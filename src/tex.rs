@@ -35,25 +35,34 @@ pub struct Document<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub struct TableData<'a> {
+    pub cols: Vec<ColSpec>,
+    pub rows: Vec<TableRow<'a>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FigureData<'a> {
+    pub graphic: Option<Graphic<'a>>,
+    pub caption: Vec<Inline<'a>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TitleBlockData<'a> {
+    pub title: Vec<Inline<'a>>,
+    pub author: Option<Vec<Inline<'a>>>,
+    pub date: Option<Vec<Inline<'a>>>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Block<'a> {
     Para(Vec<Inline<'a>>),
     List {
         ordered: bool,
         items: Vec<Vec<Block<'a>>>,
     },
-    Table {
-        cols: Vec<ColSpec>,
-        rows: Vec<TableRow<'a>>,
-    },
-    Figure {
-        graphic: Option<Graphic<'a>>,
-        caption: Vec<Inline<'a>>,
-    },
-    TitleBlock {
-        title: Vec<Inline<'a>>,
-        author: Option<Vec<Inline<'a>>>,
-        date: Option<Vec<Inline<'a>>>,
-    },
+    Table(Box<TableData<'a>>),
+    Figure(Box<FigureData<'a>>),
+    TitleBlock(Box<TitleBlockData<'a>>),
     Section {
         level: u8,
         title: Vec<Inline<'a>>,
@@ -409,11 +418,11 @@ impl<'a> Parser<'a> {
             if self.cmd_ends_at("\\maketitle") {
                 self.eat("\\maketitle");
                 if let Some(title) = &self.preamble.title {
-                    blocks.push(Block::TitleBlock {
+                    blocks.push(Block::TitleBlock(Box::new(TitleBlockData {
                         title: title.clone(),
                         author: self.preamble.author.clone(),
                         date: self.preamble.date.clone(),
-                    });
+                    })));
                 }
                 continue;
             }
@@ -593,7 +602,7 @@ impl<'a> Parser<'a> {
             });
             pending_rule = false;
         }
-        Ok(Block::Table { cols, rows })
+        Ok(Block::Table(Box::new(TableData { cols, rows })))
     }
 
     fn parse_colspec(&mut self) -> Result<Vec<ColSpec>, ParseError> {
@@ -689,7 +698,7 @@ impl<'a> Parser<'a> {
             // ignore extra paragraph text inside figure for v1
             let _ = self.parse_para_inlines()?;
         }
-        Ok(Block::Figure { graphic, caption })
+        Ok(Block::Figure(Box::new(FigureData { graphic, caption })))
     }
 
     fn parse_graphic(&mut self) -> Result<Graphic<'a>, ParseError> {
@@ -872,17 +881,43 @@ impl<'a> Parser<'a> {
     /// them as space. A `%` or command ends the run so the slice stays
     /// untransformed.
     fn parse_text_run(&mut self) -> &'a str {
+        let bytes = self.source_code.as_bytes();
         let start = self.byte_offset;
-        loop {
-            match self.peek() {
-                Some('\\' | '{' | '}' | '%' | '&') | None => break,
-                Some('\n') if self.at_blank_line() => break,
-                Some(_) => {
-                    self.bump();
+        let mut i = start;
+        while i < bytes.len() {
+            let b = bytes[i];
+            match b {
+                b'\\' | b'{' | b'}' | b'%' | b'&' => break,
+                b'\n' => {
+                    let r = &self.source_code[i..];
+                    if r.starts_with("\n\n") || r.starts_with("\n\r\n") {
+                        break;
+                    }
+                    i += 1;
+                }
+                b'\r' => {
+                    let r = &self.source_code[i..];
+                    if r.starts_with("\r\n\r\n") {
+                        break;
+                    }
+                    i += 1;
+                }
+                _ => {
+                    if b < 128 {
+                        i += 1;
+                    } else {
+                        let rest = &self.source_code[i..];
+                        if let Some(ch) = rest.chars().next() {
+                            i += ch.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
                 }
             }
         }
-        &self.source_code[start..self.byte_offset]
+        self.byte_offset = i;
+        &self.source_code[start..i]
     }
 }
 

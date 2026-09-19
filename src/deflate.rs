@@ -316,7 +316,27 @@ impl DeflateCompressor {
                     {
                         match_length = 3;
                         let max_match = (total_input_length - current_position).min(258);
-                        while match_length < max_match && input_data[previous_index + match_length] == input_data[current_position + match_length] {
+                        while match_length + 8 <= max_match {
+                            let p1 = u64::from_le_bytes(
+                                input_data[previous_index + match_length..previous_index + match_length + 8]
+                                    .try_into()
+                                    .unwrap(),
+                            );
+                            let p2 = u64::from_le_bytes(
+                                input_data[current_position + match_length..current_position + match_length + 8]
+                                    .try_into()
+                                    .unwrap(),
+                            );
+                            let diff = p1 ^ p2;
+                            if diff != 0 {
+                                match_length += (diff.trailing_zeros() / 8) as usize;
+                                break;
+                            }
+                            match_length += 8;
+                        }
+                        while match_length < max_match
+                            && input_data[previous_index + match_length] == input_data[current_position + match_length]
+                        {
                             match_length += 1;
                         }
                     }

@@ -205,13 +205,11 @@ impl<'a> Layouter<'a> {
             match b {
                 Block::Para(inls) => self.layout_para(inls),
                 Block::List { ordered, items } => self.layout_list(*ordered, items, depth),
-                Block::Table { cols, rows } => self.layout_table(cols, rows),
-                Block::Figure { graphic, caption } => self.layout_figure(*graphic, caption),
-                Block::TitleBlock {
-                    title,
-                    author,
-                    date,
-                } => self.layout_title_block(title, author.as_deref(), date.as_deref()),
+                Block::Table(table_data) => self.layout_table(&table_data.cols, &table_data.rows),
+                Block::Figure(fig_data) => self.layout_figure(fig_data.graphic, &fig_data.caption),
+                Block::TitleBlock(title_data) => {
+                    self.layout_title_block(&title_data.title, title_data.author.as_deref(), title_data.date.as_deref())
+                }
                 Block::Section { level, title } => self.layout_section(*level, title),
                 Block::PageBreak => {
                     self.new_page();
@@ -458,15 +456,26 @@ impl<'a> Layouter<'a> {
         let first_line_indent = if has_indent { self.par_indent } else { 0.0 };
         let measure = self.right - self.left;
         let mut line_w = 0.0;
+        let mut num_spaces = 0u32;
         let mut is_first_line = true;
 
         let num_words = self.scratch_words.len();
         for word_idx in 0..num_words {
             let w = self.scratch_words[word_idx];
             if w.kind == WordKind::Break {
+                while let Some(last) = self.scratch_line.last() {
+                    if last.kind == WordKind::Space {
+                        line_w -= last.width;
+                        num_spaces -= 1;
+                        self.scratch_line.pop();
+                    } else {
+                        break;
+                    }
+                }
                 let line_indent = if is_first_line { first_line_indent } else { 0.0 };
-                self.flush_scratch_line(false, line_indent);
+                self.flush_scratch_line(false, line_indent, line_w, num_spaces);
                 line_w = 0.0;
+                num_spaces = 0;
                 is_first_line = false;
                 continue;
             }
@@ -477,12 +486,19 @@ impl<'a> Layouter<'a> {
                 measure
             };
             if !self.scratch_line.is_empty() && line_w + extra > available && w.kind != WordKind::Space {
-                while self.scratch_line.last().map(|x| x.kind) == Some(WordKind::Space) {
-                    self.scratch_line.pop();
+                while let Some(last) = self.scratch_line.last() {
+                    if last.kind == WordKind::Space {
+                        line_w -= last.width;
+                        num_spaces -= 1;
+                        self.scratch_line.pop();
+                    } else {
+                        break;
+                    }
                 }
                 let line_indent = if is_first_line { first_line_indent } else { 0.0 };
-                self.flush_scratch_line(true, line_indent);
+                self.flush_scratch_line(true, line_indent, line_w, num_spaces);
                 line_w = 0.0;
+                num_spaces = 0;
                 is_first_line = false;
                 if w.kind == WordKind::Space {
                     continue;
@@ -492,30 +508,31 @@ impl<'a> Layouter<'a> {
                 continue;
             }
             line_w += extra;
+            if w.kind == WordKind::Space {
+                num_spaces += 1;
+            }
             self.scratch_line.push(w);
         }
-        while self.scratch_line.last().map(|x| x.kind) == Some(WordKind::Space) {
-            self.scratch_line.pop();
+        while let Some(last) = self.scratch_line.last() {
+            if last.kind == WordKind::Space {
+                line_w -= last.width;
+                num_spaces -= 1;
+                self.scratch_line.pop();
+            } else {
+                break;
+            }
         }
         let line_indent = if is_first_line { first_line_indent } else { 0.0 };
-        self.flush_scratch_line(false, line_indent);
+        self.flush_scratch_line(false, line_indent, line_w, num_spaces);
     }
 
-    fn flush_scratch_line(&mut self, justify: bool, line_indent: f32) {
+    fn flush_scratch_line(&mut self, justify: bool, line_indent: f32, line_w: f32, num_spaces: u32) {
         if self.scratch_line.is_empty() {
             return;
         }
         self.ensure_room(self.base_leading);
 
         let available = (self.right - self.left) - line_indent;
-        let mut line_w = 0.0f32;
-        let mut num_spaces = 0u32;
-        for w in &self.scratch_line {
-            line_w += w.width;
-            if w.kind == WordKind::Space {
-                num_spaces += 1;
-            }
-        }
 
         let word_spacing = if justify && num_spaces > 0 && line_w < available {
             let slack = available - line_w;
@@ -677,37 +694,28 @@ fn explode_words_into_size<'a>(runs: &[FlatRun<'a>], size: f32, words: &mut Vec<
             continue;
         }
         let s = run.text;
+        let bytes = s.as_bytes();
         let mut i = 0;
         let space_w = metrics::width(' ', run.face, size);
-        while i < s.len() {
-            let rest = &s[i..];
-            let c = rest.chars().next().unwrap();
-            let n = c.len_utf8();
-            if is_tex_space(c) {
-                let text = if c == ' ' { &s[i..i + 1] } else { " " };
+        while i < bytes.len() {
+            let b = bytes[i];
+            if is_tex_space_byte(b) {
+                let text = if b == b' ' { &s[i..i + 1] } else { " " };
                 words.push(Shaped {
                     text,
                     face: run.face,
                     width: space_w,
                     kind: WordKind::Space,
                 });
-                i += n;
-                while i < s.len() {
-                    let d = s[i..].chars().next().unwrap();
-                    if !is_tex_space(d) {
-                        break;
-                    }
-                    i += d.len_utf8();
+                i += 1;
+                while i < bytes.len() && is_tex_space_byte(bytes[i]) {
+                    i += 1;
                 }
             } else {
                 let start = i;
-                i += n;
-                while i < s.len() {
-                    let d = s[i..].chars().next().unwrap();
-                    if is_tex_space(d) {
-                        break;
-                    }
-                    i += d.len_utf8();
+                i += 1;
+                while i < bytes.len() && !is_tex_space_byte(bytes[i]) {
+                    i += 1;
                 }
                 let text = &s[start..i];
                 words.push(Shaped {
@@ -721,10 +729,6 @@ fn explode_words_into_size<'a>(runs: &[FlatRun<'a>], size: f32, words: &mut Vec<
     }
 }
 
-#[inline]
-fn is_tex_space(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\r' | '\n')
-}
 
 #[inline]
 fn is_tex_space_byte(b: u8) -> bool {

@@ -510,4 +510,18 @@ Content on page 2 after explicit newpage.
         let has_rule = pages[0].ops.iter().any(|op| matches!(op, layout::Paint::Rule { .. }));
         assert!(has_rule, "Expected horizontal rule on page 1");
     }
+
+    #[test]
+    fn test_ast_node_cache_line_fit() {
+        let block_size = std::mem::size_of::<tex::Block>();
+        let inline_size = std::mem::size_of::<tex::Inline>();
+        assert!(
+            block_size <= 32,
+            "Block size must be <= 32 bytes to pack >= 2 items per 64B L1 cache line without split, got {block_size}"
+        );
+        assert!(
+            inline_size <= 32,
+            "Inline size must be <= 32 bytes to pack >= 2 items per 64B L1 cache line without split, got {inline_size}"
+        );
+    }
 }

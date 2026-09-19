@@ -288,20 +288,7 @@ fn write_marker(out: &mut Vec<u8>, marker: Marker) {
     match marker {
         Marker::Bullet => out.push(0x95), // WinAnsi bullet
         Marker::Number(n) => {
-            let mut buf = [0u8; 10];
-            let mut i = 10;
-            let mut v = n;
-            if v == 0 {
-                i -= 1;
-                buf[i] = b'0';
-            } else {
-                while v > 0 {
-                    i -= 1;
-                    buf[i] = b'0' + (v % 10) as u8;
-                    v /= 10;
-                }
-            }
-            out.extend_from_slice(&buf[i..]);
+            write_u64(out, n as u64);
             out.push(b'.');
         }
     }
@@ -309,22 +296,53 @@ fn write_marker(out: &mut Vec<u8>, marker: Marker) {
 
 fn pdf_escape(out: &mut Vec<u8>, text: &str) {
     let bytes = text.as_bytes();
+    let mut start = 0;
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
         if b < 128 {
             match b {
                 b'\\' | b'(' | b')' => {
+                    if i > start {
+                        out.extend_from_slice(&bytes[start..i]);
+                    }
                     out.push(b'\\');
                     out.push(b);
+                    i += 1;
+                    start = i;
                 }
-                b'\n' => out.extend_from_slice(b"\\n"),
-                b'\r' => out.extend_from_slice(b"\\r"),
-                b'\t' => out.extend_from_slice(b"\\t"),
-                _ => out.push(b),
+                b'\n' => {
+                    if i > start {
+                        out.extend_from_slice(&bytes[start..i]);
+                    }
+                    out.extend_from_slice(b"\\n");
+                    i += 1;
+                    start = i;
+                }
+                b'\r' => {
+                    if i > start {
+                        out.extend_from_slice(&bytes[start..i]);
+                    }
+                    out.extend_from_slice(b"\\r");
+                    i += 1;
+                    start = i;
+                }
+                b'\t' => {
+                    if i > start {
+                        out.extend_from_slice(&bytes[start..i]);
+                    }
+                    out.extend_from_slice(b"\\t");
+                    i += 1;
+                    start = i;
+                }
+                _ => {
+                    i += 1;
+                }
             }
-            i += 1;
         } else {
+            if i > start {
+                out.extend_from_slice(&bytes[start..i]);
+            }
             let rest = &text[i..];
             let c = rest.chars().next().unwrap();
             i += c.len_utf8();
@@ -336,7 +354,11 @@ fn pdf_escape(out: &mut Vec<u8>, text: &str) {
                 }
                 _ => out.push(wb),
             }
+            start = i;
         }
+    }
+    if start < bytes.len() {
+        out.extend_from_slice(&bytes[start..]);
     }
 }
 
@@ -367,6 +389,18 @@ fn to_winansi(c: char) -> u8 {
     }
 }
 
+const DEC_DIGITS_LUT: &[u8; 200] = b"\
+00010203040506070809\
+10111213141516171819\
+20212223242526272829\
+30313233343536373839\
+40414243444546474849\
+50515253545556575859\
+60616263646566676869\
+70717273747576777879\
+80818283848586878889\
+90919293949596979899";
+
 fn write_f32(out: &mut Vec<u8>, v: f32) {
     if !v.is_finite() {
         out.push(b'0');
@@ -376,31 +410,20 @@ fn write_f32(out: &mut Vec<u8>, v: f32) {
     let neg = scaled < 0;
     let n = scaled.unsigned_abs();
     let whole = n / 100;
-    let frac = n % 100;
+    let frac = (n % 100) as usize;
     if neg {
         out.push(b'-');
     }
-    let mut tmp = [0u8; 20];
-    let mut i = 20;
-    let mut w = whole;
-    if w == 0 {
-        i -= 1;
-        tmp[i] = b'0';
-    } else {
-        while w > 0 {
-            i -= 1;
-            tmp[i] = b'0' + (w % 10) as u8;
-            w /= 10;
-        }
-    }
-    out.extend_from_slice(&tmp[i..]);
+    write_u64(out, whole);
     if frac == 0 {
         return;
     }
     out.push(b'.');
-    out.push(b'0' + (frac / 10) as u8);
-    if frac % 10 != 0 {
-        out.push(b'0' + (frac % 10) as u8);
+    let frac_idx = frac * 2;
+    out.push(DEC_DIGITS_LUT[frac_idx]);
+    let d2 = DEC_DIGITS_LUT[frac_idx + 1];
+    if d2 != b'0' {
+        out.push(d2);
     }
 }
 
@@ -478,33 +501,51 @@ fn write_i64(out: &mut Vec<u8>, n: i64) {
 }
 
 fn write_u64(out: &mut Vec<u8>, mut n: u64) {
-    let mut buf = [0u8; 20];
-    let mut i = 20;
     if n == 0 {
         out.push(b'0');
         return;
     }
-    while n > 0 {
+    let mut buf = [0u8; 20];
+    let mut i = 20;
+    while n >= 100 {
+        let rem = ((n % 100) as usize) * 2;
+        n /= 100;
+        i -= 2;
+        buf[i] = DEC_DIGITS_LUT[rem];
+        buf[i + 1] = DEC_DIGITS_LUT[rem + 1];
+    }
+    if n < 10 {
         i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
+        buf[i] = b'0' + n as u8;
+    } else {
+        let rem = (n as usize) * 2;
+        i -= 2;
+        buf[i] = DEC_DIGITS_LUT[rem];
+        buf[i + 1] = DEC_DIGITS_LUT[rem + 1];
     }
     out.extend_from_slice(&buf[i..]);
 }
 
 fn write_xref_entry(out: &mut Vec<u8>, off: usize) {
-    let mut buf = [b'0'; 20];
+    let mut buf = [b'0'; 10];
     let mut n = off;
     let mut i = 10;
-    if n == 0 {
-        // already zeros
-    } else {
-        while n > 0 && i > 0 {
-            i -= 1;
-            buf[i] = b'0' + (n % 10) as u8;
-            n /= 10;
-        }
+    while n >= 100 && i >= 2 {
+        let rem = (n % 100) * 2;
+        n /= 100;
+        i -= 2;
+        buf[i] = DEC_DIGITS_LUT[rem];
+        buf[i + 1] = DEC_DIGITS_LUT[rem + 1];
     }
-    out.extend_from_slice(&buf[..10]);
+    if n >= 10 && i >= 2 {
+        let rem = n * 2;
+        i -= 2;
+        buf[i] = DEC_DIGITS_LUT[rem];
+        buf[i + 1] = DEC_DIGITS_LUT[rem + 1];
+    } else if n > 0 && i >= 1 {
+        i -= 1;
+        buf[i] = b'0' + n as u8;
+    }
+    out.extend_from_slice(&buf);
     out.extend_from_slice(b" 00000 n \n");
 }

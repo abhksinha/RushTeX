@@ -1,5 +1,25 @@
-//! Adobe Font Metrics for Helvetica / Helvetica-Bold (WinAnsi, 1000 units/em).
-//! Italic/Oblique shares the Roman widths (true for Helvetica-Oblique).
+//! # Adobe Font Metrics Engine (`metrics`)
+//!
+//! Provides compile-time Adobe Font Metrics (AFM) for the standard PDF Type 1
+//! Helvetica typeface family at 1000 units per em (WinAnsi encoding).
+//!
+//! ## Architectural Design
+//!
+//! - **Zero Heap Allocations**: Font width tables for ASCII 0..=127 are precomputed and stored
+//!   directly in `.rodata` as flat `[u16; 128]` arrays (`ROMAN_WIDTHS`, `BOLD_WIDTHS`).
+//! - **Branchless Lookups**: Direct array indexing for ASCII characters avoids branch mispredictions.
+//! - **Single Multiplication Measurement**: `string_units` accumulates integer font units in a tight
+//!   byte loop, performing only one floating-point multiplication at the end.
+//! - **Oblique Width Equivalence**: In Adobe Type 1 typography, Helvetica-Oblique and
+//!   Helvetica-BoldOblique share identical horizontal character advances with Roman and Bold.
+//!
+//! ## Public APIs
+//!
+//! - [`Face`]: Enum representing the 4 standard typographic styles (`Roman`, `Bold`, `Italic`, `BoldItalic`).
+//! - [`char_units`]: Returns the raw metric width of a single character in 1000-units/em space.
+//! - [`width`]: Returns the typographic width of a character in PDF points (`pt`) for a given font size.
+//! - [`string_units`]: Computes the sum of metric units for an entire text slice in a fast ASCII loop.
+//! - [`string_width`]: Calculates total rendered width of a text string in PDF points (`pt`).
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Face {
@@ -29,8 +49,8 @@ impl Face {
     }
 
     #[inline]
-    pub fn with_bold(self, on: bool) -> Self {
-        match (self, on) {
+    pub fn with_bold(self, enable_bold: bool) -> Self {
+        match (self, enable_bold) {
             (Face::Roman, true) | (Face::Bold, true) => Face::Bold,
             (Face::Italic, true) | (Face::BoldItalic, true) => Face::BoldItalic,
             (Face::Bold, false) | (Face::Roman, false) => Face::Roman,
@@ -39,8 +59,8 @@ impl Face {
     }
 
     #[inline]
-    pub fn with_italic(self, on: bool) -> Self {
-        match (self, on) {
+    pub fn with_italic(self, enable_italic: bool) -> Self {
+        match (self, enable_italic) {
             (Face::Roman, true) | (Face::Italic, true) => Face::Italic,
             (Face::Bold, true) | (Face::BoldItalic, true) => Face::BoldItalic,
             (Face::Italic, false) | (Face::Roman, false) => Face::Roman,
@@ -92,64 +112,64 @@ pub static BOLD_WIDTHS: [u16; 128] = [
 ];
 
 #[inline]
-pub fn char_units(ch: char, face: Face) -> u16 {
-    let c = ch as u32;
-    if c < 128 {
-        if face.is_bold() {
-            BOLD_WIDTHS[c as usize]
+pub fn char_units(character: char, font_face: Face) -> u16 {
+    let character_code = character as u32;
+    if character_code < 128 {
+        if font_face.is_bold() {
+            BOLD_WIDTHS[character_code as usize]
         } else {
-            ROMAN_WIDTHS[c as usize]
+            ROMAN_WIDTHS[character_code as usize]
         }
     } else {
-        if face.is_bold() {
-            bold_units_cold(ch)
+        if font_face.is_bold() {
+            bold_units_cold(character)
         } else {
-            roman_units_cold(ch)
+            roman_units_cold(character)
         }
     }
 }
 
-/// Width of `ch` in PDF text space for `face` at `size` points.
+/// Computes the width of `character` in PDF text space for `font_face` at `font_size_points`.
 #[inline]
-pub fn width(ch: char, face: Face, size: f32) -> f32 {
-    char_units(ch, face) as f32 * (size / 1000.0)
+pub fn width(character: char, font_face: Face, font_size_points: f32) -> f32 {
+    char_units(character, font_face) as f32 * (font_size_points / 1000.0)
 }
 
-/// Fast branchless sum of font metric units for string `s`.
-pub fn string_units(s: &str, face: Face) -> u32 {
-    let bytes = s.as_bytes();
-    let is_bold = face.is_bold();
-    let table = if is_bold { &BOLD_WIDTHS } else { &ROMAN_WIDTHS };
-    let mut total: u32 = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b < 128 {
-            total += table[b as usize] as u32;
-            i += 1;
+/// Fast branchless sum of font metric units for `text`.
+pub fn string_units(text: &str, font_face: Face) -> u32 {
+    let byte_slice = text.as_bytes();
+    let is_bold = font_face.is_bold();
+    let width_table = if is_bold { &BOLD_WIDTHS } else { &ROMAN_WIDTHS };
+    let mut accumulated_units: u32 = 0;
+    let mut byte_index = 0;
+    while byte_index < byte_slice.len() {
+        let byte_value = byte_slice[byte_index];
+        if byte_value < 128 {
+            accumulated_units += width_table[byte_value as usize] as u32;
+            byte_index += 1;
         } else {
-            let rest = &s[i..];
-            let c = rest.chars().next().unwrap();
-            i += c.len_utf8();
-            total += if is_bold {
-                bold_units_cold(c) as u32
+            let remaining_text = &text[byte_index..];
+            let character = remaining_text.chars().next().unwrap();
+            byte_index += character.len_utf8();
+            accumulated_units += if is_bold {
+                bold_units_cold(character) as u32
             } else {
-                roman_units_cold(c) as u32
+                roman_units_cold(character) as u32
             };
         }
     }
-    total
+    accumulated_units
 }
 
-/// Computes width of string `s` in PDF points with a single floating-point multiplication.
+/// Computes width of `text` in PDF points with a single floating-point multiplication.
 #[inline]
-pub fn string_width(s: &str, face: Face, size: f32) -> f32 {
-    string_units(s, face) as f32 * (size / 1000.0)
+pub fn string_width(text: &str, font_face: Face, font_size_points: f32) -> f32 {
+    string_units(text, font_face) as f32 * (font_size_points / 1000.0)
 }
 
 #[cold]
-fn roman_units_cold(ch: char) -> u16 {
-    match ch {
+fn roman_units_cold(character: char) -> u16 {
+    match character {
         '\u{00A0}' => 278,
         '–' | '—' => 556,
         '‘' | '’' => 191,
@@ -161,8 +181,8 @@ fn roman_units_cold(ch: char) -> u16 {
 }
 
 #[cold]
-fn bold_units_cold(ch: char) -> u16 {
-    match ch {
+fn bold_units_cold(character: char) -> u16 {
+    match character {
         '\u{00A0}' => 278,
         '–' | '—' => 556,
         '‘' | '’' => 238,

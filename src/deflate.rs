@@ -1,10 +1,27 @@
-//! Pure Rust, zero-dependency streaming DEFLATE and zlib encoder.
+//! # High-Performance DEFLATE & zlib Compression Engine (`deflate`)
 //!
-//! Designed for L1/L2 cache locality:
-//! - 16 KB L1-cache-resident hash table ([u16; 8192]) for O(1) branchless LZ77 match candidate lookups.
-//! - Precomputed static tables in .rodata for RFC 1951 Fixed Huffman codes (zero dynamic tree overhead).
-//! - Streaming bit-accumulator avoiding intermediate token buffer allocations.
-//! - Block-batched Adler-32 checksum (RFC 1950) with no division in hot loops.
+//! Provides a pure-Rust, zero-dependency streaming DEFLATE (RFC 1951) and zlib (RFC 1950)
+//! compression encoder optimized for CPU L1 data cache locality.
+//!
+//! ## Architectural Principles
+//!
+//! - **32 KB L1-Data-Cache Resident Table**: The [`DeflateCompressor`] maintains a single `[u32; 8192]`
+//!   hash table (exactly 32,768 bytes), fitting entirely within the L1D cache of modern CPUs.
+//! - **Structure-of-Arrays (SoA) Tables in `.rodata`**: RFC 1951 Fixed Huffman codes and bit-lengths
+//!   are precomputed at compile-time as flat arrays (`LIT_LEN_CODES`, `LIT_LEN_BITS`, `DIST_CODES`,
+//!   `DIST_BITS`), eliminating the overhead of dynamic Huffman tree construction and transmission.
+//! - **Zero Intermediate Token Allocations**: Emits compressed bits directly to the target byte buffer
+//!   via a 64-bit sliding register (`BitWriter`), completely bypassing intermediate token arrays.
+//! - **Block-Batched Adler-32 Checksum**: Computes checksums in 5,552-byte unrolled batches, removing
+//!   expensive division/modulo operations from inner byte loops.
+//!
+//! ## Public APIs
+//!
+//! - [`adler32`]: Computes the RFC 1950 Adler-32 checksum of a byte slice.
+//! - [`DeflateCompressor`]: L1-resident compression engine that can be reused across pages.
+//! - [`DeflateCompressor::compress_zlib`]: Compresses input data into zlib-wrapped DEFLATE format
+//!   for PDF `/Filter /FlateDecode` streams.
+//! - [`DeflateCompressor::compress_raw`]: Compresses input data into a raw RFC 1951 Fixed Huffman stream.
 
 /// Precomputed compile-time Fixed Huffman codes and bit-lengths for Literal/Length (0..=287).
 /// Stored in .rodata as SoA: codes array and bit lengths array.
@@ -15,37 +32,37 @@ pub static LIT_LEN_BITS: [u8; 288] = generate_lit_len_bits();
 pub static DIST_CODES: [u8; 32] = generate_dist_codes();
 pub static DIST_BITS: [u8; 32] = [5u8; 32];
 
-const fn bit_reverse_8(mut b: u8) -> u8 {
-    b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
-    b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
-    b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
-    b
+const fn bit_reverse_8(mut byte_value: u8) -> u8 {
+    byte_value = (byte_value & 0xF0) >> 4 | (byte_value & 0x0F) << 4;
+    byte_value = (byte_value & 0xCC) >> 2 | (byte_value & 0x33) << 2;
+    byte_value = (byte_value & 0xAA) >> 1 | (byte_value & 0x55) << 1;
+    byte_value
 }
 
-const fn bit_reverse_16(val: u16, len: u8) -> u16 {
-    let r = ((bit_reverse_8((val & 0xFF) as u8) as u16) << 8)
-        | (bit_reverse_8(((val >> 8) & 0xFF) as u8) as u16);
-    r >> (16 - len)
+const fn bit_reverse_16(value: u16, bit_length: u8) -> u16 {
+    let reversed = ((bit_reverse_8((value & 0xFF) as u8) as u16) << 8)
+        | (bit_reverse_8(((value >> 8) & 0xFF) as u8) as u16);
+    reversed >> (16 - bit_length)
 }
 
 const fn generate_lit_len_codes() -> [u16; 288] {
     let mut table = [0u16; 288];
-    let mut i = 0;
-    while i <= 143 {
-        table[i] = bit_reverse_16(0x30 + i as u16, 8);
-        i += 1;
+    let mut code_index = 0;
+    while code_index <= 143 {
+        table[code_index] = bit_reverse_16(0x30 + code_index as u16, 8);
+        code_index += 1;
     }
-    while i <= 255 {
-        table[i] = bit_reverse_16(0x190 + (i - 144) as u16, 9);
-        i += 1;
+    while code_index <= 255 {
+        table[code_index] = bit_reverse_16(0x190 + (code_index - 144) as u16, 9);
+        code_index += 1;
     }
-    while i <= 279 {
-        table[i] = bit_reverse_16((i - 256) as u16, 7);
-        i += 1;
+    while code_index <= 279 {
+        table[code_index] = bit_reverse_16((code_index - 256) as u16, 7);
+        code_index += 1;
     }
-    while i <= 287 {
-        table[i] = bit_reverse_16(0xC0 + (i - 280) as u16, 8);
-        i += 1;
+    while code_index <= 287 {
+        table[code_index] = bit_reverse_16(0xC0 + (code_index - 280) as u16, 8);
+        code_index += 1;
     }
     table
 }
@@ -233,112 +250,112 @@ impl DeflateCompressor {
         }
     }
 
-    /// Compress `input` into zlib-wrapped DEFLATE format (RFC 1950) appending to `out`.
-    pub fn compress_zlib(&mut self, input: &[u8], out: &mut Vec<u8>) {
+    /// Compresses `input_data` into zlib-wrapped DEFLATE format (RFC 1950) appending to `destination_buffer`.
+    pub fn compress_zlib(&mut self, input_data: &[u8], destination_buffer: &mut Vec<u8>) {
         // 1. Write zlib header: CMF = 0x78 (32K window, deflate), FLG = 0x9C (default)
-        out.push(0x78);
-        out.push(0x9C);
+        destination_buffer.push(0x78);
+        destination_buffer.push(0x9C);
 
-        let start_len = out.len();
+        let start_len = destination_buffer.len();
 
         // 2. Compress payload using Fixed Huffman DEFLATE block
-        self.compress_raw(input, out);
+        self.compress_raw(input_data, destination_buffer);
 
         // If compression did not reduce size (e.g. tiny input < 32 bytes), fallback to stored block
-        let compressed_payload_len = out.len() - start_len;
-        if compressed_payload_len >= input.len() && !input.is_empty() {
-            out.truncate(start_len);
-            write_stored_block(input, out);
+        let compressed_payload_len = destination_buffer.len() - start_len;
+        if compressed_payload_len >= input_data.len() && !input_data.is_empty() {
+            destination_buffer.truncate(start_len);
+            write_stored_block(input_data, destination_buffer);
         }
 
         // 3. Write Adler-32 checksum (big-endian)
-        let checksum = adler32(input);
-        out.extend_from_slice(&checksum.to_be_bytes());
+        let checksum = adler32(input_data);
+        destination_buffer.extend_from_slice(&checksum.to_be_bytes());
     }
 
-    /// Compress raw DEFLATE stream with Fixed Huffman codes (BFINAL=1, BTYPE=01).
-    pub fn compress_raw(&mut self, input: &[u8], out: &mut Vec<u8>) {
-        if input.is_empty() {
-            let mut w = BitWriter::new(out);
-            w.write_bits(0b011, 3); // BFINAL=1, BTYPE=01
-            w.write_bits(LIT_LEN_CODES[256] as u32, LIT_LEN_BITS[256]); // EOB
-            w.finish();
+    /// Compresses raw DEFLATE stream with Fixed Huffman codes (BFINAL=1, BTYPE=01).
+    pub fn compress_raw(&mut self, input_data: &[u8], destination_buffer: &mut Vec<u8>) {
+        if input_data.is_empty() {
+            let mut bit_writer = BitWriter::new(destination_buffer);
+            bit_writer.write_bits(0b011, 3); // BFINAL=1, BTYPE=01
+            bit_writer.write_bits(LIT_LEN_CODES[256] as u32, LIT_LEN_BITS[256]); // EOB
+            bit_writer.finish();
             return;
         }
 
         // Clear hash table (32 KB memset - instantaneous in L1 cache)
         self.head.fill(0);
 
-        let mut w = BitWriter::new(out);
-        w.write_bits(0b011, 3); // BFINAL=1, BTYPE=01 (Fixed Huffman)
+        let mut bit_writer = BitWriter::new(destination_buffer);
+        bit_writer.write_bits(0b011, 3); // BFINAL=1, BTYPE=01 (Fixed Huffman)
 
-        let len = input.len();
-        let mut pos = 0;
+        let total_input_length = input_data.len();
+        let mut current_position = 0;
 
-        while pos + 3 <= len {
+        while current_position + 3 <= total_input_length {
             // 3-byte multiplicative hash
-            let b0 = input[pos] as u32;
-            let b1 = input[pos + 1] as u32;
-            let b2 = input[pos + 2] as u32;
-            let h = (((b0 << 10) ^ (b1 << 5) ^ b2).wrapping_mul(0x1e35a7bd) >> 19) as usize & 8191;
+            let byte_0 = input_data[current_position] as u32;
+            let byte_1 = input_data[current_position + 1] as u32;
+            let byte_2 = input_data[current_position + 2] as u32;
+            let hash_index = (((byte_0 << 10) ^ (byte_1 << 5) ^ byte_2).wrapping_mul(0x1e35a7bd) >> 19) as usize & 8191;
 
-            let prev_pos = self.head[h];
-            self.head[h] = (pos + 1) as u32;
+            let previous_position = self.head[hash_index];
+            self.head[hash_index] = (current_position + 1) as u32;
 
-            let mut match_len = 0;
-            let mut dist = 0;
+            let mut match_length = 0;
+            let mut match_distance = 0;
 
             // Candidate match validation (within 32K window and valid position)
-            if prev_pos > 0 {
-                let prev_idx = (prev_pos - 1) as usize;
-                dist = pos - prev_idx;
-                if dist > 0 && dist <= 32768 && prev_idx + 2 < len {
-                    if input[prev_idx] == input[pos]
-                        && input[prev_idx + 1] == input[pos + 1]
-                        && input[prev_idx + 2] == input[pos + 2]
+            if previous_position > 0 {
+                let previous_index = (previous_position - 1) as usize;
+                match_distance = current_position - previous_index;
+                if match_distance > 0 && match_distance <= 32768 && previous_index + 2 < total_input_length {
+                    if input_data[previous_index] == input_data[current_position]
+                        && input_data[previous_index + 1] == input_data[current_position + 1]
+                        && input_data[previous_index + 2] == input_data[current_position + 2]
                     {
-                        match_len = 3;
-                        let max_match = (len - pos).min(258);
-                        while match_len < max_match && input[prev_idx + match_len] == input[pos + match_len] {
-                            match_len += 1;
+                        match_length = 3;
+                        let max_match = (total_input_length - current_position).min(258);
+                        while match_length < max_match && input_data[previous_index + match_length] == input_data[current_position + match_length] {
+                            match_length += 1;
                         }
                     }
                 }
             }
 
-            if match_len >= 3 {
+            if match_length >= 3 {
                 // Emit length code
-                let (lcode, lextra_bits, lextra_val) = get_length_code(match_len);
-                w.write_bits(LIT_LEN_CODES[lcode as usize] as u32, LIT_LEN_BITS[lcode as usize]);
-                if lextra_bits > 0 {
-                    w.write_bits(lextra_val as u32, lextra_bits);
+                let (length_code, length_extra_bits, length_extra_val) = get_length_code(match_length);
+                bit_writer.write_bits(LIT_LEN_CODES[length_code as usize] as u32, LIT_LEN_BITS[length_code as usize]);
+                if length_extra_bits > 0 {
+                    bit_writer.write_bits(length_extra_val as u32, length_extra_bits);
                 }
 
                 // Emit distance code
-                let (dcode, dextra_bits, dextra_val) = get_dist_code(dist);
-                w.write_bits(DIST_CODES[dcode as usize] as u32, DIST_BITS[dcode as usize]);
-                if dextra_bits > 0 {
-                    w.write_bits(dextra_val as u32, dextra_bits);
+                let (distance_code, distance_extra_bits, distance_extra_val) = get_dist_code(match_distance);
+                bit_writer.write_bits(DIST_CODES[distance_code as usize] as u32, DIST_BITS[distance_code as usize]);
+                if distance_extra_bits > 0 {
+                    bit_writer.write_bits(distance_extra_val as u32, distance_extra_bits);
                 }
 
-                pos += match_len;
+                current_position += match_length;
             } else {
-                let lit = input[pos] as usize;
-                w.write_bits(LIT_LEN_CODES[lit] as u32, LIT_LEN_BITS[lit]);
-                pos += 1;
+                let literal_byte = input_data[current_position] as usize;
+                bit_writer.write_bits(LIT_LEN_CODES[literal_byte] as u32, LIT_LEN_BITS[literal_byte]);
+                current_position += 1;
             }
         }
 
         // Emit remaining trailing literal bytes
-        while pos < len {
-            let lit = input[pos] as usize;
-            w.write_bits(LIT_LEN_CODES[lit] as u32, LIT_LEN_BITS[lit]);
-            pos += 1;
+        while current_position < total_input_length {
+            let literal_byte = input_data[current_position] as usize;
+            bit_writer.write_bits(LIT_LEN_CODES[literal_byte] as u32, LIT_LEN_BITS[literal_byte]);
+            current_position += 1;
         }
 
         // Emit End of Block (EOB = 256)
-        w.write_bits(LIT_LEN_CODES[256] as u32, LIT_LEN_BITS[256]);
-        w.finish();
+        bit_writer.write_bits(LIT_LEN_CODES[256] as u32, LIT_LEN_BITS[256]);
+        bit_writer.finish();
     }
 }
 

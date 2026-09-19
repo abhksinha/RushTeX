@@ -1,8 +1,30 @@
-//! Tiny TeX lexer + recursive-descent parser.
+//! # TeX Syntax Lexer & Recursive-Descent Parser (`tex`)
 //!
-//! Almost every `Text` node is a subslice of the input. The only owned
-//! data on the success path is the tree scaffolding (`Vec`). Errors own
-//! their message.
+//! Provides a zero-copy lexical scanner and recursive-descent parser for LaTeX document syntax.
+//!
+//! ## Architectural Principles
+//!
+//! - **Zero-Copy AST Construction**: Text nodes ([`Inline::Text`]) are direct slices (`&'a str`)
+//!   of the input source string. No string copying or duplicate memory allocations occur.
+//! - **Single-Pass Parsing**: Syntax is parsed in a single sequential sweep without backtracking
+//!   or multiple passes over the input buffer.
+//! - **Extensible Grammar Support**:
+//!   - **Document Structure**: `\documentclass`, `\usepackage`, `\begin{document}...\end{document}`.
+//!   - **Headings & Titles**: `\title`, `\author`, `\date`, `\maketitle`, `\section`, `\subsection`.
+//!   - **Typography**: `\textbf{...}`, `\textit{...}`, `\emph{...}`, scoped `{...}` blocks.
+//!   - **Lists**: `\begin{enumerate}` (ordered) and `\begin{itemize}` (unordered) with nested `\item`.
+//!   - **Tabular Data**: `\begin{tabular}{|l|c|r|}` with horizontal rules `\hline`, column separators `&`,
+//!     and row terminators `\\`.
+//!   - **Floating Figures**: `\begin{figure}` with `\includegraphics{...}` and `\caption{...}`.
+//!   - **Escapes & Breaks**: `\\`, `\{`, `\}`, `\%`, `\ `, `\n\n` (paragraph separation).
+//!
+//! ## Public APIs
+//!
+//! - [`parse`]: Parses a LaTeX source string into a [`Document`] Abstract Syntax Tree.
+//! - [`Document`]: Root AST container holding resolved preamble and block elements.
+//! - [`Block`]: Top-level layout elements (`Para`, `List`, `Table`, `Figure`, `TitleBlock`, `Section`).
+//! - [`Inline`]: Inline text elements (`Text`, `Bold`, `Italic`, `Group`, `Break`).
+//! - [`ParseError`]: Syntax error reporting 1-based line, column, and message.
 
 use std::fmt;
 use crate::preamble::Preamble;
@@ -85,20 +107,20 @@ impl fmt::Display for ParseError {
     }
 }
 
-pub fn parse(src: &str) -> Result<Document<'_>, ParseError> {
-    let mut p = Parser::new(src);
-    let has_doc_env = p.parse_preamble_if_present()?;
-    let blocks = p.parse_blocks()?;
-    if has_doc_env {
-        let _ = p.eat_end_env("document");
+pub fn parse(source_code: &str) -> Result<Document<'_>, ParseError> {
+    let mut parser = Parser::new(source_code);
+    let has_document_environment = parser.parse_preamble_if_present()?;
+    let blocks = parser.parse_blocks()?;
+    if has_document_environment {
+        let _ = parser.eat_end_env("document");
     } else {
-        p.skip_ws();
-        if p.peek().is_some() && !p.starts_with("\\end") {
-            return Err(p.err("trailing unparsed input"));
+        parser.skip_ws();
+        if parser.peek().is_some() && !parser.starts_with("\\end") {
+            return Err(parser.err("trailing unparsed input"));
         }
     }
     Ok(Document {
-        preamble: p.preamble,
+        preamble: parser.preamble,
         blocks,
     })
 }

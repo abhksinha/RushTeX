@@ -1,10 +1,30 @@
-//! Extensible preamble parsing and document configuration.
+//! # Document Preamble and Package Architecture (`preamble`)
 //!
-//! Provides modular architecture for LaTeX preamble processing:
-//! - Document class options (`10pt`, `11pt`, `12pt`, `a4paper`, `letterpaper`, `landscape`)
-//! - Package handler registry (`\usepackage[options]{package}`)
-//! - Document metadata (`\title`, `\author`, `\date`)
-//! - Open API designed for multi-contributor package extensions.
+//! Provides modular, extensible processing for LaTeX document preambles, configuration directives,
+//! and package handlers.
+//!
+//! ## Architectural Overview
+//!
+//! In standard LaTeX, packages like `geometry` manipulate page dimensions and margins.
+//! This module decouples LaTeX syntax from internal engine state via an open plugin-style trait:
+//! - **Document Classes ([`DocClass`])**: Evaluates `\documentclass[options]{name}` to configure
+//!   standard page sizes (`a4paper`, `letterpaper`, `landscape`) and base typography (`10pt`, `11pt`, `12pt`).
+//! - **Package Handler Trait ([`PackageHandler`])**: Allows contributors to register handlers for
+//!   standard packages without touching core engine internals.
+//! - **Package Registry ([`PackageRegistry`])**: Dispatches options to registered package handlers.
+//! - **Document Configuration ([`DocumentConfig`])**: Compact struct tracking page width, height,
+//!   margins, base font size, and line height (leading).
+//!
+//! ## Public APIs
+//!
+//! - [`DocClass`]: Extracted document class directive.
+//! - [`Package`]: Extracted package directive with options.
+//! - [`DocumentConfig`]: Resolved layout and page geometry values.
+//! - [`Preamble`]: Complete parsed preamble state with document metadata.
+//! - [`PackageHandler`]: Trait for package extensions (`name()`, `apply()`).
+//! - [`PackageRegistry`]: Extensible registry of active package handlers.
+//! - [`apply_doc_class`]: Updates `DocumentConfig` according to class options.
+//! - [`parse_dimension_pt`]: Converts TeX dimensions (`in`, `cm`, `mm`, `pt`) to PDF points.
 
 use crate::tex::Inline;
 
@@ -50,7 +70,7 @@ impl Default for DocumentConfig {
     }
 }
 
-/// Parsed document preamble.
+/// Parsed document preamble containing document class, packages, and metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Preamble<'a> {
     pub class: Option<DocClass<'a>>,
@@ -83,7 +103,7 @@ pub trait PackageHandler: Sync + Send {
     fn name(&self) -> &'static str;
 
     /// Apply package options to document configuration.
-    fn apply(&self, options: &[&str], config: &mut DocumentConfig);
+    fn apply(&self, package_options: &[&str], document_config: &mut DocumentConfig);
 }
 
 /// Built-in handler for `\usepackage{geometry}`.
@@ -94,40 +114,40 @@ impl PackageHandler for GeometryPackage {
         "geometry"
     }
 
-    fn apply(&self, options: &[&str], config: &mut DocumentConfig) {
-        for &opt in options {
-            let opt = opt.trim();
-            if let Some((key, val)) = opt.split_once('=') {
-                let key = key.trim();
-                let val = val.trim();
-                if let Some(pts) = parse_dimension_pt(val) {
-                    match key {
+    fn apply(&self, package_options: &[&str], document_config: &mut DocumentConfig) {
+        for &option_str in package_options {
+            let option_str = option_str.trim();
+            if let Some((option_key, option_value)) = option_str.split_once('=') {
+                let option_key = option_key.trim();
+                let option_value = option_value.trim();
+                if let Some(points) = parse_dimension_pt(option_value) {
+                    match option_key {
                         "margin" => {
-                            config.margin_left = pts;
-                            config.margin_right = pts;
-                            config.margin_top = pts;
-                            config.margin_bottom = pts;
+                            document_config.margin_left = points;
+                            document_config.margin_right = points;
+                            document_config.margin_top = points;
+                            document_config.margin_bottom = points;
                         }
-                        "left" | "lmargin" => config.margin_left = pts,
-                        "right" | "rmargin" => config.margin_right = pts,
-                        "top" | "tmargin" => config.margin_top = pts,
-                        "bottom" | "bmargin" => config.margin_bottom = pts,
+                        "left" | "lmargin" => document_config.margin_left = points,
+                        "right" | "rmargin" => document_config.margin_right = points,
+                        "top" | "tmargin" => document_config.margin_top = points,
+                        "bottom" | "bmargin" => document_config.margin_bottom = points,
                         _ => {}
                     }
                 }
             } else {
-                match opt {
+                match option_str {
                     "a4paper" => {
-                        config.page_width = 595.0;
-                        config.page_height = 842.0;
+                        document_config.page_width = 595.0;
+                        document_config.page_height = 842.0;
                     }
                     "letterpaper" => {
-                        config.page_width = 612.0;
-                        config.page_height = 792.0;
+                        document_config.page_width = 612.0;
+                        document_config.page_height = 792.0;
                     }
                     "landscape" => {
-                        if config.page_width < config.page_height {
-                            std::mem::swap(&mut config.page_width, &mut config.page_height);
+                        if document_config.page_width < document_config.page_height {
+                            std::mem::swap(&mut document_config.page_width, &mut document_config.page_height);
                         }
                     }
                     _ => {}
@@ -183,9 +203,9 @@ impl PackageRegistry {
     }
 
     pub fn apply(&self, package: &Package<'_>, config: &mut DocumentConfig) {
-        for h in &self.handlers {
-            if h.name().eq_ignore_ascii_case(package.name) {
-                h.apply(&package.options, config);
+        for handler in &self.handlers {
+            if handler.name().eq_ignore_ascii_case(package.name) {
+                handler.apply(&package.options, config);
                 return;
             }
         }
@@ -193,9 +213,9 @@ impl PackageRegistry {
 }
 
 /// Apply document class options (e.g. `12pt`, `letterpaper`, `landscape`) to configuration.
-pub fn apply_doc_class(class: &DocClass<'_>, config: &mut DocumentConfig) {
-    for &opt in &class.options {
-        match opt.trim() {
+pub fn apply_doc_class(doc_class: &DocClass<'_>, config: &mut DocumentConfig) {
+    for &option_str in &doc_class.options {
+        match option_str.trim() {
             "10pt" => {
                 config.base_font_size = 10.0;
                 config.base_leading = 13.0;
@@ -227,30 +247,30 @@ pub fn apply_doc_class(class: &DocClass<'_>, config: &mut DocumentConfig) {
 }
 
 /// Parse TeX dimension string into PDF points (e.g. `1in`, `2.54cm`, `20mm`, `72pt`).
-pub fn parse_dimension_pt(val: &str) -> Option<f32> {
-    let s = val.trim();
-    if s.is_empty() {
+pub fn parse_dimension_pt(dimension_str: &str) -> Option<f32> {
+    let trimmed_str = dimension_str.trim();
+    if trimmed_str.is_empty() {
         return None;
     }
 
-    let (num_part, unit) = if let Some(stripped) = s.strip_suffix("in") {
+    let (number_part, unit_suffix) = if let Some(stripped) = trimmed_str.strip_suffix("in") {
         (stripped, "in")
-    } else if let Some(stripped) = s.strip_suffix("cm") {
+    } else if let Some(stripped) = trimmed_str.strip_suffix("cm") {
         (stripped, "cm")
-    } else if let Some(stripped) = s.strip_suffix("mm") {
+    } else if let Some(stripped) = trimmed_str.strip_suffix("mm") {
         (stripped, "mm")
-    } else if let Some(stripped) = s.strip_suffix("pt") {
+    } else if let Some(stripped) = trimmed_str.strip_suffix("pt") {
         (stripped, "pt")
     } else {
-        (s, "pt")
+        (trimmed_str, "pt")
     };
 
-    let num = num_part.trim().parse::<f32>().ok()?;
-    match unit {
-        "in" => Some(num * 72.0),
-        "cm" => Some(num * (72.0 / 2.54)),
-        "mm" => Some(num * (72.0 / 25.4)),
-        "pt" => Some(num),
+    let numeric_value = number_part.trim().parse::<f32>().ok()?;
+    match unit_suffix {
+        "in" => Some(numeric_value * 72.0),
+        "cm" => Some(numeric_value * (72.0 / 2.54)),
+        "mm" => Some(numeric_value * (72.0 / 25.4)),
+        "pt" => Some(numeric_value),
         _ => None,
     }
 }

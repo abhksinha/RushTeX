@@ -1,95 +1,118 @@
+//! # Command-Line Interface Driver (`main`)
+//!
+//! Provides the executable CLI frontend for `texrs`.
+//!
+//! ## Usage Modes
+//!
+//! 1. **Direct File Compilation**:
+//!    ```bash
+//!    texrs input.tex [-o output.pdf]
+//!    ```
+//! 2. **Piped Stream Compilation**:
+//!    ```bash
+//!    cat input.tex | texrs > output.pdf
+//!    ```
+//! 3. **AST Inspection**:
+//!    ```bash
+//!    texrs --ast input.tex
+//!    ```
+//! 4. **Uncompressed Stream Debugging**:
+//!    ```bash
+//!    texrs input.tex --no-compress -o uncompressed.pdf
+//!    ```
+
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let mut args = env::args().skip(1);
-    let mut input: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
+    let mut cli_arguments = env::args().skip(1);
+    let mut input_file_path: Option<PathBuf> = None;
+    let mut output_file_path: Option<PathBuf> = None;
     let mut dump_ast = false;
-    let mut compress = true;
+    let mut enable_compression = true;
 
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "-o" | "--output" => match args.next() {
-                Some(p) => output = Some(PathBuf::from(p)),
+    while let Some(argument) = cli_arguments.next() {
+        match argument.as_str() {
+            "-o" | "--output" => match cli_arguments.next() {
+                Some(path_str) => output_file_path = Some(PathBuf::from(path_str)),
                 None => {
                     eprintln!("texrs: -o requires a path");
                     return ExitCode::from(2);
                 }
             },
-            "--no-compress" => compress = false,
+            "--no-compress" => enable_compression = false,
             "--ast" => dump_ast = true,
             "-h" | "--help" => {
                 print_help();
                 return ExitCode::SUCCESS;
             }
-            s if s.starts_with('-') => {
-                eprintln!("texrs: unknown flag {s}");
+            flag if flag.starts_with('-') => {
+                eprintln!("texrs: unknown flag {flag}");
                 return ExitCode::from(2);
             }
-            s => {
-                if input.is_some() {
-                    eprintln!("texrs: extra argument {s}");
+            positional_arg => {
+                if input_file_path.is_some() {
+                    eprintln!("texrs: extra argument {positional_arg}");
                     return ExitCode::from(2);
                 }
-                input = Some(PathBuf::from(s));
+                input_file_path = Some(PathBuf::from(positional_arg));
             }
         }
     }
 
-    let Some(input) = input else {
-        // stdin → stdout if piped, else help
+    let Some(input_path) = input_file_path else {
+        // stdin → stdout if piped, else display help
         if atty_stdin() {
             print_help();
             return ExitCode::from(2);
         }
-        let mut src = String::new();
-        if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut src) {
-            eprintln!("texrs: {e}");
+        let mut source_content = String::new();
+        if let Err(err) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut source_content) {
+            eprintln!("texrs: {err}");
             return ExitCode::from(1);
         }
-        return match texrs::compile_str_opts(&src, compress) {
-            Ok(pdf) => {
-                if let Err(e) = std::io::Write::write_all(&mut std::io::stdout(), &pdf) {
-                    eprintln!("texrs: {e}");
+        return match texrs::compile_str_opts(&source_content, enable_compression) {
+            Ok(pdf_bytes) => {
+                if let Err(err) = std::io::Write::write_all(&mut std::io::stdout(), &pdf_bytes) {
+                    eprintln!("texrs: {err}");
                     return ExitCode::from(1);
                 }
                 ExitCode::SUCCESS
             }
-            Err(e) => {
-                eprintln!("texrs: {e}");
+            Err(err) => {
+                eprintln!("texrs: {err}");
                 ExitCode::from(1)
             }
         };
     };
 
     if dump_ast {
-        match std::fs::read_to_string(&input) {
-            Ok(src) => match texrs::tex::parse(&src) {
-                Ok(doc) => {
-                    println!("{doc:#?}");
+        match std::fs::read_to_string(&input_path) {
+            Ok(source_content) => match texrs::tex::parse(&source_content) {
+                Ok(document_ast) => {
+                    println!("{document_ast:#?}");
                     return ExitCode::SUCCESS;
                 }
-                Err(e) => {
-                    eprintln!("texrs: parse: {e}");
+                Err(err) => {
+                    eprintln!("texrs: parse: {err}");
                     return ExitCode::from(1);
                 }
             },
-            Err(e) => {
-                eprintln!("texrs: {e}");
+            Err(err) => {
+                eprintln!("texrs: {err}");
                 return ExitCode::from(1);
             }
         }
     }
 
-    match texrs::compile_file_opts(&input, output.as_deref(), compress) {
-        Ok(out) => {
-            eprintln!("wrote {}", out.display());
+    match texrs::compile_file_opts(&input_path, output_file_path.as_deref(), enable_compression) {
+        Ok(output_path) => {
+            eprintln!("wrote {}", output_path.display());
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("texrs: {e}");
+        Err(err) => {
+            eprintln!("texrs: {err}");
             ExitCode::from(1)
         }
     }

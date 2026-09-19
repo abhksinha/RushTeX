@@ -1,11 +1,25 @@
-//! Greedy line-breaking + page packing.
+//! # High-Speed Page Layout Engine (`layout`)
 //!
-//! Highly optimized layout engine:
-//! - Paint records are compact `Copy` values with zero inner heap allocations.
-//! - All text slices for a page are stored in a contiguous pool `Page.text_pool`.
-//! - Scratch buffers are allocated once in `Layouter` and reused across all paragraphs.
-//! - Inlines are measured with zero allocations.
-//! - Dynamically takes layout geometry & font configuration from `DocumentConfig`.
+//! Provides a zero-allocation, greedy line-breaking, table-formatting, and page-packing engine.
+//!
+//! ## Architectural Principles
+//!
+//! - **24-Byte `Copy` Display List**: The [`Paint`] enum is strictly flat without heap allocations
+//!   (no inner `Vec`), fitting multiple draw commands in a single 64-byte L1 CPU cache line.
+//! - **Contiguous Page Text Pool**: All text slice tokens for a page reside in [`Page::text_pool`],
+//!   referenced by compact `(part_start, part_count)` indices.
+//! - **Scratch Buffer Recycling**: `Layouter` allocates scratch buffers (`scratch_runs`, `scratch_words`,
+//!   `scratch_line`) once upon instantiation and clears them across paragraphs, eliminating heap churn.
+//! - **Zero-Allocation Inline Measurement**: Walks AST nodes in-place to calculate line lengths directly.
+//! - **Dynamic Document Geometry**: Margins, dimensions, leading, and font sizes are dynamically
+//!   configured via [`DocumentConfig`].
+//!
+//! ## Public APIs
+//!
+//! - [`layout`]: Typesets a parsed [`Document`] AST into a sequence of [`Page`] structures ready for PDF emission.
+//! - [`Page`]: Represents a single rendered page with width, height, draw operations, and text pool.
+//! - [`Paint`]: Display list operation (`GlyphRun`, `Marker`, `Rule`, `CaptionTag`).
+//! - [`Marker`]: Enumerated or bullet list marker.
 
 use crate::metrics::{self, Face};
 use crate::preamble::DocumentConfig;
@@ -67,15 +81,15 @@ pub enum Paint {
     },
 }
 
-pub fn layout<'a>(doc: &'a Document<'a>) -> Vec<Page<'a>> {
-    let mut l = Layouter::new(&doc.preamble.config);
-    l.layout_blocks(&doc.blocks, 0);
-    l.finish()
+pub fn layout<'a>(document: &'a Document<'a>) -> Vec<Page<'a>> {
+    let mut layouter = Layouter::new(&document.preamble.config);
+    layouter.layout_blocks(&document.blocks, 0);
+    layouter.finish()
 }
 
 struct Layouter<'a> {
     pages: Vec<Page<'a>>,
-    cur: Page<'a>,
+    current_page: Page<'a>,
     y: f32,
     left: f32,
     right: f32,
@@ -85,7 +99,7 @@ struct Layouter<'a> {
     margin_bottom: f32,
     base_font_size: f32,
     base_leading: f32,
-    fig_no: u32,
+    figure_counter: u32,
     scratch_runs: Vec<FlatRun<'a>>,
     scratch_words: Vec<Shaped<'a>>,
     scratch_line: Vec<Shaped<'a>>,
@@ -98,7 +112,7 @@ impl<'a> Layouter<'a> {
         let y = config.page_height - config.margin_top;
         Self {
             pages: Vec::new(),
-            cur: Page {
+            current_page: Page {
                 width: config.page_width,
                 height: config.page_height,
                 ops: Vec::with_capacity(128),
@@ -113,7 +127,7 @@ impl<'a> Layouter<'a> {
             margin_bottom: config.margin_bottom,
             base_font_size: config.base_font_size,
             base_leading: config.base_leading,
-            fig_no: 0,
+            figure_counter: 0,
             scratch_runs: Vec::with_capacity(64),
             scratch_words: Vec::with_capacity(256),
             scratch_line: Vec::with_capacity(32),
@@ -121,16 +135,16 @@ impl<'a> Layouter<'a> {
     }
 
     fn finish(mut self) -> Vec<Page<'a>> {
-        if !self.cur.ops.is_empty() || self.pages.is_empty() {
-            self.pages.push(self.cur);
+        if !self.current_page.ops.is_empty() || self.pages.is_empty() {
+            self.pages.push(self.current_page);
         }
         self.pages
     }
 
-    fn ensure_room(&mut self, need: f32) {
-        if self.y - need < self.margin_bottom {
-            let old = std::mem::replace(
-                &mut self.cur,
+    fn ensure_room(&mut self, required_height: f32) {
+        if self.y - required_height < self.margin_bottom {
+            let previous_page = std::mem::replace(
+                &mut self.current_page,
                 Page {
                     width: self.page_width,
                     height: self.page_height,
@@ -138,7 +152,7 @@ impl<'a> Layouter<'a> {
                     text_pool: Vec::with_capacity(256),
                 },
             );
-            self.pages.push(old);
+            self.pages.push(previous_page);
             self.y = self.page_height - self.margin_top;
         }
     }
@@ -212,9 +226,9 @@ impl<'a> Layouter<'a> {
     fn layout_list(&mut self, ordered: bool, items: &'a [Vec<Block<'a>>], depth: usize) {
         for (idx, item) in items.iter().enumerate() {
             self.ensure_room(self.base_leading);
-            let mx = self.left + (depth as f32) * LIST_INDENT;
-            self.cur.ops.push(Paint::Marker {
-                x: mx,
+            let marker_x = self.left + (depth as f32) * LIST_INDENT;
+            self.current_page.ops.push(Paint::Marker {
+                x: marker_x,
                 y: self.y,
                 face: Face::Roman,
                 size: self.base_font_size,
@@ -225,7 +239,7 @@ impl<'a> Layouter<'a> {
                 },
             });
             let saved_left = self.left;
-            self.left = mx + LIST_INDENT;
+            self.left = marker_x + LIST_INDENT;
             self.layout_blocks(item, depth + 1);
             self.left = saved_left;
             self.y -= PARA_SKIP * 0.4;
@@ -272,7 +286,7 @@ impl<'a> Layouter<'a> {
         let mut y_top = self.y;
         for row in rows {
             if row.rule_above {
-                self.cur.ops.push(Paint::Rule {
+                self.current_page.ops.push(Paint::Rule {
                     x: origin_x,
                     y: y_top,
                     w: table_w,
@@ -285,7 +299,7 @@ impl<'a> Layouter<'a> {
             let mut x = origin_x;
             for i in 0..n {
                 if cols[i].rule_left {
-                    self.cur.ops.push(Paint::Rule {
+                    self.current_page.ops.push(Paint::Rule {
                         x,
                         y: y_top - row_h,
                         w: 0.6,
@@ -294,18 +308,18 @@ impl<'a> Layouter<'a> {
                     });
                 }
                 let cell = row.cells.get(i).map(|c| c.as_slice()).unwrap_or(&[]);
-                let cw = measure_inlines(cell) * scale;
+                let cell_width = measure_inlines(cell) * scale;
                 let inner_x = match cols[i].align {
                     ColAlign::Left => x + CELL_PAD,
-                    ColAlign::Right => x + col_w[i] - CELL_PAD - cw,
-                    ColAlign::Center => x + (col_w[i] - cw) * 0.5,
+                    ColAlign::Right => x + col_w[i] - CELL_PAD - cell_width,
+                    ColAlign::Center => x + (col_w[i] - cell_width) * 0.5,
                 };
                 self.paint_inlines_at(cell, inner_x.max(x + 1.0), baseline);
                 x += col_w[i];
             }
             y_top -= row_h;
         }
-        self.cur.ops.push(Paint::Rule {
+        self.current_page.ops.push(Paint::Rule {
             x: origin_x,
             y: y_top,
             w: table_w,
@@ -316,27 +330,27 @@ impl<'a> Layouter<'a> {
     }
 
     fn layout_figure(&mut self, graphic: Option<Graphic<'a>>, caption: &'a [Inline<'a>]) {
-        self.fig_no += 1;
-        let w = (self.right - self.left).min(360.0);
-        let h = FIG_H;
-        self.ensure_room(h + self.base_leading * 2.0 + PARA_SKIP);
-        let x = self.left + ((self.right - self.left) - w) * 0.5;
-        let y_bottom = self.y - h;
-        self.cur.ops.push(Paint::Rule {
+        self.figure_counter += 1;
+        let figure_width = (self.right - self.left).min(360.0);
+        let figure_height = FIG_H;
+        self.ensure_room(figure_height + self.base_leading * 2.0 + PARA_SKIP);
+        let x = self.left + ((self.right - self.left) - figure_width) * 0.5;
+        let y_bottom = self.y - figure_height;
+        self.current_page.ops.push(Paint::Rule {
             x,
             y: y_bottom,
-            w,
-            h,
+            w: figure_width,
+            h: figure_height,
             fill: false,
         });
-        if let Some(g) = graphic {
-            if !g.path.is_empty() {
-                let tw = metrics::string_width(g.path, Face::Roman, self.base_font_size);
-                let pool_start = self.cur.text_pool.len() as u32;
-                self.cur.text_pool.push(g.path);
-                self.cur.ops.push(Paint::GlyphRun {
-                    x: x + ((w - tw) * 0.5).max(CELL_PAD),
-                    y: y_bottom + h * 0.5,
+        if let Some(graphic_obj) = graphic {
+            if !graphic_obj.path.is_empty() {
+                let text_width = metrics::string_width(graphic_obj.path, Face::Roman, self.base_font_size);
+                let pool_start = self.current_page.text_pool.len() as u32;
+                self.current_page.text_pool.push(graphic_obj.path);
+                self.current_page.ops.push(Paint::GlyphRun {
+                    x: x + ((figure_width - text_width) * 0.5).max(CELL_PAD),
+                    y: y_bottom + figure_height * 0.5,
                     face: Face::Roman,
                     size: self.base_font_size,
                     part_start: pool_start,
@@ -346,13 +360,13 @@ impl<'a> Layouter<'a> {
         }
         self.y = y_bottom - self.base_leading;
         if !caption.is_empty() || true {
-            let tag_w = 56.0;
-            self.cur.ops.push(Paint::CaptionTag {
+            let tag_width = 56.0;
+            self.current_page.ops.push(Paint::CaptionTag {
                 x: self.left,
                 y: self.y,
-                n: self.fig_no,
+                n: self.figure_counter,
             });
-            self.paint_inlines_at(caption, self.left + tag_w, self.y);
+            self.paint_inlines_at(caption, self.left + tag_width, self.y);
             self.y -= self.base_leading;
         }
     }
@@ -415,18 +429,18 @@ impl<'a> Layouter<'a> {
             }
             let face = self.scratch_line[i].face;
             let x0 = x;
-            let pool_start = self.cur.text_pool.len() as u32;
+            let pool_start = self.current_page.text_pool.len() as u32;
             while i < self.scratch_line.len() {
-                let w = self.scratch_line[i];
-                if w.kind == WordKind::Word && w.face != face {
+                let word = self.scratch_line[i];
+                if word.kind == WordKind::Word && word.face != face {
                     break;
                 }
-                self.cur.text_pool.push(w.text);
-                x += w.width;
+                self.current_page.text_pool.push(word.text);
+                x += word.width;
                 i += 1;
             }
-            let pool_len = (self.cur.text_pool.len() as u32) - pool_start;
-            self.cur.ops.push(Paint::GlyphRun {
+            let pool_len = (self.current_page.text_pool.len() as u32) - pool_start;
+            self.current_page.ops.push(Paint::GlyphRun {
                 x: x0,
                 y: self.y,
                 face,
@@ -439,20 +453,20 @@ impl<'a> Layouter<'a> {
         self.scratch_line.clear();
     }
 
-    fn paint_inlines_at(&mut self, inls: &'a [Inline<'a>], x: f32, y: f32) {
-        self.paint_inlines_at_size(inls, Face::Roman, self.base_font_size, x, y);
+    fn paint_inlines_at(&mut self, inlines: &'a [Inline<'a>], x: f32, y: f32) {
+        self.paint_inlines_at_size(inlines, Face::Roman, self.base_font_size, x, y);
     }
 
     fn paint_inlines_at_size(
         &mut self,
-        inls: &'a [Inline<'a>],
+        inlines: &'a [Inline<'a>],
         default_face: Face,
         font_size: f32,
         mut x: f32,
         y: f32,
     ) {
         self.scratch_runs.clear();
-        flatten_into(inls, default_face, &mut self.scratch_runs);
+        flatten_into(inlines, default_face, &mut self.scratch_runs);
         self.scratch_words.clear();
         explode_words_into_size(&self.scratch_runs, font_size, &mut self.scratch_words);
         let mut i = 0;
@@ -468,18 +482,18 @@ impl<'a> Layouter<'a> {
             }
             let face = self.scratch_words[i].face;
             let x0 = x;
-            let pool_start = self.cur.text_pool.len() as u32;
+            let pool_start = self.current_page.text_pool.len() as u32;
             while i < self.scratch_words.len() {
-                let w = self.scratch_words[i];
-                if (w.kind == WordKind::Word && w.face != face) || w.kind == WordKind::Break {
+                let word = self.scratch_words[i];
+                if (word.kind == WordKind::Word && word.face != face) || word.kind == WordKind::Break {
                     break;
                 }
-                self.cur.text_pool.push(w.text);
-                x += w.width;
+                self.current_page.text_pool.push(word.text);
+                x += word.width;
                 i += 1;
             }
-            let pool_len = (self.cur.text_pool.len() as u32) - pool_start;
-            self.cur.ops.push(Paint::GlyphRun {
+            let pool_len = (self.current_page.text_pool.len() as u32) - pool_start;
+            self.current_page.ops.push(Paint::GlyphRun {
                 x: x0,
                 y,
                 face,

@@ -58,6 +58,9 @@ pub enum Block<'a> {
         level: u8,
         title: Vec<Inline<'a>>,
     },
+    PageBreak,
+    VSpace(f32),
+    HRule,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,8 +374,8 @@ impl<'a> Parser<'a> {
             if self.cmd_ends_at("\\setlength") {
                 in_preamble = true;
                 self.eat("\\setlength");
-                let param = self.brace_ident()?;
-                let val_str = self.brace_ident()?;
+                let param = self.brace_arg()?;
+                let val_str = self.brace_arg()?;
                 if let Some(dim) = crate::preamble::parse_dimension_pt(val_str) {
                     if param == "\\parindent" || param == "parindent" {
                         self.preamble.config.par_indent = dim;
@@ -431,8 +434,8 @@ impl<'a> Parser<'a> {
             }
             if self.cmd_ends_at("\\setlength") {
                 self.eat("\\setlength");
-                let param = self.brace_ident()?;
-                let val_str = self.brace_ident()?;
+                let param = self.brace_arg()?;
+                let val_str = self.brace_arg()?;
                 if let Some(dim) = crate::preamble::parse_dimension_pt(val_str) {
                     if param == "\\parindent" || param == "parindent" {
                         self.preamble.config.par_indent = dim;
@@ -440,6 +443,44 @@ impl<'a> Parser<'a> {
                         self.preamble.config.par_skip = dim;
                     }
                 }
+                continue;
+            }
+            if self.cmd_ends_at("\\newpage") {
+                self.eat("\\newpage");
+                blocks.push(Block::PageBreak);
+                continue;
+            }
+            if self.cmd_ends_at("\\clearpage") {
+                self.eat("\\clearpage");
+                blocks.push(Block::PageBreak);
+                continue;
+            }
+            if self.cmd_ends_at("\\bigskip") {
+                self.eat("\\bigskip");
+                blocks.push(Block::VSpace(12.0));
+                continue;
+            }
+            if self.cmd_ends_at("\\medskip") {
+                self.eat("\\medskip");
+                blocks.push(Block::VSpace(6.0));
+                continue;
+            }
+            if self.cmd_ends_at("\\smallskip") {
+                self.eat("\\smallskip");
+                blocks.push(Block::VSpace(3.0));
+                continue;
+            }
+            if self.cmd_ends_at("\\hrule") {
+                self.eat("\\hrule");
+                blocks.push(Block::HRule);
+                continue;
+            }
+            if self.cmd_ends_at("\\vspace") {
+                self.eat("\\vspace");
+                let _ = self.eat("*");
+                let val_str = self.brace_arg()?;
+                let dim = crate::preamble::parse_dimension_pt(val_str).unwrap_or(12.0);
+                blocks.push(Block::VSpace(dim));
                 continue;
             }
             if self.cmd_ends_at("\\section") {
@@ -697,6 +738,27 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn brace_arg(&mut self) -> Result<&'a str, ParseError> {
+        self.skip_hws();
+        if !self.eat("{") {
+            return Err(self.err("expected {arg}"));
+        }
+        let start = self.byte_offset;
+        loop {
+            match self.peek() {
+                Some('}') => {
+                    let arg = &self.source_code[start..self.byte_offset];
+                    self.bump();
+                    return Ok(arg.trim());
+                }
+                Some(_) => {
+                    self.bump();
+                }
+                None => return Err(self.err("unclosed brace")),
+            }
+        }
+    }
+
     fn parse_para_inlines(&mut self) -> Result<Vec<Inline<'a>>, ParseError> {
         let mut out = Vec::new();
         loop {
@@ -710,7 +772,14 @@ impl<'a> Parser<'a> {
                     || self.cmd_ends_at("\\section")
                     || self.cmd_ends_at("\\subsection")
                     || self.cmd_ends_at("\\subsubsection")
-                    || self.cmd_ends_at("\\maketitle") =>
+                    || self.cmd_ends_at("\\maketitle")
+                    || self.cmd_ends_at("\\newpage")
+                    || self.cmd_ends_at("\\clearpage")
+                    || self.cmd_ends_at("\\bigskip")
+                    || self.cmd_ends_at("\\medskip")
+                    || self.cmd_ends_at("\\smallskip")
+                    || self.cmd_ends_at("\\hrule")
+                    || self.cmd_ends_at("\\vspace") =>
                 {
                     break;
                 }

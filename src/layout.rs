@@ -174,19 +174,23 @@ impl<'a> Layouter<'a> {
         self.pages
     }
 
+    fn new_page(&mut self) {
+        let previous_page = std::mem::replace(
+            &mut self.current_page,
+            Page {
+                width: self.page_width,
+                height: self.page_height,
+                ops: Vec::with_capacity(128),
+                text_pool: Vec::with_capacity(256),
+            },
+        );
+        self.pages.push(previous_page);
+        self.y = self.page_height - self.margin_top;
+    }
+
     fn ensure_room(&mut self, required_height: f32) -> bool {
         if self.y - required_height < self.margin_bottom {
-            let previous_page = std::mem::replace(
-                &mut self.current_page,
-                Page {
-                    width: self.page_width,
-                    height: self.page_height,
-                    ops: Vec::with_capacity(128),
-                    text_pool: Vec::with_capacity(256),
-                },
-            );
-            self.pages.push(previous_page);
-            self.y = self.page_height - self.margin_top;
+            self.new_page();
             true
         } else {
             false
@@ -209,6 +213,24 @@ impl<'a> Layouter<'a> {
                     date,
                 } => self.layout_title_block(title, author.as_deref(), date.as_deref()),
                 Block::Section { level, title } => self.layout_section(*level, title),
+                Block::PageBreak => {
+                    self.new_page();
+                }
+                Block::VSpace(h) => {
+                    self.y -= *h;
+                }
+                Block::HRule => {
+                    let w = self.right - self.left;
+                    self.ensure_room(4.0);
+                    self.current_page.ops.push(Paint::Rule {
+                        x: self.left,
+                        y: self.y,
+                        w,
+                        h: 0.4,
+                        fill: true,
+                    });
+                    self.y -= 4.0;
+                }
             }
         }
     }

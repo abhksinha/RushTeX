@@ -484,4 +484,30 @@ Second paragraph in the section has standard first line indent.
         let third_run = glyph_runs.iter().find(|(_, t)| *t == "Third").unwrap();
         assert_eq!(third_run.0, 72.0, "Third paragraph with noindent should not be indented");
     }
+
+    #[test]
+    fn test_explicit_page_break_and_skips() {
+        let src = r#"
+\documentclass{article}
+\begin{document}
+Content on page 1.
+\bigskip
+\hrule
+\vspace{20pt}
+More content on page 1.
+\newpage
+Content on page 2 after explicit newpage.
+\end{document}
+"#;
+        let doc = tex::parse(src).unwrap();
+        let pages = layout::layout(&doc);
+        assert_eq!(pages.len(), 2, "Expected exactly 2 pages from \\newpage");
+        assert!(pages[0].text_pool.contains(&"Content"));
+        assert!(pages[0].text_pool.contains(&"More"));
+        assert!(pages[1].text_pool.contains(&"explicit"));
+
+        // Verify HRule was emitted on page 1
+        let has_rule = pages[0].ops.iter().any(|op| matches!(op, layout::Paint::Rule { .. }));
+        assert!(has_rule, "Expected horizontal rule on page 1");
+    }
 }

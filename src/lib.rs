@@ -343,4 +343,36 @@ Extra garbage outside document
             other => panic!("expected parse error, got {other:?}"),
         }
     }
+
+    #[test]
+    fn test_page_numbering_plain_and_empty() {
+        // Plain (default) document has page number "1"
+        let src_plain = r#"
+\documentclass{article}
+\begin{document}
+Hello World with Page Number.
+\end{document}
+"#;
+        let pdf_plain = compile_str(src_plain).unwrap();
+        let text_plain = extract_pdftotext(&pdf_plain);
+        assert!(text_plain.contains("Hello World with Page Number."));
+        assert!(text_plain.contains("1"));
+
+        // Empty pagestyle has NO page number
+        let src_empty = r#"
+\documentclass{article}
+\pagestyle{empty}
+\begin{document}
+Hello World without Page Number.
+\end{document}
+"#;
+        let pdf_empty = compile_str(src_empty).unwrap();
+        let text_empty = extract_pdftotext(&pdf_empty);
+        assert!(text_empty.contains("Hello World without Page Number."));
+        // Check that page number "1" was not emitted in footer
+        let uncomp = compile_str_opts(src_empty, false).unwrap();
+        let s = String::from_utf8_lossy(&uncomp);
+        // The uncompressed stream shouldn't have a single digit page number (1) Tj
+        assert!(!s.contains("(1) Tj"));
+    }
 }

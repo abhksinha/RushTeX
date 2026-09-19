@@ -196,6 +196,9 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
             }
             | Paint::Marker {
                 x, y, face, size, ..
+            }
+            | Paint::PageNumber {
+                x, y, face, size, ..
             } => (*x, *y, *face, *size),
             Paint::CaptionTag { x, y, .. } => (*x, *y, Face::Roman, crate::layout::FONT_SIZE),
             Paint::Rule { .. } => unreachable!(),
@@ -249,6 +252,9 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
                 s.extend_from_slice(b"Figure ");
                 write_u64(s, *n as u64);
                 s.extend_from_slice(b": ");
+            }
+            Paint::PageNumber { page_number, .. } => {
+                write_u64(s, *page_number as u64);
             }
             Paint::Rule { .. } => {}
         }

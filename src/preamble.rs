@@ -53,6 +53,7 @@ pub struct DocumentConfig {
     pub margin_bottom: f32,
     pub base_font_size: f32,
     pub base_leading: f32,
+    pub page_numbering: bool,
 }
 
 impl Default for DocumentConfig {
@@ -66,6 +67,7 @@ impl Default for DocumentConfig {
             margin_bottom: 72.0,
             base_font_size: 11.0,
             base_leading: 14.0,
+            page_numbering: true,
         }
     }
 }

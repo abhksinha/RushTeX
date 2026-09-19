@@ -356,6 +356,17 @@ impl<'a> Parser<'a> {
                 self.preamble.date = Some(self.require_group()?);
                 continue;
             }
+            if self.cmd_ends_at("\\pagestyle") {
+                in_preamble = true;
+                self.eat("\\pagestyle");
+                let style = self.brace_ident()?;
+                if style == "empty" {
+                    self.preamble.config.page_numbering = false;
+                } else if style == "plain" {
+                    self.preamble.config.page_numbering = true;
+                }
+                continue;
+            }
             if in_preamble {
                 self.skip_preamble_command()?;
                 continue;
@@ -386,6 +397,21 @@ impl<'a> Parser<'a> {
                         date: self.preamble.date.clone(),
                     });
                 }
+                continue;
+            }
+            if self.cmd_ends_at("\\pagestyle") {
+                self.eat("\\pagestyle");
+                let style = self.brace_ident()?;
+                if style == "empty" {
+                    self.preamble.config.page_numbering = false;
+                } else if style == "plain" {
+                    self.preamble.config.page_numbering = true;
+                }
+                continue;
+            }
+            if self.cmd_ends_at("\\thispagestyle") {
+                self.eat("\\thispagestyle");
+                let _ = self.brace_ident()?;
                 continue;
             }
             if self.cmd_ends_at("\\section") {

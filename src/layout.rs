@@ -79,6 +79,13 @@ pub enum Paint {
         y: f32,
         n: u32,
     },
+    PageNumber {
+        x: f32,
+        y: f32,
+        face: Face,
+        size: f32,
+        page_number: u32,
+    },
 }
 
 pub fn layout<'a>(document: &'a Document<'a>) -> Vec<Page<'a>> {
@@ -100,6 +107,7 @@ struct Layouter<'a> {
     base_font_size: f32,
     base_leading: f32,
     figure_counter: u32,
+    page_numbering: bool,
     scratch_runs: Vec<FlatRun<'a>>,
     scratch_words: Vec<Shaped<'a>>,
     scratch_line: Vec<Shaped<'a>>,
@@ -128,6 +136,7 @@ impl<'a> Layouter<'a> {
             base_font_size: config.base_font_size,
             base_leading: config.base_leading,
             figure_counter: 0,
+            page_numbering: config.page_numbering,
             scratch_runs: Vec::with_capacity(64),
             scratch_words: Vec::with_capacity(256),
             scratch_line: Vec::with_capacity(32),
@@ -137,6 +146,23 @@ impl<'a> Layouter<'a> {
     fn finish(mut self) -> Vec<Page<'a>> {
         if !self.current_page.ops.is_empty() || self.pages.is_empty() {
             self.pages.push(self.current_page);
+        }
+        if self.page_numbering {
+            for (page_idx, page) in self.pages.iter_mut().enumerate() {
+                let page_number = (page_idx + 1) as u32;
+                let digit_count = count_digits(page_number);
+                let page_num_size = 10.0f32;
+                let num_width = (digit_count as f32) * 556.0 * (page_num_size / 1000.0);
+                let x = (page.width - num_width) * 0.5;
+                let y = self.margin_bottom * 0.45;
+                page.ops.push(Paint::PageNumber {
+                    x,
+                    y,
+                    face: Face::Roman,
+                    size: page_num_size,
+                    page_number,
+                });
+            }
         }
         self.pages
     }
@@ -667,4 +693,17 @@ fn measure_text_run_size(s: &str, face: Face, size: f32) -> f32 {
         }
     }
     total_units as f32 * (size / 1000.0)
+}
+
+#[inline]
+fn count_digits(mut n: u32) -> u32 {
+    if n == 0 {
+        return 1;
+    }
+    let mut count = 0;
+    while n > 0 {
+        count += 1;
+        n /= 10;
+    }
+    count
 }

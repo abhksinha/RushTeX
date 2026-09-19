@@ -401,4 +401,44 @@ This is the text following the protected heading that belongs with it.
         // Check that page 2 DOES have the section heading
         assert!(pages[1].text_pool.contains(&"Protected"));
     }
+
+    #[test]
+    fn test_full_justification_tw() {
+        let src = r#"
+\documentclass{article}
+\begin{document}
+This is a long paragraph that is designed to demonstrate full justification in our high-speed LaTeX engine.
+The words on the first line will expand their inter-word spacing so that the line reaches exactly the right margin.
+The very last line of this paragraph will remain left-aligned without justification.
+\end{document}
+"#;
+        let pdf_uncompressed = compile_str_opts(src, false).unwrap();
+        let s = String::from_utf8_lossy(&pdf_uncompressed);
+        // The uncompressed PDF must contain positive word spacing commands `Tw`
+        assert!(s.contains(" Tw\n"));
+        // And it must reset back to 0 Tw for the last line or trailing text
+        assert!(s.contains("0 Tw\n"));
+
+        let doc = tex::parse(src).unwrap();
+        let pages = layout::layout(&doc);
+        assert!(!pages.is_empty());
+        // Check that at least one GlyphRun has word_spacing > 0.0
+        let has_justified_run = pages[0].ops.iter().any(|op| match op {
+            layout::Paint::GlyphRun { word_spacing, .. } => *word_spacing > 0.0,
+            _ => false,
+        });
+        assert!(has_justified_run, "Expected at least one justified GlyphRun with word_spacing > 0");
+
+        // Check that the last GlyphRun of the paragraph has word_spacing == 0.0
+        let last_glyph_run = pages[0]
+            .ops
+            .iter()
+            .filter(|op| matches!(op, layout::Paint::GlyphRun { .. }))
+            .last()
+            .unwrap();
+        match last_glyph_run {
+            layout::Paint::GlyphRun { word_spacing, .. } => assert_eq!(*word_spacing, 0.0),
+            _ => unreachable!(),
+        }
+    }
 }

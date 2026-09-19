@@ -58,6 +58,7 @@ pub enum Paint {
         size: f32,
         part_start: u32,
         part_count: u32,
+        word_spacing: f32,
     },
     Marker {
         x: f32,
@@ -390,6 +391,7 @@ impl<'a> Layouter<'a> {
                     size: self.base_font_size,
                     part_start: pool_start,
                     part_count: 1,
+                    word_spacing: 0.0,
                 });
             }
         }
@@ -422,7 +424,7 @@ impl<'a> Layouter<'a> {
         for word_idx in 0..num_words {
             let w = self.scratch_words[word_idx];
             if w.kind == WordKind::Break {
-                self.flush_scratch_line();
+                self.flush_scratch_line(false);
                 line_w = 0.0;
                 continue;
             }
@@ -431,7 +433,7 @@ impl<'a> Layouter<'a> {
                 while self.scratch_line.last().map(|x| x.kind) == Some(WordKind::Space) {
                     self.scratch_line.pop();
                 }
-                self.flush_scratch_line();
+                self.flush_scratch_line(true);
                 line_w = 0.0;
                 if w.kind == WordKind::Space {
                     continue;
@@ -446,19 +448,42 @@ impl<'a> Layouter<'a> {
         while self.scratch_line.last().map(|x| x.kind) == Some(WordKind::Space) {
             self.scratch_line.pop();
         }
-        self.flush_scratch_line();
+        self.flush_scratch_line(false);
     }
 
-    fn flush_scratch_line(&mut self) {
+    fn flush_scratch_line(&mut self, justify: bool) {
         if self.scratch_line.is_empty() {
             return;
         }
         self.ensure_room(self.base_leading);
+
+        let measure = self.right - self.left;
+        let mut line_w = 0.0f32;
+        let mut num_spaces = 0u32;
+        for w in &self.scratch_line {
+            line_w += w.width;
+            if w.kind == WordKind::Space {
+                num_spaces += 1;
+            }
+        }
+
+        let word_spacing = if justify && num_spaces > 0 && line_w < measure {
+            let slack = measure - line_w;
+            let extra = slack / (num_spaces as f32);
+            if extra <= 18.0 {
+                extra
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
         let mut x = self.left;
         let mut i = 0;
         while i < self.scratch_line.len() {
             if self.scratch_line[i].kind == WordKind::Space {
-                x += self.scratch_line[i].width;
+                x += self.scratch_line[i].width + word_spacing;
                 i += 1;
                 continue;
             }
@@ -471,7 +496,8 @@ impl<'a> Layouter<'a> {
                     break;
                 }
                 self.current_page.text_pool.push(word.text);
-                x += word.width;
+                let extra_sp = if word.kind == WordKind::Space { word_spacing } else { 0.0 };
+                x += word.width + extra_sp;
                 i += 1;
             }
             let pool_len = (self.current_page.text_pool.len() as u32) - pool_start;
@@ -482,6 +508,7 @@ impl<'a> Layouter<'a> {
                 size: self.base_font_size,
                 part_start: pool_start,
                 part_count: pool_len,
+                word_spacing,
             });
         }
         self.y -= self.base_leading;
@@ -535,6 +562,7 @@ impl<'a> Layouter<'a> {
                 size: font_size,
                 part_start: pool_start,
                 part_count: pool_len,
+                word_spacing: 0.0,
             });
         }
     }

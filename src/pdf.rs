@@ -162,6 +162,7 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
     s.extend_from_slice(b"BT\n");
     let mut last_face: Option<Face> = None;
     let mut last_size: Option<f32> = None;
+    let mut last_word_spacing: Option<f32> = None;
     let mut last_x = 0.0f32;
     let mut last_y = 0.0f32;
     let mut pos_inited = false;
@@ -170,6 +171,10 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
     for op in &page.ops {
         if let Paint::Rule { x, y, w, h, fill } = op {
             if in_text {
+                if last_word_spacing.map_or(false, |w| w != 0.0) {
+                    s.extend_from_slice(b"0 Tw\n");
+                    last_word_spacing = Some(0.0);
+                }
                 s.extend_from_slice(b"ET\n");
                 in_text = false;
             }
@@ -190,17 +195,17 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
             continue;
         }
 
-        let (x, y, face, size) = match op {
+        let (x, y, face, size, word_spacing) = match op {
             Paint::GlyphRun {
-                x, y, face, size, ..
-            }
-            | Paint::Marker {
+                x, y, face, size, word_spacing, ..
+            } => (*x, *y, *face, *size, *word_spacing),
+            Paint::Marker {
                 x, y, face, size, ..
             }
             | Paint::PageNumber {
                 x, y, face, size, ..
-            } => (*x, *y, *face, *size),
-            Paint::CaptionTag { x, y, .. } => (*x, *y, Face::Roman, crate::layout::FONT_SIZE),
+            } => (*x, *y, *face, *size, 0.0),
+            Paint::CaptionTag { x, y, .. } => (*x, *y, Face::Roman, crate::layout::FONT_SIZE, 0.0),
             Paint::Rule { .. } => unreachable!(),
         };
 
@@ -208,7 +213,15 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
             s.extend_from_slice(b"BT\n");
             in_text = true;
             last_face = None;
+            last_size = None;
+            last_word_spacing = None;
             pos_inited = false;
+        }
+
+        if last_word_spacing != Some(word_spacing) {
+            write_f32(s, word_spacing);
+            s.extend_from_slice(b" Tw\n");
+            last_word_spacing = Some(word_spacing);
         }
 
         if last_face != Some(face) || last_size != Some(size) {
@@ -264,6 +277,9 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
         last_y = y;
     }
     if in_text {
+        if last_word_spacing.map_or(false, |w| w != 0.0) {
+            s.extend_from_slice(b"0 Tw\n");
+        }
         s.extend_from_slice(b"ET\n");
     }
 }

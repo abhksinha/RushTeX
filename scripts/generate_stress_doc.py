@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""
+r"""
 Generate a realistic stress-test LaTeX document with ~40,000 words.
-Includes random paragraphs with occasional bold/italic styling to benchmark
-texrs line-breaking, page-packing, and PDF generation under heavy load.
+Includes a standard LaTeX preamble (\documentclass, \usepackage, \title, \author, \date),
+\maketitle, section headings, and random paragraphs with \textbf/\textit styling.
 """
 
 import argparse
 import random
-import sys
 from pathlib import Path
 
 WORDS = [
@@ -56,30 +55,50 @@ def generate_paragraph(target_words: int, rng: random.Random) -> str:
     return res
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate LaTeX stress document.")
+    parser = argparse.ArgumentParser(description="Generate LaTeX stress document with preamble.")
     parser.add_argument("--words", type=int, default=40000, help="Target word count (default: 40000)")
     parser.add_argument("-o", "--output", type=str, default="examples/stress_40k.tex", help="Output file path")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for reproducibility")
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
-    paragraphs = []
+    blocks = []
     words_generated = 0
+    section_count = 1
+
+    blocks.append("\\section{Introduction and Workload Overview}")
 
     while words_generated < args.words:
         para_words = min(rng.randint(60, 120), args.words - words_generated)
         para = generate_paragraph(para_words, rng)
-        paragraphs.append(para)
+        blocks.append(para)
         words_generated += para_words
 
-    content = "\n\n".join(paragraphs) + "\n"
+        # Insert a section heading every ~2000 words
+        if words_generated < args.words and words_generated // 2000 >= section_count:
+            section_count += 1
+            blocks.append(f"\\section{{Section {section_count}: Continuous Data Flow Stage}}")
+
+    body = "\n\n".join(blocks)
+
+    preamble = (
+        "\\documentclass[12pt, a4paper]{article}\n"
+        "\\usepackage[margin=1in]{geometry}\n"
+        "\\title{Large-Scale Document Stress Benchmark (40,000 Words)}\n"
+        "\\author{Automated Benchmark Generator}\n"
+        "\\date{September 2026}\n\n"
+        "\\begin{document}\n"
+        "\\maketitle\n\n"
+    )
+
+    full_document = preamble + body + "\n\n\\end{document}\n"
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(content, encoding="utf-8")
+    out_path.write_text(full_document, encoding="utf-8")
 
-    size_kb = len(content.encode("utf-8")) / 1024
-    print(f"Generated {len(paragraphs)} paragraphs, {words_generated} words.")
+    size_kb = len(full_document.encode("utf-8")) / 1024
+    print(f"Generated {len(blocks)} blocks ({section_count} sections), {words_generated} words.")
     print(f"Output: {out_path} ({size_kb:.1f} KB)")
 
 if __name__ == "__main__":

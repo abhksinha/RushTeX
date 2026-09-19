@@ -1,0 +1,45 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage[margin=1in]{geometry}
+
+\title{Code Typesetting in rushtex}
+\author{rushtex team}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+The \texttt{rushtex} typesetting engine now natively supports raw code listings, verbatim environments, and inline code snippets using the standard PDF \texttt{Courier} monospace typeface family.
+
+\section{Raw Verbatim Block}
+Standard raw verbatim syntax with unescaped symbols like \verb|{}|, \verb|%|, and \verb|\|:
+
+\begin{verbatim}
+fn main() {
+    // Everything inside verbatim is literal
+    let message = "Hello from rushtex!";
+    println!("{}", message);
+}
+\end{verbatim}
+
+\section{Numbered Code Listing}
+Code listings with line numbers using the \texttt{lstlisting} syntax:
+
+\begin{lstlisting}[language=Rust, numbers=left]
+pub struct Vector3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl Vector3 {
+    pub fn dot(&self, other: &Self) -> f32 {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
+}
+\end{lstlisting}
+
+\section{Inline Code Snippets}
+You can use \texttt{cargo build --release} or \verb|rushtex input.tex -o output.pdf| directly in your terminal.
+
+\end{document}

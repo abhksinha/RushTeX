@@ -91,6 +91,7 @@ pub enum Inline<'a> {
     Italic(Vec<Inline<'a>>),
     Group(Vec<Inline<'a>>),
     Break,
+    NoIndent,
 }
 
 pub type ParseError = crate::diagnostic::Diagnostic;
@@ -367,6 +368,20 @@ impl<'a> Parser<'a> {
                 }
                 continue;
             }
+            if self.cmd_ends_at("\\setlength") {
+                in_preamble = true;
+                self.eat("\\setlength");
+                let param = self.brace_ident()?;
+                let val_str = self.brace_ident()?;
+                if let Some(dim) = crate::preamble::parse_dimension_pt(val_str) {
+                    if param == "\\parindent" || param == "parindent" {
+                        self.preamble.config.par_indent = dim;
+                    } else if param == "\\parskip" || param == "parskip" {
+                        self.preamble.config.par_skip = dim;
+                    }
+                }
+                continue;
+            }
             if in_preamble {
                 self.skip_preamble_command()?;
                 continue;
@@ -412,6 +427,19 @@ impl<'a> Parser<'a> {
             if self.cmd_ends_at("\\thispagestyle") {
                 self.eat("\\thispagestyle");
                 let _ = self.brace_ident()?;
+                continue;
+            }
+            if self.cmd_ends_at("\\setlength") {
+                self.eat("\\setlength");
+                let param = self.brace_ident()?;
+                let val_str = self.brace_ident()?;
+                if let Some(dim) = crate::preamble::parse_dimension_pt(val_str) {
+                    if param == "\\parindent" || param == "parindent" {
+                        self.preamble.config.par_indent = dim;
+                    } else if param == "\\parskip" || param == "parskip" {
+                        self.preamble.config.par_skip = dim;
+                    }
+                }
                 continue;
             }
             if self.cmd_ends_at("\\section") {
@@ -758,6 +786,7 @@ impl<'a> Parser<'a> {
             "textbf" => Ok(Inline::Bold(self.require_group()?)),
             "textit" | "emph" => Ok(Inline::Italic(self.require_group()?)),
             "par" => Ok(Inline::Break),
+            "noindent" => Ok(Inline::NoIndent),
             other => Err(self.err_at(cmd_start, format!("unknown command \\{other}"))),
         }
     }
@@ -795,7 +824,7 @@ fn is_single_escape(c: char) -> bool {
 fn is_empty_inlines(v: &[Inline<'_>]) -> bool {
     v.iter().all(|i| match i {
         Inline::Text(s) => s.trim().is_empty(),
-        Inline::Break => true,
+        Inline::Break | Inline::NoIndent => true,
         Inline::Bold(x) | Inline::Italic(x) | Inline::Group(x) => is_empty_inlines(x),
     })
 }

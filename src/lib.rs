@@ -441,4 +441,47 @@ The very last line of this paragraph will remain left-aligned without justificat
             _ => unreachable!(),
         }
     }
+
+    #[test]
+    fn test_paragraph_first_line_indent_and_noindent() {
+        let src = r#"
+\documentclass{article}
+\begin{document}
+\section{Intro}
+First paragraph after section heading has no indent.
+
+Second paragraph in the section has standard first line indent.
+
+\noindent Third paragraph explicitly requested noindent.
+\end{document}
+"#;
+        let doc = tex::parse(src).unwrap();
+        let pages = layout::layout(&doc);
+        assert!(!pages.is_empty());
+
+        let glyph_runs: Vec<_> = pages[0]
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                layout::Paint::GlyphRun { x, part_start, .. } => {
+                    let text = pages[0].text_pool[*part_start as usize];
+                    Some((*x, text))
+                }
+                _ => None,
+            })
+            .collect();
+
+        // Heading "Intro": x == 72.0
+        // "First": x == 72.0 (unindented after section)
+        // "Second": x == 72.0 + 15.0 = 87.0 (indented by 15.0pt)
+        // "Third": x == 72.0 (unindented due to \noindent)
+        let first_run = glyph_runs.iter().find(|(_, t)| *t == "First").unwrap();
+        assert_eq!(first_run.0, 72.0, "First paragraph after heading should not be indented");
+
+        let second_run = glyph_runs.iter().find(|(_, t)| *t == "Second").unwrap();
+        assert_eq!(second_run.0, 87.0, "Second paragraph should be indented by par_indent (15.0pt)");
+
+        let third_run = glyph_runs.iter().find(|(_, t)| *t == "Third").unwrap();
+        assert_eq!(third_run.0, 72.0, "Third paragraph with noindent should not be indented");
+    }
 }

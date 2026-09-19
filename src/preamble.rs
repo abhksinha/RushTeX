@@ -54,6 +54,8 @@ pub struct DocumentConfig {
     pub base_font_size: f32,
     pub base_leading: f32,
     pub page_numbering: bool,
+    pub par_indent: f32,
+    pub par_skip: f32,
 }
 
 impl Default for DocumentConfig {
@@ -68,6 +70,8 @@ impl Default for DocumentConfig {
             base_font_size: 11.0,
             base_leading: 14.0,
             page_numbering: true,
+            par_indent: 15.0,
+            par_skip: 8.0,
         }
     }
 }
@@ -159,6 +163,20 @@ impl PackageHandler for GeometryPackage {
     }
 }
 
+/// Handler for `\usepackage{parskip}` which removes first-line indentation and configures paragraph skip.
+pub struct ParskipPackage;
+
+impl PackageHandler for ParskipPackage {
+    fn name(&self) -> &'static str {
+        "parskip"
+    }
+
+    fn apply(&self, _options: &[&str], config: &mut DocumentConfig) {
+        config.par_indent = 0.0;
+        config.par_skip = 8.0;
+    }
+}
+
 /// No-op compatibility package handler for common LaTeX packages that require
 /// no configuration changes (e.g. `graphicx`, `amsmath`, `inputenc`).
 pub struct NoOpPackage(&'static str);
@@ -180,6 +198,7 @@ impl Default for PackageRegistry {
     fn default() -> Self {
         let mut reg = Self::new();
         reg.register(GeometryPackage);
+        reg.register(ParskipPackage);
         reg.register(NoOpPackage("graphicx"));
         reg.register(NoOpPackage("amsmath"));
         reg.register(NoOpPackage("amssymb"));

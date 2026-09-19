@@ -109,6 +109,9 @@ struct Layouter<'a> {
     base_leading: f32,
     figure_counter: u32,
     page_numbering: bool,
+    par_indent: f32,
+    par_skip: f32,
+    after_heading: bool,
     scratch_runs: Vec<FlatRun<'a>>,
     scratch_words: Vec<Shaped<'a>>,
     scratch_line: Vec<Shaped<'a>>,
@@ -138,6 +141,9 @@ impl<'a> Layouter<'a> {
             base_leading: config.base_leading,
             figure_counter: 0,
             page_numbering: config.page_numbering,
+            par_indent: config.par_indent,
+            par_skip: config.par_skip,
+            after_heading: true,
             scratch_runs: Vec::with_capacity(64),
             scratch_words: Vec::with_capacity(256),
             scratch_line: Vec::with_capacity(32),
@@ -190,7 +196,7 @@ impl<'a> Layouter<'a> {
     fn layout_blocks(&mut self, blocks: &'a [Block<'a>], depth: usize) {
         for (i, b) in blocks.iter().enumerate() {
             if i > 0 {
-                self.y -= PARA_SKIP;
+                self.y -= self.par_skip;
             }
             match b {
                 Block::Para(inls) => self.layout_para(inls),
@@ -239,6 +245,7 @@ impl<'a> Layouter<'a> {
         }
 
         self.y -= 16.0;
+        self.after_heading = true;
     }
 
     fn layout_section(&mut self, level: u8, title: &'a [Inline<'a>]) {
@@ -257,6 +264,7 @@ impl<'a> Layouter<'a> {
         }
         self.paint_inlines_at_size(title, Face::Bold, font_size, self.left, self.y);
         self.y -= font_size + skip_after;
+        self.after_heading = true;
     }
 
     fn layout_list(&mut self, ordered: bool, items: &'a [Vec<Block<'a>>], depth: usize) {
@@ -417,24 +425,43 @@ impl<'a> Layouter<'a> {
             return;
         }
 
+        let is_noindent = inls.iter().any(|i| matches!(i, Inline::NoIndent));
+        let has_indent = if self.after_heading || is_noindent {
+            self.after_heading = false;
+            false
+        } else {
+            self.par_indent > 0.0
+        };
+
+        let first_line_indent = if has_indent { self.par_indent } else { 0.0 };
         let measure = self.right - self.left;
         let mut line_w = 0.0;
+        let mut is_first_line = true;
 
         let num_words = self.scratch_words.len();
         for word_idx in 0..num_words {
             let w = self.scratch_words[word_idx];
             if w.kind == WordKind::Break {
-                self.flush_scratch_line(false);
+                let line_indent = if is_first_line { first_line_indent } else { 0.0 };
+                self.flush_scratch_line(false, line_indent);
                 line_w = 0.0;
+                is_first_line = false;
                 continue;
             }
             let extra = w.width;
-            if !self.scratch_line.is_empty() && line_w + extra > measure && w.kind != WordKind::Space {
+            let available = if is_first_line {
+                measure - first_line_indent
+            } else {
+                measure
+            };
+            if !self.scratch_line.is_empty() && line_w + extra > available && w.kind != WordKind::Space {
                 while self.scratch_line.last().map(|x| x.kind) == Some(WordKind::Space) {
                     self.scratch_line.pop();
                 }
-                self.flush_scratch_line(true);
+                let line_indent = if is_first_line { first_line_indent } else { 0.0 };
+                self.flush_scratch_line(true, line_indent);
                 line_w = 0.0;
+                is_first_line = false;
                 if w.kind == WordKind::Space {
                     continue;
                 }
@@ -448,16 +475,17 @@ impl<'a> Layouter<'a> {
         while self.scratch_line.last().map(|x| x.kind) == Some(WordKind::Space) {
             self.scratch_line.pop();
         }
-        self.flush_scratch_line(false);
+        let line_indent = if is_first_line { first_line_indent } else { 0.0 };
+        self.flush_scratch_line(false, line_indent);
     }
 
-    fn flush_scratch_line(&mut self, justify: bool) {
+    fn flush_scratch_line(&mut self, justify: bool, line_indent: f32) {
         if self.scratch_line.is_empty() {
             return;
         }
         self.ensure_room(self.base_leading);
 
-        let measure = self.right - self.left;
+        let available = (self.right - self.left) - line_indent;
         let mut line_w = 0.0f32;
         let mut num_spaces = 0u32;
         for w in &self.scratch_line {
@@ -467,8 +495,8 @@ impl<'a> Layouter<'a> {
             }
         }
 
-        let word_spacing = if justify && num_spaces > 0 && line_w < measure {
-            let slack = measure - line_w;
+        let word_spacing = if justify && num_spaces > 0 && line_w < available {
+            let slack = available - line_w;
             let extra = slack / (num_spaces as f32);
             if extra <= 18.0 {
                 extra
@@ -479,7 +507,7 @@ impl<'a> Layouter<'a> {
             0.0
         };
 
-        let mut x = self.left;
+        let mut x = self.left + line_indent;
         let mut i = 0;
         while i < self.scratch_line.len() {
             if self.scratch_line[i].kind == WordKind::Space {
@@ -610,6 +638,7 @@ fn flatten_into<'s, 'a>(inls: &'s [Inline<'a>], face: Face, out: &mut Vec<FlatRu
                 face,
                 is_break: true,
             }),
+            Inline::NoIndent => {}
         }
     }
 }
@@ -701,6 +730,7 @@ fn measure_inlines_face_size(inls: &[Inline<'_>], face: Face, size: f32) -> f32 
                 total_w += measure_inlines_face_size(x, face, size);
             }
             Inline::Break => {}
+            Inline::NoIndent => {}
         }
     }
     total_w

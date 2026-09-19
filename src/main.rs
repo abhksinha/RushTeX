@@ -7,6 +7,7 @@ fn main() -> ExitCode {
     let mut input: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut dump_ast = false;
+    let mut compress = true;
 
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -17,6 +18,7 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             },
+            "--no-compress" => compress = false,
             "--ast" => dump_ast = true,
             "-h" | "--help" => {
                 print_help();
@@ -47,7 +49,7 @@ fn main() -> ExitCode {
             eprintln!("texrs: {e}");
             return ExitCode::from(1);
         }
-        return match texrs::compile_str(&src) {
+        return match texrs::compile_str_opts(&src, compress) {
             Ok(pdf) => {
                 if let Err(e) = std::io::Write::write_all(&mut std::io::stdout(), &pdf) {
                     eprintln!("texrs: {e}");
@@ -81,7 +83,7 @@ fn main() -> ExitCode {
         }
     }
 
-    match texrs::compile_file(&input, output.as_deref()) {
+    match texrs::compile_file_opts(&input, output.as_deref(), compress) {
         Ok(out) => {
             eprintln!("wrote {}", out.display());
             ExitCode::SUCCESS

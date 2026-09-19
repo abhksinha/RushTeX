@@ -68,43 +68,63 @@ def main():
 
     # 1. Benchmark pdflatex
     print("-> Benchmarking pdflatex...")
+    pdflatex_out = "/tmp/pdflatex_stress.pdf"
     pdflatex_cmd = [
         "pdflatex",
         "-interaction=nonstopmode",
         "-halt-on-error",
         "-output-directory=/tmp",
+        "-jobname=pdflatex_stress",
         tex_path
     ]
     pdf_stats = run_timed_command(pdflatex_cmd, runs=5)
+    pdf_size_bytes = Path(pdflatex_out).stat().st_size if Path(pdflatex_out).exists() else 0
 
-    # 2. Benchmark texrs
-    print("-> Benchmarking texrs...")
-    texrs_cmd = [
+    # 2. Benchmark texrs Baseline (uncompressed)
+    print("-> Benchmarking texrs Baseline (uncompressed)...")
+    texrs_raw_out = "/tmp/texrs_raw.pdf"
+    texrs_raw_cmd = [
+        "./target/release/texrs",
+        tex_path,
+        "--no-compress",
+        "-o",
+        texrs_raw_out
+    ]
+    raw_stats = run_timed_command(texrs_raw_cmd, runs=5)
+    raw_size_bytes = Path(texrs_raw_out).stat().st_size if Path(texrs_raw_out).exists() else 0
+
+    # 3. Benchmark texrs Delta (compressed)
+    print("-> Benchmarking texrs Delta (compressed)...")
+    texrs_comp_out = "/tmp/texrs_comp.pdf"
+    texrs_comp_cmd = [
         "./target/release/texrs",
         tex_path,
         "-o",
-        "/tmp/texrs_stress.pdf"
+        texrs_comp_out
     ]
-    texrs_stats = run_timed_command(texrs_cmd, runs=5)
+    comp_stats = run_timed_command(texrs_comp_cmd, runs=5)
+    comp_size_bytes = Path(texrs_comp_out).stat().st_size if Path(texrs_comp_out).exists() else 0
 
-    speedup_avg = pdf_stats["avg_wall"] / max(texrs_stats["avg_wall"], 0.0001)
-    ram_reduction = (1.0 - (texrs_stats["avg_rss_mb"] / pdf_stats["avg_rss_mb"])) * 100.0
+    speedup_raw = pdf_stats["avg_wall"] / max(raw_stats["avg_wall"], 0.0001)
+    speedup_comp = pdf_stats["avg_wall"] / max(comp_stats["avg_wall"], 0.0001)
+    size_saving = (1.0 - (comp_size_bytes / max(raw_size_bytes, 1))) * 100.0
+    ram_reduction = (1.0 - (comp_stats["avg_rss_mb"] / pdf_stats["avg_rss_mb"])) * 100.0
 
-    print("\n" + "=" * 68)
-    print("      BENCHMARK COMPARISON: 40,000 WORDS COMPILATION TO PDF")
-    print("=" * 68)
-    print(f"{'Metric':<28} | {'pdflatex':<16} | {'texrs (ours)':<16}")
-    print("-" * 68)
-    print(f"{'Avg Wall-Clock Time':<28} | {pdf_stats['avg_wall'] * 1000.0:>13.2f} ms | {texrs_stats['avg_wall'] * 1000.0:>13.2f} ms")
-    print(f"{'Fastest Wall-Clock Run':<28} | {pdf_stats['min_wall'] * 1000.0:>13.2f} ms | {texrs_stats['min_wall'] * 1000.0:>13.2f} ms")
-    print(f"{'User CPU Time':<28} | {pdf_stats['avg_user'] * 1000.0:>13.2f} ms | {texrs_stats['avg_user'] * 1000.0:>13.2f} ms")
-    print(f"{'System CPU Time':<28} | {pdf_stats['avg_sys'] * 1000.0:>13.2f} ms | {texrs_stats['avg_sys'] * 1000.0:>13.2f} ms")
-    print(f"{'Peak Memory (Max RSS)':<28} | {pdf_stats['avg_rss_mb']:>13.2f} MB | {texrs_stats['avg_rss_mb']:>13.2f} MB")
-    print(f"{'Intermediate Files on Disk':<28} | {'4 (.aux, .log...)':>16} | {'0 (None)':>16}")
-    print("=" * 68)
-    print(f"Execution Speedup : {speedup_avg:.1f}x faster")
-    print(f"RAM Reduction     : {ram_reduction:.1f}% less peak memory")
-    print("=" * 68)
+    print("\n" + "=" * 90)
+    print("      BENCHMARK: 40,000 WORDS COMPILATION TO PDF (BASELINE VS DELTA)")
+    print("=" * 90)
+    print(f"{'Metric':<26} | {'pdflatex':<15} | {'texrs (Raw Baseline)':<21} | {'texrs (Compressed Delta)':<23}")
+    print("-" * 90)
+    print(f"{'Avg Wall-Clock Time':<26} | {pdf_stats['avg_wall'] * 1000.0:>12.2f} ms | {raw_stats['avg_wall'] * 1000.0:>18.2f} ms | {comp_stats['avg_wall'] * 1000.0:>20.2f} ms")
+    print(f"{'Fastest Run':<26} | {pdf_stats['min_wall'] * 1000.0:>12.2f} ms | {raw_stats['min_wall'] * 1000.0:>18.2f} ms | {comp_stats['min_wall'] * 1000.0:>20.2f} ms")
+    print(f"{'Peak Memory (Max RSS)':<26} | {pdf_stats['avg_rss_mb']:>12.2f} MB | {raw_stats['avg_rss_mb']:>18.2f} MB | {comp_stats['avg_rss_mb']:>20.2f} MB")
+    print(f"{'Output PDF Size':<26} | {pdf_size_bytes / 1024.0:>12.1f} KB | {raw_size_bytes / 1024.0:>18.1f} KB | {comp_size_bytes / 1024.0:>20.1f} KB")
+    print(f"{'Disk Overhead (Temp files)':<26} | {'4 files (.aux...)':>15} | {'0 files':>21} | {'0 files':>23}")
+    print("=" * 90)
+    print(f"Output PDF Size Reduction : {size_saving:.1f}% smaller than uncompressed baseline ({raw_size_bytes / 1024.0:.1f} KB -> {comp_size_bytes / 1024.0:.1f} KB)")
+    print(f"Compressed Speedup        : {speedup_comp:.1f}x faster than pdflatex ({pdf_stats['avg_wall']*1000.0:.1f} ms vs {comp_stats['avg_wall']*1000.0:.1f} ms)")
+    print(f"RAM Reduction vs pdflatex : {ram_reduction:.1f}% less peak memory ({comp_stats['avg_rss_mb']:.2f} MB vs {pdf_stats['avg_rss_mb']:.2f} MB)")
+    print("=" * 90)
 
 if __name__ == "__main__":
     main()

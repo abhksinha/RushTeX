@@ -8,6 +8,7 @@ pub mod tex;
 pub mod layout;
 pub mod pdf;
 pub mod preamble;
+pub mod deflate;
 
 use std::path::Path;
 
@@ -44,24 +45,39 @@ impl From<tex::ParseError> for Error {
 
 /// Compile a TeX-subset source string into a reusable destination byte buffer.
 pub fn compile_into(src: &str, out: &mut Vec<u8>) -> Result<(), Error> {
+    compile_into_opts(src, out, true)
+}
+
+/// Compile a TeX-subset source string into a reusable destination byte buffer with optional compression.
+pub fn compile_into_opts(src: &str, out: &mut Vec<u8>, compress: bool) -> Result<(), Error> {
     let doc = tex::parse(src)?;
     let pages = layout::layout(&doc);
-    pdf::emit_into(&pages, out)?;
+    pdf::emit_into_opts(&pages, out, compress)?;
     Ok(())
 }
 
 /// Compile a TeX-subset source string to an owned PDF byte buffer.
 pub fn compile_str(src: &str) -> Result<Vec<u8>, Error> {
+    compile_str_opts(src, true)
+}
+
+/// Compile a TeX-subset source string to an owned PDF byte buffer with optional compression.
+pub fn compile_str_opts(src: &str, compress: bool) -> Result<Vec<u8>, Error> {
     let mut out = Vec::with_capacity(4096);
-    compile_into(src, &mut out)?;
+    compile_into_opts(src, &mut out, compress)?;
     Ok(out)
 }
 
 /// Compile a `.tex` file to a sibling `.pdf` (or `out` if given).
 pub fn compile_file(input: &Path, output: Option<&Path>) -> Result<std::path::PathBuf, Error> {
+    compile_file_opts(input, output, true)
+}
+
+/// Compile a `.tex` file to a sibling `.pdf` (or `out` if given) with optional compression.
+pub fn compile_file_opts(input: &Path, output: Option<&Path>, compress: bool) -> Result<std::path::PathBuf, Error> {
     let src = std::fs::read_to_string(input)?;
     let mut pdf = Vec::with_capacity(4096);
-    compile_into(&src, &mut pdf)?;
+    compile_into_opts(&src, &mut pdf, compress)?;
     let out = match output {
         Some(p) => p.to_path_buf(),
         None => input.with_extension("pdf"),
@@ -73,6 +89,24 @@ pub fn compile_file(input: &Path, output: Option<&Path>) -> Result<std::path::Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn extract_pdftotext(pdf: &[u8]) -> String {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("pdftotext")
+            .args(["-", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn pdftotext");
+
+        child.stdin.as_mut().unwrap().write_all(pdf).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "pdftotext error: {:?}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
 
     #[test]
     fn hello_parses_bold() {
@@ -96,15 +130,30 @@ mod tests {
         assert!(s.starts_with("%PDF-1.4"));
         assert!(s.contains("%%EOF"));
         assert!(s.contains("/Helvetica-Bold"));
-        assert!(s.contains("(word"));
+        assert!(s.contains("/Filter /FlateDecode"));
         assert!(s.contains("xref"));
+
+        let text = extract_pdftotext(&pdf);
+        assert!(text.contains("word"));
+        assert!(text.contains("in bold"));
+
+        let uncomp = compile_str_opts("This is a simple line and this \\textbf{word} is in bold", false).unwrap();
+        let s_raw = String::from_utf8_lossy(&uncomp);
+        assert!(s_raw.contains("(word"));
     }
 
     #[test]
     fn enumerate_emits_markers() {
         let src = "\\begin{enumerate}\\item Alpha\\item Bravo\\end{enumerate}";
         let pdf = compile_str(src).unwrap();
-        let s = String::from_utf8_lossy(&pdf);
+        let text = extract_pdftotext(&pdf);
+        assert!(text.contains("1."));
+        assert!(text.contains("Alpha"));
+        assert!(text.contains("2."));
+        assert!(text.contains("Bravo"));
+
+        let uncomp = compile_str_opts(src, false).unwrap();
+        let s = String::from_utf8_lossy(&uncomp);
         assert!(s.contains("(1.)"));
         assert!(s.contains("(2.)"));
         assert!(s.contains("(Alpha)"));
@@ -126,9 +175,15 @@ A & \textbf{B} & C \\
 \end{figure}
 "#;
         let pdf = compile_str(src).unwrap();
-        let s = String::from_utf8_lossy(&pdf);
-        assert!(s.contains("(A"), "{s}");
-        assert!(s.contains("(B)"), "{s}");
+        let text = extract_pdftotext(&pdf);
+        assert!(text.contains("A"));
+        assert!(text.contains("B"));
+        assert!(text.contains("Figure 1:"));
+
+        let uncomp = compile_str_opts(src, false).unwrap();
+        let s = String::from_utf8_lossy(&uncomp);
+        assert!(s.contains("(A"));
+        assert!(s.contains("(B)"));
         assert!(s.contains("(demo.png)"));
         assert!(s.contains("(Figure 1: )"));
         assert!(s.contains(" re "));
@@ -169,11 +224,15 @@ Extra garbage outside document
         let s = String::from_utf8_lossy(&pdf);
         assert!(s.starts_with("%PDF-1.4"));
         assert!(s.contains("/MediaBox [0 0 612 792]"));
-        assert!(s.contains("(High Speed Engine)"));
-        assert!(s.contains("(Triton)"));
-        assert!(s.contains("(Overview)"));
-        assert!(s.contains("(Sub-topic)"));
+        assert!(s.contains("/Filter /FlateDecode"));
         assert!(!s.contains("Extra garbage"));
+
+        let text = extract_pdftotext(&pdf);
+        assert!(text.contains("High Speed Engine"));
+        assert!(text.contains("Triton"));
+        assert!(text.contains("Overview"));
+        assert!(text.contains("Sub-topic"));
+        assert!(!text.contains("Extra garbage"));
     }
 
     #[test]
@@ -184,8 +243,8 @@ Extra garbage outside document
         assert!(doc.preamble.class.is_none());
         assert_eq!(doc.preamble.config.page_width, 595.0); // Default A4
         let pdf = compile_str(src).unwrap();
-        let s = String::from_utf8_lossy(&pdf);
-        assert!(s.contains("(Just a raw paragraph"));
+        let text = extract_pdftotext(&pdf);
+        assert!(text.contains("Just a raw paragraph"));
     }
 
     #[test]

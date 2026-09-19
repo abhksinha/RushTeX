@@ -13,6 +13,10 @@ pub fn emit(pages: &[Page<'_>]) -> Result<Vec<u8>, Error> {
 }
 
 pub fn emit_into(pages: &[Page<'_>], out: &mut Vec<u8>) -> Result<(), Error> {
+    emit_into_opts(pages, out, true)
+}
+
+pub fn emit_into_opts(pages: &[Page<'_>], out: &mut Vec<u8>, compress: bool) -> Result<(), Error> {
     out.clear();
     let n = pages.len().max(1);
     let mut w = Writer::new(out, n);
@@ -53,6 +57,8 @@ pub fn emit_into(pages: &[Page<'_>], out: &mut Vec<u8>) -> Result<(), Error> {
     });
 
     let mut stream_buf = Vec::with_capacity(4096);
+    let mut comp_buf = Vec::with_capacity(4096);
+    let mut compressor = crate::deflate::DeflateCompressor::new();
 
     for i in 0..n {
         let pid = first_page + i as u32;
@@ -85,16 +91,28 @@ pub fn emit_into(pages: &[Page<'_>], out: &mut Vec<u8>) -> Result<(), Error> {
         stream_buf.clear();
         build_stream_into(&pages[i], &mut stream_buf);
         let cid = first_content + i as u32;
-        w.obj(cid, |w| {
-            w.write_all(b"<< /Length ");
-            w.write_int(stream_buf.len() as i32);
-            w.write_all(b" >>\nstream\n");
-            w.write_all(&stream_buf);
-            if !stream_buf.ends_with(b"\n") {
-                w.write_all(b"\n");
-            }
-            w.write_all(b"endstream\n");
-        });
+        if compress {
+            comp_buf.clear();
+            compressor.compress_zlib(&stream_buf, &mut comp_buf);
+            w.obj(cid, |w| {
+                w.write_all(b"<< /Filter /FlateDecode /Length ");
+                w.write_int(comp_buf.len() as i32);
+                w.write_all(b" >>\nstream\n");
+                w.write_all(&comp_buf);
+                w.write_all(b"\nendstream\n");
+            });
+        } else {
+            w.obj(cid, |w| {
+                w.write_all(b"<< /Length ");
+                w.write_int(stream_buf.len() as i32);
+                w.write_all(b" >>\nstream\n");
+                w.write_all(&stream_buf);
+                if !stream_buf.ends_with(b"\n") {
+                    w.write_all(b"\n");
+                }
+                w.write_all(b"endstream\n");
+            });
+        }
     }
 
     write_font(&mut w, font_roman, "Helvetica");

@@ -70,6 +70,7 @@ pub enum Block<'a> {
     PageBreak,
     VSpace(f32),
     HRule,
+    CodeListing(Box<crate::listing::CodeListingData<'a>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +102,7 @@ pub enum Inline<'a> {
     Text(&'a str),
     Bold(Vec<Inline<'a>>),
     Italic(Vec<Inline<'a>>),
+    Mono(Vec<Inline<'a>>),
     Group(Vec<Inline<'a>>),
     Break,
     NoIndent,
@@ -539,7 +541,51 @@ impl<'a> Parser<'a> {
             "itemize" => self.parse_list(false),
             "tabular" => self.parse_tabular(),
             "figure" => self.parse_figure(),
+            "verbatim" => self.parse_verbatim(),
+            "lstlisting" => self.parse_lstlisting(),
             other => Err(self.err(format!("unsupported environment {{{other}}}"))),
+        }
+    }
+
+    fn parse_verbatim(&mut self) -> Result<Block<'a>, ParseError> {
+        if self.eat("\r\n") || self.eat("\n") {
+            // strip single leading newline
+        }
+        let end_token = "\\end{verbatim}";
+        let start = self.byte_offset;
+        let rest = self.rest();
+        if let Some(pos) = rest.find(end_token) {
+            let code_slice = &self.source_code[start..start + pos];
+            self.byte_offset = start + pos + end_token.len();
+            Ok(Block::CodeListing(Box::new(crate::listing::CodeListingData::new(code_slice))))
+        } else {
+            Err(self.err("unclosed \\begin{verbatim}"))
+        }
+    }
+
+    fn parse_lstlisting(&mut self) -> Result<Block<'a>, ParseError> {
+        self.skip_hws();
+        let mut options = crate::listing::ListingOptions::default();
+        if self.starts_with("[") {
+            let opt_start = self.byte_offset;
+            if let Some(pos) = self.rest().find(']') {
+                let opt_str = &self.source_code[opt_start..opt_start + pos + 1];
+                self.byte_offset = opt_start + pos + 1;
+                options = crate::listing::parse_listing_options(opt_str);
+            }
+        }
+        if self.eat("\r\n") || self.eat("\n") {
+            // strip single leading newline
+        }
+        let end_token = "\\end{lstlisting}";
+        let start = self.byte_offset;
+        let rest = self.rest();
+        if let Some(pos) = rest.find(end_token) {
+            let code_slice = &self.source_code[start..start + pos];
+            self.byte_offset = start + pos + end_token.len();
+            Ok(Block::CodeListing(Box::new(crate::listing::CodeListingData::with_options(code_slice, options))))
+        } else {
+            Err(self.err("unclosed \\begin{lstlisting}"))
         }
     }
 
@@ -863,9 +909,28 @@ impl<'a> Parser<'a> {
         match name {
             "textbf" => Ok(Inline::Bold(self.require_group()?)),
             "textit" | "emph" => Ok(Inline::Italic(self.require_group()?)),
+            "texttt" => Ok(Inline::Mono(self.require_group()?)),
+            "verb" => self.parse_verb(),
             "par" => Ok(Inline::Break),
             "noindent" => Ok(Inline::NoIndent),
             other => Err(self.err_at(cmd_start, format!("unknown command \\{other}"))),
+        }
+    }
+
+    fn parse_verb(&mut self) -> Result<Inline<'a>, ParseError> {
+        let _ = self.eat("*");
+        let delim = match self.bump() {
+            Some(ch) if !ch.is_whitespace() => ch,
+            _ => return Err(self.err("expected delimiter after \\verb")),
+        };
+        let start = self.byte_offset;
+        let rest = self.rest();
+        if let Some(pos) = rest.find(delim) {
+            let code = &self.source_code[start..start + pos];
+            self.byte_offset = start + pos + delim.len_utf8();
+            Ok(Inline::Mono(vec![Inline::Text(code)]))
+        } else {
+            Err(self.err("unclosed \\verb delimiter"))
         }
     }
 
@@ -929,6 +994,6 @@ fn is_empty_inlines(v: &[Inline<'_>]) -> bool {
     v.iter().all(|i| match i {
         Inline::Text(s) => s.trim().is_empty(),
         Inline::Break | Inline::NoIndent => true,
-        Inline::Bold(x) | Inline::Italic(x) | Inline::Group(x) => is_empty_inlines(x),
+        Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x) => is_empty_inlines(x),
     })
 }

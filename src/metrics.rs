@@ -27,6 +27,8 @@ pub enum Face {
     Bold,
     Italic,
     BoldItalic,
+    Mono,
+    MonoBold,
 }
 
 impl Face {
@@ -36,6 +38,8 @@ impl Face {
             Face::Bold => "Helvetica-Bold",
             Face::Italic => "Helvetica-Oblique",
             Face::BoldItalic => "Helvetica-BoldOblique",
+            Face::Mono => "Courier",
+            Face::MonoBold => "Courier-Bold",
         }
     }
 
@@ -45,6 +49,8 @@ impl Face {
             Face::Bold => "/Fb",
             Face::Italic => "/Fi",
             Face::BoldItalic => "/Fbi",
+            Face::Mono => "/Fc",
+            Face::MonoBold => "/Fcb",
         }
     }
 
@@ -53,8 +59,10 @@ impl Face {
         match (self, enable_bold) {
             (Face::Roman, true) | (Face::Bold, true) => Face::Bold,
             (Face::Italic, true) | (Face::BoldItalic, true) => Face::BoldItalic,
+            (Face::Mono, true) | (Face::MonoBold, true) => Face::MonoBold,
             (Face::Bold, false) | (Face::Roman, false) => Face::Roman,
             (Face::BoldItalic, false) | (Face::Italic, false) => Face::Italic,
+            (Face::MonoBold, false) | (Face::Mono, false) => Face::Mono,
         }
     }
 
@@ -65,12 +73,31 @@ impl Face {
             (Face::Bold, true) | (Face::BoldItalic, true) => Face::BoldItalic,
             (Face::Italic, false) | (Face::Roman, false) => Face::Roman,
             (Face::BoldItalic, false) | (Face::Bold, false) => Face::Bold,
+            (Face::Mono, _) | (Face::MonoBold, _) => self,
+        }
+    }
+
+    #[inline]
+    pub fn with_mono(self, enable_mono: bool) -> Self {
+        match (self, enable_mono) {
+            (Face::Roman | Face::Italic, true) => Face::Mono,
+            (Face::Bold | Face::BoldItalic, true) => Face::MonoBold,
+            (Face::Mono, true) => Face::Mono,
+            (Face::MonoBold, true) => Face::MonoBold,
+            (Face::Mono, false) => Face::Roman,
+            (Face::MonoBold, false) => Face::Bold,
+            (other, false) => other,
         }
     }
 
     #[inline]
     pub fn is_bold(self) -> bool {
-        matches!(self, Face::Bold | Face::BoldItalic)
+        matches!(self, Face::Bold | Face::BoldItalic | Face::MonoBold)
+    }
+
+    #[inline]
+    pub fn is_mono(self) -> bool {
+        matches!(self, Face::Mono | Face::MonoBold)
     }
 }
 
@@ -113,6 +140,9 @@ pub static BOLD_WIDTHS: [u16; 128] = [
 
 #[inline]
 pub fn char_units(character: char, font_face: Face) -> u16 {
+    if font_face.is_mono() {
+        return 600;
+    }
     let character_code = character as u32;
     if character_code < 128 {
         if font_face.is_bold() {
@@ -137,6 +167,23 @@ pub fn width(character: char, font_face: Face, font_size_points: f32) -> f32 {
 
 /// Fast branchless sum of font metric units for `text`.
 pub fn string_units(text: &str, font_face: Face) -> u32 {
+    if font_face.is_mono() {
+        let byte_slice = text.as_bytes();
+        let mut char_count = 0u32;
+        let mut i = 0;
+        while i < byte_slice.len() {
+            let b = byte_slice[i];
+            if b < 128 {
+                char_count += 1;
+                i += 1;
+            } else {
+                let character = text[i..].chars().next().unwrap();
+                i += character.len_utf8();
+                char_count += 1;
+            }
+        }
+        return char_count * 600;
+    }
     let byte_slice = text.as_bytes();
     let is_bold = font_face.is_bold();
     let width_table = if is_bold { &BOLD_WIDTHS } else { &ROMAN_WIDTHS };

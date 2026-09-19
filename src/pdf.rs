@@ -63,6 +63,8 @@ pub fn emit_into_opts(
     let font_bold_id = font_roman_id + 1;
     let font_italic_id = font_roman_id + 2;
     let font_bold_italic_id = font_roman_id + 3;
+    let font_mono_id = font_roman_id + 4;
+    let font_mono_bold_id = font_roman_id + 5;
 
     // 1 Catalog
     writer.obj(catalog_id, |w| {
@@ -108,6 +110,10 @@ pub fn emit_into_opts(
             w.write_ref(font_italic_id);
             w.write_all(b" /Fbi ");
             w.write_ref(font_bold_italic_id);
+            w.write_all(b" /Fc ");
+            w.write_ref(font_mono_id);
+            w.write_all(b" /Fcb ");
+            w.write_ref(font_mono_bold_id);
             w.write_all(b" >> >> /Contents ");
             w.write_ref(content_object_id);
             w.write_all(b" >>\n");
@@ -146,6 +152,8 @@ pub fn emit_into_opts(
     write_font(&mut writer, font_bold_id, "Helvetica-Bold");
     write_font(&mut writer, font_italic_id, "Helvetica-Oblique");
     write_font(&mut writer, font_bold_italic_id, "Helvetica-BoldOblique");
+    write_font(&mut writer, font_mono_id, "Courier");
+    write_font(&mut writer, font_mono_bold_id, "Courier-Bold");
 
     writer.finish(catalog_id)
 }
@@ -331,7 +339,7 @@ fn pdf_escape(out: &mut Vec<u8>, text: &str) {
                     if i > start {
                         out.extend_from_slice(&bytes[start..i]);
                     }
-                    out.extend_from_slice(b"\\t");
+                    out.extend_from_slice(b"    ");
                     i += 1;
                     start = i;
                 }

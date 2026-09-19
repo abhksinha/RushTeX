@@ -40,6 +40,7 @@ pub mod pdf;
 pub mod preamble;
 pub mod deflate;
 pub mod diagnostic;
+pub mod listing;
 
 pub use diagnostic::Diagnostic;
 
@@ -525,5 +526,64 @@ Content on page 2 after explicit newpage.
             inline_size <= 32,
             "Inline size must be <= 32 bytes to pack >= 2 items per 64B L1 cache line without split, got {inline_size}"
         );
+    }
+
+    #[test]
+    fn test_verbatim_and_code_listing() {
+        let src = r#"
+\documentclass{article}
+\begin{document}
+Here is a raw verbatim code listing:
+\begin{verbatim}
+fn calculate_sum(values: &[i32]) -> i32 {
+    let mut sum = 0;
+    for &v in values {
+        sum += v;
+    }
+    sum // returned % comment literal
+}
+\end{verbatim}
+
+Now a numbered listings environment:
+\begin{lstlisting}[language=Rust, numbers=left]
+pub struct Vector3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+\end{lstlisting}
+\end{document}
+"#;
+        let pdf = compile_str(src).unwrap();
+        let text = extract_pdftotext(&pdf);
+        assert!(text.contains("calculate_sum"));
+        assert!(text.contains("sum += v;"));
+        assert!(text.contains("returned % comment literal"));
+        assert!(text.contains("pub struct Vector3"));
+        assert!(text.contains("pub z: f32,"));
+
+        // Verify uncompressed stream contains /Fc font selection for Courier
+        let uncomp = compile_str_opts(src, false).unwrap();
+        let stream_str = String::from_utf8_lossy(&uncomp);
+        assert!(stream_str.contains("/Fc 9"));
+        assert!(stream_str.contains("/Courier"));
+    }
+
+    #[test]
+    fn test_inline_monospace_and_verb() {
+        let src = r#"
+\documentclass{article}
+\begin{document}
+Use the command \texttt{cargo test} or \verb|fn main() { println!("hi"); }| in your terminal.
+\end{document}
+"#;
+        let pdf = compile_str(src).unwrap();
+        let text = extract_pdftotext(&pdf);
+        assert!(text.contains("cargo test"));
+        assert!(text.contains(r#"fn main() { println!("hi"); }"#));
+
+        let uncomp = compile_str_opts(src, false).unwrap();
+        let stream_str = String::from_utf8_lossy(&uncomp);
+        assert!(stream_str.contains("/Fc"));
     }
 }

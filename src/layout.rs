@@ -229,6 +229,7 @@ impl<'a> Layouter<'a> {
                     });
                     self.y -= 4.0;
                 }
+                Block::CodeListing(listing) => self.layout_code_listing(listing),
             }
         }
     }
@@ -434,6 +435,127 @@ impl<'a> Layouter<'a> {
             self.paint_inlines_at(caption, self.left + tag_width, self.y);
             self.y -= self.base_leading;
         }
+    }
+
+    fn layout_code_listing(&mut self, listing: &'a crate::listing::CodeListingData<'a>) {
+        let font_size = listing.options.font_size;
+        let line_leading = font_size * 1.30;
+        let lines: Vec<&'a str> = listing.lines().collect();
+        if lines.is_empty() {
+            return;
+        }
+
+        let show_line_numbers = listing.options.show_line_numbers;
+        let total_lines = lines.len();
+        let num_digits = if total_lines >= 100 { 3 } else if total_lines >= 10 { 2 } else { 1 };
+        let mono_char_w = metrics::width('0', Face::Mono, font_size);
+        let gutter_w = if show_line_numbers {
+            (num_digits as f32 + 1.5) * mono_char_w
+        } else {
+            0.0
+        };
+
+        let pad_x = 8.0;
+        let pad_y = 6.0;
+        let skip_before = 8.0;
+        let skip_after = 8.0;
+
+        self.ensure_room(skip_before + pad_y + line_leading);
+        self.y -= skip_before;
+
+        let code_x = self.left + pad_x + gutter_w;
+        let gutter_x = self.left + pad_x;
+
+        let mut block_page_start_y = self.y;
+        let mut lines_on_current_page = 0;
+
+        for (line_idx, &line_text) in lines.iter().enumerate() {
+            let broken = self.ensure_room(line_leading + pad_y);
+            if broken {
+                if lines_on_current_page > 0 {
+                    let block_h = block_page_start_y - self.y + pad_y;
+                    if listing.options.frame {
+                        let w = self.right - self.left;
+                        if let Some(p) = self.pages.last_mut() {
+                            p.ops.push(Paint::Rule {
+                                x: self.left,
+                                y: self.y - pad_y,
+                                w,
+                                h: block_h,
+                                fill: false,
+                            });
+                        }
+                    }
+                }
+                block_page_start_y = self.y;
+                lines_on_current_page = 0;
+            }
+
+            if lines_on_current_page == 0 {
+                self.y -= pad_y;
+            }
+
+            if show_line_numbers {
+                self.current_page.ops.push(Paint::PageNumber {
+                    x: gutter_x,
+                    y: self.y,
+                    face: Face::Mono,
+                    size: font_size * 0.85,
+                    page_number: (line_idx + 1) as u32,
+                });
+            }
+
+            if !line_text.is_empty() {
+                let pool_start = self.current_page.text_pool.len() as u32;
+                self.current_page.text_pool.push(line_text);
+                self.current_page.ops.push(Paint::GlyphRun {
+                    x: code_x,
+                    y: self.y,
+                    face: Face::Mono,
+                    size: font_size,
+                    part_start: pool_start,
+                    part_count: 1,
+                    word_spacing: 0.0,
+                });
+            }
+
+            self.y -= line_leading;
+            lines_on_current_page += 1;
+        }
+
+        let block_bottom = self.y - pad_y;
+        let block_h = block_page_start_y - block_bottom;
+        let w = self.right - self.left;
+
+        if listing.options.left_accent_bar {
+            self.current_page.ops.push(Paint::Rule {
+                x: self.left,
+                y: block_bottom,
+                w: 2.0,
+                h: block_h,
+                fill: true,
+            });
+        }
+        if listing.options.frame {
+            self.current_page.ops.push(Paint::Rule {
+                x: self.left,
+                y: block_bottom,
+                w,
+                h: block_h,
+                fill: false,
+            });
+        }
+        if show_line_numbers {
+            self.current_page.ops.push(Paint::Rule {
+                x: self.left + pad_x + gutter_w - 3.0,
+                y: block_bottom,
+                w: 0.4,
+                h: block_h,
+                fill: true,
+            });
+        }
+
+        self.y = block_bottom - skip_after;
     }
 
     fn layout_para(&mut self, inls: &'a [Inline<'a>]) {
@@ -671,6 +793,7 @@ fn flatten_into<'s, 'a>(inls: &'s [Inline<'a>], face: Face, out: &mut Vec<FlatRu
             }
             Inline::Bold(x) => flatten_into(x, face.with_bold(true), out),
             Inline::Italic(x) => flatten_into(x, face.with_italic(true), out),
+            Inline::Mono(x) => flatten_into(x, face.with_mono(true), out),
             Inline::Group(x) => flatten_into(x, face, out),
             Inline::Break => out.push(FlatRun {
                 text: "",
@@ -751,6 +874,9 @@ fn measure_inlines_face_size(inls: &[Inline<'_>], face: Face, size: f32) -> f32 
             }
             Inline::Italic(x) => {
                 total_w += measure_inlines_face_size(x, face.with_italic(true), size);
+            }
+            Inline::Mono(x) => {
+                total_w += measure_inlines_face_size(x, face.with_mono(true), size);
             }
             Inline::Group(x) => {
                 total_w += measure_inlines_face_size(x, face, size);

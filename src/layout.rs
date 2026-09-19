@@ -167,7 +167,7 @@ impl<'a> Layouter<'a> {
         self.pages
     }
 
-    fn ensure_room(&mut self, required_height: f32) {
+    fn ensure_room(&mut self, required_height: f32) -> bool {
         if self.y - required_height < self.margin_bottom {
             let previous_page = std::mem::replace(
                 &mut self.current_page,
@@ -180,6 +180,9 @@ impl<'a> Layouter<'a> {
             );
             self.pages.push(previous_page);
             self.y = self.page_height - self.margin_top;
+            true
+        } else {
+            false
         }
     }
 
@@ -209,7 +212,7 @@ impl<'a> Layouter<'a> {
         author: Option<&'a [Inline<'a>]>,
         date: Option<&'a [Inline<'a>]>,
     ) {
-        self.ensure_room(72.0);
+        self.ensure_room(72.0 + 2.0 * self.base_leading);
         self.y -= 12.0;
 
         // Title: 18pt, bold, centered
@@ -243,8 +246,14 @@ impl<'a> Layouter<'a> {
             2 => (14.0, 12.0, 4.0),
             _ => (10.0, 11.0, 2.0),
         };
-        self.y -= skip_before;
-        self.ensure_room(font_size + skip_after + 4.0);
+        // Heading orphan protection (keep-with-next):
+        // Ensure room for skip_before + heading height + at least 2 lines of body text.
+        let needed_body_lines = 2.0 * self.base_leading;
+        let total_needed = skip_before + font_size + skip_after + needed_body_lines;
+        let broken = self.ensure_room(total_needed);
+        if !broken && self.y < self.page_height - self.margin_top - 0.1 {
+            self.y -= skip_before;
+        }
         self.paint_inlines_at_size(title, Face::Bold, font_size, self.left, self.y);
         self.y -= font_size + skip_after;
     }

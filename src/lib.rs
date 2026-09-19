@@ -375,4 +375,30 @@ Hello World without Page Number.
         // The uncompressed stream shouldn't have a single digit page number (1) Tj
         assert!(!s.contains("(1) Tj"));
     }
+
+    #[test]
+    fn test_heading_orphan_protection() {
+        // Document with enough lines such that section heading fits alone
+        // but cannot fit with 2 lines of text.
+        // It must be pushed to page 2 rather than being orphaned on page 1.
+        let mut src = String::from(r#"
+\documentclass{article}
+\begin{document}
+"#);
+        for i in 1..=29 {
+            src.push_str(&format!("Paragraph item line number {i}.\n\n"));
+        }
+        src.push_str(r#"
+\section{Protected Heading}
+This is the text following the protected heading that belongs with it.
+\end{document}
+"#);
+        let doc = tex::parse(&src).unwrap();
+        let pages = layout::layout(&doc);
+        assert!(pages.len() >= 2, "should span at least 2 pages");
+        // Check that page 1 does NOT have the section heading
+        assert!(!pages[0].text_pool.contains(&"Protected"));
+        // Check that page 2 DOES have the section heading
+        assert!(pages[1].text_pool.contains(&"Protected"));
+    }
 }

@@ -26,7 +26,6 @@
 //! - [`Inline`]: Inline text elements (`Text`, `Bold`, `Italic`, `Group`, `Break`).
 //! - [`ParseError`]: Syntax error reporting 1-based line, column, and message.
 
-use std::fmt;
 use crate::preamble::Preamble;
 
 #[derive(Debug, Clone)]
@@ -94,18 +93,7 @@ pub enum Inline<'a> {
     Break,
 }
 
-#[derive(Debug, Clone)]
-pub struct ParseError {
-    pub line: usize,
-    pub col: usize,
-    pub msg: String,
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}: {}", self.line, self.col, self.msg)
-    }
-}
+pub type ParseError = crate::diagnostic::Diagnostic;
 
 pub fn parse(source_code: &str) -> Result<Document<'_>, ParseError> {
     let mut parser = Parser::new(source_code);
@@ -126,62 +114,56 @@ pub fn parse(source_code: &str) -> Result<Document<'_>, ParseError> {
 }
 
 struct Parser<'a> {
-    src: &'a str,
-    i: usize,
-    line: usize,
-    col: usize,
+    source_code: &'a str,
+    byte_offset: usize,
     preamble: Preamble<'a>,
 }
 
 impl<'a> Parser<'a> {
-    fn new(src: &'a str) -> Self {
+    fn new(source_code: &'a str) -> Self {
         Self {
-            src,
-            i: 0,
-            line: 1,
-            col: 1,
+            source_code,
+            byte_offset: 0,
             preamble: Preamble::default(),
         }
     }
 
-    fn err(&self, msg: impl Into<String>) -> ParseError {
-        ParseError {
-            line: self.line,
-            col: self.col,
-            msg: msg.into(),
-        }
+    #[inline(always)]
+    fn err(&self, message: impl Into<String>) -> ParseError {
+        self.err_at(self.byte_offset, message)
     }
 
+    #[inline(always)]
+    fn err_at(&self, byte_offset: usize, message: impl Into<String>) -> ParseError {
+        crate::diagnostic::locate_diagnostic(self.source_code, byte_offset, message)
+    }
+
+    #[inline(always)]
     fn rest(&self) -> &'a str {
-        &self.src[self.i..]
+        &self.source_code[self.byte_offset..]
     }
 
+    #[inline(always)]
     fn peek(&self) -> Option<char> {
         self.rest().chars().next()
     }
 
+    #[inline(always)]
     fn bump(&mut self) -> Option<char> {
-        let mut cs = self.rest().chars();
-        let c = cs.next()?;
-        self.i += c.len_utf8();
-        if c == '\n' {
-            self.line += 1;
-            self.col = 1;
-        } else {
-            self.col += 1;
-        }
-        Some(c)
+        let character = self.rest().chars().next()?;
+        self.byte_offset += character.len_utf8();
+        Some(character)
     }
 
-    fn starts_with(&self, s: &str) -> bool {
-        self.rest().starts_with(s)
+    #[inline(always)]
+    fn starts_with(&self, prefix: &str) -> bool {
+        self.rest().starts_with(prefix)
     }
 
-    fn eat(&mut self, s: &str) -> bool {
-        if self.starts_with(s) {
-            for _ in s.chars() {
-                self.bump();
-            }
+    #[inline(always)]
+    fn eat(&mut self, token: &str) -> bool {
+        if self.starts_with(token) {
+            self.byte_offset += token.len();
             true
         } else {
             false
@@ -189,26 +171,39 @@ impl<'a> Parser<'a> {
     }
 
     fn skip_ws(&mut self) {
-        loop {
-            match self.peek() {
-                Some(' ' | '\t' | '\r' | '\n') => {
-                    self.bump();
+        let bytes = self.rest().as_bytes();
+        let mut idx = 0;
+        while idx < bytes.len() {
+            match bytes[idx] {
+                b' ' | b'\t' | b'\r' | b'\n' => idx += 1,
+                b'%' => {
+                    self.byte_offset += idx;
+                    self.skip_comment();
+                    return self.skip_ws();
                 }
-                Some('%') => self.skip_comment(),
                 _ => break,
             }
         }
+        self.byte_offset += idx;
     }
 
     fn skip_hws(&mut self) {
-        while matches!(self.peek(), Some(' ' | '\t' | '\r')) {
-            self.bump();
+        let bytes = self.rest().as_bytes();
+        let mut idx = 0;
+        while idx < bytes.len() {
+            match bytes[idx] {
+                b' ' | b'\t' | b'\r' => idx += 1,
+                _ => break,
+            }
         }
+        self.byte_offset += idx;
     }
 
     fn skip_comment(&mut self) {
-        while !matches!(self.peek(), Some('\n') | None) {
-            self.bump();
+        if let Some(pos) = self.rest().find('\n') {
+            self.byte_offset += pos + 1;
+        } else {
+            self.byte_offset = self.source_code.len();
         }
     }
 
@@ -221,7 +216,7 @@ impl<'a> Parser<'a> {
         if !self.starts_with(cmd) {
             return false;
         }
-        match self.src[self.i + cmd.len()..].chars().next() {
+        match self.source_code[self.byte_offset + cmd.len()..].chars().next() {
             Some(c) if c.is_ascii_alphabetic() => false,
             _ => true,
         }
@@ -236,7 +231,7 @@ impl<'a> Parser<'a> {
         if !self.starts_with(PFX) {
             return false;
         }
-        let after = &self.src[self.i + PFX.len()..];
+        let after = &self.source_code[self.byte_offset + PFX.len()..];
         after.starts_with(name) && after[name.len()..].starts_with('}')
     }
 
@@ -255,7 +250,7 @@ impl<'a> Parser<'a> {
         if !self.starts_with(PFX) {
             return false;
         }
-        let after = &self.src[self.i + PFX.len()..];
+        let after = &self.source_code[self.byte_offset + PFX.len()..];
         after.starts_with(name) && after[name.len()..].starts_with('}')
     }
 
@@ -274,11 +269,11 @@ impl<'a> Parser<'a> {
         if !self.eat("[") {
             return Ok(Vec::new());
         }
-        let start = self.i;
+        let start = self.byte_offset;
         while !matches!(self.peek(), Some(']') | None) {
             self.bump();
         }
-        let raw = &self.src[start..self.i];
+        let raw = &self.source_code[start..self.byte_offset];
         if !self.eat("]") {
             return Err(self.err("unclosed optional argument ["));
         }
@@ -616,11 +611,11 @@ impl<'a> Parser<'a> {
         if !self.eat("{") {
             return Err(self.err("expected {path} after \\includegraphics"));
         }
-        let start = self.i;
+        let start = self.byte_offset;
         while !matches!(self.peek(), Some('}') | None) {
             self.bump();
         }
-        let path = self.src[start..self.i].trim();
+        let path = self.source_code[start..self.byte_offset].trim();
         if !self.eat("}") {
             return Err(self.err("unclosed \\includegraphics path"));
         }
@@ -632,11 +627,11 @@ impl<'a> Parser<'a> {
         if !self.eat("{") {
             return Err(self.err("expected {name}"));
         }
-        let start = self.i;
+        let start = self.byte_offset;
         loop {
             match self.peek() {
                 Some('}') => {
-                    let ident = &self.src[start..self.i];
+                    let ident = &self.source_code[start..self.byte_offset];
                     self.bump();
                     return Ok(ident);
                 }
@@ -686,9 +681,9 @@ impl<'a> Parser<'a> {
             Some('&') => {
                 // alignment tab belongs to tabular; if it leaks here, keep it
                 // as a one-char token so we cannot spin on an empty text run.
-                let start = self.i;
+                let start = self.byte_offset;
                 self.bump();
-                Ok(Inline::Text(&self.src[start..self.i]))
+                Ok(Inline::Text(&self.source_code[start..self.byte_offset]))
             }
             Some(_) => Ok(Inline::Text(self.parse_text_run())),
             None => Err(self.err("unexpected eof")),
@@ -715,28 +710,29 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_command(&mut self) -> Result<Inline<'a>, ParseError> {
+        let cmd_start = self.byte_offset;
         self.bump(); // '\'
         if let Some(c) = self.peek() {
             if is_single_escape(c) {
-                let start = self.i;
+                let start = self.byte_offset;
                 self.bump();
-                return Ok(Inline::Text(&self.src[start..self.i]));
+                return Ok(Inline::Text(&self.source_code[start..self.byte_offset]));
             }
         }
-        let start = self.i;
+        let start = self.byte_offset;
         while matches!(self.peek(), Some(ch) if ch.is_ascii_alphabetic()) {
             self.bump();
         }
-        let name = &self.src[start..self.i];
+        let name = &self.source_code[start..self.byte_offset];
         if name.is_empty() {
-            return Err(self.err("stray '\\'"));
+            return Err(self.err_at(cmd_start, "stray '\\'"));
         }
         self.skip_hws();
         match name {
             "textbf" => Ok(Inline::Bold(self.require_group()?)),
             "textit" | "emph" => Ok(Inline::Italic(self.require_group()?)),
             "par" => Ok(Inline::Break),
-            other => Err(self.err(format!("unknown command \\{other}"))),
+            other => Err(self.err_at(cmd_start, format!("unknown command \\{other}"))),
         }
     }
 
@@ -752,7 +748,7 @@ impl<'a> Parser<'a> {
     /// them as space. A `%` or command ends the run so the slice stays
     /// untransformed.
     fn parse_text_run(&mut self) -> &'a str {
-        let start = self.i;
+        let start = self.byte_offset;
         loop {
             match self.peek() {
                 Some('\\' | '{' | '}' | '%' | '&') | None => break,
@@ -762,7 +758,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        &self.src[start..self.i]
+        &self.source_code[start..self.byte_offset]
     }
 }
 

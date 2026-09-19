@@ -37,13 +37,16 @@ pub mod layout;
 pub mod pdf;
 pub mod preamble;
 pub mod deflate;
+pub mod diagnostic;
+
+pub use diagnostic::Diagnostic;
 
 use std::path::Path;
 
 #[derive(Debug)]
 pub enum Error {
     Io(std::io::Error),
-    Parse(tex::ParseError),
+    Parse(diagnostic::Diagnostic),
     Encode(String),
 }
 
@@ -51,7 +54,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Io(e) => write!(f, "io: {e}"),
-            Error::Parse(e) => write!(f, "parse: {e}"),
+            Error::Parse(diag) => write!(f, "{diag}"),
             Error::Encode(e) => write!(f, "encode: {e}"),
         }
     }
@@ -65,9 +68,9 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<tex::ParseError> for Error {
-    fn from(e: tex::ParseError) -> Self {
-        Error::Parse(e)
+impl From<diagnostic::Diagnostic> for Error {
+    fn from(diag: diagnostic::Diagnostic) -> Self {
+        Error::Parse(diag)
     }
 }
 
@@ -314,5 +317,30 @@ Extra garbage outside document
             us_per_doc_into,
             ITERS as f64 / elapsed_into.as_secs_f64(),
         );
+    }
+
+    #[test]
+    fn test_compiler_human_error_format() {
+        // Build 53 lines, then on line 54 place an error at character 17
+        let mut src = String::new();
+        for _ in 1..54 {
+            src.push_str("Standard paragraph content line.\n");
+        }
+        // Exactly 16 characters ("1234567890123456") followed by unknown command '\badcmd'
+        src.push_str("1234567890123456\\badcmd");
+
+        let err = compile_str(&src).unwrap_err();
+        match err {
+            Error::Parse(diag) => {
+                assert_eq!(diag.line, 54);
+                assert_eq!(diag.character, 17);
+                assert_eq!(diag.simplified_header(), "[ERROR] Line 54 from character 17");
+                let rendered = diag.to_string();
+                assert!(rendered.starts_with("[ERROR] Line 54 from character 17"));
+                assert!(rendered.contains("54 |"));
+                assert!(rendered.contains("^"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
     }
 }

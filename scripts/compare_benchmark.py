@@ -80,30 +80,30 @@ def main():
     pdf_stats = run_timed_command(pdflatex_cmd, runs=5)
     pdf_size_bytes = Path(pdflatex_out).stat().st_size if Path(pdflatex_out).exists() else 0
 
-    # 2. Benchmark texrs Baseline (uncompressed)
-    print("-> Benchmarking texrs Baseline (uncompressed)...")
-    texrs_raw_out = "/tmp/texrs_raw.pdf"
-    texrs_raw_cmd = [
-        "./target/release/texrs",
+    # 2. Benchmark rushtex Baseline (uncompressed)
+    print("-> Benchmarking rushtex Baseline (uncompressed)...")
+    rushtex_raw_out = "/tmp/rushtex_raw.pdf"
+    rushtex_raw_cmd = [
+        "./target/release/rushtex",
         tex_path,
         "--no-compress",
         "-o",
-        texrs_raw_out
+        rushtex_raw_out
     ]
-    raw_stats = run_timed_command(texrs_raw_cmd, runs=5)
-    raw_size_bytes = Path(texrs_raw_out).stat().st_size if Path(texrs_raw_out).exists() else 0
+    raw_stats = run_timed_command(rushtex_raw_cmd, runs=5)
+    raw_size_bytes = Path(rushtex_raw_out).stat().st_size if Path(rushtex_raw_out).exists() else 0
 
-    # 3. Benchmark texrs Delta (compressed)
-    print("-> Benchmarking texrs Delta (compressed)...")
-    texrs_comp_out = "/tmp/texrs_comp.pdf"
-    texrs_comp_cmd = [
-        "./target/release/texrs",
+    # 3. Benchmark rushtex Delta (compressed)
+    print("-> Benchmarking rushtex Delta (compressed)...")
+    rushtex_comp_out = "/tmp/rushtex_comp.pdf"
+    rushtex_comp_cmd = [
+        "./target/release/rushtex",
         tex_path,
         "-o",
-        texrs_comp_out
+        rushtex_comp_out
     ]
-    comp_stats = run_timed_command(texrs_comp_cmd, runs=5)
-    comp_size_bytes = Path(texrs_comp_out).stat().st_size if Path(texrs_comp_out).exists() else 0
+    comp_stats = run_timed_command(rushtex_comp_cmd, runs=5)
+    comp_size_bytes = Path(rushtex_comp_out).stat().st_size if Path(rushtex_comp_out).exists() else 0
 
     speedup_raw = pdf_stats["avg_wall"] / max(raw_stats["avg_wall"], 0.0001)
     speedup_comp = pdf_stats["avg_wall"] / max(comp_stats["avg_wall"], 0.0001)
@@ -113,7 +113,7 @@ def main():
     print("\n" + "=" * 90)
     print("      BENCHMARK: 40,000 WORDS COMPILATION TO PDF (BASELINE VS DELTA)")
     print("=" * 90)
-    print(f"{'Metric':<26} | {'pdflatex':<15} | {'texrs (Raw Baseline)':<21} | {'texrs (Compressed Delta)':<23}")
+    print(f"{'Metric':<26} | {'pdflatex':<15} | {'rushtex (Raw Baseline)':<21} | {'rushtex (Compressed)':<23}")
     print("-" * 90)
     print(f"{'Avg Wall-Clock Time':<26} | {pdf_stats['avg_wall'] * 1000.0:>12.2f} ms | {raw_stats['avg_wall'] * 1000.0:>18.2f} ms | {comp_stats['avg_wall'] * 1000.0:>20.2f} ms")
     print(f"{'Fastest Run':<26} | {pdf_stats['min_wall'] * 1000.0:>12.2f} ms | {raw_stats['min_wall'] * 1000.0:>18.2f} ms | {comp_stats['min_wall'] * 1000.0:>20.2f} ms")

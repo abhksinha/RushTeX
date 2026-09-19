@@ -1,17 +1,17 @@
 [package]
-name = "texrs"
+name = "rushtex"
 version = "0.1.0"
 edition = "2021"
-description = "Zero-dependency TeX subset → PDF text engine"
+description = "Zero-dependency TeX subset → PDF compilation engine"
 license = "MIT"
 publish = false
 
 [[bin]]
-name = "texrs"
+name = "rushtex"
 path = "src/main.rs"
 
 [lib]
-name = "texrs"
+name = "rushtex"
 path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 

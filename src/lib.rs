@@ -1,4 +1,4 @@
-//! # texrs — Pure Rust TeX-to-PDF High-Speed Compilation Engine
+//! # rushtex — Pure Rust TeX-to-PDF High-Speed Compilation Engine
 //!
 //! A zero-dependency, single-pass typesetting engine that compiles LaTeX-syntax documents
 //! directly into standards-compliant PDF 1.4 documents at sub-10ms latency.

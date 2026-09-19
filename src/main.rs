@@ -21,6 +21,8 @@
 //!    texrs input.tex --no-compress -o uncompressed.pdf
 //!    ```
 
+#![forbid(unsafe_code)]
+
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;

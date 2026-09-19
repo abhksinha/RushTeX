@@ -31,6 +31,8 @@
 //! - [`compile_file`]: Compiles a `.tex` file on disk to a `.pdf` file.
 //! - [`compile_file_opts`]: Same as `compile_file` with optional compression flag.
 
+#![forbid(unsafe_code)]
+
 pub mod metrics;
 pub mod tex;
 pub mod layout;

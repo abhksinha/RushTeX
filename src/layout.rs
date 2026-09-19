@@ -1,0 +1,656 @@
+//! Greedy line-breaking + page packing.
+//!
+//! Highly optimized layout engine:
+//! - Paint records are compact `Copy` values with zero inner heap allocations.
+//! - All text slices for a page are stored in a contiguous pool `Page.text_pool`.
+//! - Scratch buffers are allocated once in `Layouter` and reused across all paragraphs.
+//! - Inlines are measured with zero allocations.
+//! - Dynamically takes layout geometry & font configuration from `DocumentConfig`.
+
+use crate::metrics::{self, Face};
+use crate::preamble::DocumentConfig;
+use crate::tex::{Block, ColAlign, ColSpec, Document, Graphic, Inline, TableRow};
+
+pub const PAGE_W: f32 = 595.0;
+pub const PAGE_H: f32 = 842.0;
+pub const MARGIN: f32 = 72.0;
+pub const FONT_SIZE: f32 = 11.0;
+pub const LEADING: f32 = 14.0;
+pub const PARA_SKIP: f32 = 8.0;
+pub const LIST_INDENT: f32 = 24.0;
+pub const CELL_PAD: f32 = 6.0;
+pub const FIG_H: f32 = 140.0;
+
+#[derive(Clone, Debug)]
+pub struct Page<'a> {
+    pub width: f32,
+    pub height: f32,
+    pub ops: Vec<Paint>,
+    pub text_pool: Vec<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Marker {
+    Bullet,
+    Number(u32),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Paint {
+    GlyphRun {
+        x: f32,
+        y: f32,
+        face: Face,
+        size: f32,
+        part_start: u32,
+        part_count: u32,
+    },
+    Marker {
+        x: f32,
+        y: f32,
+        face: Face,
+        size: f32,
+        marker: Marker,
+    },
+    /// Axis-aligned filled or stroked rectangle. `y` is the bottom edge.
+    Rule {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        fill: bool,
+    },
+    CaptionTag {
+        x: f32,
+        y: f32,
+        n: u32,
+    },
+}
+
+pub fn layout<'a>(doc: &'a Document<'a>) -> Vec<Page<'a>> {
+    let mut l = Layouter::new(&doc.preamble.config);
+    l.layout_blocks(&doc.blocks, 0);
+    l.finish()
+}
+
+struct Layouter<'a> {
+    pages: Vec<Page<'a>>,
+    cur: Page<'a>,
+    y: f32,
+    left: f32,
+    right: f32,
+    page_width: f32,
+    page_height: f32,
+    margin_top: f32,
+    margin_bottom: f32,
+    base_font_size: f32,
+    base_leading: f32,
+    fig_no: u32,
+    scratch_runs: Vec<FlatRun<'a>>,
+    scratch_words: Vec<Shaped<'a>>,
+    scratch_line: Vec<Shaped<'a>>,
+}
+
+impl<'a> Layouter<'a> {
+    fn new(config: &DocumentConfig) -> Self {
+        let left = config.margin_left;
+        let right = config.page_width - config.margin_right;
+        let y = config.page_height - config.margin_top;
+        Self {
+            pages: Vec::new(),
+            cur: Page {
+                width: config.page_width,
+                height: config.page_height,
+                ops: Vec::with_capacity(128),
+                text_pool: Vec::with_capacity(256),
+            },
+            y,
+            left,
+            right,
+            page_width: config.page_width,
+            page_height: config.page_height,
+            margin_top: config.margin_top,
+            margin_bottom: config.margin_bottom,
+            base_font_size: config.base_font_size,
+            base_leading: config.base_leading,
+            fig_no: 0,
+            scratch_runs: Vec::with_capacity(64),
+            scratch_words: Vec::with_capacity(256),
+            scratch_line: Vec::with_capacity(32),
+        }
+    }
+
+    fn finish(mut self) -> Vec<Page<'a>> {
+        if !self.cur.ops.is_empty() || self.pages.is_empty() {
+            self.pages.push(self.cur);
+        }
+        self.pages
+    }
+
+    fn ensure_room(&mut self, need: f32) {
+        if self.y - need < self.margin_bottom {
+            let old = std::mem::replace(
+                &mut self.cur,
+                Page {
+                    width: self.page_width,
+                    height: self.page_height,
+                    ops: Vec::with_capacity(128),
+                    text_pool: Vec::with_capacity(256),
+                },
+            );
+            self.pages.push(old);
+            self.y = self.page_height - self.margin_top;
+        }
+    }
+
+    fn layout_blocks(&mut self, blocks: &'a [Block<'a>], depth: usize) {
+        for (i, b) in blocks.iter().enumerate() {
+            if i > 0 {
+                self.y -= PARA_SKIP;
+            }
+            match b {
+                Block::Para(inls) => self.layout_para(inls),
+                Block::List { ordered, items } => self.layout_list(*ordered, items, depth),
+                Block::Table { cols, rows } => self.layout_table(cols, rows),
+                Block::Figure { graphic, caption } => self.layout_figure(*graphic, caption),
+                Block::TitleBlock {
+                    title,
+                    author,
+                    date,
+                } => self.layout_title_block(title, author.as_deref(), date.as_deref()),
+                Block::Section { level, title } => self.layout_section(*level, title),
+            }
+        }
+    }
+
+    fn layout_title_block(
+        &mut self,
+        title: &'a [Inline<'a>],
+        author: Option<&'a [Inline<'a>]>,
+        date: Option<&'a [Inline<'a>]>,
+    ) {
+        self.ensure_room(72.0);
+        self.y -= 12.0;
+
+        // Title: 18pt, bold, centered
+        let title_w = measure_inlines_face_size(title, Face::Bold, 18.0);
+        let title_x = self.left + ((self.right - self.left) - title_w).max(0.0) * 0.5;
+        self.paint_inlines_at_size(title, Face::Bold, 18.0, title_x, self.y);
+        self.y -= 26.0;
+
+        // Author: 12pt, Roman, centered
+        if let Some(auth) = author {
+            let auth_w = measure_inlines_face_size(auth, Face::Roman, 12.0);
+            let auth_x = self.left + ((self.right - self.left) - auth_w).max(0.0) * 0.5;
+            self.paint_inlines_at_size(auth, Face::Roman, 12.0, auth_x, self.y);
+            self.y -= 18.0;
+        }
+
+        // Date: 10pt, Roman, centered
+        if let Some(dt) = date {
+            let dt_w = measure_inlines_face_size(dt, Face::Roman, 10.0);
+            let dt_x = self.left + ((self.right - self.left) - dt_w).max(0.0) * 0.5;
+            self.paint_inlines_at_size(dt, Face::Roman, 10.0, dt_x, self.y);
+            self.y -= 16.0;
+        }
+
+        self.y -= 16.0;
+    }
+
+    fn layout_section(&mut self, level: u8, title: &'a [Inline<'a>]) {
+        let (skip_before, font_size, skip_after) = match level {
+            1 => (18.0, 14.0, 6.0),
+            2 => (14.0, 12.0, 4.0),
+            _ => (10.0, 11.0, 2.0),
+        };
+        self.y -= skip_before;
+        self.ensure_room(font_size + skip_after + 4.0);
+        self.paint_inlines_at_size(title, Face::Bold, font_size, self.left, self.y);
+        self.y -= font_size + skip_after;
+    }
+
+    fn layout_list(&mut self, ordered: bool, items: &'a [Vec<Block<'a>>], depth: usize) {
+        for (idx, item) in items.iter().enumerate() {
+            self.ensure_room(self.base_leading);
+            let mx = self.left + (depth as f32) * LIST_INDENT;
+            self.cur.ops.push(Paint::Marker {
+                x: mx,
+                y: self.y,
+                face: Face::Roman,
+                size: self.base_font_size,
+                marker: if ordered {
+                    Marker::Number((idx + 1) as u32)
+                } else {
+                    Marker::Bullet
+                },
+            });
+            let saved_left = self.left;
+            self.left = mx + LIST_INDENT;
+            self.layout_blocks(item, depth + 1);
+            self.left = saved_left;
+            self.y -= PARA_SKIP * 0.4;
+        }
+    }
+
+    fn layout_table(&mut self, cols: &[ColSpec], rows: &'a [TableRow<'a>]) {
+        if cols.is_empty() || rows.is_empty() {
+            return;
+        }
+        let n = cols.len();
+        let mut widths = vec![0.0f32; n];
+        for row in rows {
+            for (i, cell) in row.cells.iter().enumerate().take(n) {
+                widths[i] = widths[i].max(measure_inlines(cell));
+            }
+        }
+        let table_w: f32 = widths
+            .iter()
+            .map(|w| w + 2.0 * CELL_PAD)
+            .sum::<f32>()
+            .min(self.right - self.left);
+        // If too wide, shrink columns proportionally.
+        let raw: f32 = widths.iter().map(|w| w + 2.0 * CELL_PAD).sum();
+        let scale = if raw > 0.0 && raw > self.right - self.left {
+            (self.right - self.left) / raw
+        } else {
+            1.0
+        };
+        for w in widths.iter_mut() {
+            *w *= scale;
+        }
+        let col_w: Vec<f32> = widths.iter().map(|w| w + 2.0 * CELL_PAD).collect();
+        let row_h = self.base_leading + 4.0;
+        let mut extra_rules = 0u32;
+        for row in rows {
+            if row.rule_above {
+                extra_rules += 1;
+            }
+        }
+        let total_h = row_h * rows.len() as f32 + extra_rules as f32 * 0.6 + 2.0;
+        self.ensure_room(total_h);
+        let origin_x = self.left;
+        let mut y_top = self.y;
+        for row in rows {
+            if row.rule_above {
+                self.cur.ops.push(Paint::Rule {
+                    x: origin_x,
+                    y: y_top,
+                    w: table_w,
+                    h: 0.6,
+                    fill: true,
+                });
+                y_top -= 1.2;
+            }
+            let baseline = y_top - row_h + 5.0;
+            let mut x = origin_x;
+            for i in 0..n {
+                if cols[i].rule_left {
+                    self.cur.ops.push(Paint::Rule {
+                        x,
+                        y: y_top - row_h,
+                        w: 0.6,
+                        h: row_h,
+                        fill: true,
+                    });
+                }
+                let cell = row.cells.get(i).map(|c| c.as_slice()).unwrap_or(&[]);
+                let cw = measure_inlines(cell) * scale;
+                let inner_x = match cols[i].align {
+                    ColAlign::Left => x + CELL_PAD,
+                    ColAlign::Right => x + col_w[i] - CELL_PAD - cw,
+                    ColAlign::Center => x + (col_w[i] - cw) * 0.5,
+                };
+                self.paint_inlines_at(cell, inner_x.max(x + 1.0), baseline);
+                x += col_w[i];
+            }
+            y_top -= row_h;
+        }
+        self.cur.ops.push(Paint::Rule {
+            x: origin_x,
+            y: y_top,
+            w: table_w,
+            h: 0.4,
+            fill: true,
+        });
+        self.y = y_top - PARA_SKIP;
+    }
+
+    fn layout_figure(&mut self, graphic: Option<Graphic<'a>>, caption: &'a [Inline<'a>]) {
+        self.fig_no += 1;
+        let w = (self.right - self.left).min(360.0);
+        let h = FIG_H;
+        self.ensure_room(h + self.base_leading * 2.0 + PARA_SKIP);
+        let x = self.left + ((self.right - self.left) - w) * 0.5;
+        let y_bottom = self.y - h;
+        self.cur.ops.push(Paint::Rule {
+            x,
+            y: y_bottom,
+            w,
+            h,
+            fill: false,
+        });
+        if let Some(g) = graphic {
+            if !g.path.is_empty() {
+                let tw = metrics::string_width(g.path, Face::Roman, self.base_font_size);
+                let pool_start = self.cur.text_pool.len() as u32;
+                self.cur.text_pool.push(g.path);
+                self.cur.ops.push(Paint::GlyphRun {
+                    x: x + ((w - tw) * 0.5).max(CELL_PAD),
+                    y: y_bottom + h * 0.5,
+                    face: Face::Roman,
+                    size: self.base_font_size,
+                    part_start: pool_start,
+                    part_count: 1,
+                });
+            }
+        }
+        self.y = y_bottom - self.base_leading;
+        if !caption.is_empty() || true {
+            let tag_w = 56.0;
+            self.cur.ops.push(Paint::CaptionTag {
+                x: self.left,
+                y: self.y,
+                n: self.fig_no,
+            });
+            self.paint_inlines_at(caption, self.left + tag_w, self.y);
+            self.y -= self.base_leading;
+        }
+    }
+
+    fn layout_para(&mut self, inls: &'a [Inline<'a>]) {
+        self.scratch_runs.clear();
+        flatten_into(inls, Face::Roman, &mut self.scratch_runs);
+        self.scratch_words.clear();
+        explode_words_into_size(&self.scratch_runs, self.base_font_size, &mut self.scratch_words);
+        if self.scratch_words.is_empty() {
+            return;
+        }
+
+        let measure = self.right - self.left;
+        let mut line_w = 0.0;
+
+        let num_words = self.scratch_words.len();
+        for word_idx in 0..num_words {
+            let w = self.scratch_words[word_idx];
+            if w.kind == WordKind::Break {
+                self.flush_scratch_line();
+                line_w = 0.0;
+                continue;
+            }
+            let extra = w.width;
+            if !self.scratch_line.is_empty() && line_w + extra > measure && w.kind != WordKind::Space {
+                while self.scratch_line.last().map(|x| x.kind) == Some(WordKind::Space) {
+                    self.scratch_line.pop();
+                }
+                self.flush_scratch_line();
+                line_w = 0.0;
+                if w.kind == WordKind::Space {
+                    continue;
+                }
+            }
+            if self.scratch_line.is_empty() && w.kind == WordKind::Space {
+                continue;
+            }
+            line_w += extra;
+            self.scratch_line.push(w);
+        }
+        while self.scratch_line.last().map(|x| x.kind) == Some(WordKind::Space) {
+            self.scratch_line.pop();
+        }
+        self.flush_scratch_line();
+    }
+
+    fn flush_scratch_line(&mut self) {
+        if self.scratch_line.is_empty() {
+            return;
+        }
+        self.ensure_room(self.base_leading);
+        let mut x = self.left;
+        let mut i = 0;
+        while i < self.scratch_line.len() {
+            if self.scratch_line[i].kind == WordKind::Space {
+                x += self.scratch_line[i].width;
+                i += 1;
+                continue;
+            }
+            let face = self.scratch_line[i].face;
+            let x0 = x;
+            let pool_start = self.cur.text_pool.len() as u32;
+            while i < self.scratch_line.len() {
+                let w = self.scratch_line[i];
+                if w.kind == WordKind::Word && w.face != face {
+                    break;
+                }
+                self.cur.text_pool.push(w.text);
+                x += w.width;
+                i += 1;
+            }
+            let pool_len = (self.cur.text_pool.len() as u32) - pool_start;
+            self.cur.ops.push(Paint::GlyphRun {
+                x: x0,
+                y: self.y,
+                face,
+                size: self.base_font_size,
+                part_start: pool_start,
+                part_count: pool_len,
+            });
+        }
+        self.y -= self.base_leading;
+        self.scratch_line.clear();
+    }
+
+    fn paint_inlines_at(&mut self, inls: &'a [Inline<'a>], x: f32, y: f32) {
+        self.paint_inlines_at_size(inls, Face::Roman, self.base_font_size, x, y);
+    }
+
+    fn paint_inlines_at_size(
+        &mut self,
+        inls: &'a [Inline<'a>],
+        default_face: Face,
+        font_size: f32,
+        mut x: f32,
+        y: f32,
+    ) {
+        self.scratch_runs.clear();
+        flatten_into(inls, default_face, &mut self.scratch_runs);
+        self.scratch_words.clear();
+        explode_words_into_size(&self.scratch_runs, font_size, &mut self.scratch_words);
+        let mut i = 0;
+        while i < self.scratch_words.len() {
+            if self.scratch_words[i].kind == WordKind::Break {
+                i += 1;
+                continue;
+            }
+            if self.scratch_words[i].kind == WordKind::Space {
+                x += self.scratch_words[i].width;
+                i += 1;
+                continue;
+            }
+            let face = self.scratch_words[i].face;
+            let x0 = x;
+            let pool_start = self.cur.text_pool.len() as u32;
+            while i < self.scratch_words.len() {
+                let w = self.scratch_words[i];
+                if (w.kind == WordKind::Word && w.face != face) || w.kind == WordKind::Break {
+                    break;
+                }
+                self.cur.text_pool.push(w.text);
+                x += w.width;
+                i += 1;
+            }
+            let pool_len = (self.cur.text_pool.len() as u32) - pool_start;
+            self.cur.ops.push(Paint::GlyphRun {
+                x: x0,
+                y,
+                face,
+                size: font_size,
+                part_start: pool_start,
+                part_count: pool_len,
+            });
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordKind {
+    Word,
+    Space,
+    Break,
+}
+
+#[derive(Clone, Copy)]
+struct Shaped<'a> {
+    text: &'a str,
+    face: Face,
+    width: f32,
+    kind: WordKind,
+}
+
+#[derive(Clone, Copy)]
+struct FlatRun<'a> {
+    text: &'a str,
+    face: Face,
+    is_break: bool,
+}
+
+fn flatten_into<'s, 'a>(inls: &'s [Inline<'a>], face: Face, out: &mut Vec<FlatRun<'a>>) {
+    for i in inls {
+        match i {
+            Inline::Text(s) => {
+                if !s.is_empty() {
+                    out.push(FlatRun {
+                        text: s,
+                        face,
+                        is_break: false,
+                    });
+                }
+            }
+            Inline::Bold(x) => flatten_into(x, face.with_bold(true), out),
+            Inline::Italic(x) => flatten_into(x, face.with_italic(true), out),
+            Inline::Group(x) => flatten_into(x, face, out),
+            Inline::Break => out.push(FlatRun {
+                text: "",
+                face,
+                is_break: true,
+            }),
+        }
+    }
+}
+
+fn explode_words_into_size<'a>(runs: &[FlatRun<'a>], size: f32, words: &mut Vec<Shaped<'a>>) {
+    for run in runs {
+        if run.is_break {
+            words.push(Shaped {
+                text: "",
+                face: run.face,
+                width: 0.0,
+                kind: WordKind::Break,
+            });
+            continue;
+        }
+        let s = run.text;
+        let mut i = 0;
+        let space_w = metrics::width(' ', run.face, size);
+        while i < s.len() {
+            let rest = &s[i..];
+            let c = rest.chars().next().unwrap();
+            let n = c.len_utf8();
+            if is_tex_space(c) {
+                let text = if c == ' ' { &s[i..i + 1] } else { " " };
+                words.push(Shaped {
+                    text,
+                    face: run.face,
+                    width: space_w,
+                    kind: WordKind::Space,
+                });
+                i += n;
+                while i < s.len() {
+                    let d = s[i..].chars().next().unwrap();
+                    if !is_tex_space(d) {
+                        break;
+                    }
+                    i += d.len_utf8();
+                }
+            } else {
+                let start = i;
+                i += n;
+                while i < s.len() {
+                    let d = s[i..].chars().next().unwrap();
+                    if is_tex_space(d) {
+                        break;
+                    }
+                    i += d.len_utf8();
+                }
+                let text = &s[start..i];
+                words.push(Shaped {
+                    text,
+                    face: run.face,
+                    width: metrics::string_width(text, run.face, size),
+                    kind: WordKind::Word,
+                });
+            }
+        }
+    }
+}
+
+#[inline]
+fn is_tex_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\r' | '\n')
+}
+
+#[inline]
+fn is_tex_space_byte(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\r' | b'\n')
+}
+
+fn measure_inlines(inls: &[Inline<'_>]) -> f32 {
+    measure_inlines_face_size(inls, Face::Roman, FONT_SIZE)
+}
+
+fn measure_inlines_face_size(inls: &[Inline<'_>], face: Face, size: f32) -> f32 {
+    let mut total_w = 0.0;
+    for inl in inls {
+        match inl {
+            Inline::Text(s) => {
+                total_w += measure_text_run_size(s, face, size);
+            }
+            Inline::Bold(x) => {
+                total_w += measure_inlines_face_size(x, face.with_bold(true), size);
+            }
+            Inline::Italic(x) => {
+                total_w += measure_inlines_face_size(x, face.with_italic(true), size);
+            }
+            Inline::Group(x) => {
+                total_w += measure_inlines_face_size(x, face, size);
+            }
+            Inline::Break => {}
+        }
+    }
+    total_w
+}
+
+fn measure_text_run_size(s: &str, face: Face, size: f32) -> f32 {
+    let mut total_units: u32 = 0;
+    let space_units = metrics::char_units(' ', face) as u32;
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if is_tex_space_byte(b) {
+            total_units += space_units;
+            i += 1;
+            while i < bytes.len() && is_tex_space_byte(bytes[i]) {
+                i += 1;
+            }
+        } else {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && !is_tex_space_byte(bytes[i]) {
+                i += 1;
+            }
+            let word = &s[start..i];
+            total_units += metrics::string_units(word, face);
+        }
+    }
+    total_units as f32 * (size / 1000.0)
+}

@@ -586,4 +586,34 @@ Use the command \texttt{cargo test} or \verb|fn main() { println!("hi"); }| in y
         let stream_str = String::from_utf8_lossy(&uncomp);
         assert!(stream_str.contains("/Fc"));
     }
+
+    #[test]
+    fn test_text_escape_commands() {
+        let src = r#"
+\documentclass{article}
+\begin{document}
+Escaped symbols: \textbackslash{} \textasciitilde{} \textasciicircum{} \% \$ \& \# \_ \{ \}
+\end{document}
+"#;
+        let pdf = compile_str(src).unwrap();
+        let text = extract_pdftotext(&pdf);
+        assert!(text.contains(r#"\"#));
+        assert!(text.contains("~"));
+        assert!(text.contains("^"));
+        assert!(text.contains("%"));
+        assert!(text.contains("$"));
+        assert!(text.contains("&"));
+        assert!(text.contains("#"));
+        assert!(text.contains("_"));
+        assert!(text.contains("{"));
+        assert!(text.contains("}"));
+    }
+
+    #[test]
+    fn test_manual_compilation() {
+        let manual_source = include_str!("../docs/manual.tex");
+        let pdf = compile_str(manual_source).expect("docs/manual.tex should compile cleanly");
+        assert!(!pdf.is_empty());
+        assert!(pdf.starts_with(b"%PDF-1.4"));
+    }
 }

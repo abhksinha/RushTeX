@@ -913,6 +913,18 @@ impl<'a> Parser<'a> {
             "verb" => self.parse_verb(),
             "par" => Ok(Inline::Break),
             "noindent" => Ok(Inline::NoIndent),
+            "textbackslash" => {
+                let _ = self.eat("{}");
+                Ok(Inline::Text("\\"))
+            }
+            "textasciitilde" => {
+                let _ = self.eat("{}");
+                Ok(Inline::Text("~"))
+            }
+            "textasciicircum" => {
+                let _ = self.eat("{}");
+                Ok(Inline::Text("^"))
+            }
             other => Err(self.err_at(cmd_start, format!("unknown command \\{other}"))),
         }
     }

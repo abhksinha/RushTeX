@@ -123,19 +123,39 @@ fn main() -> ExitCode {
 fn print_help() {
     eprintln!(
         "\
-rushtex — zero-dependency TeX-subset → PDF
+rushtex — ultra-fast, zero-dependency LaTeX compiler in pure safe Rust
 
 USAGE:
   rushtex <file.tex> [-o out.pdf]
   rushtex --ast <file.tex>
+  rushtex <file.tex> --no-compress -o out.pdf
   cat file.tex | rushtex > out.pdf
 
-COMMANDS understood:
-  \\textbf{{...}}   \\textit{{...}}   \\emph{{...}}
-  \\begin{{enumerate}} \\item ... \\end{{enumerate}}
+OPTIONS:
+  -o, --output <path>    Output PDF file path (default: <file>.pdf)
+  --no-compress          Disable FlateDecode stream compression for debugging
+  --ast                  Dump internal AST representation to stdout
+  -h, --help             Display this help message
+
+DOCUMENT STRUCTURE:
+  \\documentclass[10pt|11pt|12pt, a4paper|letterpaper]{{article}}
+  \\usepackage[margin=1in]{{geometry}}
+  \\title{{...}}  \\author{{...}}  \\date{{...}}  \\maketitle
+  \\pagestyle{{plain|empty}}
+  \\section{{...}}  \\subsection{{...}}  \\subsubsection{{...}}
+  \\newpage  \\clearpage  \\vspace{{...}}  \\hrule
+
+TYPOGRAPHY & FORMATTING:
+  \\textbf{{...}}  \\textit{{...}}  \\emph{{...}}  \\texttt{{...}}  \\verb|...|
+  \\par  \\noindent  \\%  \\$  \\&  \\#  \\_  \\{{  \\}}
+
+ENVIRONMENTS:
+  \\begin{{verbatim}} ... \\end{{verbatim}}
+  \\begin{{lstlisting}}[language=..., numbers=left] ... \\end{{lstlisting}}
+  \\begin{{tabular}}{{|l|c|r|}} \\hline ... \\\\ \\hline \\end{{tabular}}
   \\begin{{itemize}}   \\item ... \\end{{itemize}}
-  \\\\  blank-line paragraph  % comment
-  \\{{  \\}}  \\%  \\\\"
+  \\begin{{enumerate}} \\item ... \\end{{enumerate}}
+  \\begin{{figure}}[h] \\includegraphics{{...}} \\caption{{...}} \\end{{figure}}"
     );
 }
 

@@ -419,12 +419,63 @@ pub struct BigOpData<'a> {
     pub limits: bool,
 }
 
+/// Delimiter option bitfield constants (Batch 1: Item 55).
+pub const DELIMITER_OPT_NONE: u8 = 0;
+pub const DELIMITER_OPT_AXIS: u8 = 1 << 0;
+pub const DELIMITER_OPT_NOAXIS: u8 = 1 << 1;
+pub const DELIMITER_OPT_EXACT: u8 = 1 << 2;
+
+/// Fraction option bitfield constants (Batch 1: Item 52).
+pub const FRACTION_OPT_NONE: u8 = 0;
+pub const FRACTION_OPT_EXACT: u8 = 1 << 0;
+pub const FRACTION_OPT_NORULE: u8 = 1 << 1;
+pub const FRACTION_OPT_NOAXIS: u8 = 1 << 2;
+pub const FRACTION_OPT_SKEWED: u8 = 1 << 3;
+
 /// Data payload for dynamic delimiters (boxed to guarantee MathNode fits within 32 bytes).
 #[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
 pub struct DelimitedData<'a> {
     pub open: &'a str,
     pub close: &'a str,
-    pub content: MathNode<'a>,
+    pub content: Box<MathNode<'a>>,
+    pub height: f32,
+    pub depth: f32,
+    pub options: u8,
+    pub class: u8,
+    #[cfg(target_pointer_width = "64")]
+    pub _padding: [u8; 14],
+    #[cfg(target_pointer_width = "32")]
+    pub _padding: [u8; 2],
+}
+
+impl<'a> DelimitedData<'a> {
+    /// Creates a new DelimitedData with default zero-options and default sizing.
+    #[inline(always)]
+    pub fn new(open: &'a str, close: &'a str, content: MathNode<'a>) -> Self {
+        Self {
+            open,
+            close,
+            content: Box::new(content),
+            height: 0.0,
+            depth: 0.0,
+            options: 0,
+            class: 0,
+            #[cfg(target_pointer_width = "64")]
+            _padding: [0; 14],
+            #[cfg(target_pointer_width = "32")]
+            _padding: [0; 2],
+        }
+    }
+}
+
+/// Data payload for 4-branch \mathchoice (boxed to guarantee MathNode fits within 32 bytes).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MathChoiceData<'a> {
+    pub display: MathNode<'a>,
+    pub text: MathNode<'a>,
+    pub script: MathNode<'a>,
+    pub script_script: MathNode<'a>,
 }
 
 /// Column alignment for matrices and alignment grids.
@@ -473,6 +524,7 @@ pub enum MathNode<'a> {
         num: Box<MathNode<'a>>,
         den: Box<MathNode<'a>>,
         has_rule: bool,
+        options: u8,
     },
     /// Radical with optional index root ($\sqrt{A}$ or $\sqrt[n]{A}$).
     Radical {
@@ -508,6 +560,10 @@ pub enum MathNode<'a> {
     },
     /// Vertically centered formula box on the math axis (TeX Appendix G Rule 12).
     Vcenter(Box<MathNode<'a>>),
+    /// 4-branch mathematical choice for style-dependent layouts (`\mathchoice{D}{T}{S}{SS}`).
+    MathChoice(Box<MathChoiceData<'a>>),
+    /// Middle delimiter within a dynamic fence (`\middle |`).
+    MiddleDelim { delim: &'a str, options: u8 },
 }
 
 #[cfg(target_pointer_width = "64")]
@@ -554,6 +610,8 @@ impl<'a> MathNode<'a> {
             }
             MathNode::StyleScope { content, .. } => content.atom_kind(),
             MathNode::Vcenter(_) => MathAtomKind::Ord,
+            MathNode::MathChoice(choice) => choice.display.atom_kind(),
+            MathNode::MiddleDelim { .. } => MathAtomKind::Inner,
         }
     }
 
@@ -570,6 +628,8 @@ impl<'a> MathNode<'a> {
             }
             MathNode::StyleScope { content, .. } => content.first_atom_kind(),
             MathNode::Vcenter(_) => MathAtomKind::Ord,
+            MathNode::MathChoice(choice) => choice.display.first_atom_kind(),
+            MathNode::MiddleDelim { .. } => MathAtomKind::Inner,
             _ => self.atom_kind(),
         }
     }

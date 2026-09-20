@@ -7,6 +7,7 @@
 \usepackage{array}
 \usepackage{enumitem}
 \usepackage{graphicx}
+\graphicspath{{docs/}{./}}
 
 \lstdefinelanguage{Rust}{
   keywords={fn, let, mut, struct, pub, impl, match, use, return, true, false, if, else, assert},
@@ -452,156 +453,403 @@ Memory Reduction & 84.7\% less RAM & 0.0\% (baseline) \\
 
 \bigskip
 
-\section{Mathematical Typography (\texttt{math})}
-The \texttt{rushtex} mathematical typesetting subsystem faithfully implements the canonical mathematical layout engine specified in TeX Appendix G (\emph{The TeXbook} by Donald Knuth), engineered in pure safe Rust under zero-allocation performance budgets.
+\section{Mathematical Typography and Equation Reference (\texttt{math})}
+The \texttt{rushtex} mathematical typesetting subsystem faithfully implements the canonical mathematical layout engine specified in TeX Appendix G (\emph{The TeXbook} by Donald Knuth), engineered in pure safe Rust under zero-allocation performance budgets. This section serves a dual purpose: it acts as a comprehensive reference guide explaining how every equation type is defined, parsed, and typeset, while functioning as a rigorous visual specimen suite spanning major branches of theoretical physics and modern mathematics.
 
-\subsection{TeX Appendix G Architectural Engine}
-Rather than relying on empirical heuristic approximations, the mathematical engine converts mathematical AST structures directly into exact physical geometry:
+\subsection{Mathematical Environments and Equation Types}
+Mathematical typesetting in \texttt{rushtex} is strictly partitioned into distinct rendering environments, each tailored for specific structural, geometric, and semantic requirements.
+
+\subsubsection{Inline Mathematics (\texttt{\$...} and \texttt{\textbackslash(...\textbackslash)})}
+Inline formulas appear within running paragraph prose. In this mode, the layout engine selects \emph{Text Style} ($T$) or \emph{Cramped Text Style} ($T'$), enforcing tight vertical bounds to prevent uneven inter-line spacing:
 \begin{itemize}
-\item \textbf{Authoritative Font Metrics}: All TeX Appendix G dimensional parameters ($\sigma_8$ through $\sigma_{22}$ and $\xi_8$ through $\xi_{13}$) are centralized in a 64-byte aligned structure fitting entirely within a single CPU L1 data cache line.
-\item \textbf{Mathematical Axis Centering}: All fraction bars, operator symbols, and enclosing delimiters are centered symmetrically across the font's mathematical axis ($\sigma_{22}$), guaranteeing consistent baseline alignments.
-\item \textbf{Branchless Inter-Atom Spacing}: Mathematical expressions are classified into the eight canonical TeX atom categories (\texttt{Ord}, \texttt{Op}, \texttt{Bin}, \texttt{Rel}, \texttt{Open}, \texttt{Close}, \texttt{Punct}, \texttt{Inner}). Spacing between any adjacent pair of atoms is resolved branchlessly in a single CPU cycle via a 64-byte L1-resident lookup table, with automatic display-style glue expansion.
-\item \textbf{TeX Appendix G Rule 5}: Binary operators (\texttt{Bin}) at expression boundaries or adjacent to incompatible operators (e.g., unary minus $-x$) are dynamically transformed into ordinary atoms (\texttt{Ord}), ensuring reference-identical horizontal rhythm.
-\item \textbf{Italic Correction \& Overhang Shielding}: Nuclei with slanted glyphs automatically project italic corrections to superscripts and opening delimiters, preventing collisions (such as in $f(x)$) while shielding subscripts.
+\item Operators (such as $\sum$ or $\int$) place limits horizontally as subscripts and superscripts rather than vertically above and below.
+\item Built-up fractions are compressed, and inter-atom spacing is slightly reduced.
+\item Examples: The mass-energy equivalence $E = mc^2$, Euler's identity $e^{i\pi} + 1 = 0$, the de Broglie wavelength $\lambda = \frac{h}{p}$, and the Heisenberg uncertainty relation $\Delta x \, \Delta p \ge \frac{\hbar}{2}$.
 \end{itemize}
 
-\subsection{Inline and Display Mathematics}
-Mathematical expressions can be embedded inline within running text using standard dollar delimiters \verb|$...$| or \verb|\(...\)|. Display equations can be centered using \verb|$$...$$|, \verb|\[...\]|, or the formal \verb|equation| and \verb|equation*| environments.
-
-Einstein's mass-energy equivalence $E = mc^2$ demonstrates inline symbol placement. When placed in display mode with automatic numbering:
-\begin{equation}
-E = \sqrt{(m_0 c^2)^2 + (p c)^2}
-\end{equation}
-
-\subsection{Calculus, Series, and Large Operators}
-The engine provides first-class support for fractions, superscripts, subscripts, radicals, and operators with display-style limits. The fundamental theorem of calculus and the Gaussian integral are formatted natively:
-\begin{equation}
-\int_a^b f(x) \mathrm{d}x = F(b) - F(a)
-\end{equation}
-
+\subsubsection{Unnumbered Display Mathematics (\texttt{\textbackslash[...\textbackslash]} and \texttt{\$\$...})}
+Display equations are rendered as independent blocks centered horizontally across the text column. In this mode, the engine selects \emph{Display Style} ($D$):
+\begin{itemize}
+\item Fractions, radicals, and large operators utilize expanded vertical clearances and full-sized glyphs.
+\item Operators automatically place their limits directly above and below the nucleus.
+\end{itemize}
 \[
-\int_{-\infty}^\infty e^{-x^2} \mathrm{d}x = \frac{\sqrt{\pi}}{2}
+\int_{-\infty}^{\infty} e^{-x^2} \, \mathrm{d}x = \sqrt{\pi}
 \]
 
-Multivariate calculus operations, double integrals, and series with display limits are rendered with exact operator dimensions and subscript kerning:
+\subsubsection{Numbered Equation Environments (\texttt{equation} and \texttt{equation*})}
+The \texttt{equation} environment centers the formula horizontally while automatically generating a right-aligned equation number enclosed in parentheses. The counter increments monotonically across the document:
+\begin{equation}
+i \hbar \frac{\partial}{\partial t} \Psi(\mathbf{r}, t) = \left( -\frac{\hbar^2}{2m} \nabla^2 + V(\mathbf{r}, t) \right) \Psi(\mathbf{r}, t)
+\end{equation}
+The starred variant \texttt{equation*} suppresses the equation number while preserving identical display-style geometry:
 \begin{equation*}
-\frac{\partial f}{\partial x} = \lim_{h \to 0} \frac{f(x+h, y) - f(x, y)}{h}, \quad \iint_D \nabla^2 \Phi \, \mathrm{d}A = \oint_{\partial D} \nabla \Phi \cdot \vec{n} \, \mathrm{d}s
+\mathcal{L} = \bar{\psi} (i \gamma^\mu D_\mu - m) \psi - \frac{1}{4} F_{\mu\nu} F^{\mu\nu}
 \end{equation*}
 
-Summations and products position their index limits directly above and below the operator glyph in display styles:
-\begin{equation}
-\sum_{k=1}^n k^2 = \frac{n(n+1)(2n+1)}{6}, \quad \prod_{i=1}^m (1 + x_i) \le \exp\left(\sum_{i=1}^m x_i\right)
-\end{equation}
+\subsubsection{Multi-Line Aligned Systems (\texttt{align} and \texttt{align*})}
+The \texttt{align} and \texttt{align*} environments typeset multi-line derivations with horizontal alignment anchored at relation symbols (typically \verb|&=|). Each line in \texttt{align} receives an individual equation number unless suppressed:
+\begin{align}
+\nabla \cdot \mathbf{E} &= \frac{\rho}{\varepsilon_0} \\
+\nabla \cdot \mathbf{B} &= 0 \\
+\nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t} \\
+\nabla \times \mathbf{B} &= \mu_0 \mathbf{J} + \mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t}
+\end{align}
+Unnumbered alignments use \texttt{align*}:
+\begin{align*}
+\oint_{\partial S} \mathbf{E} \cdot \mathrm{d}\mathbf{l} &= -\frac{\mathrm{d}}{\mathrm{d}t} \iint_S \mathbf{B} \cdot \mathrm{d}\mathbf{S} \\
+\oint_{\partial S} \mathbf{B} \cdot \mathrm{d}\mathbf{l} &= \mu_0 I_{\text{enc}} + \mu_0 \varepsilon_0 \frac{\mathrm{d}}{\mathrm{d}t} \iint_S \mathbf{E} \cdot \mathrm{d}\mathbf{S}
+\end{align*}
 
-\subsection{Accents, Vectors, and Extensible Rules}
-Mathematical accents are positioned with nucleus italic compensation:
-\[
-\vec{F} = m \vec{a}, \quad \hat{H} \Psi = E \Psi, \quad \overline{z_1 + z_2} = \bar{z}_1 + \bar{z}_2, \quad \tilde{A} \approx A_0
-\]
+\subsubsection{Centered Multi-Line Groups (\texttt{gather} and \texttt{gather*})}
+The \texttt{gather} environment typesets multiple formulas where each line is individually centered without column alignment:
+\begin{gather}
+H = \sum_{i=1}^n \frac{p_i^2}{2m} + \sum_{i<j} V(r_{ij}) \\
+\dot{q}_i = \frac{\partial H}{\partial p_i}, \quad \dot{p}_i = -\frac{\partial H}{\partial q_i}
+\end{gather}
 
-\subsection{Linear Algebra, Determinants, and Systems}
-RushTeX implements content-sensitive matrix layout with zero dynamic heap allocations. Row heights and column widths adjust dynamically to their cell contents, and delimiters are rendered with constant, crisp stroke thickness:
+\subsubsection{Long Splitting Equations (\texttt{multline})}
+When an equation is too long to fit across a single column width, the \texttt{multline} environment breaks it across several lines: the first line is left-aligned, the final line is right-aligned, and intermediate lines are centered:
+\begin{multline}
+f(x) = a_0 + a_1 x + a_2 x^2 + a_3 x^3 + a_4 x^4 + a_5 x^5 + a_6 x^6 \\
++ b_1 \sin(x) + b_2 \sin(2x) + b_3 \sin(3x) + b_4 \sin(4x) \\
++ c_1 \cos(x) + c_2 \cos(2x) + c_3 \cos(3x) + c_4 \cos(4x)
+\end{multline}
+
+\subsection{TeX Appendix G Architectural Engine and Mathematical Spacing}
+The \texttt{rushtex} mathematical typesetting subsystem implements the 22 fundamental placement rules of TeX Appendix G with zero dynamic heap allocations on the layout hot path:
+
 \begin{itemize}
-\item \textbf{Parentheses (\texttt{pmatrix})}: Continuous, sleek curved delimiters scaled to matrix height.
-\item \textbf{Square Brackets (\texttt{bmatrix})}: Razor-sharp vector stems and inward horizontal caps.
-\item \textbf{Determinants (\texttt{vmatrix})}: Constant-thickness vertical bars without stroke bloat.
-\item \textbf{Matrix Norms (\texttt{Vmatrix})}: Double vertical rules for operator norms.
-\item \textbf{Piecewise Systems (\texttt{cases})}: Unilateral left-brace fences for piecewise definitions.
+\item \textbf{Mathematical Axis Centering}: All fraction rules, relation operators ($=$, $\le$, $\approx$), and extensible delimiters are symmetrically centered on the font's mathematical axis ($\sigma_{22}$), eliminating vertical drift between formulas.
+\item \textbf{The Eight Atom Kinds}: Every mathematical node is categorized into: \texttt{Ord} (ordinary symbol), \texttt{Op} (large operator), \texttt{Bin} (binary operator), \texttt{Rel} (relation), \texttt{Open} (opening fence), \texttt{Close} (closing fence), \texttt{Punct} (punctuation), and \texttt{Inner} (enclosed sub-formula).
+\item \textbf{Branchless Spacing LUT}: Typographic spacing between any adjacent pair of atoms is resolved in a single CPU cycle via the 64-byte aligned \texttt{ATOM\_SPACING\_LUT}, providing canonical math spacing: thin space ($3\,\text{mu}$), medium space ($4\,\text{mu}$), and thick space ($5\,\text{mu}$), with display-style natural glue expansion.
+\item \textbf{Rule 5 Boundary Normalization}: Binary operators (\texttt{Bin}) positioned at expression boundaries or directly following another operator (e.g., unary minus in $-x$ or $x = -y$) are dynamically converted to ordinary atoms (\texttt{Ord}), preventing erroneous gap expansion.
+\item \textbf{Italic Correction and Overhang Shielding}: Slanted characters (such as $f$, $j$, $y$) project an italic correction to superscripts and opening delimiters to eliminate visual collisions (e.g., $f(x)$ vs. $x(t)$), while subscripts remain tucked underneath.
 \end{itemize}
 
-Linear transformation with brackets and parentheses:
+\subsection{Fractions, Continued Fractions, and Binomials}
+Fractions and combinatorial coefficients are governed by TeX Appendix G Rule 10:
+
+\subsubsection{Standard and Sized Fractions}
+Standard fractions are typeset with \verb|\frac{numerator}{denominator}|. In addition, AMS-LaTeX style-forcing commands are natively supported:
+\begin{itemize}
+\item \verb|\dfrac{a}{b}| forces display-style sizing even within inline text.
+\item \verb|\tfrac{a}{b}| forces text-style sizing inside display equations.
+\end{itemize}
+\[
+\text{Standard Display: } \frac{a + b}{c + d}, \quad \text{Forced Text: } \tfrac{a + b}{c + d}
+\]
+
+\subsubsection{Continued Fractions (\texttt{\textbackslash cfrac})}
+Continued fractions nested with standard \verb|\frac| quickly shrink into unreadable script sizes. The \verb|\cfrac| primitive preserves display-style dimensions across all recursive levels:
+\[
+\sqrt{2} = 1 + \cfrac{1}{2 + \cfrac{1}{2 + \cfrac{1}{2 + \cfrac{1}{2 + \dotsb}}}}
+\]
+The golden ratio $\phi = \frac{1 + \sqrt{5}}{2}$ expressed as an infinite continued fraction:
+\[
+\phi = 1 + \cfrac{1}{1 + \cfrac{1}{1 + \cfrac{1}{1 + \cfrac{1}{1 + \dotsb}}}}
+\]
+
+\subsubsection{Binomial Coefficients (\texttt{\textbackslash binom}, \texttt{\textbackslash dbinom}, \texttt{\textbackslash tbinom})}
+Combinatorial coefficients typeset atop without a fraction rule, enclosed in dynamically scaled parentheses:
+\[
+\binom{n}{k} = \frac{n!}{k!(n-k)!}, \quad \sum_{k=0}^n \binom{n}{k} x^k y^{n-k} = (x + y)^n
+\]
+The generalized fraction primitive \verb|\genfrac{ld}{rd}{thick}{style}{num}{den}| allows arbitrary delimiter, line thickness, and style combinations.
+
+\subsection{Radicals, Roots, and Extensible Surds}
+Radical constructions obey TeX Appendix G Rule 11:
+\begin{itemize}
+\item \textbf{Seamless Overbar}: The radical symbol and the horizontal vinculum rule join without gaps or overlaps.
+\item \textbf{Symmetrical Clearance Excess}: Symmetrical distribution of vertical clearance ensures that radicands with tall descenders or short letters (such as $\sqrt{\pi}$ or $\sqrt{x}$) maintain perfect top and bottom visual balance.
+\item \textbf{Degree Indices}: Arbitrary root degrees are positioned cleanly within the radical hook:
+\end{itemize}
+\[
+\sqrt{x} + \sqrt{x^2 + y^2} + \sqrt{\frac{a^2 + b^2}{c^2 + d^2}} + \sqrt[3]{x^3 + y^3} + \sqrt[n]{1 + \frac{x}{n}}
+\]
+
+\subsection{Calculus, Differential Forms, and Large Operators}
+Large operators scale dynamically based on display mode, positioning limits according to TeX Appendix G Rule 13:
+
+\subsubsection{Single, Multiple, and Contour Integrals}
+Integrals feature exact italic correction overhang compensation so that upper and lower limits are centered optically over the slanted glyph:
+\[
+\int_0^\infty \frac{x^3}{e^x - 1} \, \mathrm{d}x = \frac{\pi^4}{15}, \quad \iint_{\mathbb{R}^2} e^{-(x^2 + y^2)} \, \mathrm{d}x \, \mathrm{d}y = \pi
+\]
+Contour and surface integrals:
+\[
+\oint_C (P \, \mathrm{d}x + Q \, \mathrm{d}y) = \iint_D \left( \frac{\partial Q}{\partial x} - \frac{\partial P}{\partial y} \right) \mathrm{d}A
+\]
+
+\subsubsection{Summations, Products, and Display Limits}
+Operators with display limits center their indices directly above and below:
+\[
+\sum_{n=1}^\infty \frac{1}{n^2} = \frac{\pi^2}{6}, \quad \prod_{p \text{ prime}} \frac{1}{1 - p^{-s}} = \sum_{n=1}^\infty \frac{1}{n^s} = \zeta(s)
+\]
+Limits can be explicitly controlled with \verb|\limits| and \verb|\nolimits|:
+\[
+\sum\nolimits_{k=1}^N a_k \quad \text{versus} \quad \sum\limits_{k=1}^N a_k
+\]
+
+\subsection{Matrices, Arrays, and Piecewise Systems}
+RushTeX implements content-sensitive matrix layout with zero dynamic heap allocations. Row heights and column widths adjust dynamically to their cell contents, and delimiters are rendered with constant, crisp stroke thickness:
+
+\subsubsection{Matrix Flavors and Delimiters}
+\begin{itemize}
+\item \textbf{Parentheses (\texttt{pmatrix})}: Standard matrix notation.
+\item \textbf{Square Brackets (\texttt{bmatrix})}: Vector and tensor representations.
+\item \textbf{Determinants (\texttt{vmatrix})}: Single vertical bars.
+\item \textbf{Matrix Norms (\texttt{Vmatrix})}: Double vertical bars.
+\item \textbf{Curly Braces (\texttt{Bmatrix})}: Group and set matrices.
+\end{itemize}
+
+Matrix-vector multiplication:
 \[
 \begin{pmatrix}
-a_{11} & a_{12} \\
-a_{21} & a_{22}
+a_{11} & a_{12} & a_{13} \\
+a_{21} & a_{22} & a_{23} \\
+a_{31} & a_{32} & a_{33}
 \end{pmatrix}
 \begin{bmatrix}
 x_1 \\
-x_2
+x_2 \\
+x_3
 \end{bmatrix}
 =
 \begin{bmatrix}
 y_1 \\
-y_2
+y_2 \\
+y_3
 \end{bmatrix}
 \]
 
-Determinants and matrix norms:
+Determinants and operator norms:
 \[
-\begin{vmatrix}
+\det(A) = \begin{vmatrix}
 a & b \\
 c & d
 \end{vmatrix}
 = ad - bc, \quad
-\begin{Vmatrix}
-1 & 2 \\
-3 & 4
-\end{Vmatrix}
-\le \sqrt{30}
+\|A\|_F = \sqrt{\sum_{i=1}^m \sum_{j=1}^n |a_{ij}|^2}
 \]
 
-Piecewise equations with unilateral delimiter formatting:
+Content-sensitive row height adjustment with fraction cells:
 \[
-f(x) = \begin{cases}
-x^2 \sin\left(\frac{1}{x}\right) & x \neq 0 \\
-0 & x = 0
+\begin{pmatrix}
+\frac{1}{2} & 0 & 0 \\
+0 & \frac{\sqrt{3}}{2} & -\frac{1}{2} \\
+0 & \frac{1}{2} & \frac{\sqrt{3}}{2}
+\end{pmatrix}
+\]
+
+\subsubsection{Piecewise Systems (\texttt{cases})}
+Piecewise definitions render with a unilateral left brace and aligned conditions:
+\[
+\operatorname{sgn}(x) = \begin{cases}
+1 & \text{if } x > 0 \\
+0 & \text{if } x = 0 \\
+-1 & \text{if } x < 0
+\end{cases}, \quad
+|x| = \begin{cases}
+x & \text{if } x \ge 0 \\
+-x & \text{if } x < 0
 \end{cases}
 \]
 
-\subsection{Theoretical and Modern Physics}
-Complex physical laws from classical mechanics, electrodynamics, quantum mechanics, and general relativity are represented natively:
+\subsection{Delimiters and Sizing Fences}
+Delimiters automatically enclose formulas of arbitrary vertical height using \verb|\left| and \verb|\right|:
+\begin{itemize}
+\item \textbf{Rule 19 Sizing}: The target delimiter height is computed via $2 \cdot \max(h - \sigma_{22}, d + \sigma_{22}) \cdot 0.9$.
+\item \textbf{Null Delimiters}: \verb|\left.| or \verb|\right.| renders an invisible zero-width delimiter, essential for unilateral fences or evaluation bars:
+\end{itemize}
+\[
+\left. \frac{\mathrm{d}f}{\mathrm{d}x} \right|_{x=x_0} = \lim_{h \to 0} \frac{f(x_0 + h) - f(x_0)}{h}
+\]
+\[
+\left( 1 + \left( \frac{a + b}{c + d} \right)^2 \right)^{\frac{1}{2}}
+\]
+
+\subsection{Accents, Vectors, and Typographic Spacing}
+Mathematical accents are positioned with nucleus italic compensation:
+\[
+\vec{v}, \quad \mathbf{v}, \quad \hat{u}, \quad \bar{x}, \quad \dot{x}, \quad \ddot{x}, \quad \dddot{x}, \quad \ddddot{x}, \quad \tilde{A}, \quad \mathring{A}
+\]
+Horizontal rhythm can be fine-tuned using micro-spacing commands:
+\begin{itemize}
+\item Thin space \verb|\,| ($3\,\text{mu}$): $\int f(x) \, \mathrm{d}x$.
+\item Medium space \verb|\:| ($4\,\text{mu}$): $a \: b$.
+\item Thick space \verb|\;| ($5\,\text{mu}$): $a \; b$.
+\item Negative thin space \verb|\!| ($-3\,\text{mu}$): used in overlapping integrals $\int\!\!\int f \, \mathrm{d}A$ or tightening $\iint\! f \, \mathrm{d}A$.
+\item Quad \verb|\quad| ($18\,\text{mu}$) and Qquad \verb|\qquad| ($36\,\text{mu}$).
+\end{itemize}
+
+\subsection{Comprehensive Physics Showcase}
+This section presents foundational formulations from major branches of theoretical and applied physics, formatted natively in \texttt{rushtex}.
+
+\subsubsection{Classical Mechanics and Analytical Dynamics}
+In Lagrangian mechanics, the dynamics of a system with generalized coordinates $q_i$ and generalized velocities $\dot{q}_i$ are governed by the action principle $\delta S = 0$, where $S = \int \mathcal{L} \, \mathrm{d}t$:
 \begin{equation}
-\vec{F} = \frac{\mathrm{d}\vec{p}}{\mathrm{d}t} = m \vec{a}
+\frac{\mathrm{d}}{\mathrm{d}t} \left( \frac{\partial \mathcal{L}}{\partial \dot{q}_i} \right) - \frac{\partial \mathcal{L}}{\partial q_i} = 0, \quad i = 1, \dots, n
+\end{equation}
+Under the Legendre transformation $p_i = \frac{\partial \mathcal{L}}{\partial \dot{q}_i}$, the Hamiltonian $\mathcal{H}(q_i, p_i, t) = \sum_{i=1}^n p_i \dot{q}_i - \mathcal{L}$ yields Hamilton's canonical equations:
+\begin{equation}
+\dot{q}_i = \frac{\partial \mathcal{H}}{\partial p_i}, \quad \dot{p}_i = -\frac{\partial \mathcal{H}}{\partial q_i}
+\end{equation}
+The time evolution of any dynamical observable $A(q, p, t)$ is given by the Poisson bracket:
+\begin{equation}
+\frac{\mathrm{d}A}{\mathrm{d}t} = \{A, \mathcal{H}\} + \frac{\partial A}{\partial t}, \quad \{A, B\} = \sum_{i=1}^n \left( \frac{\partial A}{\partial q_i}\frac{\partial B}{\partial p_i} - \frac{\partial A}{\partial p_i}\frac{\partial B}{\partial q_i} \right)
 \end{equation}
 
-Maxwell's equations in differential form:
-\begin{equation*}
-\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}, \quad \nabla \times \mathbf{B} = \mu_0 \mathbf{J} + \mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t}
-\end{equation*}
-
-The time-dependent Schrodinger equation:
-\begin{equation}
-i \hbar \frac{\partial}{\partial t} \Psi(\mathbf{r}, t) = \hat{H} \Psi(\mathbf{r}, t)
-\end{equation}
-
-Einstein's general relativistic field equations:
-\begin{equation}
-R_{\mu\nu} - \frac{1}{2} R g_{\mu\nu} + \Lambda g_{\mu\nu} = \frac{8\pi G}{c^4} T_{\mu\nu}
-\end{equation}
-
-\subsection{Advanced Mathematical Constructs and AMS Environments}
-The math engine supports advanced AMS-LaTeX syntax lowering directly into hardware-optimized primitives:
-
-Multi-equation alignment systems format relation symbols and column boundaries natively:
-\begin{align*}
+\subsubsection{Classical Electrodynamics and Field Theory}
+Maxwell's equations in microscopic differential form describe the coupling between electric and magnetic fields:
+\begin{align}
+\nabla \cdot \mathbf{E} &= \frac{\rho}{\varepsilon_0} \\
 \nabla \cdot \mathbf{B} &= 0 \\
-\nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t}
-\end{align*}
+\nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t} \\
+\nabla \times \mathbf{B} &= \mu_0 \mathbf{J} + \mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t}
+\end{align}
+In relativistic 4-vector notation, the electromagnetic field strength tensor $F^{\mu\nu} = \partial^\mu A^\nu - \partial^\nu A^\mu$ unifies these relations:
+\begin{equation}
+\partial_\mu F^{\mu\nu} = \mu_0 J^\nu, \quad \partial_\mu \tilde{F}^{\mu\nu} = 0
+\end{equation}
+The electromagnetic stress-energy tensor $T^{\mu\nu}$ and the Lorentz force density $f^\mu$:
+\begin{equation}
+T^{\mu\nu} = \frac{1}{\mu_0} \left( F^{\mu\alpha} F^\nu{}_\alpha - \frac{1}{4} \eta^{\mu\nu} F_{\alpha\beta} F^{\alpha\beta} \right), \quad f^\mu = \partial_\nu T^{\mu\nu} = F^{\mu\nu} J_\nu
+\end{equation}
 
-Continued fractions and combinatorial binomial coefficients:
-\[
-\frac{1}{1 + \cfrac{1}{2 + \cfrac{1}{3 + \cfrac{1}{4}}}} = \frac{30}{43}, \quad \binom{n}{k} = \frac{n!}{k!(n-k)!}
-\]
+\subsubsection{Quantum Mechanics and Quantum Field Theory}
+The time-dependent Schrödinger equation for a non-relativistic quantum particle in three dimensions:
+\begin{equation}
+i \hbar \frac{\partial}{\partial t} \Psi(\mathbf{r}, t) = \left( -\frac{\hbar^2}{2m} \nabla^2 + V(\mathbf{r}) \right) \Psi(\mathbf{r}, t)
+\end{equation}
+The relativistic Dirac equation for spin-$1/2$ fermions:
+\begin{equation}
+\left( i \hbar \gamma^\mu \partial_\mu - mc \right) \psi = 0
+\end{equation}
+where the $4 \times 4$ Dirac gamma matrices satisfy the Clifford algebra anticommutation relation:
+\begin{equation}
+\{\gamma^\mu, \gamma^\nu\} = \gamma^\mu \gamma^\nu + \gamma^\nu \gamma^\mu = 2 \eta^{\mu\nu} I_4
+\end{equation}
+The canonical commutation relations in quantum mechanics:
+\begin{equation}
+[\hat{x}_j, \hat{p}_k] = i \hbar \delta_{jk}, \quad [\hat{L}_x, \hat{L}_y] = i \hbar \hat{L}_z
+\end{equation}
+The quantum harmonic oscillator in terms of creation ($a^\dagger$) and annihilation ($a$) ladder operators:
+\begin{equation}
+\hat{H} = \hbar \omega \left( a^\dagger a + \frac{1}{2} \right), \quad [a, a^\dagger] = 1, \quad a |n\rangle = \sqrt{n} |n-1\rangle, \quad a^\dagger |n\rangle = \sqrt{n+1} |n+1\rangle
+\end{equation}
+The Feynman path integral formulation of quantum transition amplitudes:
+\begin{equation}
+\langle x_f, t_f | x_i, t_i \rangle = \int \mathcal{D}[x(t)] \, \exp\left( \frac{i}{\hbar} \int_{t_i}^{t_f} \mathcal{L}(x, \dot{x}) \, \mathrm{d}t \right)
+\end{equation}
 
-Number theory and modular arithmetic:
-\[
-a \equiv b \pmod{m}, \quad r = a \bmod n
-\]
+\subsubsection{General Relativity and Cosmology}
+Einstein's field equations relate spacetime curvature to the distribution of mass and energy:
+\begin{equation}
+G_{\mu\nu} + \Lambda g_{\mu\nu} = \frac{8 \pi G}{c^4} T_{\mu\nu}, \quad G_{\mu\nu} \equiv R_{\mu\nu} - \frac{1}{2} R g_{\mu\nu}
+\end{equation}
+The Riemann curvature tensor and Christoffel connection coefficients:
+\begin{equation}
+\Gamma^\mu_{\alpha\beta} = \frac{1}{2} g^{\mu\sigma} \left( \partial_\alpha g_{\beta\sigma} + \partial_\beta g_{\alpha\sigma} - \partial_\sigma g_{\alpha\beta} \right)
+\end{equation}
+\begin{equation}
+R^\rho{}_{\sigma\mu\nu} = \partial_\mu \Gamma^\rho_{\nu\sigma} - \partial_\nu \Gamma^\rho_{\mu\sigma} + \Gamma^\rho_{\mu\lambda} \Gamma^\lambda_{\nu\sigma} - \Gamma^\rho_{\nu\lambda} \Gamma^\lambda_{\mu\sigma}
+\end{equation}
+The geodesic equation for test particles in curved spacetime:
+\begin{equation}
+\frac{\mathrm{d}^2 x^\mu}{\mathrm{d}\tau^2} + \Gamma^\mu_{\alpha\beta} \frac{\mathrm{d}x^\alpha}{\mathrm{d}\tau} \frac{\mathrm{d}x^\beta}{\mathrm{d}\tau} = 0
+\end{equation}
+The Schwarzschild metric line element describing the vacuum geometry outside a spherical mass $M$:
+\begin{equation}
+\mathrm{d}s^2 = -\left( 1 - \frac{2GM}{c^2 r} \right) c^2 \mathrm{d}t^2 + \left( 1 - \frac{2GM}{c^2 r} \right)^{-1} \mathrm{d}r^2 + r^2 (\mathrm{d}\theta^2 + \sin^2\theta \, \mathrm{d}\phi^2)
+\end{equation}
+In modern cosmology, the Friedmann equations describe the expansion of a homogeneous and isotropic universe with scale factor $a(t)$:
+\begin{equation}
+\left( \frac{\dot{a}}{a} \right)^2 = \frac{8\pi G}{3} \rho - \frac{k c^2}{a^2} + \frac{\Lambda c^2}{3}, \quad \frac{\ddot{a}}{a} = -\frac{4\pi G}{3}\left( \rho + \frac{3p}{c^2} \right) + \frac{\Lambda c^2}{3}
+\end{equation}
 
-Higher-order optical accents and wide constructions:
-\[
-\dot{x}, \quad \ddot{x}, \quad \dddot{x}, \quad \ddddot{x}, \quad \mathring{A}, \quad \widehat{x + y}, \quad \widetilde{A}
-\]
+\subsubsection{Fluid Dynamics and Thermodynamics}
+The Navier-Stokes equations governing the velocity field $\mathbf{u}$ of an incompressible Newtonian fluid with density $\rho$ and dynamic viscosity $\mu$:
+\begin{equation}
+\rho \left( \frac{\partial \mathbf{u}}{\partial t} + (\mathbf{u} \cdot \nabla) \mathbf{u} \right) = -\nabla p + \mu \nabla^2 \mathbf{u} + \mathbf{f}, \quad \nabla \cdot \mathbf{u} = 0
+\end{equation}
+The fundamental thermodynamic relation and Maxwell relations:
+\begin{equation}
+\mathrm{d}U = T \, \mathrm{d}S - P \, \mathrm{d}V + \mu \, \mathrm{d}N
+\end{equation}
+\begin{equation}
+\left( \frac{\partial T}{\partial V} \right)_S = -\left( \frac{\partial P}{\partial S} \right)_V, \quad \left( \frac{\partial T}{\partial P} \right)_S = \left( \frac{\partial V}{\partial S} \right)_P, \quad \left( \frac{\partial S}{\partial V} \right)_T = \left( \frac{\partial P}{\partial T} \right)_V
+\end{equation}
 
-Mathematical typefaces and algebraic spaces:
-\[
-\mathbb{R}^n, \quad \mathcal{F}[f](\omega), \quad \mathbf{X} \in \mathsf{GL}(n, \mathbb{C})
-\]
+\subsection{Comprehensive Mathematics Showcase}
+This section presents essential formulations across analysis, complex variables, number theory, and differential geometry.
 
-Fine-grained mathematical spacing and horizontal rhythm:
-\[
-\forall \varepsilon > 0 \quad \exists \delta > 0 \qquad |x - x_0| < \delta \implies |f(x) - L| < \varepsilon
-\]
+\subsubsection{Complex Analysis and Residue Calculus}
+The Cauchy-Riemann equations establish the holomorphy of a complex function $f(z) = u(x, y) + i v(x, y)$:
+\begin{equation}
+\frac{\partial u}{\partial x} = \frac{\partial v}{\partial y}, \quad \frac{\partial u}{\partial y} = -\frac{\partial v}{\partial x}
+\end{equation}
+Cauchy's integral formula determines the value of an analytic function from its boundary contour:
+\begin{equation}
+f(z_0) = \frac{1}{2\pi i} \oint_\gamma \frac{f(z)}{z - z_0} \, \mathrm{d}z, \quad f^{(n)}(z_0) = \frac{n!}{2\pi i} \oint_\gamma \frac{f(z)}{(z - z_0)^{n+1}} \, \mathrm{d}z
+\end{equation}
+The residue theorem evaluates closed contour integrals via isolated singularities:
+\begin{equation}
+\oint_\gamma f(z) \, \mathrm{d}z = 2\pi i \sum_{k=1}^m \operatorname{Res}(f, z_k)
+\end{equation}
+
+\subsubsection{Fourier Analysis and Integral Transforms}
+The continuous Fourier transform and its exact inverse:
+\begin{equation}
+\hat{f}(\xi) = \int_{-\infty}^\infty f(x) e^{-2\pi i x \xi} \, \mathrm{d}x, \quad f(x) = \int_{-\infty}^\infty \hat{f}(\xi) e^{2\pi i x \xi} \, \mathrm{d}\xi
+\end{equation}
+The convolution theorem:
+\begin{equation}
+\widehat{f * g}(\xi) = \hat{f}(\xi) \cdot \hat{g}(\xi), \quad (f * g)(x) \equiv \int_{-\infty}^\infty f(y) g(x - y) \, \mathrm{d}y
+\end{equation}
+Plancherel's theorem establishing the isometry of the Fourier transform on $L^2(\mathbb{R})$:
+\begin{equation}
+\int_{-\infty}^\infty |f(x)|^2 \, \mathrm{d}x = \int_{-\infty}^\infty |\hat{f}(\xi)|^2 \, \mathrm{d}\xi
+\end{equation}
+
+\subsubsection{Number Theory and the Riemann Zeta Function}
+The Riemann zeta function $\zeta(s)$ defined on the half-plane $\operatorname{Re}(s) > 1$ by Dirichlet series and Euler product:
+\begin{equation}
+\zeta(s) = \sum_{n=1}^\infty \frac{1}{n^s} = \prod_{p \text{ prime}} \frac{1}{1 - p^{-s}}
+\end{equation}
+The functional equation extending $\zeta(s)$ to the entire complex plane:
+\begin{equation}
+\zeta(s) = 2^s \pi^{s-1} \sin\left(\frac{\pi s}{2}\right) \Gamma(1 - s) \zeta(1 - s)
+\end{equation}
+Stirling's asymptotic formula for the Gamma function:
+\begin{equation}
+\ln \Gamma(z) \sim \left( z - \frac{1}{2} \right) \ln z - z + \frac{1}{2} \ln(2\pi) + \sum_{k=1}^\infty \frac{B_{2k}}{2k(2k-1)z^{2k-1}}
+\end{equation}
+
+\subsubsection{Differential Geometry and Stokes' Theorem}
+The generalized Stokes' theorem on smooth oriented manifolds:
+\begin{equation}
+\int_{\partial \Omega} \omega = \int_\Omega \mathrm{d}\omega
+\end{equation}
+where $\omega$ is a differential $(k-1)$-form and $\mathrm{d}\omega$ is its exterior derivative.
+The Gauss-Bonnet theorem connecting total Gaussian curvature $K$ and geodesic curvature $k_g$ to the topological Euler characteristic $\chi(M)$:
+\begin{equation}
+\iint_M K \, \mathrm{d}A + \oint_{\partial M} k_g \, \mathrm{d}s = 2\pi \chi(M)
+\end{equation}
+
+\subsubsection{Probability Theory and Multivariate Statistics}
+The probability density function of a $k$-dimensional multivariate normal distribution:
+\begin{equation}
+f(\mathbf{x}) = \frac{1}{(2\pi)^{k/2} |\boldsymbol{\Sigma}|^{1/2}} \exp\left( -\frac{1}{2} (\mathbf{x} - \boldsymbol{\mu})^T \boldsymbol{\Sigma}^{-1} (\mathbf{x} - \boldsymbol{\mu}) \right)
+\end{equation}
+Bayes' theorem for continuous probability density distributions:
+\begin{equation}
+p(\theta | \mathbf{x}) = \frac{p(\mathbf{x} | \theta) \, p(\theta)}{\int p(\mathbf{x} | \theta') \, p(\theta') \, \mathrm{d}\theta'}
+\end{equation}
+The Central Limit Theorem for independent and identically distributed random variables:
+\begin{equation}
+\lim_{n \to \infty} P\left( \frac{\sum_{i=1}^n X_i - n\mu}{\sigma \sqrt{n}} \le z \right) = \frac{1}{\sqrt{2\pi}} \int_{-\infty}^z e^{-t^2/2} \, \mathrm{d}t = \Phi(z)
+\end{equation}
 
 \bigskip
 

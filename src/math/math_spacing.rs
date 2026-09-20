@@ -48,29 +48,68 @@ pub static MATH_SPACING_TABLE: [u8; 64] = [
 
 const _: () = assert!(core::mem::size_of_val(&MATH_SPACING_TABLE) == 64);
 
+/// Returns the raw atom spacing code (0..3) from the 64-byte L1 table.
+#[inline(always)]
+pub fn atom_spacing_code(prev: MathAtomKind, curr: MathAtomKind) -> u8 {
+    let idx = ((prev as usize & 7) << 3) | (curr as usize & 7);
+    MATH_SPACING_TABLE[idx]
+}
+
+/// Returns the typographic spacing between two adjacent atoms in exact scaled points (`sp`),
+/// using TeX's integer `cur_mu = quad / 18` model.
+#[inline(always)]
+pub fn atom_spacing_sp(
+    prev: MathAtomKind,
+    curr: MathAtomKind,
+    is_display_or_text: bool,
+    quad: crate::math::math_box::ScaledPoints,
+) -> crate::math::math_box::ScaledPoints {
+    use crate::math::math_box::ScaledPoints;
+    let code = atom_spacing_code(prev, curr);
+    let mu_1 = quad / 18;
+    match code {
+        1 => mu_1 * 3, // thinmuskip = 3 mu
+        2 => {
+            if is_display_or_text {
+                mu_1 * 4 // medmuskip = 4 mu (suppressed in script styles)
+            } else {
+                ScaledPoints::ZERO
+            }
+        }
+        3 => {
+            if is_display_or_text {
+                mu_1 * 5 // thickmuskip = 5 mu (suppressed in script styles)
+            } else {
+                ScaledPoints::ZERO
+            }
+        }
+        _ => ScaledPoints::ZERO,
+    }
+}
+
 /// Precomputed branchless L1-resident mathematical spacing lookup table in em units.
 ///
 /// Precomputed for all 3 mathematical style contexts (Display, Text, Script/ScriptScript)
-/// across all 64 atom pairs.
-/// - 0: Display style (with display glue expansion: 5 mu Bin, 6.5 mu Rel)
-/// - 1: Text style (4 mu Bin, 5 mu Rel)
+/// across all 64 atom pairs according to canonical TeX Appendix G:
+/// - 0: Display style (4 mu Bin = 4/18 em, 5 mu Rel = 5/18 em)
+/// - 1: Text style (4 mu Bin = 4/18 em, 5 mu Rel = 5/18 em)
 /// - 2: Script / ScriptScript style (Bin and Rel spacing suppressed to 0 mu)
 #[repr(C, align(64))]
 pub struct SpacingLut(pub [[f32; 64]; 3]);
 
 #[allow(clippy::excessive_precision)]
 pub static ATOM_SPACING_LUT: SpacingLut = SpacingLut([
-    // Display style
+    // Display style (canonical TeX Appendix G: 4 mu Bin, 5 mu Rel)
     [
-        0.00000000, 0.16666667, 0.27777778, 0.36111111, 0.00000000, 0.00000000, 0.00000000,
-        0.16666667, 0.16666667, 0.16666667, 0.00000000, 0.36111111, 0.00000000, 0.00000000,
-        0.00000000, 0.16666667, 0.27777778, 0.27777778, 0.00000000, 0.00000000, 0.27777778,
-        0.00000000, 0.00000000, 0.27777778, 0.36111111, 0.36111111, 0.00000000, 0.00000000,
-        0.36111111, 0.00000000, 0.00000000, 0.36111111, 0.00000000, 0.00000000, 0.00000000,
+        0.00000000, 0.16666667, 0.22222222, 0.27777778, 0.00000000, 0.00000000, 0.00000000,
+        0.16666667, 0.16666667, 0.16666667, 0.00000000, 0.27777778, 0.00000000, 0.00000000,
+        0.00000000, 0.16666667, 0.22222222, 0.22222222, 0.00000000, 0.00000000, 0.22222222,
+        0.00000000, 0.00000000, 0.22222222, 0.27777778, 0.27777778, 0.00000000, 0.00000000,
+        0.27777778, 0.00000000, 0.00000000, 0.27777778, 0.00000000, 0.00000000, 0.00000000,
         0.00000000, 0.00000000, 0.00000000, 0.00000000, 0.00000000, 0.00000000, 0.16666667,
-        0.27777778, 0.36111111, 0.00000000, 0.00000000, 0.00000000, 0.16666667, 0.22222222,
+        0.22222222, 0.27777778, 0.00000000, 0.00000000, 0.00000000, 0.16666667, 0.22222222,
         0.22222222, 0.00000000, 0.22222222, 0.22222222, 0.22222222, 0.22222222, 0.22222222,
-        0.16666667, 0.16666667, 0.27777778, 0.36111111, 0.16666667, 0.00000000, 0.16666667,
+        0.16666667, 0.16666667, 0.22222222, 0.27777778, 0.16666667, 0.00000000, 0.16666667,
         0.16666667,
     ],
     // Text style
@@ -269,10 +308,9 @@ impl PackedAtomMetadata {
 pub struct AtomBoundaryClassifier;
 
 impl AtomBoundaryClassifier {
-    /// Valid left operands for a binary operator: Ord (0), Op (1), Close (5), Inner (7).
-    /// Binary mask: (1 << 0) | (1 << 1) | (1 << 5) | (1 << 7) = 0xA3.
+    /// Valid left operands for a binary operator: Ord (0), Close (5), Inner (7).
+    /// Binary mask: (1 << 0) | (1 << 5) | (1 << 7) = 0xA1.
     pub const VALID_LEFT_MASK: u8 = (1 << (MathAtomKind::Ord as u8))
-        | (1 << (MathAtomKind::Op as u8))
         | (1 << (MathAtomKind::Close as u8))
         | (1 << (MathAtomKind::Inner as u8));
 

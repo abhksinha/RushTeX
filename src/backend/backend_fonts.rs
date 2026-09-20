@@ -44,6 +44,16 @@ pub enum Face {
     MonoBold = 5,
     Symbol = 6,
     Dingbats = 7,
+    Extension = 8,
+    MathItalic = 9,
+    Roman7 = 10,
+    Roman5 = 11,
+    MathItalic7 = 12,
+    MathItalic5 = 13,
+    Symbol7 = 14,
+    Symbol5 = 15,
+    AmsA = 16,
+    AmsB = 17,
 }
 
 impl Face {
@@ -51,7 +61,7 @@ impl Face {
     pub const ITALIC_MASK: u8 = 2;
     pub const MONO_MASK: u8 = 4;
 
-    pub const ALL: [Face; 8] = [
+    pub const ALL: [Face; 18] = [
         Face::Roman,
         Face::Bold,
         Face::Italic,
@@ -60,6 +70,16 @@ impl Face {
         Face::MonoBold,
         Face::Symbol,
         Face::Dingbats,
+        Face::Extension,
+        Face::MathItalic,
+        Face::Roman7,
+        Face::Roman5,
+        Face::MathItalic7,
+        Face::MathItalic5,
+        Face::Symbol7,
+        Face::Symbol5,
+        Face::AmsA,
+        Face::AmsB,
     ];
 
     #[inline(always)]
@@ -72,17 +92,69 @@ impl Face {
             4 => Face::Mono,
             5 => Face::MonoBold,
             6 => Face::Symbol,
-            _ => Face::Dingbats,
+            7 => Face::Dingbats,
+            8 => Face::Extension,
+            9 => Face::MathItalic,
+            10 => Face::Roman7,
+            11 => Face::Roman5,
+            12 => Face::MathItalic7,
+            13 => Face::MathItalic5,
+            14 => Face::Symbol7,
+            15 => Face::Symbol5,
+            16 => Face::AmsA,
+            17 => Face::AmsB,
+            _ => Face::Roman,
         }
     }
 
     #[inline(always)]
     pub fn pdf_name(self, family: FontFamily) -> &'static str {
         if self == Face::Symbol {
-            return "Symbol";
+            return match family {
+                FontFamily::ComputerModern => "CMSY10",
+                _ => "Symbol",
+            };
+        }
+        if self == Face::Symbol7 {
+            return "CMSY7";
+        }
+        if self == Face::Symbol5 {
+            return "CMSY5";
+        }
+        if self == Face::Extension {
+            return match family {
+                FontFamily::ComputerModern => "CMEX10",
+                _ => "Symbol",
+            };
         }
         if self == Face::Dingbats {
             return "ZapfDingbats";
+        }
+        if self == Face::MathItalic {
+            return match family {
+                FontFamily::ComputerModern => "CMMI10",
+                FontFamily::Times => "Times-Italic",
+                FontFamily::Helvetica => "Helvetica-Oblique",
+                FontFamily::Palatino => "Palatino-Italic",
+            };
+        }
+        if self == Face::MathItalic7 {
+            return "CMMI7";
+        }
+        if self == Face::MathItalic5 {
+            return "CMMI5";
+        }
+        if self == Face::Roman7 {
+            return "CMR7";
+        }
+        if self == Face::Roman5 {
+            return "CMR5";
+        }
+        if self == Face::AmsA {
+            return "MSAM10";
+        }
+        if self == Face::AmsB {
+            return "MSBM10";
         }
         match family {
             FontFamily::Times => {
@@ -120,7 +192,7 @@ impl Face {
             }
             FontFamily::ComputerModern => {
                 const CM_NAMES: [&str; 6] =
-                    ["CMR10", "CMR10", "CMMI10", "CMMI10", "CMTT10", "CMTT10"];
+                    ["CMR10", "CMBX10", "CMTI10", "CMBX10", "CMTT10", "CMTT10"];
                 CM_NAMES[self as usize]
             }
         }
@@ -128,13 +200,16 @@ impl Face {
 
     #[inline(always)]
     pub fn resource(self) -> &'static str {
-        const RES: [&str; 8] = ["/Fr", "/Fb", "/Fi", "/Fbi", "/Fc", "/Fcb", "/Fs", "/Fz"];
+        const RES: [&str; 18] = [
+            "/Fr", "/Fb", "/Fi", "/Fbi", "/Fc", "/Fcb", "/Fs", "/Fz", "/Fe", "/Fmi",
+            "/Fr7", "/Fr5", "/Fmi7", "/Fmi5", "/Fs7", "/Fs5", "/Fmsa", "/Fmsb",
+        ];
         RES[self as usize]
     }
 
     #[inline(always)]
     pub fn with_bold(self, enable_bold: bool) -> Self {
-        if self == Face::Symbol || self == Face::Dingbats {
+        if (self as u8) >= 6 {
             return self;
         }
         let val = self as u8;
@@ -155,7 +230,7 @@ impl Face {
 
     #[inline(always)]
     pub fn with_italic(self, enable_italic: bool) -> Self {
-        if self.is_mono() || self == Face::Symbol || self == Face::Dingbats {
+        if self.is_mono() || (self as u8) >= 6 {
             return self;
         }
         let val = self as u8;
@@ -176,7 +251,7 @@ impl Face {
 
     #[inline(always)]
     pub fn with_mono(self, enable_mono: bool) -> Self {
-        if self == Face::Symbol || self == Face::Dingbats {
+        if (self as u8) >= 6 {
             return self;
         }
         let is_b = (self as u8) & Self::BOLD_MASK;
@@ -216,6 +291,16 @@ impl Face {
     #[inline(always)]
     pub fn is_dingbats(self) -> bool {
         self == Face::Dingbats
+    }
+
+    #[inline(always)]
+    pub fn is_extension(self) -> bool {
+        self == Face::Extension
+    }
+
+    #[inline(always)]
+    pub fn is_math_italic(self) -> bool {
+        self == Face::MathItalic
     }
 }
 
@@ -392,6 +477,28 @@ pub static CMR10_WIDTHS: AlignedTable<128> = AlignedTable([
     392, 394, 389, 556, 528, 722, 528, 528, 444, 500, 1000, 500, 500, 500,
 ]);
 
+pub static CMBX10_WIDTHS: AlignedTable<128> = AlignedTable([
+    692, 958, 894, 806, 767, 900, 831, 894, 831, 894, 831, 671, 639, 639, 958, 958, 319, 351,
+    575, 575, 575, 575, 575, 869, 511, 597, 831, 894, 575, 1042, 1169, 894, 319, 350, 603, 958,
+    575, 958, 894, 319, 447, 447, 575, 894, 319, 383, 319, 575, 575, 575, 575, 575, 575, 575,
+    575, 575, 575, 575, 319, 319, 350, 894, 543, 543, 894, 869, 818, 831, 882, 756, 724, 904,
+    900, 436, 594, 901, 692, 1092, 900, 864, 786, 864, 862, 639, 800, 885, 869, 1189, 869, 869,
+    703, 319, 603, 319, 575, 319, 319, 559, 639, 511, 639, 527, 351, 575, 639, 319, 351, 607,
+    319, 958, 639, 575, 639, 607, 474, 454, 447, 639, 607, 831, 607, 607, 511, 575, 1150, 575,
+    575, 575,
+]);
+
+pub static CMTI10_WIDTHS: AlignedTable<128> = AlignedTable([
+    627, 818, 767, 692, 664, 743, 716, 767, 716, 767, 716, 613, 562, 588, 882, 894, 307, 332,
+    511, 511, 511, 511, 511, 831, 460, 537, 716, 716, 511, 883, 985, 767, 256, 307, 514, 818,
+    769, 818, 767, 307, 409, 409, 511, 767, 307, 358, 307, 511, 511, 511, 511, 511, 511, 511,
+    511, 511, 511, 511, 307, 307, 307, 767, 511, 511, 767, 743, 704, 716, 755, 678, 653, 774,
+    743, 386, 525, 769, 627, 897, 743, 767, 678, 767, 729, 562, 716, 743, 743, 999, 743, 743,
+    613, 307, 514, 307, 511, 307, 307, 511, 460, 460, 511, 460, 307, 460, 511, 307, 307, 460,
+    256, 818, 562, 511, 511, 460, 422, 409, 332, 537, 460, 664, 464, 486, 409, 511, 1022, 511,
+    511, 511,
+]);
+
 pub static CMMI10_WIDTHS: AlignedTable<128> = AlignedTable([
     615, 833, 763, 694, 742, 831, 780, 583, 667, 651, 651, 640, 566, 651, 444, 406, 438, 497, 469,
     354, 576, 583, 603, 494, 438, 570, 517, 571, 437, 540, 596, 626, 651, 622, 466, 591, 828, 517,
@@ -431,6 +538,94 @@ pub static CMTT10_WIDTHS: AlignedTable<128> = AlignedTable([
     525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525,
     525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525,
     525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525, 525,
+]);
+
+pub static CMR7_WIDTHS: AlignedTable<128> = AlignedTable([
+    706, 938, 877, 782, 754, 843, 815, 877, 815, 877, 815, 678, 647, 647, 970, 970, 323, 354,
+    569, 569, 569, 569, 569, 843, 508, 569, 815, 877, 569, 1014, 1137, 877, 323, 323, 569, 938,
+    569, 938, 877, 323, 446, 446, 569, 877, 323, 385, 323, 569, 569, 569, 569, 569, 569, 569,
+    569, 569, 569, 569, 323, 323, 323, 877, 539, 539, 877, 843, 799, 815, 860, 768, 737, 884,
+    843, 413, 583, 874, 706, 1028, 843, 877, 768, 877, 829, 631, 815, 843, 843, 1151, 843, 843,
+    692, 323, 569, 323, 569, 323, 323, 569, 631, 508, 631, 508, 354, 569, 631, 323, 354, 600,
+    323, 938, 631, 569, 631, 600, 446, 453, 446, 631, 600, 815, 600, 600, 508, 569, 1139, 569,
+    569, 569,
+]);
+
+pub static CMR5_WIDTHS: AlignedTable<128> = AlignedTable([
+    831, 1097, 1028, 911, 889, 981, 958, 1028, 958, 1028, 958, 681, 681, 403, 403, 646, 403, 438,
+    681, 681, 681, 681, 681, 981, 611, 681, 958, 1028, 681, 1178, 1317, 1028, 403, 403, 681, 1097,
+    681, 1097, 1028, 403, 542, 542, 681, 1028, 403, 472, 403, 681, 681, 681, 681, 681, 681, 681,
+    681, 681, 681, 681, 403, 403, 1028, 1028, 1028, 646, 1028, 981, 935, 958, 1004, 900, 865, 1033,
+    981, 494, 692, 1015, 831, 1189, 981, 1028, 900, 1028, 969, 750, 958, 981, 981, 1328, 981, 981,
+    819, 403, 681, 403, 681, 403, 403, 681, 750, 611, 750, 611, 438, 681, 750, 403, 438, 715,
+    403, 1097, 750, 681, 750, 715, 542, 549, 542, 750, 715, 958, 715, 715, 611, 681, 1361, 681,
+    681, 681,
+]);
+
+pub static CMMI7_WIDTHS: AlignedTable<128> = AlignedTable([
+    694, 954, 869, 798, 844, 936, 886, 678, 770, 717, 880, 743, 648, 600, 519, 476, 520, 589,
+    544, 423, 669, 678, 695, 573, 520, 668, 593, 662, 527, 633, 687, 714, 756, 720, 540, 690,
+    950, 593, 439, 751, 1139, 1139, 1139, 1139, 339, 339, 585, 585, 585, 585, 585, 585, 585, 585,
+    585, 585, 585, 585, 339, 339, 893, 585, 893, 585, 610, 859, 863, 819, 934, 839, 725, 889,
+    936, 506, 632, 960, 784, 1089, 905, 869, 727, 900, 861, 701, 675, 778, 675, 1074, 937, 672,
+    778, 462, 462, 462, 1139, 1139, 478, 620, 502, 511, 595, 542, 557, 557, 669, 404, 473, 607,
+    361, 1014, 706, 564, 589, 524, 530, 539, 432, 675, 571, 826, 648, 579, 546, 399, 442, 730,
+    585, 339,
+]);
+
+pub static CMMI5_WIDTHS: AlignedTable<128> = AlignedTable([
+    833, 1153, 1048, 967, 1018, 1110, 1065, 840, 944, 893, 1061, 913, 791, 747, 654, 614, 667, 744,
+    677, 550, 828, 840, 850, 712, 667, 831, 726, 815, 682, 792, 842, 865, 931, 886, 675, 855,
+    1145, 726, 578, 918, 1361, 1361, 1361, 1361, 458, 458, 736, 736, 736, 736, 736, 736, 736, 736,
+    736, 736, 736, 736, 458, 458, 1083, 736, 1083, 736, 749, 1036, 1037, 996, 1110, 1007, 867, 1064,
+    1110, 627, 773, 1139, 956, 1284, 1076, 1048, 875, 1082, 1030, 856, 832, 944, 828, 1279, 1113, 824,
+    943, 597, 597, 597, 1361, 1361, 597, 774, 633, 649, 740, 677, 684, 701, 828, 534, 588, 758,
+    480, 1228, 881, 703, 740, 659, 671, 670, 564, 846, 722, 1009, 792, 731, 689, 534, 553, 889,
+    736, 458,
+]);
+
+pub static CMSY7_WIDTHS: AlignedTable<128> = AlignedTable([
+    893, 339, 893, 585, 893, 585, 893, 893, 893, 893, 893, 893, 893, 1139, 585, 585, 893, 893,
+    893, 893, 893, 893, 893, 893, 893, 893, 893, 893, 1139, 1139, 893, 893, 1139, 1139, 585, 585,
+    1139, 1139, 1139, 893, 1139, 1139, 708, 708, 1139, 1139, 1139, 893, 329, 1139, 770, 770, 1016, 1016,
+    0, 0, 647, 647, 770, 585, 831, 831, 893, 893, 708, 918, 753, 620, 889, 616, 818, 689,
+    979, 647, 782, 872, 792, 1343, 936, 906, 809, 936, 981, 702, 648, 718, 720, 1135, 819, 764,
+    823, 770, 770, 770, 770, 770, 708, 708, 524, 524, 524, 524, 585, 585, 462, 462, 339, 585,
+    585, 708, 585, 339, 938, 859, 954, 494, 770, 770, 893, 893, 524, 524, 524, 708, 893, 893,
+    893, 893,
+]);
+
+pub static CMSY5_WIDTHS: AlignedTable<128> = AlignedTable([
+    1083, 458, 1083, 736, 1083, 736, 1083, 1083, 1083, 1083, 1083, 1083, 1083, 1361, 736, 736, 1083, 1083,
+    1083, 1083, 1083, 1083, 1083, 1083, 1083, 1083, 1083, 1083, 1361, 1361, 1083, 1083, 1361, 1361, 736, 736,
+    1361, 1361, 1361, 1083, 1361, 1361, 875, 875, 1361, 1361, 1361, 1083, 441, 1361, 944, 944, 1222, 1222,
+    0, 0, 806, 806, 944, 736, 1014, 1014, 1083, 1083, 875, 1113, 919, 782, 1084, 771, 988, 850,
+    1195, 820, 958, 1055, 965, 1568, 1126, 1089, 998, 1132, 1196, 868, 822, 874, 899, 1368, 997, 929,
+    991, 944, 944, 944, 944, 944, 875, 875, 667, 667, 667, 667, 736, 736, 597, 597, 458, 736,
+    736, 875, 736, 458, 1097, 1036, 1153, 632, 944, 944, 1083, 1083, 667, 667, 667, 875, 1083, 1083,
+    1083, 1083,
+]);
+
+pub static MSAM10_WIDTHS: AlignedTable<128> = AlignedTable([
+    778, 778, 778, 778, 778, 278, 667, 667, 778, 778, 1000, 1000, 778, 722, 889, 611, 1000, 1000,
+    1000, 1000, 833, 833, 417, 417, 417, 417, 1111, 1111, 1000, 1000, 500, 500, 1000, 1389, 1000, 1000,
+    778, 778, 778, 778, 1111, 667, 667, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778,
+    778, 778, 275, 500, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 944, 500,
+    722, 778, 778, 500, 500, 722, 722, 722, 778, 778, 778, 778, 778, 750, 1000, 1000, 833, 611,
+    611, 611, 722, 722, 722, 778, 778, 778, 778, 778, 667, 667, 760, 760, 778, 778, 778, 778,
+    778, 778, 1333, 1333, 500, 500, 947, 902, 667, 778, 778, 778, 500, 500, 833, 500, 556, 778,
+    778, 778,
+]);
+
+pub static MSBM10_WIDTHS: AlignedTable<128> = AlignedTable([
+    778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778,
+    778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 778, 889, 889, 778, 778, 778, 778,
+    778, 778, 778, 778, 778, 778, 778, 778, 500, 278, 222, 389, 611, 722, 611, 722, 778, 778,
+    778, 778, 1000, 1000, 1000, 1000, 1000, 1000, 778, 778, 556, 722, 667, 722, 722, 667, 611, 778,
+    778, 389, 500, 778, 667, 944, 722, 778, 611, 778, 722, 556, 667, 722, 722, 1000, 722, 722,
+    667, 1889, 2333, 1889, 2333, 0, 556, 639, 0, 0, 0, 0, 722, 556, 778, 667, 444, 667,
+    778, 778, 778, 778, 222, 389, 778, 778, 778, 778, 778, 778, 1000, 1000, 778, 667, 556, 540,
+    540, 429,
 ]);
 
 pub static COURIER_WIDTHS: AlignedTable<128> = AlignedTable([600; 128]);
@@ -620,7 +815,7 @@ pub fn resolve_width_table(family: FontFamily, font_face: Face) -> &'static [u16
         FontFamily::Times => match font_face {
             Face::Roman => &TIMES_ROMAN_WIDTHS,
             Face::Bold => &TIMES_BOLD_WIDTHS,
-            Face::Italic => &TIMES_ITALIC_WIDTHS,
+            Face::Italic | Face::MathItalic => &TIMES_ITALIC_WIDTHS,
             Face::BoldItalic => &TIMES_BOLD_ITALIC_WIDTHS,
             _ => &TIMES_ROMAN_WIDTHS,
         },
@@ -634,16 +829,28 @@ pub fn resolve_width_table(family: FontFamily, font_face: Face) -> &'static [u16
         FontFamily::Palatino => match font_face {
             Face::Roman => &PALATINO_ROMAN_WIDTHS,
             Face::Bold => &PALATINO_BOLD_WIDTHS,
-            Face::Italic => &PALATINO_ITALIC_WIDTHS,
+            Face::Italic | Face::MathItalic => &PALATINO_ITALIC_WIDTHS,
             Face::BoldItalic => &PALATINO_BOLD_ITALIC_WIDTHS,
             _ => &PALATINO_ROMAN_WIDTHS,
         },
         FontFamily::ComputerModern => match font_face {
-            Face::Roman | Face::Bold => &CMR10_WIDTHS,
-            Face::Italic | Face::BoldItalic => &CMMI10_WIDTHS,
+            Face::Roman => &CMR10_WIDTHS,
+            Face::Bold => &CMBX10_WIDTHS,
+            Face::Italic => &CMTI10_WIDTHS,
+            Face::BoldItalic => &CMBX10_WIDTHS,
+            Face::MathItalic => &CMMI10_WIDTHS,
             Face::Mono | Face::MonoBold => &CMTT10_WIDTHS,
             Face::Symbol => &CMSY10_WIDTHS,
+            Face::Extension => &CMEX10_WIDTHS,
             Face::Dingbats => &CMR10_WIDTHS,
+            Face::Roman7 => &CMR7_WIDTHS,
+            Face::Roman5 => &CMR5_WIDTHS,
+            Face::MathItalic7 => &CMMI7_WIDTHS,
+            Face::MathItalic5 => &CMMI5_WIDTHS,
+            Face::Symbol7 => &CMSY7_WIDTHS,
+            Face::Symbol5 => &CMSY5_WIDTHS,
+            Face::AmsA => &MSAM10_WIDTHS,
+            Face::AmsB => &MSBM10_WIDTHS,
         },
     }
 }
@@ -687,7 +894,58 @@ pub fn char_units_family(character: char, font_face: Face, family: FontFamily) -
             _ => 600,
         };
     }
+    if font_face == Face::Extension {
+        let code = character as u32;
+        if code < 128 {
+            return CMEX10_WIDTHS[code as usize];
+        }
+        return symbol_char_units(character);
+    }
     if font_face == Face::Symbol {
+        if family == FontFamily::ComputerModern {
+            if character == '-' || character == '−' {
+                return crate::math::math_tfm::cmsy10_metric(0x00).w;
+            }
+            if let Some(byte) = unicode_to_symbol_byte(character) {
+                let code = if byte == 0x2D { 0x00 } else { byte };
+                return crate::math::math_tfm::cmsy10_metric(code).w;
+            }
+            let code = character as u32;
+            if code < 128 {
+                let c = if code == 0x2D { 0x00 } else { code as u8 };
+                return crate::math::math_tfm::cmsy10_metric(c).w;
+            }
+        }
+        return symbol_char_units(character);
+    }
+    if font_face == Face::Symbol7 {
+        if character == '-' || character == '−' {
+            return crate::math::math_tfm::cmsy7_metric(0x00).w;
+        }
+        if let Some(byte) = unicode_to_symbol_byte(character) {
+            let code = if byte == 0x2D { 0x00 } else { byte };
+            return crate::math::math_tfm::cmsy7_metric(code).w;
+        }
+        let code = character as u32;
+        if code < 128 {
+            let c = if code == 0x2D { 0x00 } else { code as u8 };
+            return crate::math::math_tfm::cmsy7_metric(c).w;
+        }
+        return symbol_char_units(character);
+    }
+    if font_face == Face::Symbol5 {
+        if character == '-' || character == '−' {
+            return crate::math::math_tfm::cmsy5_metric(0x00).w;
+        }
+        if let Some(byte) = unicode_to_symbol_byte(character) {
+            let code = if byte == 0x2D { 0x00 } else { byte };
+            return crate::math::math_tfm::cmsy5_metric(code).w;
+        }
+        let code = character as u32;
+        if code < 128 {
+            let c = if code == 0x2D { 0x00 } else { code as u8 };
+            return crate::math::math_tfm::cmsy5_metric(c).w;
+        }
         return symbol_char_units(character);
     }
     if font_face == Face::Dingbats {
@@ -810,6 +1068,16 @@ pub fn string_units_family(text: &str, font_face: Face, family: FontFamily) -> u
             _ => 600,
         };
         return char_count * mono_unit;
+    }
+    if font_face == Face::Extension {
+        let byte_slice = text.as_bytes();
+        let mut acc = 0u32;
+        for &b in byte_slice {
+            if b < 128 {
+                acc += CMEX10_WIDTHS[b as usize] as u32;
+            }
+        }
+        return acc;
     }
     if font_face == Face::Symbol {
         let byte_slice = text.as_bytes();

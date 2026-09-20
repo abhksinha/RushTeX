@@ -1438,8 +1438,12 @@ Computer Modern document with \textbf{bold} and \textit{italic}.
             "lmodern package must switch to CMR10"
         );
         assert!(
-            s.contains("/BaseFont /CMMI10"),
-            "lmodern package must switch to CMMI10"
+            s.contains("/BaseFont /CMTI10"),
+            "lmodern package must switch to CMTI10"
+        );
+        assert!(
+            s.contains("/BaseFont /CMBX10"),
+            "lmodern package must switch to CMBX10"
         );
 
         let src_cm = r#"

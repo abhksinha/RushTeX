@@ -122,7 +122,9 @@ mod tests {
     fn test_parse_fraction_and_scripts() {
         let node = parse_math_str(r"\frac{a + b}{c_1^2}");
         match node {
-            MathNode::Fraction { num, den, has_rule } => {
+            MathNode::Fraction {
+                num, den, has_rule, ..
+            } => {
                 assert!(has_rule);
                 assert!(matches!(*num, MathNode::Row(_)));
                 assert!(matches!(*den, MathNode::SubSup { .. }));
@@ -639,6 +641,11 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         normalize_atom_kinds(&mut kinds6);
         assert_eq!(kinds6, [MathAtomKind::Ord, MathAtomKind::Ord]);
 
+        // Operator followed by binary: [\log, +, x] -> [Op, Ord, Ord] (tex.web line 14331)
+        let mut kinds_op = [MathAtomKind::Op, MathAtomKind::Bin, MathAtomKind::Ord];
+        normalize_atom_kinds(&mut kinds_op);
+        assert_eq!(kinds_op, [MathAtomKind::Op, MathAtomKind::Ord, MathAtomKind::Ord]);
+
         // End-to-end measurement: "x = - y" should have thick space after "=" and zero space between "-" and "y"
         let eq_expr = parse_math_str("x = - y");
         let eq_box = measure_math(&eq_expr, 10.0, FontFamily::Times, MathStyle::Display);
@@ -780,11 +787,12 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
             MathNode::Delimited(ref data) => {
                 assert_eq!(data.open, "(");
                 assert_eq!(data.close, ")");
-                match data.content {
+                match *data.content {
                     MathNode::Fraction {
                         ref num,
                         ref den,
                         has_rule,
+                        ..
                     } => {
                         assert!(!has_rule, "Binomial coefficient must have no rule");
                         assert!(matches!(**num, MathNode::Variable('n')));
@@ -833,6 +841,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
             num: Box::new(MathNode::Variable('n')),
             den: Box::new(MathNode::Variable('k')),
             has_rule: false,
+            options: 0,
         };
         render_math(
             &pure_atop,
@@ -1656,7 +1665,10 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         assert_eq!(grouped_var, MathNode::Variable('x'));
 
         let frac = parse_math_str(r"\frac{a}{b}");
-        if let MathNode::Fraction { num, den, has_rule } = frac {
+        if let MathNode::Fraction {
+            num, den, has_rule, ..
+        } = frac
+        {
             assert!(has_rule);
             assert_eq!(*num, MathNode::Variable('a'));
             assert_eq!(*den, MathNode::Variable('b'));
@@ -2113,7 +2125,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
 
         // 10. AtomBoundaryClassifier branchless bitmask classification
         assert!(AtomBoundaryClassifier::is_valid_left(MathAtomKind::Ord));
-        assert!(AtomBoundaryClassifier::is_valid_left(MathAtomKind::Op));
+        assert!(!AtomBoundaryClassifier::is_valid_left(MathAtomKind::Op)); // tex.web line 14331: Op converts following Bin to Ord
         assert!(AtomBoundaryClassifier::is_valid_left(MathAtomKind::Close));
         assert!(AtomBoundaryClassifier::is_valid_left(MathAtomKind::Inner));
         assert!(!AtomBoundaryClassifier::is_valid_left(MathAtomKind::Bin));
@@ -2519,4 +2531,386 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
 
         assert!(ComprehensiveMathVerifier::verify_invariants());
     }
+
+    #[test]
+    fn test_batches_1_to_9_items_51_to_100() {
+        use crate::math::*;
+
+        // BATCH 1: Math Mode Grammar, Infix Fractions & Fences (Items 51–56)
+        // Item 51: Infix \over, \atop, \atopwithdelims
+        let over_node = parse_math_str(r"a + b \over c + d");
+        match over_node {
+            MathNode::Fraction {
+                num, den, has_rule, ..
+            } => {
+                assert!(has_rule);
+                assert!(matches!(*num, MathNode::Row(_)));
+                assert!(matches!(*den, MathNode::Row(_)));
+            }
+            _ => panic!("Expected Fraction from \\over"),
+        }
+
+        let atop_node = parse_math_str(r"n \atop k");
+        match atop_node {
+            MathNode::Fraction { has_rule, .. } => assert!(!has_rule),
+            _ => panic!("Expected Fraction from \\atop"),
+        }
+
+        let atop_delims = parse_math_str(r"n \atopwithdelims() k");
+        match atop_delims {
+            MathNode::Delimited(ref data) => {
+                assert_eq!(data.open, "(");
+                assert_eq!(data.close, ")");
+            }
+            _ => panic!("Expected Delimited from \\atopwithdelims"),
+        }
+
+        // Item 52: FractionOptionDecoder
+        let above_node = parse_math_str(r"a \above exact norule 2pt b");
+        match above_node {
+            MathNode::Fraction {
+                options, has_rule, ..
+            } => {
+                assert!(!has_rule);
+                assert_ne!(options & math_ast::FRACTION_OPT_EXACT, 0);
+                assert_ne!(options & math_ast::FRACTION_OPT_NORULE, 0);
+            }
+            _ => panic!("Expected Fraction from \\above"),
+        }
+
+        // Item 53: SubformulaFlattener
+        let flattened = parse_math_str("{x}");
+        assert_eq!(flattened, MathNode::Variable('x'));
+
+        // Item 54: MathChoiceQuadBranches
+        let choice_node = parse_math_str(r"\mathchoice{D}{T}{S}{SS}");
+        match choice_node {
+            MathNode::MathChoice(ref c) => {
+                assert_eq!(c.display, MathNode::Variable('D'));
+                assert_eq!(c.text, MathNode::Variable('T'));
+                assert_eq!(c.script, MathNode::Variable('S'));
+                assert_eq!(
+                    c.script_script,
+                    MathNode::Row(vec![MathNode::Variable('S'), MathNode::Variable('S')])
+                );
+            }
+            _ => panic!("Expected MathChoice node"),
+        }
+
+        // Item 55 & 56: DelimiterOptionDecoder & MiddleDelimiterSupport
+        assert_eq!(math_ast::DELIMITER_OPT_NONE, 0);
+        let middle_node = parse_math_str(r"\left( a \middle| b \right)");
+        match middle_node {
+            MathNode::Delimited(ref data) => {
+                assert_eq!(data.open, "(");
+                assert_eq!(data.close, ")");
+                match *data.content {
+                    MathNode::Row(ref nodes) => {
+                        assert!(nodes
+                            .iter()
+                            .any(|n| matches!(n, MathNode::MiddleDelim { delim: "|", .. })));
+                    }
+                    _ => panic!("Expected Row with MiddleDelim"),
+                }
+            }
+            _ => panic!("Expected Delimited"),
+        }
+
+        // BATCH 2: Script Invariants & Error Recovery (Items 57–62)
+        // Item 57: EmptyNucleusScriptAttacher
+        let empty_nuc = parse_math_str("_1");
+        assert!(matches!(empty_nuc, MathNode::SubSup { .. }));
+
+        // Item 58: DoubleScriptConflictDetector
+        let double_sub = parse_math_str("x_1_2");
+        assert!(matches!(double_sub, MathNode::SubSup { .. }));
+        let double_sup = parse_math_str("x^1^2");
+        assert!(matches!(double_sup, MathNode::SubSup { .. }));
+
+        // Item 59: NoScriptFlagEnforcer
+        let no_sub = parse_math_str(r"x \nosubscript _1");
+        assert_eq!(no_sub, MathNode::Variable('x'));
+
+        // Item 61: SuperSubOrderInvariance
+        let sub_sup1 = parse_math_str("x_1^2");
+        let sub_sup2 = parse_math_str("x^2_1");
+        assert_eq!(sub_sup1, sub_sup2);
+
+        // Item 62: ScriptStyleDivergence
+        assert_eq!(
+            MathStyle::Display.sup_style().sup_style(),
+            MathStyle::ScriptScript
+        );
+        assert_eq!(MathStyle::Display.sub_style(), MathStyle::CrampedScript);
+
+        // BATCH 3: Math Family & Font Resolution (Items 63–68)
+        assert_eq!(std::mem::size_of::<MathFamilyTable>(), 64);
+        let mut fam_table = MathFamilyTable::new();
+        fam_table.set(2, 0, 5);
+        assert_eq!(fam_table.get(2, 0), 5);
+
+        let mut fam_stack = MathFamilyScopeStack::new();
+        fam_stack.push(2, 0, 3, 1);
+        fam_table.set(2, 0, 7);
+        fam_stack.unwind_to_level(0, &mut fam_table);
+        assert_eq!(fam_table.get(2, 0), 3);
+
+        let decoded_code = MathCodeDecoder::decode(0x212B);
+        assert_eq!(decoded_code.class, MathAtomKind::Bin);
+        assert_eq!(decoded_code.family, 1);
+        assert_eq!(decoded_code.char_code, 0x2B);
+
+        let ext_code = ExtendedMathCodeDecoder::decode(3, 2, 0x2264);
+        assert_eq!(ext_code.class, MathAtomKind::Rel);
+        assert_eq!(ext_code.family, 2);
+        assert_eq!(ext_code.char_code, 0x2264);
+
+        let del_code = DelimiterCodeDecoder::decode(0x028000).unwrap();
+        assert_eq!(del_code.small_fam, 0);
+        assert_eq!(del_code.small_char, 0x28);
+
+        assert!(ActiveMathCodeInterceptor::is_active(0x8000));
+        assert!(!ActiveMathCodeInterceptor::is_active(0x7FFF));
+
+        // BATCH 4: Dynamic Math Engine Parameters (Items 69–74)
+        assert_eq!(std::mem::size_of::<MathParameterRegistry>(), 512);
+        let mut param_reg = MathParameterRegistry::new();
+        param_reg.set(MATH_PARAM_AXIS, MathStyle::Display, 250);
+        assert_eq!(param_reg.get(MATH_PARAM_AXIS, MathStyle::Display), 250);
+
+        let mut param_stack = MathParamScopeStack::new();
+        param_stack.push(MATH_PARAM_AXIS, MathStyle::Display, 250, 1);
+        param_reg.set(MATH_PARAM_AXIS, MathStyle::Display, 300);
+        param_stack.unwind_to_level(0, &mut param_reg);
+        assert_eq!(param_reg.get(MATH_PARAM_AXIS, MathStyle::Display), 250);
+
+        let mut spacing_override = MathSpacingParameterOverride::new();
+        assert_eq!(
+            spacing_override.get(MathAtomKind::Ord, MathAtomKind::Ord),
+            None
+        );
+        spacing_override.set(MathAtomKind::Ord, MathAtomKind::Ord, 3);
+        assert_eq!(
+            spacing_override.get(MathAtomKind::Ord, MathAtomKind::Ord),
+            Some(3)
+        );
+
+        assert_eq!(
+            MathAxisHeightParameter::get(&param_reg, MathStyle::Display, 2.5),
+            0.25
+        );
+        assert_eq!(
+            RuleThicknessParameter::get(&param_reg, MathStyle::Display, 0.4),
+            0.4
+        );
+        assert_eq!(
+            ScriptDropParameters::sup_drop(&param_reg, MathStyle::Display, 1.5),
+            1.5
+        );
+        assert_eq!(
+            ScriptDropParameters::sub_drop(&param_reg, MathStyle::Display, 0.5),
+            0.5
+        );
+
+        // BATCH 5: Display Math Entry, Geometry & Alignment (Items 75–80)
+        assert_eq!(
+            DisplayMathParagraphBreaker::compute_predisplaysize(100.0, 10.0, 2000.0),
+            120.0
+        );
+        assert_eq!(
+            EmptyParagraphDisplayFilter::filter_predisplaysize(false, 100.0),
+            EmptyParagraphDisplayFilter::NEG_MAX_DIMEN
+        );
+        assert_eq!(
+            EmptyParagraphDisplayFilter::filter_predisplaysize(true, 100.0),
+            100.0
+        );
+
+        let (dw, di) = DisplayShapeGeometryResolver::resolve_geometry(400.0, 20.0, 1, 2);
+        assert_eq!(dw, 380.0);
+        assert_eq!(di, 20.0);
+
+        assert!(EveryDisplayHookTrigger::has_hook(true));
+        assert_eq!(
+            DisplayHalignAdapter::center_table(200.0, 400.0, 10.0),
+            110.0
+        );
+
+        let mut prev_graf = 3;
+        let mut space_factor = 500;
+        DisplayResumeStateRestorer::restore_state(&mut prev_graf, &mut space_factor);
+        assert_eq!(prev_graf, 6);
+        assert_eq!(space_factor, 1000);
+
+        // BATCH 6: Equation Numbering & Tag Placement (Items 81–86)
+        assert!(EquationTagSideSelector::is_left_side(true, false, false));
+        assert!(!EquationTagSideSelector::is_left_side(false, false, false));
+        assert!(!EquationTagSideSelector::is_left_side(true, true, false));
+
+        let d1 = DisplayEquationCentering::compute_displacement(400.0, 200.0, 30.0);
+        assert_eq!(d1, 100.0);
+        let d2 = DisplayEquationCentering::compute_displacement(400.0, 300.0, 60.0);
+        assert_eq!(d2, 20.0);
+
+        assert!(EquationTagCollisionDisplacement::must_split_line(
+            350.0, 50.0, 400.0, 10.0
+        ));
+        assert!(!EquationTagCollisionDisplacement::must_split_line(
+            200.0, 30.0, 400.0, 10.0
+        ));
+
+        assert!(DisplaySkipModeSelector::should_emit_skip(
+            DisplaySkipMode::Normal,
+            10.0
+        ));
+        assert!(!DisplaySkipModeSelector::should_emit_skip(
+            DisplaySkipMode::Suppress,
+            10.0
+        ));
+
+        assert!(PreDisplayClearanceComparator::uses_short_skip(
+            150.0, 0.0, 100.0, false
+        ));
+        assert!(!PreDisplayClearanceComparator::uses_short_skip(
+            80.0, 0.0, 100.0, false
+        ));
+        assert_eq!(EquationTagPageBreakGuard::penalty(), 10000);
+
+        // BATCH 7: Advanced Accents & Over/Under (Items 87–92)
+        let double_acc = DoubleMathAccentComposer::compose(10.0, 5.0, 2.0, 1.0, 1.0);
+        assert_eq!(double_acc.top_y, 16.0);
+        assert_eq!(double_acc.bot_y, 7.0);
+
+        let (ox, oy) = OverlayAccentApplier::compute_overlay_pos(10.0, 10.0, 8.0, 6.0, 2.0, 4.0);
+        assert_eq!(ox, 12.0);
+        assert_eq!(oy, 12.0);
+
+        assert!(AccentFixedModifierHandler::is_fixed(1));
+        assert!(!AccentFixedModifierHandler::is_fixed(0));
+
+        assert!((AccentFractionAdjustment::adjust_clearance(2.0, 1500) - 3.0).abs() < 1e-5);
+        assert_eq!(
+            UnderDelimiterBuilder::compute_under_y(10.0, 2.0, 3.0, 1.0),
+            4.0
+        );
+        assert_eq!(OverDelimiterBuilder::compute_over_y(10.0, 5.0, 1.0), 16.0);
+
+        // BATCH 8: Generalized Delimiters (Items 93–96)
+        assert_eq!(
+            DelimiterSearchChain::select_tier(10.0, 10.0),
+            DelimiterSearchTier::Small
+        );
+        assert_eq!(
+            DelimiterSearchChain::select_tier(20.0, 10.0),
+            DelimiterSearchTier::Large
+        );
+        assert_eq!(
+            DelimiterSearchChain::select_tier(30.0, 10.0),
+            DelimiterSearchTier::Extensible
+        );
+
+        assert!(MissingDelimiterFallback::is_null_delim("."));
+        assert!(MissingDelimiterFallback::is_null_delim(""));
+        assert!(!MissingDelimiterFallback::is_null_delim("("));
+
+        let (th, td) = DelimiterExactSizing::compute_target_span(15.0, 5.0, 8.0, 2.0, 2.5);
+        assert_eq!(th, 15.0);
+        assert_eq!(td, 5.0);
+
+        assert_eq!(
+            DelimiterAxisAlignmentToggle::compute_y_center(10.0, 2.5, false),
+            12.5
+        );
+        assert_eq!(
+            DelimiterAxisAlignmentToggle::compute_y_center(10.0, 2.5, true),
+            10.0
+        );
+
+        // BATCH 9: Inline Math Boundaries, Kerning & BiDi (Items 97–100)
+        let spec = MathSurroundSpec {
+            surround_w: 3.0,
+            skip_mode: 0,
+        };
+        assert_eq!(InlineMathSurroundInjector::before_surround(spec), 3.0);
+        assert_eq!(InlineMathSurroundInjector::after_surround(spec), 3.0);
+
+        assert_eq!(
+            InlineMathPenaltyInserter::break_penalty(MathAtomKind::Bin),
+            Some(700)
+        );
+        assert_eq!(
+            InlineMathPenaltyInserter::break_penalty(MathAtomKind::Rel),
+            Some(500)
+        );
+        assert_eq!(
+            InlineMathPenaltyInserter::break_penalty(MathAtomKind::Ord),
+            None
+        );
+
+        assert!(MathDirectionalityManager::is_direction_reversed(
+            MathDirection::LeftToRight,
+            MathDirection::RightToLeft
+        ));
+        assert!(!MathDirectionalityManager::is_direction_reversed(
+            MathDirection::LeftToRight,
+            MathDirection::LeftToRight
+        ));
+
+        let mut sf = 1500u16;
+        MathSpaceFactorNormalizer::normalize_space_factor(&mut sf);
+        assert_eq!(sf, 1000);
+    }
+
+    #[test]
+    fn test_pdflatex_parity_check() {
+        use crate::font_metrics::FontFamily;
+        use crate::math::math_parser::parse_math_str;
+        use crate::math::math_layout::measure_math;
+        use crate::math::math_ast::MathStyle;
+
+        let b0 = measure_math(&parse_math_str("x^2"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b1 = measure_math(&parse_math_str("x^2 + y_1 = z"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b2 = measure_math(&parse_math_str(r"\mathbb{R}"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+
+        // Ground-truth pdflatex verification:
+        // pdflatex B0 ($x^2$):            10.2014 pt width, 8.1400 pt height
+        // pdflatex B1 ($x^2 + y_1 = z$): 50.2360 pt width, 8.1400 pt height
+        // pdflatex B2 ($\mathbb{R}$):     7.2222 pt width, 6.8889 pt height
+        assert!((b0.w - 10.2014).abs() < 0.005, "Expected 10.2014pt for $x^2$, got {}", b0.w);
+        assert!((b0.h - 8.1400).abs() < 0.005, "Expected 8.1400pt height for $x^2$, got {}", b0.h);
+
+        assert!((b1.w - 50.2360).abs() < 0.005, "Expected 50.2360pt for $x^2 + y_1 = z$, got {}", b1.w);
+        assert!((b1.h - 8.1400).abs() < 0.005, "Expected 8.1400pt height for $x^2 + y_1 = z$, got {}", b1.h);
+
+        assert!((b2.w - 7.2222).abs() < 0.005, "Expected 7.2222pt for $\\mathbb{{R}}$, got {}", b2.w);
+        assert!((b2.h - 6.8889).abs() < 0.005, "Expected 6.8889pt height for $\\mathbb{{R}}$, got {}", b2.h);
+
+        let b_xy = measure_math(&parse_math_str("x + y"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert!((b_xy.w - 23.1990).abs() < 0.01, "Expected 23.1990pt for $x + y$, got {}", b_xy.w);
+
+        let b_ab = measure_math(&parse_math_str("a - b"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert!((b_ab.w - 21.7997).abs() < 0.01, "Expected 21.7997pt for $a - b$, got {}", b_ab.w);
+
+        let b_greek = measure_math(&parse_math_str(r"\alpha + \beta = \gamma"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert!((b_greek.w - 43.9063).abs() < 0.03, "Expected 43.9063pt for $\\alpha + \\beta = \\gamma$, got {}", b_greek.w);
+
+        let b_fx = measure_math(&parse_math_str("f(x) = x^2"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert!((b_fx.w - 43.0000).abs() < 0.02, "Expected 43.0000pt for $f(x) = x^2$, got {}", b_fx.w);
+
+        let b_iint = measure_math(&parse_math_str(r"\iint"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_iiint = measure_math(&parse_math_str(r"\iiint"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_iint_d = measure_math(&parse_math_str(r"\iint"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_iiint_d = measure_math(&parse_math_str(r"\iiint"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+
+        assert!((b_iint.w - 11.6667).abs() < 0.02, "Expected 11.6667pt for text \\iint, got {}", b_iint.w);
+        assert!((b_iiint.w - 16.6667).abs() < 0.02, "Expected 16.6667pt for text \\iiint, got {}", b_iiint.w);
+        assert!((b_iint_d.w - 16.6668).abs() < 0.02, "Expected 16.6668pt for display \\iint, got {}", b_iint_d.w);
+        assert!((b_iiint_d.w - 23.3335).abs() < 0.02, "Expected 23.3335pt for display \\iiint, got {}", b_iiint_d.w);
+
+        let b_tight = measure_math(&parse_math_str(r"\iint\! f \, \mathrm{d}A"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_loose = measure_math(&parse_math_str(r"\iint f \, \mathrm{d}A"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        // \! cancels \thinmuskip (1.6667pt) exactly:
+        assert!((b_loose.w - b_tight.w - 1.6667).abs() < 0.01, "Expected 1.6667pt difference between loose and tight, got {}", b_loose.w - b_tight.w);
+    }
 }
+

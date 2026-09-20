@@ -13,7 +13,7 @@ echo "======================================================================"
 
 # Target TeX file
 TEX_FILE="${1:-docs/manual.tex}"
-RUNS="${2:-3}"
+RUNS="${9:-8}"
 
 if [ ! -f "$TEX_FILE" ]; then
     echo "Error: TeX file '$TEX_FILE' not found!"
@@ -23,7 +23,7 @@ fi
 
 # Ensure runs is a positive integer
 if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || [ "$RUNS" -lt 1 ]; then
-    RUNS=3
+    RUNS=9
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

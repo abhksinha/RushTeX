@@ -41,7 +41,7 @@ pub struct Page<'a> {
     pub width: f32,
     pub height: f32,
     pub font_family: metrics::FontFamily,
-    pub used_faces: u8,
+    pub used_faces: u32,
     pub ops: Vec<Paint>,
     pub text_pool: Vec<&'a str>,
 }
@@ -68,30 +68,26 @@ impl<'a> Page<'a> {
     }
 
     #[inline(always)]
-    pub fn compute_used_faces(&self) -> u8 {
-        if self.used_faces != 0 {
-            self.used_faces
-        } else {
-            let mut mask = 0;
-            for op in &self.ops {
-                match op {
-                    Paint::GlyphRun { face, .. }
-                    | Paint::Marker { face, .. }
-                    | Paint::PageNumber { face, .. }
-                    | Paint::SectionNumber { face, .. }
-                    | Paint::FigureTag { face, .. }
-                    | Paint::TableTag { face, .. }
-                    | Paint::EquationNumber { face, .. } => {
-                        mask |= 1 << (*face as u8);
-                    }
-                    Paint::CaptionTag { .. } | Paint::TableCaptionTag { .. } => {
-                        mask |= 1 << (Face::Roman as u8);
-                    }
-                    Paint::Rule { .. } => {}
+    pub fn compute_used_faces(&self) -> u32 {
+        let mut mask = self.used_faces;
+        for op in &self.ops {
+            match op {
+                Paint::GlyphRun { face, .. }
+                | Paint::Marker { face, .. }
+                | Paint::PageNumber { face, .. }
+                | Paint::SectionNumber { face, .. }
+                | Paint::FigureTag { face, .. }
+                | Paint::TableTag { face, .. }
+                | Paint::EquationNumber { face, .. } => {
+                    mask |= 1 << (*face as u8);
                 }
+                Paint::CaptionTag { .. } | Paint::TableCaptionTag { .. } => {
+                    mask |= 1 << (Face::Roman as u8);
+                }
+                Paint::Rule { .. } => {}
             }
-            mask
         }
+        mask
     }
 }
 
@@ -1426,6 +1422,12 @@ impl<'a> Layouter<'a> {
                 if cur_k == WordKind::Word && cur_face != face {
                     break;
                 }
+                if cur_k == WordKind::Space
+                    && self.font_family == metrics::FontFamily::ComputerModern
+                    && (face == Face::Italic || face == Face::BoldItalic)
+                {
+                    break;
+                }
                 self.current_page.text_pool.push(self.words_soa.texts[i]);
                 let extra_sp = if cur_k == WordKind::Space {
                     word_spacing
@@ -1649,6 +1651,12 @@ impl<'a> Layouter<'a> {
                     break;
                 }
                 if cur_k == WordKind::Word && cur_face != face {
+                    break;
+                }
+                if cur_k == WordKind::Space
+                    && self.font_family == metrics::FontFamily::ComputerModern
+                    && (face == Face::Italic || face == Face::BoldItalic)
+                {
                     break;
                 }
                 self.current_page

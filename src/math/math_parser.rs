@@ -5,9 +5,13 @@
 
 use crate::backend::fonts::Face;
 use crate::math::math_ast::{
-    BigOpData, ColAlign, DelimitedData, MathNode, MathStyle, MatrixData, MatrixDelim,
+    BigOpData, ColAlign, DelimitedData, MathChoiceData, MathNode, MathStyle, MatrixData,
+    MatrixDelim, DELIMITER_OPT_NONE, FRACTION_OPT_EXACT, FRACTION_OPT_NOAXIS, FRACTION_OPT_NONE,
+    FRACTION_OPT_NORULE,
 };
-use crate::math::math_fonts::lookup_math_command;
+use crate::math::math_fonts::{
+    lookup_math_command, mathcode_atom_kind, mathcode_char, mathcode_family, MATHCODE_TABLE,
+};
 use crate::math::math_spacing::MathAtomKind;
 
 pub struct MathParser<'a> {
@@ -119,6 +123,121 @@ impl<'a> MathParser<'a> {
                 break;
             }
 
+            // Batch 1: Item 51 - InfixFractionParser & Item 52 - FractionOptionDecoder
+            let rem = self.remaining();
+            let is_candidate = rem.starts_with("\\over")
+                || rem.starts_with("\\atop")
+                || rem.starts_with("\\above");
+
+            if is_candidate {
+                let (is_infix, has_rule, with_delims, is_above) = if self.eat("\\overwithdelims") {
+                    (true, true, true, false)
+                } else if self.eat("\\atopwithdelims") {
+                    (true, false, true, false)
+                } else if self.eat("\\abovewithdelims") {
+                    (true, true, true, true)
+                } else if rem.starts_with("\\over")
+                    && !rem["\\over".len()..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_alphabetic())
+                {
+                    self.pos += "\\over".len();
+                    (true, true, false, false)
+                } else if rem.starts_with("\\atop")
+                    && !rem["\\atop".len()..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_alphabetic())
+                {
+                    self.pos += "\\atop".len();
+                    (true, false, false, false)
+                } else if rem.starts_with("\\above")
+                    && !rem["\\above".len()..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_alphabetic())
+                {
+                    self.pos += "\\above".len();
+                    (true, true, false, true)
+                } else {
+                    (false, false, false, false)
+                };
+
+                if is_infix {
+                    let (ldelim, rdelim) = if with_delims {
+                        self.skip_ws();
+                        let l = self.parse_delim_char();
+                        self.skip_ws();
+                        let r = self.parse_delim_char();
+                        (Some(l), Some(r))
+                    } else {
+                        (None, None)
+                    };
+
+                    let mut options = FRACTION_OPT_NONE;
+                    if is_above {
+                        loop {
+                            self.skip_ws();
+                            if self.eat("exact") {
+                                options |= FRACTION_OPT_EXACT;
+                            } else if self.eat("norule") {
+                                options |= FRACTION_OPT_NORULE;
+                            } else if self.eat("noaxis") {
+                                options |= FRACTION_OPT_NOAXIS;
+                            } else {
+                                break;
+                            }
+                        }
+                        self.skip_ws();
+                        self.scan_dimen();
+                    }
+
+                    // Numerator is everything parsed before the infix operator
+                    let num = if let Some(nodes) = rest.take() {
+                        MathNode::Row(nodes)
+                    } else if let Some(node) = first.take() {
+                        node
+                    } else {
+                        MathNode::Row(Vec::new())
+                    };
+
+                    // Denominator is parsed recursively for the remainder of this scope
+                    let den = self.parse_expression_inner(stop_at_delim, stop_at_cell);
+                    let frac_rule = has_rule && (options & FRACTION_OPT_NORULE == 0);
+                    let frac = MathNode::Fraction {
+                        num: Box::new(num),
+                        den: Box::new(den),
+                        has_rule: frac_rule,
+                        options,
+                    };
+
+                    return if let (Some(l), Some(r)) = (ldelim, rdelim) {
+                        MathNode::Delimited(Box::new(DelimitedData::new(l, r, frac)))
+                    } else {
+                        frac
+                    };
+                }
+            }
+
+            // Batch 2: Item 57 - EmptyNucleusScriptAttacher
+            // If expression begins with '_' or '^', inject an empty ordinary nucleus
+            if self.remaining().starts_with('_') || self.remaining().starts_with('^') {
+                let empty_nucleus = MathNode::Row(Vec::new());
+                let attached = self.attach_scripts(empty_nucleus);
+                if let Some(ref mut nodes) = rest {
+                    nodes.push(attached);
+                } else if let Some(first_node) = first.take() {
+                    let mut nodes = Vec::with_capacity(4);
+                    nodes.push(first_node);
+                    nodes.push(attached);
+                    rest = Some(nodes);
+                } else {
+                    first = Some(attached);
+                }
+                continue;
+            }
+
             if let Some(node) = self.parse_primary(stop_at_delim, stop_at_cell) {
                 // Check if followed by subscript '_' or superscript '^'
                 let attached = self.attach_scripts(node);
@@ -162,6 +281,8 @@ impl<'a> MathParser<'a> {
 
         let mut sub: Option<Box<MathNode<'a>>> = None;
         let mut sup: Option<Box<MathNode<'a>>> = None;
+        let mut allow_sub = true;
+        let mut allow_sup = true;
 
         loop {
             self.skip_ws();
@@ -180,15 +301,54 @@ impl<'a> MathParser<'a> {
                     data.limits = true;
                 }
                 continue;
+            } else if self.eat("\\nosuperscript") {
+                // Batch 2: Item 59 - NoScriptFlagEnforcer
+                allow_sup = false;
+                continue;
+            } else if self.eat("\\nosubscript") {
+                // Batch 2: Item 59 - NoScriptFlagEnforcer
+                allow_sub = false;
+                continue;
             }
+
             if self.eat("_") {
                 self.skip_ws();
                 let sub_node = self.parse_script_argument();
-                sub = Some(Box::new(sub_node));
+                if !allow_sub {
+                    continue;
+                }
+                // Batch 2: Item 58 - DoubleScriptConflictDetector
+                // If sub is already present (e.g. x_1_2), treat like x_1{}_2
+                if sub.is_some() {
+                    let prev_subsup = MathNode::SubSup {
+                        nucleus: Box::new(nucleus),
+                        sub,
+                        sup: sup.take(),
+                    };
+                    nucleus = prev_subsup;
+                    sub = Some(Box::new(sub_node));
+                } else {
+                    sub = Some(Box::new(sub_node));
+                }
             } else if self.eat("^") {
                 self.skip_ws();
                 let sup_node = self.parse_script_argument();
-                sup = Some(Box::new(sup_node));
+                if !allow_sup {
+                    continue;
+                }
+                // Batch 2: Item 58 - DoubleScriptConflictDetector
+                // If sup is already present (e.g. x^1^2), treat like x^1{}^2
+                if sup.is_some() {
+                    let prev_subsup = MathNode::SubSup {
+                        nucleus: Box::new(nucleus),
+                        sub: sub.take(),
+                        sup,
+                    };
+                    nucleus = prev_subsup;
+                    sup = Some(Box::new(sup_node));
+                } else {
+                    sup = Some(Box::new(sup_node));
+                }
             } else if self.eat("'") {
                 // Prime operator
                 let prime_sym = MathNode::Symbol {
@@ -197,12 +357,24 @@ impl<'a> MathParser<'a> {
                     glyph: "'",
                     code: Some(b'\''),
                 };
-                sup = Some(Box::new(prime_sym));
+                if sup.is_some() {
+                    let prev_subsup = MathNode::SubSup {
+                        nucleus: Box::new(nucleus),
+                        sub: sub.take(),
+                        sup,
+                    };
+                    nucleus = prev_subsup;
+                    sup = Some(Box::new(prime_sym));
+                } else {
+                    sup = Some(Box::new(prime_sym));
+                }
             } else {
                 break;
             }
         }
 
+        // Batch 2: Item 61 - SuperSubOrderInvariance
+        // Canonical ordering: sub and sup are stored in canonical fields regardless of order of encounter
         if sub.is_some() || sup.is_some() {
             // Check if nucleus is BigOp with limits
             if let MathNode::BigOp(mut data) = nucleus {
@@ -247,7 +419,12 @@ impl<'a> MathParser<'a> {
         if self.eat("{") {
             let inner = self.parse_expression(Some("}"));
             self.eat("}");
-            return Some(inner);
+            // Batch 1: Item 53 - SubformulaFlattener: unwrapping singleton groups
+            let flattened = match inner {
+                MathNode::Row(mut nodes) if nodes.len() == 1 => nodes.pop().unwrap(),
+                other => other,
+            };
+            return Some(flattened);
         }
 
         // 2. Command `\cmd`
@@ -275,55 +452,41 @@ impl<'a> MathParser<'a> {
             return Some(MathNode::Variable(ch));
         }
 
-        // 5. Operators & Relational Glyphs
+        // 5. Operators, Relational Glyphs, Delimiters & Punctuation via Canonical MATHCODE_TABLE
         self.pos += ch.len_utf8();
-        let (kind, face, glyph, code) = match ch {
-            '-' => (MathAtomKind::Bin, Face::Symbol, "-", Some(0x2D)),
-            '+' => (MathAtomKind::Bin, Face::Roman, "+", None),
-            '*' => (MathAtomKind::Bin, Face::Roman, "*", None),
-            '=' | '<' | '>' => (
-                MathAtomKind::Rel,
-                Face::Roman,
-                &self.src[self.pos - 1..self.pos],
-                None,
-            ),
-            '(' | '[' => (
-                MathAtomKind::Open,
-                Face::Roman,
-                &self.src[self.pos - 1..self.pos],
-                None,
-            ),
-            ')' | ']' => (
-                MathAtomKind::Close,
-                Face::Roman,
-                &self.src[self.pos - 1..self.pos],
-                None,
-            ),
-            ',' | ';' => (
-                MathAtomKind::Punct,
-                Face::Roman,
-                &self.src[self.pos - 1..self.pos],
-                None,
-            ),
-            '/' | '!' | '|' => (
-                MathAtomKind::Ord,
-                Face::Roman,
-                &self.src[self.pos - 1..self.pos],
-                None,
-            ),
-            _ => (
-                MathAtomKind::Ord,
-                Face::Roman,
-                &self.src[self.pos - ch.len_utf8()..self.pos],
-                None,
-            ),
-        };
+        let glyph = &self.src[self.pos - ch.len_utf8()..self.pos];
+        if let Some(mcode) = MATHCODE_TABLE.lookup(ch) {
+            if mcode != 0x8000 {
+                let kind = mathcode_atom_kind(mcode);
+                let fam = mathcode_family(mcode);
+                let char_code = mathcode_char(mcode);
+                let face = match fam {
+                    0 => Face::Roman,
+                    1 => Face::MathItalic,
+                    2 => Face::Symbol,
+                    3 => Face::Extension,
+                    _ => Face::Roman,
+                };
+                let code = match ch {
+                    '-' => Some(0x2D),
+                    '<' => Some(b'<'),
+                    '>' => Some(b'>'),
+                    _ => Some(char_code),
+                };
+                return Some(MathNode::Symbol {
+                    kind,
+                    face,
+                    glyph,
+                    code,
+                });
+            }
+        }
 
         Some(MathNode::Symbol {
-            kind,
-            face,
+            kind: MathAtomKind::Ord,
+            face: Face::Roman,
             glyph,
-            code,
+            code: None,
         })
     }
 
@@ -427,6 +590,7 @@ impl<'a> MathParser<'a> {
                     num,
                     den,
                     has_rule: true,
+                    options: FRACTION_OPT_NONE,
                 })
             }
             "dfrac" => {
@@ -438,6 +602,7 @@ impl<'a> MathParser<'a> {
                         num,
                         den,
                         has_rule: true,
+                        options: FRACTION_OPT_NONE,
                     }),
                 })
             }
@@ -450,6 +615,7 @@ impl<'a> MathParser<'a> {
                         num,
                         den,
                         has_rule: true,
+                        options: FRACTION_OPT_NONE,
                     }),
                 })
             }
@@ -462,12 +628,11 @@ impl<'a> MathParser<'a> {
                     num,
                     den,
                     has_rule: false,
+                    options: FRACTION_OPT_NONE,
                 };
-                Some(MathNode::Delimited(Box::new(DelimitedData {
-                    open: "(",
-                    close: ")",
-                    content: frac,
-                })))
+                Some(MathNode::Delimited(Box::new(DelimitedData::new(
+                    "(", ")", frac,
+                ))))
             }
             "dbinom" => {
                 let num = Box::new(self.parse_mandatory_arg());
@@ -476,16 +641,15 @@ impl<'a> MathParser<'a> {
                     num,
                     den,
                     has_rule: false,
+                    options: FRACTION_OPT_NONE,
                 };
                 let scope = MathNode::StyleScope {
                     style: MathStyle::Display,
                     content: Box::new(frac),
                 };
-                Some(MathNode::Delimited(Box::new(DelimitedData {
-                    open: "(",
-                    close: ")",
-                    content: scope,
-                })))
+                Some(MathNode::Delimited(Box::new(DelimitedData::new(
+                    "(", ")", scope,
+                ))))
             }
             "tbinom" => {
                 let num = Box::new(self.parse_mandatory_arg());
@@ -494,16 +658,15 @@ impl<'a> MathParser<'a> {
                     num,
                     den,
                     has_rule: false,
+                    options: FRACTION_OPT_NONE,
                 };
                 let scope = MathNode::StyleScope {
                     style: MathStyle::Text,
                     content: Box::new(frac),
                 };
-                Some(MathNode::Delimited(Box::new(DelimitedData {
-                    open: "(",
-                    close: ")",
-                    content: scope,
-                })))
+                Some(MathNode::Delimited(Box::new(DelimitedData::new(
+                    "(", ")", scope,
+                ))))
             }
 
             // Continued fraction `\cfrac{num}{den}`
@@ -514,6 +677,7 @@ impl<'a> MathParser<'a> {
                     num,
                     den,
                     has_rule: true,
+                    options: FRACTION_OPT_NONE,
                 };
                 Some(MathNode::StyleScope {
                     style: MathStyle::Display,
@@ -527,6 +691,20 @@ impl<'a> MathParser<'a> {
                 Some(MathNode::Vcenter(content))
             }
 
+            // Batch 1: Item 54 - MathChoiceQuadBranches `\mathchoice{D}{T}{S}{SS}`
+            "mathchoice" => {
+                let display = self.parse_mandatory_arg();
+                let text = self.parse_mandatory_arg();
+                let script = self.parse_mandatory_arg();
+                let script_script = self.parse_mandatory_arg();
+                Some(MathNode::MathChoice(Box::new(MathChoiceData {
+                    display,
+                    text,
+                    script,
+                    script_script,
+                })))
+            }
+
             // Generalized fraction / binomial primitive `\genfrac{ld}{rd}{thick}{style}{num}{den}`
             "genfrac" => {
                 let open_arg = self.parse_ident_arg();
@@ -537,7 +715,12 @@ impl<'a> MathParser<'a> {
                 let den = Box::new(self.parse_mandatory_arg());
 
                 let has_rule = thick_arg != "0pt";
-                let mut core = MathNode::Fraction { num, den, has_rule };
+                let mut core = MathNode::Fraction {
+                    num,
+                    den,
+                    has_rule,
+                    options: FRACTION_OPT_NONE,
+                };
 
                 if !style_arg.is_empty() {
                     let style = match style_arg {
@@ -554,11 +737,9 @@ impl<'a> MathParser<'a> {
                 }
 
                 if !open_arg.is_empty() || !close_arg.is_empty() {
-                    Some(MathNode::Delimited(Box::new(DelimitedData {
-                        open: open_arg,
-                        close: close_arg,
-                        content: core,
-                    })))
+                    Some(MathNode::Delimited(Box::new(DelimitedData::new(
+                        open_arg, close_arg, core,
+                    ))))
                 } else {
                     Some(core)
                 }
@@ -612,11 +793,19 @@ impl<'a> MathParser<'a> {
                 } else {
                     ")"
                 };
-                Some(MathNode::Delimited(Box::new(DelimitedData {
-                    open,
-                    close,
-                    content,
-                })))
+                Some(MathNode::Delimited(Box::new(DelimitedData::new(
+                    open, close, content,
+                ))))
+            }
+
+            // Batch 1: Item 56 - MiddleDelimiterSupport `\middle |`
+            "middle" => {
+                self.skip_ws();
+                let delim = self.parse_delim_char();
+                Some(MathNode::MiddleDelim {
+                    delim,
+                    options: DELIMITER_OPT_NONE,
+                })
             }
 
             // Spacing
@@ -657,11 +846,7 @@ impl<'a> MathParser<'a> {
                     ])),
                 };
                 let inner = MathNode::Row(vec![mod_text, MathNode::Space(4.0 / 18.0 * 10.0), arg]);
-                let parens = MathNode::Delimited(Box::new(DelimitedData {
-                    open: "(",
-                    close: ")",
-                    content: inner,
-                }));
+                let parens = MathNode::Delimited(Box::new(DelimitedData::new("(", ")", inner)));
                 Some(MathNode::Row(vec![MathNode::Space(5.0), parens]))
             }
 
@@ -722,7 +907,7 @@ impl<'a> MathParser<'a> {
             "mathbb" => {
                 let content = Box::new(self.parse_mandatory_arg());
                 Some(MathNode::StyleChange {
-                    face: Face::Bold,
+                    face: Face::AmsB,
                     content,
                 })
             }
@@ -840,12 +1025,48 @@ impl<'a> MathParser<'a> {
         if self.eat("{") {
             let node = self.parse_expression(Some("}"));
             self.eat("}");
-            node
+            // Batch 1: Item 53 - SubformulaFlattener
+            match node {
+                MathNode::Row(mut nodes) if nodes.len() == 1 => nodes.pop().unwrap(),
+                other => other,
+            }
         } else if let Some(atom) = self.parse_single_atom() {
             atom
         } else {
             MathNode::Row(Vec::new())
         }
+    }
+
+    /// Scans an optional dimension value (e.g. `1pt`, `0.5em`) for `\above` and delimiter options.
+    fn scan_dimen(&mut self) -> f32 {
+        self.skip_ws();
+        let start = self.pos;
+        let mut has_dot = false;
+        while let Some(ch) = self.peek_char() {
+            if ch.is_ascii_digit() {
+                self.pos += 1;
+            } else if ch == '.' && !has_dot {
+                has_dot = true;
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        let num_str = &self.src[start..self.pos];
+        let val: f32 = num_str.parse().unwrap_or(0.0);
+        self.skip_ws();
+        let rem = self.remaining();
+        if rem.starts_with("pt")
+            || rem.starts_with("em")
+            || rem.starts_with("ex")
+            || rem.starts_with("cm")
+            || rem.starts_with("mm")
+            || rem.starts_with("in")
+            || rem.starts_with("mu")
+        {
+            self.pos += 2;
+        }
+        val
     }
 
     /// Parses `{ident}` string slice.

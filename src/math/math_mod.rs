@@ -12,6 +12,7 @@ pub mod math_bigop;
 pub mod math_box;
 pub mod math_delim;
 pub mod math_diff;
+pub mod math_display;
 pub mod math_fonts;
 pub mod math_fraction;
 pub mod math_layout;
@@ -21,6 +22,19 @@ pub mod math_radical;
 pub mod math_scripts;
 pub mod math_spacing;
 pub mod math_tfm;
+
+pub use math_display::{
+    AccentFixedModifierHandler, AccentFractionAdjustment, DelimiterAxisAlignmentToggle,
+    DelimiterExactSizing, DelimiterSearchChain, DelimiterSearchTier, DisplayEquationCentering,
+    DisplayHalignAdapter, DisplayMathParagraphBreaker, DisplayResumeStateRestorer,
+    DisplayShapeGeometryResolver, DisplaySkipMode, DisplaySkipModeSelector, DoubleAccentPositions,
+    DoubleMathAccentComposer, EmptyParagraphDisplayFilter, EquationTagCollisionDisplacement,
+    EquationTagPageBreakGuard, EquationTagSideSelector, EveryDisplayHookTrigger,
+    InlineMathPenaltyInserter, InlineMathSurroundInjector, MathDirection,
+    MathDirectionalityManager, MathSpaceFactorNormalizer, MathSurroundSpec,
+    MissingDelimiterFallback, OverDelimiterBuilder, OverlayAccentApplier,
+    PreDisplayClearanceComparator, UnderDelimiterBuilder,
+};
 
 pub use math_assembly::{
     ComprehensiveMathVerifier, FormulaBoundingBoxUnion, MathGeometricTraceBuffer,
@@ -35,7 +49,7 @@ pub use math_bigop::{
     BigOpVariantTier, IntegralOverhangCorrector, LimitClearanceGovernor, OperatorCenteringEngine,
     OperatorLimitSwitch, PackedBigOpMetrics, BIG_OP_VARIANT_TIER,
 };
-pub use math_box::MathBox;
+pub use math_box::{MathBox, ScaledPoints, SpMathBox};
 pub use math_delim::{
     DelimiterPairMatch, DelimiterSizingGovernor, DelimiterVariantResolver,
     ExtensibleAssemblyEngine, NullDelimiterEliminator, DELIMITER_VARIANT_RESOLVER,
@@ -44,7 +58,17 @@ pub use math_diff::{
     compare_geometry, trace_math_geometry, GeometryDiff, GeometryTolerance, GlyphPlacement,
     MathGeometryTrace, RulePlacement,
 };
-pub use math_fonts::{lookup_math_command, measure_char, measure_symbol_byte, MathSymbolDef};
+pub use math_fonts::{
+    lookup_math_command, measure_char, measure_symbol_byte, ActiveMathCodeInterceptor,
+    DecodedDelCode, DecodedMathCode, DelimiterCodeDecoder, ExtendedMathCode,
+    ExtendedMathCodeDecoder, MathAxisHeightParameter, MathCodeDecoder, MathFamilyScopeEntry,
+    MathFamilyScopeStack, MathFamilyTable, MathParamScopeEntry, MathParamScopeStack,
+    MathParameterRegistry, MathSpacingParameterOverride, MathSymbolDef, RuleThicknessParameter,
+    ScriptDropParameters, MATH_PARAM_AXIS, MATH_PARAM_COUNT, MATH_PARAM_DELIM1, MATH_PARAM_DELIM2,
+    MATH_PARAM_DENOM1, MATH_PARAM_DENOM2, MATH_PARAM_NUM1, MATH_PARAM_NUM2, MATH_PARAM_NUM3,
+    MATH_PARAM_RULE_THICKNESS, MATH_PARAM_SUB1, MATH_PARAM_SUB2, MATH_PARAM_SUB_DROP,
+    MATH_PARAM_SUP1, MATH_PARAM_SUP2, MATH_PARAM_SUP3, MATH_PARAM_SUP_DROP,
+};
 pub use math_fraction::{
     BinomialDelimiterCache, ContinuedFractionPipeline, FractionClearanceGovernor,
     GeneralizedFractionEngine, NumeratorDenominatorAligner, PackedFractionMetrics,

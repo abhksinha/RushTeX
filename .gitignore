@@ -7,3 +7,6 @@ graphify-out/
 examples/stress_*.tex
 *.aux
 *.log
+*.toc
+*.zip
+__pycache__/

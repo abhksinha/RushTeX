@@ -1369,7 +1369,13 @@ pub fn layout_node<'a, 'p>(
                     let w = metrics::string_width_family(op, Face::Roman, font_size, ctx.font_family);
                     (Face::Roman, font_size, w, (op_m.text_height as f32 * 0.001) * font_size, 0.0, 0.0)
                 } else if is_integral {
-                    let code = if style.is_display() { 0x5A } else { 0x52 };
+                    let code = if *op == "oint" {
+                        if style.is_display() { 0x49 } else { 0x48 }
+                    } else if style.is_display() {
+                        0x5A
+                    } else {
+                        0x52
+                    };
                     cm_op_code = code;
                     let m = crate::math::math_tfm::cmex10_metric(code);
                     let single_w = ((m.w + m.ic) as f32) * (font_size * 0.001);
@@ -1486,22 +1492,15 @@ pub fn layout_node<'a, 'p>(
                     ctx.emit_glyph_run(x, y, op_face, op_size, op);
                 } else if is_integral {
                     if ctx.font_family == metrics::FontFamily::ComputerModern {
-                        let int_glyph = if style.is_display() { "Z" } else { "R" };
-                        let code = if style.is_display() { 0x5A } else { 0x52 };
-                        let m = crate::math::math_tfm::cmex10_metric(code);
+                        let int_glyph = crate::math::math_delim::byte_str(cm_op_code);
+                        let m = crate::math::math_tfm::cmex10_metric(cm_op_code);
                         let single_w = ((m.w + m.ic) as f32) * (op_size * 0.001);
                         let offset = if style.is_display() {
                             single_w - (6.0 / 18.0) * op_size
                         } else {
                             single_w - (3.0 / 18.0) * op_size
                         };
-                        if *op == "oint" {
-                            ctx.emit_glyph_run(x, y, Face::Extension, op_size, int_glyph);
-                            let ring_size = op_size * 0.65;
-                            let ring_x = x + single_w * 0.18;
-                            let ring_y = y + (op_h - op_d) * 0.45;
-                            ctx.emit_glyph_run(ring_x, ring_y, Face::Symbol, ring_size, "\u{000E}");
-                        } else if *op == "iint" {
+                        if *op == "iint" {
                             ctx.emit_glyph_run(x, y, Face::Extension, op_size, int_glyph);
                             ctx.emit_glyph_run(
                                 x + offset,
@@ -1534,9 +1533,10 @@ pub fn layout_node<'a, 'p>(
                         let offset = single_w * 0.75;
                         if *op == "oint" {
                             ctx.emit_glyph_run(x, y, Face::Symbol, op_size, "\u{00F2}");
-                            let ring_size = op_size * 0.65;
-                            let ring_x = x + single_w * 0.18;
-                            let ring_y = y + (op_h - op_d) * 0.45;
+                            let ring_size = op_size * 0.55;
+                            let ring_w = metrics::SYMBOL_WIDTHS[0xB0] as f32 * (ring_size * 0.001);
+                            let ring_x = x + (single_w - ring_w) * 0.5;
+                            let ring_y = y + (op_h - op_d) * 0.5 - 0.40 * ring_size;
                             ctx.emit_glyph_run(ring_x, ring_y, Face::Symbol, ring_size, "\u{00B0}");
                         } else if *op == "iint" {
                             ctx.emit_glyph_run(x, y, Face::Symbol, op_size, "\u{00F2}");

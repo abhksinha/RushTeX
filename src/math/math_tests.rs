@@ -1102,6 +1102,45 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
             "Contour integral must emit both integral stem and contour ring"
         );
 
+        // 3b. Computer Modern native contour integral (CMEX10 0x48/0x49)
+        ops.clear();
+        pool.clear();
+        render_math(
+            &oint_node,
+            10.0,
+            FontFamily::ComputerModern,
+            MathStyle::Display,
+            0.0,
+            0.0,
+            &mut ops,
+            &mut pool,
+        );
+        assert!(
+            pool.contains(&"I"),
+            "Display-style contour integral in CM must emit native CMEX10 0x49 ('I')"
+        );
+        assert!(
+            !pool.contains(&"\u{000E}") && !pool.contains(&"\u{00B0}"),
+            "Native CM contour integral must not emit synthetic circle overlay"
+        );
+
+        ops.clear();
+        pool.clear();
+        render_math(
+            &oint_node,
+            10.0,
+            FontFamily::ComputerModern,
+            MathStyle::Text,
+            0.0,
+            0.0,
+            &mut ops,
+            &mut pool,
+        );
+        assert!(
+            pool.contains(&"H"),
+            "Text-style contour integral in CM must emit native CMEX10 0x48 ('H')"
+        );
+
         let stem_ops =
             parse_math_str(r"\bigvee \bigwedge \bigoplus \bigotimes \bigodot \biguplus \bigsqcup");
         let stem_box = measure_math(&stem_ops, 10.0, FontFamily::Times, MathStyle::Display);

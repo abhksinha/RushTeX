@@ -2911,6 +2911,35 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         let b_loose = measure_math(&parse_math_str(r"\iint f \, \mathrm{d}A"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
         // \! cancels \thinmuskip (1.6667pt) exactly:
         assert!((b_loose.w - b_tight.w - 1.6667).abs() < 0.01, "Expected 1.6667pt difference between loose and tight, got {}", b_loose.w - b_tight.w);
+
+        // Ground-truth pdflatex verification for integrals:
+        let b_int_t = measure_math(&parse_math_str(r"\int"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_int_d = measure_math(&parse_math_str(r"\int"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_int_fx = measure_math(&parse_math_str(r"\int f(x) dx"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert!((b_int_t.w - 6.6667).abs() < 0.01, "Expected 6.6667pt for text \\int, got {}", b_int_t.w);
+        assert!((b_int_t.h - 8.0556).abs() < 0.01, "Expected 8.0556pt height for text \\int, got {}", b_int_t.h);
+        assert!((b_int_t.d - 3.0556).abs() < 0.01, "Expected 3.0556pt depth for text \\int, got {}", b_int_t.d);
+        assert!((b_int_d.w - 10.0000).abs() < 0.01, "Expected 10.0000pt for display \\int, got {}", b_int_d.w);
+        assert!((b_int_d.h - 13.6112).abs() < 0.01, "Expected 13.6112pt height for display \\int, got {}", b_int_d.h);
+        assert!((b_int_d.d - 8.6112).abs() < 0.01, "Expected 8.6112pt depth for display \\int, got {}", b_int_d.d);
+        assert!((b_int_fx.w - 38.7188).abs() < 0.02, "Expected 38.7188pt for \\int f(x) dx, got {}", b_int_fx.w);
+
+        // Ground-truth pdflatex verification for radicals:
+        let b_sqrt_x = measure_math(&parse_math_str(r"\sqrt{x}"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_sqrt_2 = measure_math(&parse_math_str(r"\sqrt{2}"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_sqrt_half = measure_math(&parse_math_str(r"\sqrt{\frac{1}{2}}"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert!((b_sqrt_x.w - 14.0486).abs() < 0.01, "Expected 14.0486pt for \\sqrt{{x}}, got {}", b_sqrt_x.w);
+        assert!((b_sqrt_2.w - 13.3334).abs() < 0.01, "Expected 13.3334pt for \\sqrt{{2}}, got {}", b_sqrt_2.w);
+        assert!((b_sqrt_half.w - 16.3861).abs() < 0.01, "Expected 16.3861pt for \\sqrt{{\\frac{{1}}{{2}}}}, got {}", b_sqrt_half.w);
+
+        // Verify CMEX Unicode mapping parity:
+        use crate::backend::backend_cm_fonts::CMEX_TO_UNICODE;
+        assert_eq!(CMEX_TO_UNICODE[0x52], 0x222B, "CMEX 0x52 (text int) maps to U+222B");
+        assert_eq!(CMEX_TO_UNICODE[0x5A], 0x222B, "CMEX 0x5A (display int) maps to U+222B");
+        assert_eq!(CMEX_TO_UNICODE[0x70], 0x221A, "CMEX 0x70 (radical var 0) maps to U+221A");
+        assert_eq!(CMEX_TO_UNICODE[0x72], 0x221A, "CMEX 0x72 (radical var 2) maps to U+221A");
+        assert_eq!(CMEX_TO_UNICODE[0x50], 0x2211, "CMEX 0x50 (text sum) maps to U+2211");
+        assert_eq!(CMEX_TO_UNICODE[0x58], 0x2211, "CMEX 0x58 (display sum) maps to U+2211");
     }
 
     #[test]

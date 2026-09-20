@@ -246,72 +246,81 @@ pub fn layout_delimiter<'a, 'p>(
             }
 
             if let Some(recipe) = recipe_opt {
-                let m_top = crate::math::math_tfm::cmex10_metric(recipe.top);
-                let m_bot = crate::math::math_tfm::cmex10_metric(recipe.bot);
                 let m_rep = crate::math::math_tfm::cmex10_metric(recipe.rep);
+                let w = (m_rep.w as f32 * 0.001) * font_size;
+                let u = ((m_rep.h + m_rep.d) as f32 * 0.001) * font_size;
 
-                let w = (m_top.w.max(m_bot.w).max(m_rep.w) as f32 * 0.001) * font_size;
-                let h_top = ((m_top.h + m_top.d) as f32 * 0.001) * font_size;
-                let h_bot = ((m_bot.h + m_bot.d) as f32 * 0.001) * font_size;
-                let h_rep = ((m_rep.h + m_rep.d) as f32 * 0.001) * font_size;
+                let h_top = if recipe.top != 0 {
+                    let m = crate::math::math_tfm::cmex10_metric(recipe.top);
+                    ((m.h + m.d) as f32 * 0.001) * font_size
+                } else {
+                    0.0
+                };
+                let h_bot = if recipe.bot != 0 {
+                    let m = crate::math::math_tfm::cmex10_metric(recipe.bot);
+                    ((m.h + m.d) as f32 * 0.001) * font_size
+                } else {
+                    0.0
+                };
+                let h_mid = if recipe.mid != 0 {
+                    let m = crate::math::math_tfm::cmex10_metric(recipe.mid);
+                    ((m.h + m.d) as f32 * 0.001) * font_size
+                } else {
+                    0.0
+                };
 
-                if recipe.mid == 0 {
-                    let fixed_h = h_top + h_bot;
-                    let n_rep = if target_h > fixed_h && h_rep > 0.0 {
-                        ((target_h - fixed_h) / h_rep).ceil() as usize
+                let fixed_h = h_top + h_bot + h_mid;
+                let has_mid = recipe.mid != 0;
+                let n_rep = if u > 0.0 && target_h > fixed_h {
+                    if has_mid {
+                        ((target_h - fixed_h) / (2.0 * u)).ceil() as usize
                     } else {
-                        0
-                    };
-                    let actual_h = fixed_h + (n_rep as f32) * h_rep;
-                    let y_top = y_center + actual_h * 0.5;
-                    let top_y = y_top - (m_top.h as f32 * 0.001) * font_size;
-                    let bot_y = y_center - actual_h * 0.5 + (m_bot.d as f32 * 0.001) * font_size;
-
-                    if recipe.top != 0 {
-                        let s = crate::math::math_delim::byte_str(recipe.top);
-                        ctx.emit_glyph_run(x, top_y, Face::Extension, font_size, s);
-                    }
-                    if recipe.bot != 0 {
-                        let s = crate::math::math_delim::byte_str(recipe.bot);
-                        ctx.emit_glyph_run(x, bot_y, Face::Extension, font_size, s);
-                    }
-                    for i in 0..n_rep {
-                        let curr_y = top_y - h_top - (i as f32) * h_rep + (m_rep.d as f32 * 0.001) * font_size;
-                        let s = crate::math::math_delim::byte_str(recipe.rep);
-                        ctx.emit_glyph_run(x, curr_y, Face::Extension, font_size, s);
+                        ((target_h - fixed_h) / u).ceil() as usize
                     }
                 } else {
-                    let m_mid = crate::math::math_tfm::cmex10_metric(recipe.mid);
-                    let h_mid = ((m_mid.h + m_mid.d) as f32 * 0.001) * font_size;
-                    let fixed_h = h_top + h_bot + h_mid;
-                    let half_needed = ((target_h - fixed_h) * 0.5).max(0.0);
-                    let n_rep = if h_rep > 0.0 {
-                        (half_needed / h_rep).ceil() as usize
-                    } else {
-                        0
-                    };
-                    let actual_half = h_top + (n_rep as f32) * h_rep + h_mid * 0.5;
-                    let y_top = y_center + actual_half;
-                    let top_y = y_top - (m_top.h as f32 * 0.001) * font_size;
-                    let bot_y = y_center - actual_half + (m_bot.d as f32 * 0.001) * font_size;
-                    let mid_y = y_center + ((m_mid.d - m_mid.h) as f32 * 0.001) * font_size * 0.5;
+                    0
+                };
 
-                    let s_top = crate::math::math_delim::byte_str(recipe.top);
-                    let s_bot = crate::math::math_delim::byte_str(recipe.bot);
-                    let s_mid = crate::math::math_delim::byte_str(recipe.mid);
-                    let s_rep = crate::math::math_delim::byte_str(recipe.rep);
+                let total_h = if has_mid {
+                    fixed_h + (2 * n_rep) as f32 * u
+                } else {
+                    fixed_h + (n_rep as f32) * u
+                };
 
-                    ctx.emit_glyph_run(x, top_y, Face::Extension, font_size, s_top);
-                    ctx.emit_glyph_run(x, bot_y, Face::Extension, font_size, s_bot);
-                    ctx.emit_glyph_run(x, mid_y, Face::Extension, font_size, s_mid);
+                let mut curr_top_y = y_center + total_h * 0.5;
 
-                    for i in 0..n_rep {
-                        let up_y = mid_y + h_mid * 0.5 + ((i + 1) as f32) * h_rep - (m_rep.h as f32 * 0.001) * font_size;
-                        let dn_y = mid_y - h_mid * 0.5 - (i as f32) * h_rep + (m_rep.d as f32 * 0.001) * font_size;
-                        ctx.emit_glyph_run(x, up_y, Face::Extension, font_size, s_rep);
-                        ctx.emit_glyph_run(x, dn_y, Face::Extension, font_size, s_rep);
+                let mut emit_piece = |code: u8, top_y: &mut f32| {
+                    if code != 0 {
+                        let m = crate::math::math_tfm::cmex10_metric(code);
+                        let baseline_y = *top_y - (m.h as f32 * 0.001) * font_size;
+                        let s = crate::math::math_delim::byte_str(code);
+                        ctx.emit_glyph_run(x, baseline_y, Face::Extension, font_size, s);
+                        *top_y = baseline_y - (m.d as f32 * 0.001) * font_size;
+                    }
+                };
+
+                // TeX Appendix G Rule 19 vertical stack:
+                // 1. Top piece
+                emit_piece(recipe.top, &mut curr_top_y);
+
+                // 2. Upper repeaters
+                for _ in 0..n_rep {
+                    emit_piece(recipe.rep, &mut curr_top_y);
+                }
+
+                // 3. Middle piece (if any)
+                emit_piece(recipe.mid, &mut curr_top_y);
+
+                // 4. Lower repeaters (if middle piece exists)
+                if has_mid {
+                    for _ in 0..n_rep {
+                        emit_piece(recipe.rep, &mut curr_top_y);
                     }
                 }
+
+                // 5. Bottom piece
+                emit_piece(recipe.bot, &mut curr_top_y);
+
                 return w;
             }
         }
@@ -896,7 +905,7 @@ pub fn layout_node<'a, 'p>(
             };
 
             let frac_pad = if *has_rule {
-                ((params.rule_thickness as f32 * 1.5) * scale).max(1.2 * scale)
+                0.12 * font_size
             } else {
                 0.0
             };
@@ -1013,6 +1022,131 @@ pub fn layout_node<'a, 'p>(
             } else {
                 (0.0, 0.0, origin_x)
             };
+
+            if ctx.font_family == metrics::FontFamily::ComputerModern {
+                let rule_t_cm = (0.040 * font_size).max(0.398);
+                let x_height_cm = 0.43055 * font_size;
+                let min_clr = if style.is_display() {
+                    rule_t_cm + (x_height_cm * 0.25)
+                } else {
+                    rule_t_cm + (rule_t_cm * 0.25)
+                };
+                let v = rad_box.h + rad_box.d + min_clr + rule_t_cm;
+
+                // 1. Check small radical in cmsy10 first (Family 2, char 0x70)
+                let small_m = crate::math::math_tfm::cmsy10_metric(0x70);
+                let small_hd = ((small_m.h + small_m.d) as f32 * 0.001) * font_size;
+
+                let (rad_w, rad_h, rad_d, is_ext, rad_code, n_rep) = if v <= small_hd {
+                    let w = (small_m.w as f32 * 0.001) * font_size;
+                    let h = (small_m.h as f32 * 0.001) * font_size;
+                    let d = (small_m.d as f32 * 0.001) * font_size;
+                    (w, h, d, false, 0x70u8, 0usize)
+                } else {
+                    // 2. Check large discrete variants in cmex10 (Family 3, char 0x70..0x73)
+                    let variants: [u8; 4] = [0x70, 0x71, 0x72, 0x73];
+                    let mut found = None;
+                    for &code in &variants {
+                        let m = crate::math::math_tfm::cmex10_metric(code);
+                        let hd = ((m.h + m.d) as f32 * 0.001) * font_size;
+                        if hd >= v {
+                            let w = (m.w as f32 * 0.001) * font_size;
+                            let h = (m.h as f32 * 0.001) * font_size;
+                            let d = (m.d as f32 * 0.001) * font_size;
+                            found = Some((w, h, d, false, code, 0usize));
+                            break;
+                        }
+                    }
+                    if let Some(res) = found {
+                        res
+                    } else {
+                        // 3. Extensible radical in cmex10 (top 0x76, rep 0x75, bot 0x74)
+                        let m_top = crate::math::math_tfm::cmex10_metric(0x76);
+                        let m_bot = crate::math::math_tfm::cmex10_metric(0x74);
+                        let m_rep = crate::math::math_tfm::cmex10_metric(0x75);
+                        let h_fixed = ((m_top.h + m_top.d + m_bot.h + m_bot.d) as f32 * 0.001) * font_size;
+                        let u = ((m_rep.h + m_rep.d) as f32 * 0.001) * font_size;
+                        let n = if u > 0.0 && v > h_fixed {
+                            ((v - h_fixed) / u).ceil() as usize
+                        } else {
+                            0
+                        };
+                        let total_hd = h_fixed + (n as f32) * u;
+                        let w = (m_rep.w as f32 * 0.001) * font_size;
+                        let h = (m_top.h as f32 * 0.001) * font_size;
+                        let d = total_hd - h;
+                        (w, h, d, true, 0x74u8, n)
+                    }
+                };
+
+                // TeX Appendix G Rule 11: Distribute excess height evenly
+                let delta = rad_d - (rad_box.h + rad_box.d + min_clr);
+                let actual_clr = if delta > 0.0 {
+                    min_clr + delta * 0.5
+                } else {
+                    min_clr
+                };
+
+                let rule_bottom_y = origin_y + rad_box.h + actual_clr;
+                let rad_y = rule_bottom_y - rad_h;
+                let rad_content_x = rad_origin_x + rad_w;
+                let rule_w = rad_box.w + 0.5;
+
+                if !ctx.is_measuring() {
+                    if !is_ext {
+                        if rad_code == 0x70 && v <= small_hd {
+                            // Small radical from cmsy10
+                            ctx.emit_glyph_run(rad_origin_x, rad_y, Face::Symbol, font_size, "p");
+                        } else {
+                            // Discrete variant from cmex10
+                            let s = crate::math::math_delim::byte_str(rad_code);
+                            ctx.emit_glyph_run(rad_origin_x, rad_y, Face::Extension, font_size, s);
+                        }
+                    } else {
+                        // Extensible radical from cmex10
+                        let mut curr_top_y = rule_bottom_y + rad_h;
+                        let mut emit_piece = |code: u8, top_y: &mut f32| {
+                            let m = crate::math::math_tfm::cmex10_metric(code);
+                            let baseline_y = *top_y - (m.h as f32 * 0.001) * font_size;
+                            let s = crate::math::math_delim::byte_str(code);
+                            ctx.emit_glyph_run(rad_origin_x, baseline_y, Face::Extension, font_size, s);
+                            *top_y = baseline_y - (m.d as f32 * 0.001) * font_size;
+                        };
+                        // Top (0x76)
+                        emit_piece(0x76, &mut curr_top_y);
+                        // Repeaters (0x75)
+                        for _ in 0..n_rep {
+                            emit_piece(0x75, &mut curr_top_y);
+                        }
+                        // Bottom (0x74)
+                        emit_piece(0x74, &mut curr_top_y);
+                    }
+
+                    if let Some(deg) = degree {
+                        let deg_style = MathStyle::CrampedScriptScript;
+                        let deg_x = origin_x + deg_x_offset;
+                        let net_h = (rad_box.h - rad_box.d).max(0.0);
+                        let deg_y = origin_y + 0.60 * net_h + 0.20 * font_size;
+                        layout_node(ctx, deg, deg_style, deg_x, deg_y);
+                    }
+
+                    // Paint radicand
+                    layout_node(ctx, radicand, rad_style, rad_content_x, origin_y);
+
+                    // Overbar rule connecting seamlessly to glyph ledge:
+                    ctx.emit_rule(
+                        rad_content_x - rule_t_cm * 0.5,
+                        rule_bottom_y,
+                        rule_w + rule_t_cm * 0.5,
+                        rule_t_cm,
+                    );
+                }
+
+                let total_w = rad_content_x + rad_box.w - origin_x;
+                let total_h = (rule_bottom_y + rule_t_cm) - origin_y;
+                let total_d = rad_box.d.max(rad_d - rad_box.h - actual_clr);
+                return MathBox::with_dims(total_w, total_h, total_d);
+            }
 
             let (rad_size, rule_x, rad_content_x, bar_thickness, target_bottom_y, rule_bottom_y) =
                 if !is_extensible {
@@ -1430,10 +1564,13 @@ pub fn layout_node<'a, 'p>(
 
                 let (sup_x, sub_x, mut sup_shift, mut sub_shift) = if is_integral {
                     if ctx.font_family == metrics::FontFamily::ComputerModern {
-                        let sx = origin_x + op_w + op_ic;
-                        let bx = origin_x + op_w;
-                        let s_shift = (op_top_y - origin_y - 2.5).max(0.40 * font_size + sup_box.d);
-                        let b_shift = (origin_y - op_bot_y + 0.5).max(0.30 * font_size + sub_box.h);
+                        let op_w_no_ic = op_w - op_ic;
+                        let sx = origin_x + op_w;
+                        let bx = origin_x + op_w_no_ic;
+                        let sup_drop = 0.24722 * font_size;
+                        let sub_drop = 0.05000 * font_size;
+                        let s_shift = (op_top_y - origin_y - sup_drop).max((params.sup1 as f32) * scale);
+                        let b_shift = (origin_y - op_bot_y + sub_drop).max((params.sub1 as f32) * scale);
                         (sx, bx, s_shift, b_shift)
                     } else {
                         // Slanted integral limits: upper limit staggered right, lower limit tucked under

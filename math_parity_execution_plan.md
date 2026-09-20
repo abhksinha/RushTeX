@@ -46,3 +46,10 @@
   - [x] 6.2 Implement `emit_tounicode_cmap` in `backend_pdf.rs` generating Adobe `/CIDInit /ProcSet findresource begin ... end` streams.
   - [x] 6.3 Shared CMap stream references across font sizes (`CMR10`, `CMR7`, `CMR5` share the single OT1 CMap object ID), preventing redundant PDF stream bloat.
   - [x] 6.4 Packed parameter object `CmFontObjectIds` (16 bytes, zero allocation) and automated PDF text extraction test (`pdftotext`) verifying searchable math glyphs (`π`, `∫`, `≤`, `E = mc`).
+
+- [x] **Milestone 7: Extensible Delimiter Vertical Assembly, Radical Overbar Continuity & Integral Op Parity**
+  - [x] 7.1 Replaced heuristic delimiter assembly with Donald Knuth's canonical `tex.web` §713 top-to-bottom stack algorithm (exact touching without sub-pixel gaps).
+  - [x] 7.2 Implemented authoritative `cmex10` discrete radical variants (0x70, 0x71, 0x72, 0x73) and extensible radical assembly (top 0x76, rep 0x75, bot 0x74) per `tex.web` §737.
+  - [x] 7.3 Restored canonical `\nulldelimiterspace` (1.2pt) margin on fraction rules matching TeX Live ground truth.
+  - [x] 7.4 Corrected integral italic correction and script placement (`\int` subscript hugs bottom hook without `ic`, superscript shifted right by `ic`, exact `sup_drop` and `sub_drop` baseline shifts).
+  - [x] 7.5 Fixed Computer Modern `/ToUnicode` mapping for display `\int` (0x5A -> U+222B) and all CMEX big operators.

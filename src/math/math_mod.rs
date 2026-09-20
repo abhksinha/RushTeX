@@ -23,6 +23,14 @@ pub mod math_scripts;
 pub mod math_spacing;
 pub mod math_tfm;
 
+#[path = "fonts/mod.rs"]
+pub mod fonts;
+
+pub use fonts::{
+    OpenTypeFont, OpenTypeMathConstants, OpenTypeMathEngine, NEWCM_MATH_CONSTANTS,
+    STIX2_MATH_CONSTANTS,
+};
+
 pub use math_display::{
     AccentFixedModifierHandler, AccentFractionAdjustment, DelimiterAxisAlignmentToggle,
     DelimiterExactSizing, DelimiterSearchChain, DelimiterSearchTier, DisplayEquationCentering,

@@ -70,6 +70,13 @@ impl MatrixLayoutMetricsEngine {
                 let row_sep = 0.0;
                 (min_rh, min_rd, row_sep)
             }
+            MatrixEnvKind::SmallMatrix => {
+                // AMS-LaTeX smallmatrix uses compact script-size metrics
+                let min_rh = 0.60 * font_size;
+                let min_rd = 0.25 * font_size;
+                let row_sep = 0.0;
+                (min_rh, min_rd, row_sep)
+            }
         }
     }
 
@@ -91,6 +98,9 @@ impl MatrixLayoutMetricsEngine {
                 1.0 * font_size // \quad = 1em
             }
             MatrixEnvKind::Multline => 0.0,
+            MatrixEnvKind::SmallMatrix => {
+                0.50 * font_size // Compact inter-column separation
+            }
             MatrixEnvKind::Matrix => {
                 1.0 * font_size // 2 * \arraycolsep = 10pt = 1em
             }

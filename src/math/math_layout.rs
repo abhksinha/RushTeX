@@ -1878,7 +1878,11 @@ pub fn layout_node<'a, 'p>(
                 crate::math::math_matrix::MatrixLayoutMetricsEngine::row_parameters(
                     env_kind, font_size,
                 );
-            let cell_style = style.matrix_cell_style();
+            let cell_style = if env_kind == MatrixEnvKind::SmallMatrix {
+                MathStyle::Script
+            } else {
+                style.matrix_cell_style()
+            };
 
             // First pass: content-sensitive measurement of cell widths, row heights, and row depths
             for (r_idx, r) in rows.iter().enumerate() {
@@ -2540,6 +2544,10 @@ pub fn layout_node<'a, 'p>(
 
         MathNode::Underbrace(inner) => {
             layout_underbrace(ctx, inner, None, None, style, origin_x, origin_y)
+        }
+
+        MathNode::Coerce { content, .. } => {
+            layout_node(ctx, content, style, origin_x, origin_y)
         }
     };
     ctx.style_stack.pop();

@@ -705,6 +705,23 @@ impl<'a> MathParser<'a> {
                 })))
             }
 
+            // Atom class coercion primitives (\mathord, \mathop, \mathbin, \mathrel, \mathopen, \mathclose, \mathpunct, \mathinner)
+            "mathord" | "mathop" | "mathbin" | "mathrel" | "mathopen" | "mathclose" | "mathpunct" | "mathinner" => {
+                let kind = match cmd {
+                    "mathord" => MathAtomKind::Ord,
+                    "mathop" => MathAtomKind::Op,
+                    "mathbin" => MathAtomKind::Bin,
+                    "mathrel" => MathAtomKind::Rel,
+                    "mathopen" => MathAtomKind::Open,
+                    "mathclose" => MathAtomKind::Close,
+                    "mathpunct" => MathAtomKind::Punct,
+                    "mathinner" => MathAtomKind::Inner,
+                    _ => unreachable!(),
+                };
+                let content = Box::new(self.parse_mandatory_arg());
+                Some(MathNode::Coerce { kind, content })
+            }
+
             // Generalized fraction / binomial primitive `\genfrac{ld}{rd}{thick}{style}{num}{den}`
             "genfrac" => {
                 let open_arg = self.parse_ident_arg();
@@ -931,6 +948,7 @@ impl<'a> MathParser<'a> {
                     "Bmatrix" => (MatrixDelim::Braces, MatrixEnvKind::Matrix, Vec::new()),
                     "vmatrix" => (MatrixDelim::VBar, MatrixEnvKind::Matrix, Vec::new()),
                     "Vmatrix" => (MatrixDelim::DoubleVBar, MatrixEnvKind::Matrix, Vec::new()),
+                    "smallmatrix" => (MatrixDelim::None, MatrixEnvKind::SmallMatrix, Vec::new()),
                     "cases" => (
                         MatrixDelim::LeftBrace,
                         MatrixEnvKind::Cases,

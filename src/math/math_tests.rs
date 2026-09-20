@@ -1179,6 +1179,25 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         assert_eq!(slash_chain[0], 0x0E);
         assert!(slash_recipe.is_none());
 
+        // 3e. Atom class coercion (\mathbin, \mathrel, \mathord, \mathop)
+        let coerced_bin = parse_math_str(r"\mathbin{*}");
+        assert_eq!(coerced_bin.atom_kind(), MathAtomKind::Bin);
+        let coerced_rel = parse_math_str(r"\mathrel{:}");
+        assert_eq!(coerced_rel.atom_kind(), MathAtomKind::Rel);
+        let coerced_ord = parse_math_str(r"\mathord{+}");
+        assert_eq!(coerced_ord.atom_kind(), MathAtomKind::Ord);
+
+        // 3f. smallmatrix compact environment
+        let sm_node = parse_math_str(r"\begin{smallmatrix} a & b \\ c & d \end{smallmatrix}");
+        let sm_box = measure_math(&sm_node, 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert!(sm_box.w > 0.0 && sm_box.h > 0.0);
+
+        // 3g. Skewchar optical accent kerning (CMMI10 char 127)
+        let offset_a = crate::math::glyph_top_accent_offset('A', Face::MathItalic, FontFamily::ComputerModern);
+        assert_eq!(offset_a, 139, "CMMI10 'A' skewchar kern must equal 139");
+        let offset_f = crate::math::glyph_top_accent_offset('f', Face::MathItalic, FontFamily::ComputerModern);
+        assert_eq!(offset_f, 167, "CMMI10 'f' skewchar kern must equal 167");
+
         // 4. Higher-order dot accents (Rule 12)
         ops.clear();
         pool.clear();

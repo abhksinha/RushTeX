@@ -59,7 +59,7 @@ pub use math_diff::{
     MathGeometryTrace, RulePlacement,
 };
 pub use math_fonts::{
-    lookup_math_command, measure_char, measure_symbol_byte, ActiveMathCodeInterceptor,
+    glyph_top_accent_offset, lookup_math_command, measure_char, measure_symbol_byte, ActiveMathCodeInterceptor,
     DecodedDelCode, DecodedMathCode, DelimiterCodeDecoder, ExtendedMathCode,
     ExtendedMathCodeDecoder, MathAxisHeightParameter, MathCodeDecoder, MathFamilyScopeEntry,
     MathFamilyScopeStack, MathFamilyTable, MathParamScopeEntry, MathParamScopeStack,

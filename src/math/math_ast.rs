@@ -488,6 +488,7 @@ pub enum MatrixEnvKind {
     Cases = 2,
     Gather = 3,
     Multline = 4,
+    SmallMatrix = 5,
 }
 
 /// Column alignment for matrices and alignment grids.
@@ -581,6 +582,11 @@ pub enum MathNode<'a> {
     Overbrace(Box<MathNode<'a>>),
     /// Extensible horizontal underbrace (`\underbrace{content}`).
     Underbrace(Box<MathNode<'a>>),
+    /// Explicit atom class coercion (`\mathord`, `\mathbin`, `\mathrel`, etc.).
+    Coerce {
+        kind: MathAtomKind,
+        content: Box<MathNode<'a>>,
+    },
 }
 
 #[cfg(target_pointer_width = "64")]
@@ -633,6 +639,7 @@ impl<'a> MathNode<'a> {
             MathNode::MiddleDelim { .. } => MathAtomKind::Inner,
             MathNode::Overbrace(_) => MathAtomKind::Op,
             MathNode::Underbrace(_) => MathAtomKind::Op,
+            MathNode::Coerce { kind, .. } => *kind,
         }
     }
 
@@ -653,6 +660,7 @@ impl<'a> MathNode<'a> {
             MathNode::MiddleDelim { .. } => MathAtomKind::Inner,
             MathNode::Overbrace(_) => MathAtomKind::Op,
             MathNode::Underbrace(_) => MathAtomKind::Op,
+            MathNode::Coerce { kind, .. } => *kind,
             _ => self.atom_kind(),
         }
     }
@@ -667,6 +675,7 @@ impl<'a> MathNode<'a> {
                 _ => choice.script_script.atom_kind_in_style(style),
             },
             MathNode::SubSup { nucleus, .. } => nucleus.atom_kind_in_style(style),
+            MathNode::Coerce { kind, .. } => *kind,
             MathNode::Row(nodes) => {
                 for n in nodes.iter().rev() {
                     if !matches!(n, MathNode::Space(_)) {

@@ -1436,8 +1436,35 @@ pub fn lookup_accent_metrics(accent: &str, _family: metrics::FontFamily) -> Opti
 }
 
 /// Returns optical horizontal top accent attachment offset in 1000-units-per-em.
+/// In Computer Modern, utilizes Donald Knuth's authoritative skewchar (char 127) kerning from CMMI10/CMSY10.
 #[inline(always)]
 pub fn glyph_top_accent_offset(ch: char, face: Face, family: metrics::FontFamily) -> u16 {
+    if family == metrics::FontFamily::ComputerModern {
+        if face == Face::MathItalic {
+            match ch {
+                'A' => return 139,
+                'H' => return 56,
+                'J' => return 167,
+                'P' => return 83,
+                'U' => return 28,
+                'Z' => return 83,
+                'f' => return 167,
+                'z' => return 56,
+                _ => {}
+            }
+        } else if face == Face::Symbol {
+            match ch {
+                'A' => return 139,
+                'J' => return 167,
+                'K' => return 56,
+                'Q' => return 111,
+                'V' => return 28,
+                'Y' => return 83,
+                'Z' => return 139,
+                _ => {}
+            }
+        }
+    }
     if face != Face::Italic && face != Face::BoldItalic && face != Face::MathItalic {
         return 0;
     }

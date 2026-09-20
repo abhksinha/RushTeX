@@ -1286,6 +1286,28 @@ Alpha line one is quite long and we need enough words to ensure it wraps onto a 
     }
 
     #[test]
+    fn test_cm_math_tounicode_searchability() {
+        let src = r"\documentclass{article}
+\usepackage{computermodern}
+\begin{document}
+Einstein field formula $E = mc^2$ and Euler identity $e^{i\pi} + 1 = 0$.
+Calculus formula $\int_0^1 f(x) dx \le \sum_{i=1}^n x_i$.
+\end{document}";
+        let pdf = compile_str(src).expect("Compilation must succeed");
+        assert!(!pdf.is_empty());
+        let text = extract_pdftotext(&pdf);
+        assert!(text.contains("E = mc"));
+        assert!(text.contains('π'), "Greek letter pi must be extracted via ToUnicode");
+        assert!(text.contains('∫'), "Integral symbol must be extracted via ToUnicode");
+        assert!(text.contains('≤'), "Less-than-or-equal symbol must be extracted via ToUnicode");
+        assert!(text.contains("f (x)") || text.contains("f(x)"));
+        // Check that PDF contains /ToUnicode references for embedded CM fonts
+        let pdf_str = String::from_utf8_lossy(&pdf);
+        assert!(pdf_str.contains("/ToUnicode"));
+        assert!(pdf_str.contains("/RushTeX-ToUnicode"));
+    }
+
+    #[test]
     fn test_default_font_is_times_roman() {
         let src = r#"
 \documentclass{article}

@@ -41,3 +41,8 @@
   - [x] 5.5 State restoration:
         restore horizontal mode state via `DisplayResumeStateRestorer::restore_state`.
 
+- [x] **Milestone 6: Type 1 `/ToUnicode` CMap Generation for Computer Modern Math Searchability**
+  - [x] 6.1 Compile-time `.rodata` static Unicode mappings (`CMR_TO_UNICODE`, `CMMI_TO_UNICODE`, `CMSY_TO_UNICODE`, `CMEX_TO_UNICODE`, `MSAM_TO_UNICODE`, `MSBM_TO_UNICODE`) in `backend_cm_fonts.rs`.
+  - [x] 6.2 Implement `emit_tounicode_cmap` in `backend_pdf.rs` generating Adobe `/CIDInit /ProcSet findresource begin ... end` streams.
+  - [x] 6.3 Shared CMap stream references across font sizes (`CMR10`, `CMR7`, `CMR5` share the single OT1 CMap object ID), preventing redundant PDF stream bloat.
+  - [x] 6.4 Packed parameter object `CmFontObjectIds` (16 bytes, zero allocation) and automated PDF text extraction test (`pdftotext`) verifying searchable math glyphs (`π`, `∫`, `≤`, `E = mc`).

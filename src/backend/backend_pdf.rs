@@ -110,6 +110,64 @@ pub fn emit_into_opts(
         }
     }
 
+    let mut ot1_tounicode_id = 0u32;
+    let mut oml_tounicode_id = 0u32;
+    let mut oms_tounicode_id = 0u32;
+    let mut omx_tounicode_id = 0u32;
+    let mut msam_tounicode_id = 0u32;
+    let mut msbm_tounicode_id = 0u32;
+
+    if font_family == FontFamily::ComputerModern {
+        let has_ot1 = (doc_used_faces
+            & ((1 << Face::Roman as u8)
+                | (1 << Face::Bold as u8)
+                | (1 << Face::Italic as u8)
+                | (1 << Face::Roman7 as u8)
+                | (1 << Face::Roman5 as u8)))
+            != 0;
+        if has_ot1 {
+            ot1_tounicode_id = next_font_id;
+            next_font_id += 1;
+        }
+
+        let has_oml = (doc_used_faces
+            & ((1 << Face::MathItalic as u8)
+                | (1 << Face::MathItalic7 as u8)
+                | (1 << Face::MathItalic5 as u8)))
+            != 0;
+        if has_oml {
+            oml_tounicode_id = next_font_id;
+            next_font_id += 1;
+        }
+
+        let has_oms = (doc_used_faces
+            & ((1 << Face::Symbol as u8)
+                | (1 << Face::Symbol7 as u8)
+                | (1 << Face::Symbol5 as u8)))
+            != 0;
+        if has_oms {
+            oms_tounicode_id = next_font_id;
+            next_font_id += 1;
+        }
+
+        let has_omx = (doc_used_faces & (1 << Face::Extension as u8)) != 0;
+        if has_omx {
+            omx_tounicode_id = next_font_id;
+            next_font_id += 1;
+        }
+
+        let has_msam = (doc_used_faces & (1 << Face::AmsA as u8)) != 0;
+        if has_msam {
+            msam_tounicode_id = next_font_id;
+            next_font_id += 1;
+        }
+
+        let has_msbm = (doc_used_faces & (1 << Face::AmsB as u8)) != 0;
+        if has_msbm {
+            msbm_tounicode_id = next_font_id;
+        }
+    }
+
     // 1 Catalog
     writer.obj(catalog_id, |w| {
         w.write_all(b"<< /Type /Catalog /Pages ");
@@ -193,161 +251,155 @@ pub fn emit_into_opts(
         if (doc_used_faces & (1 << face_idx)) != 0 {
             let face = Face::from_u8(face_idx as u8);
             if font_family == FontFamily::ComputerModern {
+                let ids = CmFontObjectIds {
+                    font_id: id,
+                    descriptor_id: font_descriptor_ids[face_idx],
+                    file_id: font_file_ids[face_idx],
+                    tounicode_id: match face {
+                        Face::Roman | Face::Bold | Face::Italic | Face::Roman7 | Face::Roman5 => {
+                            if ot1_tounicode_id > 0 {
+                                Some(ot1_tounicode_id)
+                            } else {
+                                None
+                            }
+                        }
+                        Face::MathItalic | Face::MathItalic7 | Face::MathItalic5 => {
+                            if oml_tounicode_id > 0 {
+                                Some(oml_tounicode_id)
+                            } else {
+                                None
+                            }
+                        }
+                        Face::Symbol | Face::Symbol7 | Face::Symbol5 => {
+                            if oms_tounicode_id > 0 {
+                                Some(oms_tounicode_id)
+                            } else {
+                                None
+                            }
+                        }
+                        Face::Extension => {
+                            if omx_tounicode_id > 0 {
+                                Some(omx_tounicode_id)
+                            } else {
+                                None
+                            }
+                        }
+                        Face::AmsA => {
+                            if msam_tounicode_id > 0 {
+                                Some(msam_tounicode_id)
+                            } else {
+                                None
+                            }
+                        }
+                        Face::AmsB => {
+                            if msbm_tounicode_id > 0 {
+                                Some(msbm_tounicode_id)
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    },
+                };
                 match face {
-                    Face::Roman => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMR10_PROGRAM,
-                            &crate::backend::backend_fonts::CMR10_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::Bold => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMBX10_PROGRAM,
-                            &crate::backend::backend_fonts::CMBX10_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::Italic => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMTI10_PROGRAM,
-                            &crate::backend::backend_fonts::CMTI10_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::MathItalic => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMMI10_PROGRAM,
-                            &crate::backend::backend_fonts::CMMI10_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::Symbol => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMSY10_PROGRAM,
-                            &crate::backend::backend_fonts::CMSY10_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::Extension => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMEX10_PROGRAM,
-                            &crate::backend::backend_fonts::CMEX10_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::Roman7 => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMR7_PROGRAM,
-                            &crate::backend::backend_fonts::CMR7_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::Roman5 => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMR5_PROGRAM,
-                            &crate::backend::backend_fonts::CMR5_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::MathItalic7 => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMMI7_PROGRAM,
-                            &crate::backend::backend_fonts::CMMI7_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::MathItalic5 => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMMI5_PROGRAM,
-                            &crate::backend::backend_fonts::CMMI5_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::Symbol7 => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMSY7_PROGRAM,
-                            &crate::backend::backend_fonts::CMSY7_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::Symbol5 => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::CMSY5_PROGRAM,
-                            &crate::backend::backend_fonts::CMSY5_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::AmsA => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::MSAM10_PROGRAM,
-                            &crate::backend::backend_fonts::MSAM10_WIDTHS,
-                            false,
-                        );
-                    }
-                    Face::AmsB => {
-                        write_embedded_cm_font(
-                            &mut writer,
-                            id,
-                            font_descriptor_ids[face_idx],
-                            font_file_ids[face_idx],
-                            &crate::backend::cm_fonts::MSBM10_PROGRAM,
-                            &crate::backend::backend_fonts::MSBM10_WIDTHS,
-                            false,
-                        );
-                    }
+                    Face::Roman => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMR10_PROGRAM,
+                        &crate::backend::backend_fonts::CMR10_WIDTHS,
+                        false,
+                    ),
+                    Face::Bold => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMBX10_PROGRAM,
+                        &crate::backend::backend_fonts::CMBX10_WIDTHS,
+                        false,
+                    ),
+                    Face::Italic => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMTI10_PROGRAM,
+                        &crate::backend::backend_fonts::CMTI10_WIDTHS,
+                        false,
+                    ),
+                    Face::MathItalic => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMMI10_PROGRAM,
+                        &crate::backend::backend_fonts::CMMI10_WIDTHS,
+                        false,
+                    ),
+                    Face::Symbol => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMSY10_PROGRAM,
+                        &crate::backend::backend_fonts::CMSY10_WIDTHS,
+                        false,
+                    ),
+                    Face::Extension => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMEX10_PROGRAM,
+                        &crate::backend::backend_fonts::CMEX10_WIDTHS,
+                        false,
+                    ),
+                    Face::Roman7 => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMR7_PROGRAM,
+                        &crate::backend::backend_fonts::CMR7_WIDTHS,
+                        false,
+                    ),
+                    Face::Roman5 => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMR5_PROGRAM,
+                        &crate::backend::backend_fonts::CMR5_WIDTHS,
+                        false,
+                    ),
+                    Face::MathItalic7 => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMMI7_PROGRAM,
+                        &crate::backend::backend_fonts::CMMI7_WIDTHS,
+                        false,
+                    ),
+                    Face::MathItalic5 => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMMI5_PROGRAM,
+                        &crate::backend::backend_fonts::CMMI5_WIDTHS,
+                        false,
+                    ),
+                    Face::Symbol7 => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMSY7_PROGRAM,
+                        &crate::backend::backend_fonts::CMSY7_WIDTHS,
+                        false,
+                    ),
+                    Face::Symbol5 => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::CMSY5_PROGRAM,
+                        &crate::backend::backend_fonts::CMSY5_WIDTHS,
+                        false,
+                    ),
+                    Face::AmsA => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::MSAM10_PROGRAM,
+                        &crate::backend::backend_fonts::MSAM10_WIDTHS,
+                        false,
+                    ),
+                    Face::AmsB => write_embedded_cm_font(
+                        &mut writer,
+                        ids,
+                        &crate::backend::cm_fonts::MSBM10_PROGRAM,
+                        &crate::backend::backend_fonts::MSBM10_WIDTHS,
+                        false,
+                    ),
                     Face::Dingbats => write_font(&mut writer, id, "ZapfDingbats", false),
                     _ => write_font(&mut writer, id, face.pdf_name(font_family), true),
                 }
@@ -361,23 +413,48 @@ pub fn emit_into_opts(
         }
     }
 
+    if ot1_tounicode_id > 0 {
+        emit_tounicode_cmap(&mut writer, ot1_tounicode_id, &crate::backend::cm_fonts::CMR_TO_UNICODE);
+    }
+    if oml_tounicode_id > 0 {
+        emit_tounicode_cmap(&mut writer, oml_tounicode_id, &crate::backend::cm_fonts::CMMI_TO_UNICODE);
+    }
+    if oms_tounicode_id > 0 {
+        emit_tounicode_cmap(&mut writer, oms_tounicode_id, &crate::backend::cm_fonts::CMSY_TO_UNICODE);
+    }
+    if omx_tounicode_id > 0 {
+        emit_tounicode_cmap(&mut writer, omx_tounicode_id, &crate::backend::cm_fonts::CMEX_TO_UNICODE);
+    }
+    if msam_tounicode_id > 0 {
+        emit_tounicode_cmap(&mut writer, msam_tounicode_id, &crate::backend::cm_fonts::MSAM_TO_UNICODE);
+    }
+    if msbm_tounicode_id > 0 {
+        emit_tounicode_cmap(&mut writer, msbm_tounicode_id, &crate::backend::cm_fonts::MSBM_TO_UNICODE);
+    }
+
     writer.finish(catalog_id)
+}
+
+#[derive(Clone, Copy)]
+struct CmFontObjectIds {
+    font_id: u32,
+    descriptor_id: u32,
+    file_id: u32,
+    tounicode_id: Option<u32>,
 }
 
 fn write_embedded_cm_font(
     writer: &mut Writer,
-    font_id: u32,
-    descriptor_id: u32,
-    file_id: u32,
+    ids: CmFontObjectIds,
     program: &crate::backend::cm_fonts::CmFontProgram,
     widths: &[u16; 128],
     with_encoding: bool,
 ) {
-    writer.obj(font_id, |w| {
+    writer.obj(ids.font_id, |w| {
         w.write_all(b"<< /Type /Font /Subtype /Type1 /BaseFont /");
         w.write_all(program.name.as_bytes());
         w.write_all(b" /FontDescriptor ");
-        w.write_ref(descriptor_id);
+        w.write_ref(ids.descriptor_id);
         w.write_all(b" /FirstChar 0 /LastChar 127 /Widths [");
         for &width in widths.iter() {
             w.write_all(b" ");
@@ -387,10 +464,14 @@ fn write_embedded_cm_font(
         if with_encoding {
             w.write_all(b" /Encoding /WinAnsiEncoding");
         }
+        if let Some(tuid) = ids.tounicode_id {
+            w.write_all(b" /ToUnicode ");
+            w.write_ref(tuid);
+        }
         w.write_all(b" >>\n");
     });
 
-    writer.obj(descriptor_id, |w| {
+    writer.obj(ids.descriptor_id, |w| {
         w.write_all(b"<< /Type /FontDescriptor /FontName /");
         w.write_all(program.name.as_bytes());
         w.write_all(b" /Flags ");
@@ -414,11 +495,11 @@ fn write_embedded_cm_font(
         w.write_all(b" /StemV ");
         w.write_int(program.stem_v);
         w.write_all(b" /FontFile ");
-        w.write_ref(file_id);
+        w.write_ref(ids.file_id);
         w.write_all(b" >>\n");
     });
 
-    writer.obj(file_id, |w| {
+    writer.obj(ids.file_id, |w| {
         w.write_all(b"<< /Filter /FlateDecode /Length ");
         w.write_int(program.compressed_stream.len() as i32);
         w.write_all(b" /Length1 ");
@@ -445,6 +526,76 @@ fn write_font(w: &mut Writer, id: u32, name: &str, with_encoding: bool) {
         } else {
             w.write_all(b" >>\n");
         }
+    });
+}
+
+const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+
+#[inline(always)]
+fn write_hex2(out: &mut [u8], byte: u8) {
+    out[0] = b'<';
+    out[1] = HEX_DIGITS[(byte >> 4) as usize];
+    out[2] = HEX_DIGITS[(byte & 0x0F) as usize];
+    out[3] = b'>';
+}
+
+#[inline(always)]
+fn write_hex4(out: &mut [u8], val: u16) {
+    out[0] = b'<';
+    out[1] = HEX_DIGITS[((val >> 12) & 0x0F) as usize];
+    out[2] = HEX_DIGITS[((val >> 8) & 0x0F) as usize];
+    out[3] = HEX_DIGITS[((val >> 4) & 0x0F) as usize];
+    out[4] = HEX_DIGITS[(val & 0x0F) as usize];
+    out[5] = b'>';
+}
+
+fn emit_tounicode_cmap(writer: &mut Writer, id: u32, map: &[u16; 128]) {
+    let mut s = Vec::with_capacity(2048);
+    s.extend_from_slice(b"/CIDInit /ProcSet findresource begin\n");
+    s.extend_from_slice(b"12 dict begin\nbegincmap\n");
+    s.extend_from_slice(b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n");
+    s.extend_from_slice(b"/CMapName /RushTeX-ToUnicode def\n");
+    s.extend_from_slice(b"/CMapType 2 def\n");
+    s.extend_from_slice(b"1 begincodespacerange\n<00> <7F>\nendcodespacerange\n");
+
+    let mut entries: [(u8, u16); 128] = [(0, 0); 128];
+    let mut count = 0;
+    for (src, &dst) in map.iter().enumerate() {
+        if dst != 0 {
+            entries[count] = (src as u8, dst);
+            count += 1;
+        }
+    }
+
+    let mut i = 0;
+    while i < count {
+        let chunk = (count - i).min(100);
+        write_u64(&mut s, chunk as u64);
+        s.extend_from_slice(b" beginbfchar\n");
+        for j in 0..chunk {
+            let (src, dst) = entries[i + j];
+            let mut hex_buf = [0u8; 12];
+            write_hex2(&mut hex_buf[0..4], src);
+            hex_buf[4] = b' ';
+            write_hex4(&mut hex_buf[5..11], dst);
+            hex_buf[11] = b'\n';
+            s.extend_from_slice(&hex_buf);
+        }
+        s.extend_from_slice(b"endbfchar\n");
+        i += chunk;
+    }
+
+    s.extend_from_slice(b"endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+
+    writer.obj(id, |w| {
+        w.write_all(b"<< /Length ");
+        w.write_int(s.len() as i32);
+        w.write_all(b" >>\nstream\n");
+        w.write_all(&s);
+        if !s.ends_with(b"\n") {
+            w.write_all(b"\n");
+        }
+        w.write_all(b"endstream\n");
     });
 }
 

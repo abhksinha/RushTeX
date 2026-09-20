@@ -25,8 +25,8 @@
 //! - [`emit_into`]: Serializes pages into a preallocated `Vec<u8>` buffer using compression.
 //! - [`emit_into_opts`]: Serializes pages with an optional compression toggle (`enable_compression`).
 
-use crate::layout::{Marker, Paint, Page, PAGE_H, PAGE_W};
-use crate::metrics::Face;
+use crate::font_metrics::Face;
+use crate::page_layout::{Marker, Page, Paint, PAGE_H, PAGE_W};
 use crate::Error;
 
 pub fn emit(pages: &[Page<'_>]) -> Result<Vec<u8>, Error> {
@@ -45,8 +45,21 @@ pub fn emit_into_opts(
     enable_compression: bool,
 ) -> Result<(), Error> {
     destination_buffer.clear();
+    destination_buffer.reserve(pages.len() * 2048 + 4096);
     let total_pages = pages.len().max(1);
-    let mut writer = Writer::new(destination_buffer, total_pages);
+
+    // Collect all faces used across all pages in this document
+    let mut doc_used_faces = 0u8;
+    for page in pages {
+        doc_used_faces |= page.compute_used_faces();
+    }
+    // If document has no text at all (e.g. blank document), default to Roman
+    if doc_used_faces == 0 {
+        doc_used_faces = 1 << (Face::Roman as u8);
+    }
+    let num_fonts = doc_used_faces.count_ones() as usize;
+
+    let mut writer = Writer::new(destination_buffer, total_pages, num_fonts);
     writer.write_all(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
 
     // Object plan:
@@ -54,17 +67,21 @@ pub fn emit_into_opts(
     // 2 pages node
     // 3.. 3+total_pages-1 page dicts
     // 3+total_pages .. 3+2*total_pages-1 contents
-    // then 4 font objects
+    // then only the font objects that are used in the document
     let catalog_id = 1u32;
     let pages_id = 2u32;
     let first_page_id = 3u32;
     let first_content_id = first_page_id + total_pages as u32;
-    let font_roman_id = first_content_id + total_pages as u32;
-    let font_bold_id = font_roman_id + 1;
-    let font_italic_id = font_roman_id + 2;
-    let font_bold_italic_id = font_roman_id + 3;
-    let font_mono_id = font_roman_id + 4;
-    let font_mono_bold_id = font_roman_id + 5;
+
+    // Allocate sequential IDs only for used fonts
+    let mut font_object_ids = [0u32; 8];
+    let mut next_font_id = first_content_id + total_pages as u32;
+    for (face_idx, obj_id) in font_object_ids.iter_mut().enumerate() {
+        if (doc_used_faces & (1 << face_idx)) != 0 {
+            *obj_id = next_font_id;
+            next_font_id += 1;
+        }
+    }
 
     // 1 Catalog
     writer.obj(catalog_id, |w| {
@@ -85,9 +102,9 @@ pub fn emit_into_opts(
         w.write_all(b" ] >>\n");
     });
 
-    let mut uncompressed_stream = Vec::with_capacity(4096);
-    let mut compressed_stream = Vec::with_capacity(4096);
-    let mut compressor = crate::deflate::DeflateCompressor::new();
+    let mut uncompressed_stream = Vec::with_capacity(16384);
+    let mut compressed_stream = Vec::with_capacity(16384);
+    let mut compressor = crate::deflate_compress::DeflateCompressor::new();
 
     for page_idx in 0..total_pages {
         let page_object_id = first_page_id + page_idx as u32;
@@ -102,27 +119,24 @@ pub fn emit_into_opts(
             w.write_all(b" ");
             w.write_num(page_height);
             w.write_all(b"] /Resources << /Font <<");
-            w.write_all(b" /Fr ");
-            w.write_ref(font_roman_id);
-            w.write_all(b" /Fb ");
-            w.write_ref(font_bold_id);
-            w.write_all(b" /Fi ");
-            w.write_ref(font_italic_id);
-            w.write_all(b" /Fbi ");
-            w.write_ref(font_bold_italic_id);
-            w.write_all(b" /Fc ");
-            w.write_ref(font_mono_id);
-            w.write_all(b" /Fcb ");
-            w.write_ref(font_mono_bold_id);
+            for (face_idx, &font_id) in font_object_ids.iter().enumerate() {
+                if (doc_used_faces & (1 << face_idx)) != 0 {
+                    let face = Face::from_u8(face_idx as u8);
+                    w.write_all(b" ");
+                    w.write_all(face.resource().as_bytes());
+                    w.write_all(b" ");
+                    w.write_ref(font_id);
+                }
+            }
             w.write_all(b" >> >> /Contents ");
             w.write_ref(content_object_id);
             w.write_all(b" >>\n");
         });
     }
 
-    for page_idx in 0..total_pages {
+    for (page_idx, page) in pages.iter().enumerate().take(total_pages) {
         uncompressed_stream.clear();
-        build_stream_into(&pages[page_idx], &mut uncompressed_stream);
+        build_stream_into(page, &mut uncompressed_stream);
         let content_object_id = first_content_id + page_idx as u32;
         if enable_compression {
             compressed_stream.clear();
@@ -148,21 +162,30 @@ pub fn emit_into_opts(
         }
     }
 
-    write_font(&mut writer, font_roman_id, "Helvetica");
-    write_font(&mut writer, font_bold_id, "Helvetica-Bold");
-    write_font(&mut writer, font_italic_id, "Helvetica-Oblique");
-    write_font(&mut writer, font_bold_italic_id, "Helvetica-BoldOblique");
-    write_font(&mut writer, font_mono_id, "Courier");
-    write_font(&mut writer, font_mono_bold_id, "Courier-Bold");
+    let font_family = pages.first().map(|p| p.font_family).unwrap_or_default();
+    for (face_idx, &id) in font_object_ids.iter().enumerate() {
+        if (doc_used_faces & (1 << face_idx)) != 0 {
+            let face = Face::from_u8(face_idx as u8);
+            match face {
+                Face::Symbol => write_font(&mut writer, id, "Symbol", false),
+                Face::Dingbats => write_font(&mut writer, id, "ZapfDingbats", false),
+                _ => write_font(&mut writer, id, face.pdf_name(font_family), true),
+            }
+        }
+    }
 
     writer.finish(catalog_id)
 }
 
-fn write_font(w: &mut Writer, id: u32, name: &str) {
+fn write_font(w: &mut Writer, id: u32, name: &str, with_encoding: bool) {
     w.obj(id, |w| {
         w.write_all(b"<< /Type /Font /Subtype /Type1 /BaseFont /");
         w.write_all(name.as_bytes());
-        w.write_all(b" /Encoding /WinAnsiEncoding >>\n");
+        if with_encoding {
+            w.write_all(b" /Encoding /WinAnsiEncoding >>\n");
+        } else {
+            w.write_all(b" >>\n");
+        }
     });
 }
 
@@ -179,7 +202,7 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
     for op in &page.ops {
         if let Paint::Rule { x, y, w, h, fill } = op {
             if in_text {
-                if last_word_spacing.map_or(false, |w| w != 0.0) {
+                if last_word_spacing.is_some_and(|w| w != 0.0) {
                     s.extend_from_slice(b"0 Tw\n");
                     last_word_spacing = Some(0.0);
                 }
@@ -205,15 +228,34 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
 
         let (x, y, face, size, word_spacing) = match op {
             Paint::GlyphRun {
-                x, y, face, size, word_spacing, ..
+                x,
+                y,
+                face,
+                size,
+                word_spacing,
+                ..
             } => (*x, *y, *face, *size, *word_spacing),
             Paint::Marker {
                 x, y, face, size, ..
             }
             | Paint::PageNumber {
                 x, y, face, size, ..
+            }
+            | Paint::SectionNumber {
+                x, y, face, size, ..
+            }
+            | Paint::FigureTag {
+                x, y, face, size, ..
+            }
+            | Paint::TableTag {
+                x, y, face, size, ..
+            }
+            | Paint::EquationNumber {
+                x, y, face, size, ..
             } => (*x, *y, *face, *size, 0.0),
-            Paint::CaptionTag { x, y, .. } => (*x, *y, Face::Roman, crate::layout::FONT_SIZE, 0.0),
+            Paint::CaptionTag { x, y, .. } | Paint::TableCaptionTag { x, y, .. } => {
+                (*x, *y, Face::Roman, crate::page_layout::FONT_SIZE, 0.0)
+            }
             Paint::Rule { .. } => unreachable!(),
         };
 
@@ -260,12 +302,17 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
             Paint::GlyphRun {
                 part_start,
                 part_count,
+                face,
                 ..
             } => {
                 let start = *part_start as usize;
                 let count = *part_count as usize;
                 for &p in &page.text_pool[start..start + count] {
-                    pdf_escape(s, p);
+                    if p == " " {
+                        s.push(b' ');
+                    } else {
+                        pdf_escape(s, p, *face);
+                    }
                 }
             }
             Paint::Marker { marker, .. } => write_marker(s, *marker),
@@ -274,8 +321,50 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
                 write_u64(s, *n as u64);
                 s.extend_from_slice(b": ");
             }
+            Paint::TableCaptionTag { n, .. } => {
+                s.extend_from_slice(b"Table ");
+                write_u64(s, *n as u64);
+                s.extend_from_slice(b": ");
+            }
             Paint::PageNumber { page_number, .. } => {
                 write_u64(s, *page_number as u64);
+            }
+            Paint::SectionNumber { number, level, .. } => match level {
+                1 => write_u64(s, number[0] as u64),
+                2 => {
+                    write_u64(s, number[0] as u64);
+                    s.push(b'.');
+                    write_u64(s, number[1] as u64);
+                }
+                3 => {
+                    write_u64(s, number[0] as u64);
+                    s.push(b'.');
+                    write_u64(s, number[1] as u64);
+                    s.push(b'.');
+                    write_u64(s, number[2] as u64);
+                }
+                _ => {
+                    write_u64(s, number[0] as u64);
+                    s.push(b'.');
+                    write_u64(s, number[1] as u64);
+                    s.push(b'.');
+                    write_u64(s, number[2] as u64);
+                    s.push(b'.');
+                    write_u64(s, number[3] as u64);
+                }
+            },
+            Paint::FigureTag { n, .. } => {
+                s.extend_from_slice(b"Figure ");
+                write_u64(s, *n as u64);
+            }
+            Paint::TableTag { n, .. } => {
+                s.extend_from_slice(b"Table ");
+                write_u64(s, *n as u64);
+            }
+            Paint::EquationNumber { n, .. } => {
+                s.push(b'(');
+                write_u64(s, *n as u64);
+                s.push(b')');
             }
             Paint::Rule { .. } => {}
         }
@@ -285,7 +374,7 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
         last_y = y;
     }
     if in_text {
-        if last_word_spacing.map_or(false, |w| w != 0.0) {
+        if last_word_spacing.is_some_and(|w| w != 0.0) {
             s.extend_from_slice(b"0 Tw\n");
         }
         s.extend_from_slice(b"ET\n");
@@ -295,15 +384,56 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
 fn write_marker(out: &mut Vec<u8>, marker: Marker) {
     match marker {
         Marker::Bullet => out.push(0x95), // WinAnsi bullet
+        Marker::Dash => out.push(0x96),   // WinAnsi en-dash
+        Marker::Asterisk => out.push(b'*'),
+        Marker::MiddleDot => out.push(0xB7), // WinAnsi middle dot
         Marker::Number(n) => {
             write_u64(out, n as u64);
+            out.push(b'.');
+        }
+        Marker::ParenNumber(n) => {
+            out.push(b'(');
+            write_u64(out, n as u64);
+            out.push(b')');
+        }
+        Marker::Alpha(n) => {
+            out.push(b'(');
+            let ch = b'a' + ((n.max(1) - 1) % 26) as u8;
+            out.push(ch);
+            out.push(b')');
+        }
+        Marker::AlphaDot(n) => {
+            let ch = b'a' + ((n.max(1) - 1) % 26) as u8;
+            out.push(ch);
+            out.push(b'.');
+        }
+        Marker::Roman(n) => {
+            let s = crate::page_layout::to_roman(n);
+            out.extend_from_slice(s.as_bytes());
+            out.push(b'.');
+        }
+        Marker::UpperRoman(n) => {
+            let s = crate::page_layout::to_upper_roman(n);
+            out.extend_from_slice(s.as_bytes());
+            out.push(b'.');
+        }
+        Marker::UpperAlpha(n) => {
+            let ch = b'A' + ((n.max(1) - 1) % 26) as u8;
+            out.push(ch);
             out.push(b'.');
         }
     }
 }
 
-fn pdf_escape(out: &mut Vec<u8>, text: &str) {
+fn pdf_escape(out: &mut Vec<u8>, text: &str, face: Face) {
     let bytes = text.as_bytes();
+    let needs_escape = bytes
+        .iter()
+        .any(|&b| b >= 128 || matches!(b, b'\\' | b'(' | b')' | b'\n' | b'\r' | b'\t'));
+    if !needs_escape {
+        out.extend_from_slice(bytes);
+        return;
+    }
     let mut start = 0;
     let mut i = 0;
     while i < bytes.len() {
@@ -354,11 +484,21 @@ fn pdf_escape(out: &mut Vec<u8>, text: &str) {
             let rest = &text[i..];
             let c = rest.chars().next().unwrap();
             i += c.len_utf8();
-            let wb = to_winansi(c);
+            let wb = if face == Face::Symbol {
+                crate::font_metrics::unicode_to_symbol_byte(c).unwrap_or(b'?')
+            } else {
+                to_winansi(c)
+            };
             match wb {
                 b'\\' | b'(' | b')' => {
                     out.push(b'\\');
                     out.push(wb);
+                }
+                b if b >= 128 => {
+                    out.push(b'\\');
+                    out.push(b'0' + ((b >> 6) & 7));
+                    out.push(b'0' + ((b >> 3) & 7));
+                    out.push(b'0' + (b & 7));
                 }
                 _ => out.push(wb),
             }
@@ -393,6 +533,15 @@ fn to_winansi(c: char) -> u8 {
         'è' => 0xE8,
         'à' => 0xE0,
         'ç' => 0xE7,
+        '±' => 0xB1,
+        '×' => 0xD7,
+        '÷' => 0xF7,
+        'µ' => 0xB5,
+        '°' => 0xB0,
+        '§' => 0xA7,
+        '¶' => 0xB6,
+        '†' => 0x86,
+        '‡' => 0x87,
         _ => b'?',
     }
 }
@@ -441,11 +590,11 @@ struct Writer<'w> {
 }
 
 impl<'w> Writer<'w> {
-    fn new(buf: &'w mut Vec<u8>, page_count: usize) -> Self {
+    fn new(buf: &'w mut Vec<u8>, page_count: usize, font_count: usize) -> Self {
         let n = page_count.max(1);
         Self {
             buf,
-            offsets: Vec::with_capacity(2 * n + 6),
+            offsets: Vec::with_capacity(2 * n + 2 + font_count),
         }
     }
 

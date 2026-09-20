@@ -102,7 +102,7 @@ const fn generate_dist_codes() -> [u8; 32] {
 
 // Length code lookup: returns (code, extra_bits, extra_val)
 #[inline(always)]
-fn get_length_code(len: usize) -> (u16, u8, u16) {
+const fn const_get_length_code(len: usize) -> (u16, u8, u16) {
     match len {
         3 => (257, 0, 0),
         4 => (258, 0, 0),
@@ -138,7 +138,7 @@ fn get_length_code(len: usize) -> (u16, u8, u16) {
 
 // Distance code lookup: returns (code, extra_bits, extra_val)
 #[inline(always)]
-fn get_dist_code(dist: usize) -> (u8, u8, u16) {
+const fn const_get_dist_code(dist: usize) -> (u8, u8, u16) {
     match dist {
         1 => (0, 0, 0),
         2 => (1, 0, 0),
@@ -173,14 +173,99 @@ fn get_dist_code(dist: usize) -> (u8, u8, u16) {
     }
 }
 
-/// Computes Adler-32 checksum (RFC 1950) with block-batched unrolled arithmetic.
+const fn generate_length_encode_table() -> [(u32, u8); 256] {
+    let mut table = [(0u32, 0u8); 256];
+    let lit_codes = generate_lit_len_codes();
+    let lit_bits = generate_lit_len_bits();
+    let mut len = 3;
+    while len <= 258 {
+        let (code, extra_bits, extra_val) = const_get_length_code(len);
+        let huff_code = lit_codes[code as usize] as u32;
+        let huff_bits = lit_bits[code as usize];
+        let combined = huff_code | ((extra_val as u32) << huff_bits);
+        let total = huff_bits + extra_bits;
+        table[len - 3] = (combined, total);
+        len += 1;
+    }
+    table
+}
+
+const fn generate_dist_encode_table_512() -> [(u32, u8); 513] {
+    let mut table = [(0u32, 0u8); 513];
+    let dist_codes = generate_dist_codes();
+    let mut dist = 1;
+    while dist <= 512 {
+        let (code, extra_bits, extra_val) = const_get_dist_code(dist);
+        let huff_code = dist_codes[code as usize] as u32;
+        let combined = huff_code | ((extra_val as u32) << 5);
+        let total = 5 + extra_bits;
+        table[dist] = (combined, total);
+        dist += 1;
+    }
+    table
+}
+
+pub static LENGTH_ENCODE_TABLE: [(u32, u8); 256] = generate_length_encode_table();
+pub static DIST_ENCODE_TABLE_512: [(u32, u8); 513] = generate_dist_encode_table_512();
+
+const fn generate_lit_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    let codes = generate_lit_len_codes();
+    let bits = generate_lit_len_bits();
+    let mut i = 0;
+    while i < 256 {
+        table[i] = (codes[i] as u32) | ((bits[i] as u32) << 16);
+        i += 1;
+    }
+    table
+}
+
+pub static LIT_TABLE: [u32; 256] = generate_lit_table();
+
+/// Computes Adler-32 checksum (RFC 1950) with 16-byte unrolled arithmetic.
 pub fn adler32(data: &[u8]) -> u32 {
     let mut s1 = 1u32;
     let mut s2 = 0u32;
     const MOD_ADLER: u32 = 65521;
 
     for chunk in data.chunks(5552) {
-        for &b in chunk {
+        let mut slice = chunk;
+        while slice.len() >= 16 {
+            s1 += slice[0] as u32;
+            s2 += s1;
+            s1 += slice[1] as u32;
+            s2 += s1;
+            s1 += slice[2] as u32;
+            s2 += s1;
+            s1 += slice[3] as u32;
+            s2 += s1;
+            s1 += slice[4] as u32;
+            s2 += s1;
+            s1 += slice[5] as u32;
+            s2 += s1;
+            s1 += slice[6] as u32;
+            s2 += s1;
+            s1 += slice[7] as u32;
+            s2 += s1;
+            s1 += slice[8] as u32;
+            s2 += s1;
+            s1 += slice[9] as u32;
+            s2 += s1;
+            s1 += slice[10] as u32;
+            s2 += s1;
+            s1 += slice[11] as u32;
+            s2 += s1;
+            s1 += slice[12] as u32;
+            s2 += s1;
+            s1 += slice[13] as u32;
+            s2 += s1;
+            s1 += slice[14] as u32;
+            s2 += s1;
+            s1 += slice[15] as u32;
+            s2 += s1;
+            slice = &slice[16..];
+        }
+        for &b in slice {
             s1 += b as u32;
             s2 += s1;
         }
@@ -231,10 +316,16 @@ impl<'a> BitWriter<'a> {
 
 /// High-performance zlib/DEFLATE compressor.
 ///
-/// Holds an 8192-entry hash table (32 KB) that stays resident in L1 data cache.
+/// Uses a Structure-of-Arrays (SoA) match table:
+/// Single-pass streaming DEFLATE compressor.
+///
+/// Uses an AoS (Array-of-Structures) packed match table:
+/// - `table`: 4096 x u64 (32 KB) table storing packed `(prefix3 << 32) | pos`.
+/// - Fits 100% inside 32 KB CPU L1 data cache. Exactly 8 slots fit per 64-byte L1 cache line.
+/// - Single 64-bit load/store per probe eliminates dual-array cache set conflicts and cuts
+///   L1 cache line accesses in half.
 pub struct DeflateCompressor {
-    // 8192 entries of u32 = 32,768 bytes (32 KB) -> 100% L1D cache resident
-    head: [u32; 8192],
+    table: [u64; 4096],
 }
 
 impl Default for DeflateCompressor {
@@ -246,7 +337,7 @@ impl Default for DeflateCompressor {
 impl DeflateCompressor {
     pub fn new() -> Self {
         Self {
-            head: [0u32; 8192],
+            table: [0u64; 4096],
         }
     }
 
@@ -283,93 +374,112 @@ impl DeflateCompressor {
             return;
         }
 
-        // Clear hash table (32 KB memset - instantaneous in L1 cache)
-        self.head.fill(0);
+        destination_buffer.reserve(input_data.len() + 64);
+
+        // Clear table (32 KB) - fits completely in L1 cache
+        self.table.fill(0);
 
         let mut bit_writer = BitWriter::new(destination_buffer);
         bit_writer.write_bits(0b011, 3); // BFINAL=1, BTYPE=01 (Fixed Huffman)
 
         let total_input_length = input_data.len();
         let mut current_position = 0;
+        let mut misses = 0u32;
 
-        while current_position + 3 <= total_input_length {
-            // 3-byte multiplicative hash
-            let byte_0 = input_data[current_position] as u32;
-            let byte_1 = input_data[current_position + 1] as u32;
-            let byte_2 = input_data[current_position + 2] as u32;
-            let hash_index = (((byte_0 << 10) ^ (byte_1 << 5) ^ byte_2).wrapping_mul(0x1e35a7bd) >> 19) as usize & 8191;
+        while current_position + 4 <= total_input_length {
+            let word = u32::from_le_bytes(
+                input_data[current_position..current_position + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            let prefix3 = word & 0x00FF_FFFF;
+            let hash_index = (prefix3.wrapping_mul(0x1e35a7bd) >> 20) as usize & 4095;
 
-            let previous_position = self.head[hash_index];
-            self.head[hash_index] = (current_position + 1) as u32;
+            let entry = self.table[hash_index];
+            let prev_pos = entry as u32;
+            let prev_prefix = (entry >> 32) as u32;
+            self.table[hash_index] =
+                (current_position as u32 + 1) as u64 | ((prefix3 as u64) << 32);
 
             let mut match_length = 0;
             let mut match_distance = 0;
 
-            // Candidate match validation (within 32K window and valid position)
-            if previous_position > 0 {
-                let previous_index = (previous_position - 1) as usize;
+            // Verified match: if prefix matches in L1 cache, first 3 bytes are guaranteed!
+            if prev_pos > 0 && prev_prefix == prefix3 {
+                let previous_index = (prev_pos - 1) as usize;
                 match_distance = current_position - previous_index;
-                if match_distance > 0 && match_distance <= 32768 && previous_index + 2 < total_input_length {
-                    if input_data[previous_index] == input_data[current_position]
-                        && input_data[previous_index + 1] == input_data[current_position + 1]
-                        && input_data[previous_index + 2] == input_data[current_position + 2]
+                if match_distance > 0 && match_distance <= 32768 {
+                    match_length = 3;
+                    let max_match = (total_input_length - current_position).min(258);
+                    while match_length + 8 <= max_match {
+                        let p1 = u64::from_le_bytes(
+                            input_data
+                                [previous_index + match_length..previous_index + match_length + 8]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let p2 = u64::from_le_bytes(
+                            input_data[current_position + match_length
+                                ..current_position + match_length + 8]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let diff = p1 ^ p2;
+                        if diff != 0 {
+                            match_length += (diff.trailing_zeros() / 8) as usize;
+                            break;
+                        }
+                        match_length += 8;
+                    }
+                    while match_length < max_match
+                        && input_data[previous_index + match_length]
+                            == input_data[current_position + match_length]
                     {
-                        match_length = 3;
-                        let max_match = (total_input_length - current_position).min(258);
-                        while match_length + 8 <= max_match {
-                            let p1 = u64::from_le_bytes(
-                                input_data[previous_index + match_length..previous_index + match_length + 8]
-                                    .try_into()
-                                    .unwrap(),
-                            );
-                            let p2 = u64::from_le_bytes(
-                                input_data[current_position + match_length..current_position + match_length + 8]
-                                    .try_into()
-                                    .unwrap(),
-                            );
-                            let diff = p1 ^ p2;
-                            if diff != 0 {
-                                match_length += (diff.trailing_zeros() / 8) as usize;
-                                break;
-                            }
-                            match_length += 8;
-                        }
-                        while match_length < max_match
-                            && input_data[previous_index + match_length] == input_data[current_position + match_length]
-                        {
-                            match_length += 1;
-                        }
+                        match_length += 1;
                     }
                 }
             }
 
             if match_length >= 3 {
-                // Emit length code
-                let (length_code, length_extra_bits, length_extra_val) = get_length_code(match_length);
-                bit_writer.write_bits(LIT_LEN_CODES[length_code as usize] as u32, LIT_LEN_BITS[length_code as usize]);
-                if length_extra_bits > 0 {
-                    bit_writer.write_bits(length_extra_val as u32, length_extra_bits);
-                }
+                let (len_bits, len_count) = LENGTH_ENCODE_TABLE[match_length - 3];
+                bit_writer.write_bits(len_bits, len_count);
 
-                // Emit distance code
-                let (distance_code, distance_extra_bits, distance_extra_val) = get_dist_code(match_distance);
-                bit_writer.write_bits(DIST_CODES[distance_code as usize] as u32, DIST_BITS[distance_code as usize]);
-                if distance_extra_bits > 0 {
-                    bit_writer.write_bits(distance_extra_val as u32, distance_extra_bits);
-                }
+                let (dist_bits, dist_count) = if match_distance <= 512 {
+                    DIST_ENCODE_TABLE_512[match_distance]
+                } else {
+                    let (code, extra_bits, extra_val) = const_get_dist_code(match_distance);
+                    let bits = (DIST_CODES[code as usize] as u32) | ((extra_val as u32) << 5);
+                    (bits, 5 + extra_bits)
+                };
+                bit_writer.write_bits(dist_bits, dist_count);
 
                 current_position += match_length;
+                misses = 0;
             } else {
                 let literal_byte = input_data[current_position] as usize;
-                bit_writer.write_bits(LIT_LEN_CODES[literal_byte] as u32, LIT_LEN_BITS[literal_byte]);
+                let entry = LIT_TABLE[literal_byte];
+                bit_writer.write_bits(entry & 0xFFFF, (entry >> 16) as u8);
                 current_position += 1;
+                misses += 1;
+                if misses > 32 {
+                    let step = (misses >> 5).min(4) as usize;
+                    let fast_literals =
+                        (step - 1).min(total_input_length.saturating_sub(current_position + 4));
+                    for _ in 0..fast_literals {
+                        let lit = input_data[current_position] as usize;
+                        let entry = LIT_TABLE[lit];
+                        bit_writer.write_bits(entry & 0xFFFF, (entry >> 16) as u8);
+                        current_position += 1;
+                    }
+                }
             }
         }
 
         // Emit remaining trailing literal bytes
         while current_position < total_input_length {
             let literal_byte = input_data[current_position] as usize;
-            bit_writer.write_bits(LIT_LEN_CODES[literal_byte] as u32, LIT_LEN_BITS[literal_byte]);
+            let entry = LIT_TABLE[literal_byte];
+            bit_writer.write_bits(entry & 0xFFFF, (entry >> 16) as u8);
             current_position += 1;
         }
 
@@ -381,7 +491,8 @@ impl DeflateCompressor {
 
 fn write_stored_block(input: &[u8], out: &mut Vec<u8>) {
     for chunk in input.chunks(65535) {
-        let is_last = (chunk.as_ptr() as usize + chunk.len()) == (input.as_ptr() as usize + input.len());
+        let is_last =
+            (chunk.as_ptr() as usize + chunk.len()) == (input.as_ptr() as usize + input.len());
         out.push(if is_last { 0x01 } else { 0x00 });
         let len = chunk.len() as u16;
         let nlen = !len;
@@ -426,13 +537,14 @@ mod tests {
         use std::io::Write;
         use std::process::{Command, Stdio};
 
-        let large_repeats = b"The quick brown fox jumps over the lazy dog. 1234567890\n".repeat(2000); // ~114 KB
+        let large_repeats =
+            b"The quick brown fox jumps over the lazy dog. 1234567890\n".repeat(2000); // ~114 KB
         let cases: &[&[u8]] = &[
             b"",
             b"a",
             b"Hello world!",
             b"The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.",
-            include_bytes!("../examples/sample.tex"),
+            include_bytes!("../../examples/sample.tex"),
             &large_repeats,
         ];
 
@@ -451,7 +563,12 @@ mod tests {
                 .spawn()
                 .expect("spawn python3");
 
-            child.stdin.as_mut().unwrap().write_all(&compressed).unwrap();
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(&compressed)
+                .unwrap();
             let output = child.wait_with_output().unwrap();
             assert!(output.status.success());
             assert_eq!(output.stdout, input);

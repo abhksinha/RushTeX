@@ -1,0 +1,71 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\begin{document}
+
+\section*{RushTeX Mathematical Typographic Specimen Suite}
+
+\subsection*{1. Atoms, Variables, and Italic Correction}
+The mass-energy equivalence $E = mc^2$ and Pythagorean theorem $a^2 + b^2 = c^2$.
+Notice italic correction with superscripts: $f^2$ versus $x^2$, and tensor indices $T_{\mu\nu}^{\alpha\beta}$.
+
+\subsection*{2. Fractions and Nested Clearances}
+Display fraction with rule at the mathematical axis:
+\[
+\frac{a + b}{c + d} = \frac{1}{1 + \frac{x}{y}}
+\]
+
+\subsection*{3. Radicals and Seamless Overbars}
+Square roots of varying heights and contents:
+\[
+\sqrt{x} + \sqrt{x^2 + 1} + \sqrt{\frac{a^2 + b^2}{c^2}}
+\]
+
+\subsection*{4. Calculus and Large Operators}
+Fundamental theorem of calculus and Gaussian integral:
+\[
+\int_a^b f(x) \mathrm{d}x = F(b) - F(a)
+\]
+\[
+\int_{-\infty}^\infty e^{-x^2} \mathrm{d}x = \sqrt{\pi}
+\]
+Summations and products with display limits:
+\[
+\sum_{k=1}^n k^2 = \frac{n(n+1)(2n+1)}{6}, \quad \prod_{i=1}^m \left( 1 + x_i \right)
+\]
+
+\subsection*{5. Content-Sensitive Matrices}
+Two-by-two linear transform:
+\[
+\begin{pmatrix}
+a & b \\
+c & d
+\end{pmatrix}
+\begin{pmatrix}
+x \\
+y
+\end{pmatrix}
+=
+\begin{pmatrix}
+ax + by \\
+cx + dy
+\end{pmatrix}
+\]
+Matrix with fraction cells (testing content-sensitive row height and baseline alignment):
+\[
+\begin{pmatrix}
+\frac{1}{2} & 0 \\
+0 & \frac{3}{4}
+\end{pmatrix}
+\]
+
+\subsection*{6. Accents and Physics Formulations}
+Newtonian mechanics and quantum wave mechanics:
+\[
+\vec{F} = m \vec{a} = m \ddot{\vec{r}}
+\]
+\[
+i \hbar \frac{\partial}{\partial t} \Psi = \hat{H} \Psi
+\]
+
+\end{document}

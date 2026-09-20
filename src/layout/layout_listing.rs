@@ -29,12 +29,12 @@
 pub struct ListingOptions<'a> {
     /// Optional programming language name (e.g. `"Rust"`, `"Python"`).
     pub language: Option<&'a str>,
-    /// Whether to print line numbers in a left gutter.
-    pub show_line_numbers: bool,
     /// Monospace font size in points (`pt`). Defaults to `9.0`.
     pub font_size: f32,
     /// Number of spaces per tab stop. Defaults to `4`.
-    pub tab_spaces: usize,
+    pub tab_spaces: u8,
+    /// Whether to print line numbers in a left gutter.
+    pub show_line_numbers: bool,
     /// Whether to render a framing border around the code block. Defaults to `true`.
     pub frame: bool,
     /// Whether to render a vertical accent bar on the left edge. Defaults to `true`.
@@ -45,9 +45,9 @@ impl<'a> Default for ListingOptions<'a> {
     fn default() -> Self {
         Self {
             language: None,
-            show_line_numbers: false,
             font_size: 9.0,
             tab_spaces: 4,
+            show_line_numbers: false,
             frame: true,
             left_accent_bar: true,
         }
@@ -94,7 +94,10 @@ impl<'a> CodeListingData<'a> {
 /// - `fontsize=<int|float>`
 pub fn parse_listing_options<'a>(raw_options: &'a str) -> ListingOptions<'a> {
     let mut options = ListingOptions::default();
-    let trimmed = raw_options.trim().trim_start_matches('[').trim_end_matches(']');
+    let trimmed = raw_options
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
 
     for entry in trimmed.split(',') {
         let entry = entry.trim();
@@ -117,7 +120,7 @@ pub fn parse_listing_options<'a>(raw_options: &'a str) -> ListingOptions<'a> {
                 }
                 "tabsize" => {
                     if let Ok(ts) = value.parse::<usize>() {
-                        options.tab_spaces = ts.max(1);
+                        options.tab_spaces = ts.clamp(1, 32) as u8;
                     }
                 }
                 "fontsize" | "basicstyle" => {
@@ -167,6 +170,7 @@ mod tests {
 
     #[test]
     fn test_parse_listing_options() {
+        assert_eq!(std::mem::size_of::<ListingOptions>(), 24);
         let opts = parse_listing_options("[language=Rust, numbers=left, tabsize=2]");
         assert_eq!(opts.language, Some("Rust"));
         assert!(opts.show_line_numbers);

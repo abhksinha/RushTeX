@@ -39,7 +39,7 @@ fn main() -> ExitCode {
             "-o" | "--output" => match cli_arguments.next() {
                 Some(path_str) => output_file_path = Some(PathBuf::from(path_str)),
                 None => {
-                    eprintln!("rushtex: -o requires a path");
+                    eprintln!("[ERROR] -o requires a path");
                     return ExitCode::from(2);
                 }
             },
@@ -50,12 +50,12 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             flag if flag.starts_with('-') => {
-                eprintln!("rushtex: unknown flag {flag}");
+                eprintln!("[ERROR] unknown flag {flag}");
                 return ExitCode::from(2);
             }
             positional_arg => {
                 if input_file_path.is_some() {
-                    eprintln!("rushtex: extra argument {positional_arg}");
+                    eprintln!("[ERROR] extra argument {positional_arg}");
                     return ExitCode::from(2);
                 }
                 input_file_path = Some(PathBuf::from(positional_arg));
@@ -69,24 +69,42 @@ fn main() -> ExitCode {
             print_help();
             return ExitCode::from(2);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let start_time = std::time::Instant::now();
         let mut source_content = String::new();
-        if let Err(err) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut source_content) {
-            eprintln!("rushtex: {err}");
+        if let Err(err) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut source_content)
+        {
+            eprintln!("{}", rushtex::Error::Io(err));
             return ExitCode::from(1);
         }
-        return match rushtex::compile_str_opts(&source_content, enable_compression) {
-            Ok(pdf_bytes) => {
-                if let Err(err) = std::io::Write::write_all(&mut std::io::stdout(), &pdf_bytes) {
-                    eprintln!("rushtex: {err}");
-                    return ExitCode::from(1);
-                }
-                ExitCode::SUCCESS
-            }
+        let document = match rushtex::tex::parse(&source_content) {
+            Ok(doc) => doc,
             Err(err) => {
-                eprintln!("rushtex: {err}");
-                ExitCode::from(1)
+                eprintln!("{err}");
+                return ExitCode::from(1);
             }
         };
+        let pages = rushtex::layout::layout(&document);
+        let page_count = pages.len();
+        let mut pdf_bytes = Vec::with_capacity(4096);
+        if let Err(err) = rushtex::pdf::emit_into_opts(&pages, &mut pdf_bytes, enable_compression) {
+            eprintln!("{err}");
+            return ExitCode::from(1);
+        }
+        if let Err(err) = std::io::Write::write_all(&mut std::io::stdout(), &pdf_bytes) {
+            eprintln!("{}", rushtex::Error::Io(err));
+            return ExitCode::from(1);
+        }
+        let page_unit = if page_count == 1 { "page" } else { "pages" };
+        #[cfg(not(target_arch = "wasm32"))]
+        let elapsed_secs = start_time.elapsed().as_secs_f64();
+        #[cfg(target_arch = "wasm32")]
+        let elapsed_secs = 0.0;
+        eprintln!(
+            "[DONE] Compilation of <stdin> completed and RUSHTEX wrote {} {} in {:.3} second",
+            page_count, page_unit, elapsed_secs
+        );
+        return ExitCode::SUCCESS;
     };
 
     if dump_ast {
@@ -97,24 +115,35 @@ fn main() -> ExitCode {
                     return ExitCode::SUCCESS;
                 }
                 Err(err) => {
-                    eprintln!("rushtex: parse: {err}");
+                    eprintln!("{err}");
                     return ExitCode::from(1);
                 }
             },
             Err(err) => {
-                eprintln!("rushtex: {err}");
+                eprintln!("{}", rushtex::Error::Io(err));
                 return ExitCode::from(1);
             }
         }
     }
 
     match rushtex::compile_file_opts(&input_path, output_file_path.as_deref(), enable_compression) {
-        Ok(output_path) => {
-            eprintln!("wrote {}", output_path.display());
+        Ok(report) => {
+            let page_unit = if report.page_count == 1 {
+                "page"
+            } else {
+                "pages"
+            };
+            eprintln!(
+                "[DONE] Compilation of {} completed and RUSHTEX wrote {} {} in {:.3} second",
+                input_path.display(),
+                report.page_count,
+                page_unit,
+                report.elapsed.as_secs_f64()
+            );
             ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("rushtex: {err}");
+            eprintln!("{err}");
             ExitCode::from(1)
         }
     }

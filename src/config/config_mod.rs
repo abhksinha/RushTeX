@@ -26,7 +26,8 @@
 //! - [`apply_doc_class`]: Updates `DocumentConfig` according to class options.
 //! - [`parse_dimension_pt`]: Converts TeX dimensions (`in`, `cm`, `mm`, `pt`) to PDF points.
 
-use crate::tex::Inline;
+pub use crate::font_metrics::FontFamily;
+use crate::tex_parser::Inline;
 
 /// Extracted document class directive, e.g. `\documentclass[11pt,a4paper]{article}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,9 +54,19 @@ pub struct DocumentConfig {
     pub margin_bottom: f32,
     pub base_font_size: f32,
     pub base_leading: f32,
+    pub font_family: FontFamily,
     pub page_numbering: bool,
     pub par_indent: f32,
     pub par_skip: f32,
+    pub hang_indent: f32,
+    pub hang_after: i32,
+    pub left_skip: f32,
+    pub right_skip: f32,
+    pub list_left_margin: f32,
+    pub list_label_sep: f32,
+    pub list_item_indent: f32,
+    pub list_item_sep: f32,
+    pub list_par_indent: f32,
 }
 
 impl Default for DocumentConfig {
@@ -69,15 +80,25 @@ impl Default for DocumentConfig {
             margin_bottom: 72.0,
             base_font_size: 11.0,
             base_leading: 14.0,
+            font_family: FontFamily::Times,
             page_numbering: true,
             par_indent: 15.0,
             par_skip: 8.0,
+            hang_indent: 0.0,
+            hang_after: 1,
+            left_skip: 0.0,
+            right_skip: 0.0,
+            list_left_margin: 24.0,
+            list_label_sep: 6.0,
+            list_item_indent: 0.0,
+            list_item_sep: 4.0,
+            list_par_indent: 0.0,
         }
     }
 }
 
 /// Parsed document preamble containing document class, packages, and metadata.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Preamble<'a> {
     pub class: Option<DocClass<'a>>,
     pub packages: Vec<Package<'a>>,
@@ -85,19 +106,6 @@ pub struct Preamble<'a> {
     pub author: Option<Vec<Inline<'a>>>,
     pub date: Option<Vec<Inline<'a>>>,
     pub config: DocumentConfig,
-}
-
-impl<'a> Default for Preamble<'a> {
-    fn default() -> Self {
-        Self {
-            class: None,
-            packages: Vec::new(),
-            title: None,
-            author: None,
-            date: None,
-            config: DocumentConfig::default(),
-        }
-    }
 }
 
 /// Trait for package handlers.
@@ -153,7 +161,10 @@ impl PackageHandler for GeometryPackage {
                     }
                     "landscape" => {
                         if document_config.page_width < document_config.page_height {
-                            std::mem::swap(&mut document_config.page_width, &mut document_config.page_height);
+                            std::mem::swap(
+                                &mut document_config.page_width,
+                                &mut document_config.page_height,
+                            );
                         }
                     }
                     _ => {}
@@ -189,6 +200,19 @@ impl PackageHandler for NoOpPackage {
     fn apply(&self, _options: &[&str], _config: &mut DocumentConfig) {}
 }
 
+/// Handler for typeface packages (e.g. `times`, `helvet`, `helvetica`).
+pub struct FontPackage(&'static str, FontFamily);
+
+impl PackageHandler for FontPackage {
+    fn name(&self) -> &'static str {
+        self.0
+    }
+
+    fn apply(&self, _options: &[&str], config: &mut DocumentConfig) {
+        config.font_family = self.1;
+    }
+}
+
 /// Extensible registry of package handlers.
 pub struct PackageRegistry {
     handlers: Vec<Box<dyn PackageHandler>>,
@@ -199,6 +223,21 @@ impl Default for PackageRegistry {
         let mut reg = Self::new();
         reg.register(GeometryPackage);
         reg.register(ParskipPackage);
+        reg.register(FontPackage("times", FontFamily::Times));
+        reg.register(FontPackage("mathptmx", FontFamily::Times));
+        reg.register(FontPackage("newtxtext", FontFamily::Times));
+        reg.register(FontPackage("tgtermes", FontFamily::Times));
+        reg.register(FontPackage("helvet", FontFamily::Helvetica));
+        reg.register(FontPackage("helvetica", FontFamily::Helvetica));
+        reg.register(FontPackage("tgheros", FontFamily::Helvetica));
+        reg.register(FontPackage("sans", FontFamily::Helvetica));
+        reg.register(FontPackage("palatino", FontFamily::Palatino));
+        reg.register(FontPackage("mathpazo", FontFamily::Palatino));
+        reg.register(FontPackage("tgpagella", FontFamily::Palatino));
+        reg.register(FontPackage("newpxtext", FontFamily::Palatino));
+        reg.register(FontPackage("lmodern", FontFamily::ComputerModern));
+        reg.register(FontPackage("computermodern", FontFamily::ComputerModern));
+        reg.register(FontPackage("cm", FontFamily::ComputerModern));
         reg.register(NoOpPackage("graphicx"));
         reg.register(NoOpPackage("amsmath"));
         reg.register(NoOpPackage("amssymb"));
@@ -208,6 +247,10 @@ impl Default for PackageRegistry {
         reg.register(NoOpPackage("microtype"));
         reg.register(NoOpPackage("xcolor"));
         reg.register(NoOpPackage("babel"));
+        reg.register(NoOpPackage("enumitem"));
+        reg.register(NoOpPackage("listings"));
+        reg.register(NoOpPackage("booktabs"));
+        reg.register(NoOpPackage("array"));
         reg
     }
 }
@@ -233,7 +276,7 @@ impl PackageRegistry {
     }
 }
 
-/// Apply document class options (e.g. `12pt`, `letterpaper`, `landscape`) to configuration.
+/// Apply document class options (e.g. `12pt`, `letterpaper`, `landscape`, `sans`) to configuration.
 pub fn apply_doc_class(doc_class: &DocClass<'_>, config: &mut DocumentConfig) {
     for &option_str in &doc_class.options {
         match option_str.trim() {
@@ -262,6 +305,18 @@ pub fn apply_doc_class(doc_class: &DocClass<'_>, config: &mut DocumentConfig) {
                     std::mem::swap(&mut config.page_width, &mut config.page_height);
                 }
             }
+            "sans" | "sansserif" | "sf" => {
+                config.font_family = FontFamily::Helvetica;
+            }
+            "serif" | "roman" | "rm" => {
+                config.font_family = FontFamily::Times;
+            }
+            "palatino" => {
+                config.font_family = FontFamily::Palatino;
+            }
+            "computermodern" | "cm" => {
+                config.font_family = FontFamily::ComputerModern;
+            }
             _ => {}
         }
     }
@@ -282,6 +337,10 @@ pub fn parse_dimension_pt(dimension_str: &str) -> Option<f32> {
         (stripped, "mm")
     } else if let Some(stripped) = trimmed_str.strip_suffix("pt") {
         (stripped, "pt")
+    } else if let Some(stripped) = trimmed_str.strip_suffix("em") {
+        (stripped, "em")
+    } else if let Some(stripped) = trimmed_str.strip_suffix("ex") {
+        (stripped, "ex")
     } else {
         (trimmed_str, "pt")
     };
@@ -292,6 +351,8 @@ pub fn parse_dimension_pt(dimension_str: &str) -> Option<f32> {
         "cm" => Some(numeric_value * (72.0 / 2.54)),
         "mm" => Some(numeric_value * (72.0 / 25.4)),
         "pt" => Some(numeric_value),
+        "em" => Some(numeric_value * 11.0),
+        "ex" => Some(numeric_value * 5.5),
         _ => None,
     }
 }

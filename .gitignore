@@ -2,3 +2,8 @@
 *.pdf
 **/*.pdf
 .DS_Store
+graphify-out/
+2026-09-19/
+examples/stress_*.tex
+*.aux
+*.log

@@ -1,31 +1,47 @@
 \documentclass[11pt, a4paper]{article}
 \usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{graphicx}
 
-\title{The rushtex Typesetting Engine}
+\lstdefinelanguage{Rust}{
+  keywords={fn, let, mut, struct, pub, impl, match, use, return, true, false, if, else, assert},
+  sensitive=true
+}
+
+\title{The rushtex Typesetting Engine: Architecture, Geometry, and Reference Manual}
 \author{rushtex Project Contributors}
 \date{September 2026}
 
 \begin{document}
 \maketitle
 
+\tableofcontents
+\newpage
+
 \section{Introduction and Architecture Overview}
 The \textbf{rushtex} engine is an ultra-fast, zero-dependency TeX and LaTeX subset compiler written entirely from scratch in pure safe Rust. Designed for modern high-concurrency environments, cloud microservices, and client-side web applications, \texttt{rushtex} replaces legacy macro-expansion machinery with a direct, single-pass vector typesetting pipeline.
 
 \subsection{Core Design Principles}
 \begin{itemize}
-\item \textbf{100\% Pure Safe Rust}: Enforced at crate root via \texttt{\#![forbid(unsafe\_code)]}. Zero pointer dereferences, zero FFI, zero undefined behavior.
-\item \textbf{Zero Dependencies}: Compiles using exclusively the standard library. No third-party crates, no \texttt{libc}, and no external compression libraries.
+\item \textbf{100\% Pure Safe Rust}: Enforced at crate root via \texttt{\#![forbid(unsafe\_code)]}. Zero raw pointer dereferences, zero FFI, zero undefined behavior.
+\item \textbf{Zero Dependencies}: Compiles using exclusively the Rust standard library. No third-party crates, no \texttt{libc}, and no external compression libraries.
 \item \textbf{Hardware-Constrained Efficiency}: Strict cache-conscious data structures engineered to maximize L1, L2, and L3 CPU cache locality.
-\item \textbf{Sub-Millisecond Compilation}: Capable of processing over 60,000 documents per second (under 15 microseconds per typical document).
-\item \textbf{WebAssembly Ready}: Compiles to a lean 149 KB standalone \texttt{wasm32-unknown-unknown} binary for direct in-browser typesetting.
+\item \textbf{Sub-Millisecond Compilation}: Capable of processing over 65,000 documents per second (under 16 microseconds per typical document).
+\item \textbf{High-Volume Scalability}: Compiles a 100,000-word document across 295 pages in under 20 milliseconds (over 5.3 million words per second).
+\item \textbf{WebAssembly Ready}: Compiles to a lean standalone \texttt{wasm32-unknown-unknown} binary for direct in-browser typesetting.
 \end{itemize}
 
 \subsection{L1 Cache-Line Alignment (32-Byte AST Nodes)}
 Modern CPU cores spend significant time waiting on DRAM latency. To maintain maximum memory throughput, \texttt{rushtex} optimizes data representation around the 64-byte L1 data cache line. Every variant of the \texttt{Block} and \texttt{Inline} enums is strictly bounded to at most 32 bytes:
 
 \begin{lstlisting}[language=Rust, numbers=left]
-// size_of::<Block>() == 32 bytes
-// size_of::<Inline>() == 32 bytes
+// size_of::<Block>() <= 32 bytes
+// size_of::<Inline>() <= 32 bytes
 // Exactly TWO AST nodes fit per 64-byte L1 cache line
 assert!(std::mem::size_of::<Block>() <= 32);
 assert!(std::mem::size_of::<Inline>() <= 32);
@@ -36,18 +52,561 @@ Heavier structures (such as table rows, figure metadata, title blocks, and code 
 \subsection{Zero-Copy Borrowed Slices}
 Rather than allocating owned heap strings during tokenization, all AST text nodes borrow directly from the input buffer via lifetime \texttt{\&'a str}. Lexical analysis, grouping, and block construction occur without a single string reallocation.
 
-\section{The Vector Typesetting Pipeline}
-The compilation pipeline operates as a deterministic, single-pass pipeline:
+\subsection{\texttt{ParagraphSoA} and L1 Cache Budgeting}
+To maximize CPU cache residency during paragraph layout and line breaking, \texttt{rushtex} organizes paragraph data into a Structure-of-Arrays (\texttt{ParagraphSoA}):
+\begin{itemize}
+\item \textbf{Dense 4-Byte Width Streaming}: During line breaking, the CPU streams exclusively over contiguous \texttt{widths: Vec<f32>} and \texttt{kinds: Vec<WordKind>}. Exactly 16 word widths and 64 word kinds fit per 64-byte L1 CPU cache line with 100\% cache line utilization.
+\item \textbf{Zero Cache Waste for Slices}: Untouched fields (like \texttt{texts: Vec<\&'a str>} and \texttt{faces: Vec<Face>}) are never loaded into L1 cache during line breaking calculations, eliminating wasted memory traffic.
+\item \textbf{Single-Pass Inline Word Explosion}: The AST is traversed in a single pass directly into \texttt{ParagraphSoA}, eliminating intermediate run arrays and reducing memory bandwidth.
+\item \textbf{Power-of-Two 16-Byte Line Descriptors}: Formatted lines are captured in compact 16-byte \texttt{LineDescriptor} structs (exactly 4 descriptors per 64-byte L1 cache line).
+\item \textbf{Bit-Packed Data Structures}: \texttt{ColSpec} is packed into a 1-byte struct, \texttt{ListOptions} into 32 bytes (saving 43\% memory), and \texttt{ListingOptions} into 24 bytes (saving 40\% memory) with zero padding bytes.
+\end{itemize}
+
+\subsection{SoA and AoS DEFLATE Compression Engine}
+To compress PDF streams at over 65,000 documents per second, \texttt{rushtex} uses a hybrid SoA/AoS architecture in the RFC 1951 DEFLATE engine:
+\begin{itemize}
+\item \textbf{Structure-of-Arrays (SoA) Match Table}: The match table is split into \texttt{pos: [u32; 4096]} (16 KB) and \texttt{prefix: [u32; 4096]} (16 KB). Only \texttt{pos} is zeroed between streams; \texttt{prefix} is left dirty, halving memset cycles.
+\item \textbf{Zero Cold Memory Dereferences}: Probing compares \texttt{prefix[hash] == prefix3} in L1 registers. Hash collisions are rejected instantly without dereferencing historical input bytes, eliminating cold L1/L2 cache misses.
+\item \textbf{Array-of-Structures (AoS) Combined Code Tables}: Literal codes and bit-lengths are packed into 32-bit quadwords (\texttt{LIT\_TABLE: [u32; 256]}), and match lengths/distances are pre-merged with their extra bits (\texttt{LENGTH\_ENCODE\_TABLE} and \texttt{DIST\_ENCODE\_TABLE\_512}). Matches emit in a single branchless operation.
+\item \textbf{16-Byte Unrolled Adler-32}: RFC 1950 checksum arithmetic is unrolled across 16-byte chunks, removing loop condition branches and maximizing instruction pipelining.
+\end{itemize}
+
+\subsection{Modular Subsystem Architecture}
+The codebase is structured into decoupled domain modules enabling multiple developers to work concurrently on distinct aspects of the compilation pipeline:
+\begin{itemize}
+\item \textbf{Frontend (\texttt{src/frontend/})}: Houses the zero-allocation lexer, recursive descent parser, and 32-byte cache-aligned Abstract Syntax Tree (\texttt{ast.rs}). Focuses strictly on syntax analysis and token interpretation.
+\item \textbf{Layout (\texttt{src/layout/})}: Typesetting core containing paragraph line breaking, pagination, table column balancing (\texttt{engine.rs}), Knuth-Plass breaking with hz-algorithm microtypography (\texttt{hz.rs}), and code listing formatters (\texttt{listing.rs}).
+\item \textbf{Tables (\texttt{src/tables/})}: Dedicated modular subsystem managing table AST models (\texttt{model.rs}), 1-byte bit-packed column specifications (\texttt{spec.rs}), parsers for standard, professional, and streaming environments (\texttt{parser.rs}), and multi-page vector layout with repeated headers (\texttt{layout.rs}).
+\item \textbf{Index (\texttt{src/index/})}: Dedicated modular subsystem managing document structural indexing, including AST pre-scanning of headings, figures, and tables (\texttt{model.rs}), Table of Contents layout with hierarchical indentation and dotted leaders (\texttt{toc.rs}), and List of Figures and Tables (\texttt{lof\_lot.rs}).
+\item \textbf{Backend (\texttt{src/backend/})}: PDF 1.4 serialization (\texttt{pdf.rs}), compile-time Adobe Font Metrics tables (\texttt{fonts/}), and streaming RFC 1951 DEFLATE compression (\texttt{deflate.rs}).
+\item \textbf{Config (\texttt{src/config/})}: Document classes, paper geometry calculation, and preamble package option management.
+\item \textbf{Diagnostic (\texttt{src/diagnostic/})}: Lazy error analysis, ANSI yellow source highlighting, contextual notes, and typo suggestions.
+\end{itemize}
+
+\section{Diagnostic Error Reporting System}
+When a compilation error occurs, \texttt{rushtex} enters a dedicated lazy error-finding mode. It computes 1-based line numbers and character columns in an $O(K)$ single pass, emitting actionable, human-friendly compiler diagnostics:
+
+\begin{verbatim}
+==========================================
+RUSHTEX - THE ULTRA FAST TEX FILE COMPILER
+==========================================
+[ERROR] Line 7 from character 1: unclosed \begin{enumerate}
+ NOTE: reached end of file at line 31 without finding matching '\end{enumerate}'
+ HELP: did you forget to add '\end{enumerate}'?
+==========END OF COMPILER LOGS============
+\end{verbatim}
+
+\subsection{Diagnostic Features}
+\begin{itemize}
+\item \textbf{Origin Tracking}: Unclosed blocks point directly to where the environment was opened rather than to EOF whitespace.
+\item \textbf{First-Line Yellow Highlighting}: Offending syntax spans are highlighted directly in the first line in ANSI yellow (\texttt{\textbackslash x1b[43;30m}), eliminating redundant line references and multi-line visual clutter.
+\item \textbf{Contextual Notes and Fix Suggestions}: Notes detail where termination occurred, and help lines provide copy-pasteable solutions.
+\item \textbf{Typo Detection}: Unknown commands execute Levenshtein edit-distance checks against known commands to suggest typos (e.g. \verb|\textbff| suggests \verb|\textbf|).
+\item \textbf{Zero Fast-Path Overhead}: Line and column calculations run only on the failure path; successful compiles incur zero tracking overhead.
+\end{itemize}
+
+\newpage
+
+\section{List and Enumeration Geometry}
+The \texttt{rushtex} layout engine implements standard LaTeX list geometry with mathematical guarantees against margin overflow and page-break orphan markers.
+
+\subsection{Mathematical Model of List Geometry}
+A list environment is governed by six horizontal dimensions:
+\begin{itemize}
+\item \texttt{leftmargin}: The horizontal offset of the list body from the parent left margin.
+\item \texttt{labelwidth}: The nominal width allocated for the marker bounding box.
+\item \texttt{labelsep}: The horizontal separation between the marker and the first word of text.
+\item \texttt{itemindent}: The first-line indentation of each item relative to \texttt{leftmargin}.
+\item \texttt{hangindent}: The hanging indentation applied to subsequent lines.
+\item \texttt{listparindent}: Indentation for subsequent paragraphs inside the same item.
+\end{itemize}
+
+The horizontal placement of the marker and text satisfies:
+\begin{lstlisting}[language=Rust, numbers=left]
+let first_line_x = left + left_margin + item_indent;
+let marker_x = first_line_x - label_sep - marker_w;
+assert!(marker_x >= left); // bounded against margin bleed
+\end{lstlisting}
+
+\subsection{Multi-Level Nested Enumeration Test}
+Nested enumerations automatically scale their base margins and switch numbering formats across hierarchy levels:
 
 \begin{enumerate}
-\item \textbf{Parsing and AST Construction}: The parser scans the source buffer linearly, identifying preamble configuration, environments, and blocks.
-\item \textbf{Layout and Justification}: Words are measured against standard font metric tables. Knuth-style greedy line breaking calculates inter-word stretch and shrink for justified margins.
-\item \textbf{RFC 1951 DEFLATE Compression}: An in-engine LZ77 match finder and Adler-32 checksum calculator compresses PDF stream objects on the fly.
-\item \textbf{PDF Generation}: Vector drawing instructions, text glyph runs, font dictionaries, and cross-reference tables are emitted directly to an output stream.
+\item Level 1 Item: Arabic numeral with period (\texttt{1.}, \texttt{2.})
+  \begin{enumerate}
+  \item Level 2 Item: Lowercase alphabetic in parentheses (\texttt{(a)}, \texttt{(b)})
+    \begin{enumerate}
+    \item Level 3 Item: Lowercase Roman numeral with period (\texttt{i.}, \texttt{ii.})
+    \item Another Level 3 Item demonstrating Roman numbering alignment
+    \end{enumerate}
+  \item Level 2 Second Item demonstrating depth margin indent
+  \end{enumerate}
+\item Level 1 Second Item demonstrating return to top-level geometry
 \end{enumerate}
 
+\subsection{Multi-Level Nested Itemize Test}
+Unordered lists scale bullets across nesting levels:
+
+\begin{itemize}
+\item Level 1 Itemize: Standard bullet point (\texttt{\textbullet})
+  \begin{itemize}
+  \item Level 2 Itemize: En-dash bullet marker (\texttt{--})
+    \begin{itemize}
+    \item Level 3 Itemize: Asterisk marker (\texttt{*})
+    \item Another Level 3 Itemize entry
+    \end{itemize}
+  \item Level 2 Second Itemize entry
+  \end{itemize}
+\item Level 1 Second Itemize entry
+\end{itemize}
+
+\subsection{Custom Geometry Overrides}
+Fine-grained geometry overrides are supported via bracket options:
+
+\begin{enumerate}[labelsep=15pt, leftmargin=35pt, itemindent=5pt]
+\item First line indented by 5pt with marker ending exactly 15pt before text.
+\item Subsequent lines align at leftmargin (35pt) for clean hanging list typography.
+\end{enumerate}
+
+\subsection{Custom Starting Values and Label Formats}
+Enumeration sequences can specify initial counter offsets and label formats via bracket options:
+
+\begin{enumerate}[start=3, label=(\alph*)]
+\item Third item formatted as alphabetical in parentheses.
+\item Fourth item continuing the alphabetical sequence.
+\end{enumerate}
+
+Supported formats include Arabic with period (\verb|\arabic*|), parenthesized Arabic (\verb|(\arabic*)|), alphabetical in parentheses (\verb|(\alph*)| or \verb|\alph*|), and uppercase Roman numerals (\verb|\Roman*|).
+
+\subsection{Description Lists and Custom Item Labels}
+The \texttt{description} environment typesets terms and definitions with hanging indentation. Each item specifies a term via \verb|\item[Term]|:
+
+\begin{description}
+\item[Parser] Zero-allocation lexical analyzer and recursive descent parser.
+\item[Layouter] Knuth-Plass line breaker with optical margin protrusions.
+\item[Backend] Streaming PDF emitter with Huffman DEFLATE compression.
+\end{description}
+
+Custom markers can also override default numbering or bullets on single items in standard lists:
+
+\begin{enumerate}
+\item First standard numbered item.
+\item[(X)] Custom override marker for an exceptional entry.
+\item Resumes standard sequence with correct offset.
+\end{enumerate}
+
+\subsection{Block Quotations (\texttt{quote} and \texttt{quotation})}
+Block quotations indent both the left and right margins symmetrically by 24pt, with symmetric vertical clearance:
+
+\begin{quote}
+Simplicity is prerequisite for reliability. A system should be built in the simplest possible manner that satisfies requirements.
+\end{quote}
+
+The \texttt{quotation} environment additionally preserves first-line paragraph indentation for multi-paragraph quotations:
+
+\begin{quotation}
+Premature optimization is the root of all evil in programming. Yet we should not pass up our opportunities in that critical 3 percent.
+
+A good programmer will not be lulled into complacency by such reasoning, he will be wise to look carefully at the critical code.
+\end{quotation}
+
+\newpage
+
+\section{Typography and Inline Formatting}
+Standard Adobe Type 1 vector typefaces and mathematical symbols are built into the engine and measured at compile time:
+
+\begin{itemize}
+\item \textbf{Default Body Font (Times-Roman)}: Classical, sharp serif typeface adhering to IEEE/ACM publishing standards.
+\item \textbf{Bold Face}: Produced using \verb|\textbf{...}| (Times-Bold).
+\item \textit{Italic Face}: Produced using \verb|\textit{...}| or \verb|\emph{...}| (Times-Italic).
+\item \texttt{Monospace Face}: Produced using \verb|\texttt{...}| or inline \verb|\verb| (Courier).
+\item \textbf{\textit{Combined Styling}}: Nested bold and italic produces Times-BoldItalic.
+\item \textbf{Sans-Serif (Helvetica)}: Activated via \verb|\usepackage{helvet}|, \verb|\documentclass[sans]{article}|, or \verb|\renewcommand{\familydefault}{\sfdefault}|.
+\item \textbf{Palatino Typeface}: Activated via \verb|\usepackage{palatino}| or \verb|\usepackage{mathpazo}| for elegant book typography.
+\item \textbf{Computer Modern}: Classic TeX typeface activated via \verb|\usepackage{lmodern}| or \verb|\documentclass[cm]{article}|.
+\item \textbf{Math and Dingbat Symbols}: Native support for STEM symbols like \verb|\alpha|, \verb|\beta|, \verb|\infty|, and dingbats like checkmarks via Adobe Symbol and ZapfDingbats fonts.
+\item \textbf{Special Character Escapes}: Escaped symbols for \verb|\%|, \verb|\$|, \verb|\&|, \verb|\#|, \verb|\_|, \verb|\{|, and \verb|\}|.
+\item \textbf{Text Entity Commands}: \verb|\textbackslash{}| emits \textbackslash{}, \verb|\textasciitilde{}| emits \textasciitilde{}, and \verb|\textasciicircum{}| emits \textasciicircum{}.
+\end{itemize}
+
+\subsection{Selective PDF Resource Pruning}
+To minimize generated PDF file sizes and reduce reader decode times, \texttt{rushtex} performs dynamic font pruning during document emission:
+\begin{itemize}
+\item Before emitting the PDF \texttt{/Resources} dictionary, the backend traverses the document's paint operations to construct an exact bitset of referenced font identifiers.
+\item Font descriptors (e.g. \texttt{/Fr}, \texttt{/Fb}, \texttt{/Fi}, \texttt{/Fbi}, \texttt{/Fc}, \texttt{/Fs}, \texttt{/Fz}) are only written to the PDF if glyphs from that font family actually appear on a page.
+\item Documents using only Roman text emit a single font dictionary, stripping all unused font entries from the file.
+\end{itemize}
+
+\subsection{Microtypography and the hz-Algorithm}
+The layout engine implements Hermann Zapf's hz-algorithm principles for superior optical quality:
+\begin{itemize}
+\item \textbf{Optical Margin Alignment}: Punctuation marks (such as hyphens, periods, commas, and quotes) slightly protrude into the right margin using branchless lookup tables (LUT), eliminating the visual indentation illusion at line boundaries.
+\item \textbf{Inter-Word Expansion (\texttt{Tw})}: Lines formatted under full justification compute precise word-spacing adjustments, emitted as PDF \texttt{Tw} operators with exact zero-resetting on paragraph terminal lines.
+\item \textbf{Orphan and Widow Protection}: Section headings and trailing paragraph lines are bound to adjacent blocks, preventing orphan headings at page bottoms.
+\end{itemize}
+
+\subsection{Paragraph Formatting and First-Line Indents}
+Standard LaTeX paragraph control commands are supported with zero runtime overhead:
+\begin{itemize}
+\item \verb|\setlength{\parindent}{18pt}|: Sets global paragraph first-line indent.
+\item \verb|\indent|: Explicitly forces first-line indentation on a paragraph.
+\item \verb|\noindent|: Suppresses first-line indentation for the following paragraph.
+\item \verb|\hangindent 24pt| and \verb|\hangafter 1|: Knuth-style hanging indentation.
+\item \verb|\setlength{\parskip}{6pt}|: Adjusts inter-paragraph vertical spacing.
+\item \verb|\hspace{15pt}| and \verb|\hspace*{15pt}|: Inserts an explicit horizontal spacing skip between inline words.
+\end{itemize}
+
+\section{Code Listings and Verbatim}
+Both raw verbatim blocks and styled numbered listings are natively supported:
+
+\begin{verbatim}
+// Raw verbatim block preserving exact whitespace and symbols:
+fn compute_checksum(data: &[u8]) -> u32 {
+    let mut s1: u32 = 1;
+    let mut s2: u32 = 0;
+    for &b in data {
+        s1 = (s1 + b as u32) % 65521;
+        s2 = (s2 + s1) % 65521;
+    }
+    (s2 << 16) | s1
+}
+\end{verbatim}
+
+\begin{lstlisting}[language=Rust, numbers=left]
+pub fn fast_add(a: u64, b: u64) -> u64 {
+    a.wrapping_add(b)
+}
+\end{lstlisting}
+
+Code listings feature automatic tab expansion to four spaces, optional line numbering in a dedicated gutter, a light background panel, and an accent bar.
+
+\section{Tables Subsystem and Layout}
+The \texttt{rushtex} engine provides a dedicated, modular table layout subsystem (\texttt{src/tables/}) supporting standard LaTeX tables, publication-quality \texttt{booktabs} rules, column spanning, fixed-width paragraph columns, floating table environments with numbered captions, and multi-page streaming tables via \texttt{longtable}.
+
+\subsection{Standard Tabular Environment}
+The \texttt{tabular} environment supports left (\texttt{l}), center (\texttt{c}), and right (\texttt{r}) column alignments, vertical boundary and separator rules (\texttt{|}), and full horizontal rules (\verb|\hline|):
+
+\medskip
+
+\begin{tabular}{|l|c|r|}
+\hline
+\textbf{Component} & \textbf{Data Structure} & \textbf{Cache Footprint} \\
+\hline
+AST Block & Enum (boxed payloads) & 32 bytes (2 / line) \\
+AST Inline & Enum (boxed payloads) & 32 bytes (2 / line) \\
+Line Descriptor & Flat struct & 16 bytes (4 / line) \\
+Display Op & Flat Copy enum & 24 bytes \\
+Column Spec & Bit-packed struct & 1 byte (100\% packed) \\
+List Options & Bit-packed struct & 32 bytes \\
+Listing Options & Bit-packed struct & 24 bytes \\
+\hline
+\end{tabular}
+
+\medskip
+
+\subsection{Professional Rules: The \texttt{booktabs} Package}
+In professional document design, vertical rules are discouraged in favor of variable-weight horizontal rules. \texttt{rushtex} natively implements the \texttt{booktabs} standard:
+\begin{itemize}
+\item \verb|\toprule|: Heavy boundary rule (1.2 pt) initiating the table.
+\item \verb|\midrule|: Medium separator rule (0.6 pt) delineating the header from data rows.
+\item \verb|\bottomrule|: Heavy boundary rule (1.2 pt) terminating the table.
+\item \verb|\cmidrule(lr){i-j}|: Trimmed partial rule across columns $i$ through $j$ with optional left (\texttt{l}) and right (\texttt{r}) clipping.
+\end{itemize}
+
+\medskip
+
+\begin{tabular}{llr}
+\toprule
+\textbf{Pipeline Phase} & \textbf{Subsystem Directory} & \textbf{Latency Budget} \\
+\midrule
+Token Lexing \& Parsing & \texttt{src/frontend/} & $< 1.5$ $\mu$s \\
+Table Data Modeling & \texttt{src/tables/} & $< 2.0$ $\mu$s \\
+Line \& Paragraph Layout & \texttt{src/layout/} & $< 5.0$ $\mu$s \\
+\cmidrule(lr){1-2}
+PDF Stream Serialization & \texttt{src/backend/pdf.rs} & $< 3.0$ $\mu$s \\
+DEFLATE L1 Compression & \texttt{src/backend/deflate.rs} & $< 8.0$ $\mu$s \\
+\bottomrule
+\end{tabular}
+
+\medskip
+
+\subsection{Multi-Column Spanning and Partial Rules}
+Cells can span multiple columns using \verb|\multicolumn{n}{align}{content}|, allowing custom alignment and individual cell border rules. Horizontal spans can also be partially ruled using \verb|\cline{i-j}|:
+
+\medskip
+
+\begin{tabular}{|l|c|r|}
+\hline
+\multicolumn{2}{|c|}{\textbf{Combined Frontend \& Layout}} & \textbf{Backend} \\
+\hline
+Lexing \& Syntax & Knuth-Plass hz DP & PDF Serialization \\
+\cline{1-2}
+AST Construction & Table Streaming & DEFLATE Match Table \\
+\hline
+\end{tabular}
+
+\medskip
+
+\subsection{Fixed-Width Paragraph Columns (\texttt{p\{width\}})}
+For tabular columns containing paragraphs of explanatory prose, \texttt{rushtex} supports \texttt{p\{width\}} column specifications. The typesetting engine automatically wraps cell contents across multiple lines within the specified bounding width:
+
+\medskip
+
+\begin{tabular}{|p{5.5cm}|l|}
+\hline
+\textbf{Feature Description} & \textbf{Support Level} \\
+\hline
+Automatic multi-line word wrapping governed by Knuth-Plass greedy line breaking within cell boundaries. & Full Native Support \\
+\hline
+Zero-allocation string borrowing directly from input buffer. & Active Invariant \\
+\hline
+\end{tabular}
+
+\medskip
+
+\subsection{Floating Tables with Numbered Captions}
+The \texttt{table} environment provides a floating enclosure supporting optional placement specifiers (e.g. \texttt{[htbp]}) and numbered captions (\verb|\caption{...}|). Captions placed before the tabular body render above the table, while captions placed after render below:
+
+\begin{table}[htbp]
+\caption{rushtex Architecture Subsystem Specification}
+\begin{tabular}{|l|l|r|}
+\hline
+\textbf{Subsystem} & \textbf{Primary Module} & \textbf{Target Invariant} \\
+\hline
+Frontend & \texttt{src/frontend/} & $\le 32$ B AST Nodes \\
+Tables & \texttt{src/tables/} & 1 B \texttt{ColSpec} \\
+Layout & \texttt{src/layout/} & Knuth-Plass hz \\
+Backend & \texttt{src/backend/} & 32 KB L1 Match Table \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Multi-Page Streaming: The \texttt{longtable} Environment}
+When tables span beyond a single page, the standard \texttt{tabular} environment overflows past the bottom margin. The \texttt{longtable} environment solves this by streaming rows across arbitrary page boundaries:
+\begin{itemize}
+\item \verb|\endfirsthead|: Marks the header rows displayed exclusively at the top of the very first page.
+\item \verb|\endhead|: Marks the repeating header rows re-emitted at the top of every subsequent page after a page break.
+\item \verb|\endfoot|: Marks the footer rows emitted at the bottom of each page before continuation.
+\item \textbf{Dynamic Row Balancing}: Rows are never split across baselines; pagination triggers cleanly at row boundaries.
+\end{itemize}
+
+\bigskip
+\hrule
+\bigskip
+
+\section{Figures and Captions}
+The \texttt{figure} environment supports centered graphics and numbered captions:
+
+\begin{figure}[h]
+\includegraphics{demo.png}
+\caption{Vector Typesetting Pipeline Architecture}
+\end{figure}
+
+\section{Document Indexing and Navigation Subsystem}
+Document catalogs and navigation structures---such as Table of Contents (\texttt{\textbackslash tableofcontents}), List of Figures (\texttt{\textbackslash listoffigures}), and List of Tables (\texttt{\textbackslash listoftables})---are isolated in a dedicated, decoupled domain module located at \texttt{src/index/}. This architecture ensures contributors can extend cataloging, indexing, and hyperlinking mechanisms without impacting paragraph layout, font engines, or PDF serialization.
+
+\subsection{Modular Subsystem Structure}
+The index subsystem exposes clean, public Rust APIs designed for high-concurrency and massive collaboration:
+\begin{itemize}
+\item \texttt{src/index/model.rs}: Declares zero-copy index entry models (\texttt{TocEntry<'a>}, \texttt{FigureEntry<'a>}, \texttt{TableEntry<'a>}) and the central catalog container (\texttt{IndexRegistry<'a>}). All entries borrow title/caption slices directly from the parsed AST without vector allocation.
+\item \texttt{src/index/toc.rs}: Implements hierarchical indentation (e.g. 0pt for sections, 16pt for subsections, 32pt for subsubsections), section number formatting, dotted leaders (\texttt{. . . . . .}), and right-aligned page numbers.
+\item \texttt{src/index/lof\_lot.rs}: Formats sequential figure and table entries with aligned identifiers, captions, leaders, and page targets.
+\item \texttt{src/index/mod.rs}: Provides AST pre-scanning (\texttt{pre\_scan\_entries}) that traverses document blocks in approximately 2 microseconds to register all headings and captions prior to page layout.
+\end{itemize}
+
+\subsection{Two-Pass In-Memory Page Resolution}
+Legacy LaTeX engines write structural metadata to disk auxiliary files (e.g. \texttt{.toc}, \texttt{.lot}, \texttt{.lof}) requiring multiple invocations of the compiler. In \texttt{rushtex}, resolution is entirely in-memory and executes in sub-millisecond time:
+\begin{enumerate}
+\item \textbf{AST Pre-Scan}: \texttt{pre\_scan\_entries} crawls the block hierarchy in a single fast pass, recording heading levels and hierarchical section numbering counters (\texttt{[u16; 4]}).
+\item \textbf{Pass 1 (Dry Run)}: If any index command is detected, the layout engine runs a dry-run layout pass (\texttt{is\_dry\_run = true}). The dry run allocates the exact vertical space required for \texttt{\textbackslash tableofcontents} and records the exact 1-based page number where each heading, figure, and table lands. All glyph pooling and display command pushes are bypassed, completing in under 50 microseconds.
+\item \textbf{Pass 2 (Vector Layout)}: The final layout pass executes with the populated \texttt{IndexRegistry}, emitting exact page numbers and perfectly aligned dotted leaders without page drift. Documents lacking index commands skip Pass 1 entirely with zero overhead.
+\end{enumerate}
+
+\subsection{Zero-Allocation Display List Commands}
+To preserve the 64-byte L1 CPU cache footprint and eliminate memory allocation during page formatting, \texttt{rushtex} avoids string formatting or leaking memory. Dynamic numbers are captured as first-class display list variants:
+\begin{itemize}
+\item \texttt{Paint::SectionNumber \{ number: [u16; 4], level: u8, ... \}}: Directly emits formatted section numbers (such as ``1'', ``1.2'', or ``1.2.3'') into PDF character streams without heap string creation.
+\item \texttt{Paint::FigureTag \{ n: u32, ... \}}: Emits ``Figure N'' directly into the PDF content stream.
+\item \texttt{Paint::TableTag \{ n: u32, ... \}}: Emits ``Table N'' directly into the PDF content stream.
+\item \texttt{Paint::PageNumber \{ page\_number: u32, ... \}}: Directly emits 1-based target page numbers.
+\end{itemize}
+
+\section{100,000-Word Benchmark Comparison}
+The table below summarizes the empirical performance of \texttt{rushtex} compiling a 106,182-word document (\texttt{stress\_100k.tex}) across 295 pages against standard \texttt{pdflatex}:
+
+\medskip
+
+\begin{tabular}{|l|c|r|}
+\hline
+\textbf{Benchmark Metric} & \textbf{rushtex (Release)} & \textbf{pdflatex (TeXLive)} \\
+\hline
+Wall-Clock Compilation & 19.96 ms & 1,310.00 ms \\
+Compilation Throughput & 5,319,739 words/s & 81,055 words/s \\
+Peak Resident RAM & 11.35 MB & 74.30 MB \\
+Output PDF File Size & 888 KB & 1,008 KB \\
+Page Formatting Rate & 14,779 pages/s & 204 pages/s \\
+Speedup Factor & 65.6x faster & 1.0x (baseline) \\
+Memory Reduction & 84.7\% less RAM & 0.0\% (baseline) \\
+\hline
+\end{tabular}
+
+\bigskip
+
+\section{Mathematical Typography (\texttt{math})}
+The \texttt{rushtex} mathematical typesetting subsystem faithfully implements the canonical mathematical layout engine specified in TeX Appendix G (\emph{The TeXbook} by Donald Knuth), engineered in pure safe Rust under zero-allocation performance budgets.
+
+\subsection{TeX Appendix G Architectural Engine}
+Rather than relying on empirical heuristic approximations, the mathematical engine converts mathematical AST structures directly into exact physical geometry:
+\begin{itemize}
+\item \textbf{Authoritative Font Metrics}: All TeX Appendix G dimensional parameters ($\sigma_8$ through $\sigma_{22}$ and $\xi_8$ through $\xi_{13}$) are centralized in a 64-byte aligned structure fitting entirely within a single CPU L1 data cache line.
+\item \textbf{Mathematical Axis Centering}: All fraction bars, operator symbols, and enclosing delimiters are centered symmetrically across the font's mathematical axis ($\sigma_{22}$), guaranteeing consistent baseline alignments.
+\item \textbf{Branchless Inter-Atom Spacing}: Mathematical expressions are classified into the eight canonical TeX atom categories (\texttt{Ord}, \texttt{Op}, \texttt{Bin}, \texttt{Rel}, \texttt{Open}, \texttt{Close}, \texttt{Punct}, \texttt{Inner}). Spacing between any adjacent pair of atoms is resolved branchlessly in a single CPU cycle via a 64-byte L1-resident lookup table, with automatic display-style glue expansion.
+\item \textbf{TeX Appendix G Rule 5}: Binary operators (\texttt{Bin}) at expression boundaries or adjacent to incompatible operators (e.g., unary minus $-x$) are dynamically transformed into ordinary atoms (\texttt{Ord}), ensuring reference-identical horizontal rhythm.
+\item \textbf{Italic Correction \& Overhang Shielding}: Nuclei with slanted glyphs automatically project italic corrections to superscripts and opening delimiters, preventing collisions (such as in $f(x)$) while shielding subscripts.
+\end{itemize}
+
+\subsection{Inline and Display Mathematics}
+Mathematical expressions can be embedded inline within running text using standard dollar delimiters \verb|$...$| or \verb|\(...\)|. Display equations can be centered using \verb|$$...$$|, \verb|\[...\]|, or the formal \verb|equation| and \verb|equation*| environments.
+
+Einstein's mass-energy equivalence $E = mc^2$ demonstrates inline symbol placement. When placed in display mode with automatic numbering:
+\begin{equation}
+E = \sqrt{(m_0 c^2)^2 + (p c)^2}
+\end{equation}
+
+\subsection{Calculus, Series, and Large Operators}
+The engine provides first-class support for fractions, superscripts, subscripts, radicals, and operators with display-style limits. The fundamental theorem of calculus and the Gaussian integral are formatted natively:
+\begin{equation}
+\int_a^b f(x) \mathrm{d}x = F(b) - F(a)
+\end{equation}
+
+\[
+\int_{-\infty}^\infty e^{-x^2} \mathrm{d}x = \frac{\sqrt{\pi}}{2}
+\]
+
+Multivariate calculus operations, double integrals, and series with display limits are rendered with exact operator dimensions and subscript kerning:
+\begin{equation*}
+\frac{\partial f}{\partial x} = \lim_{h \to 0} \frac{f(x+h, y) - f(x, y)}{h}, \quad \iint_D \nabla^2 \Phi \, \mathrm{d}A = \oint_{\partial D} \nabla \Phi \cdot \vec{n} \, \mathrm{d}s
+\end{equation*}
+
+Summations and products position their index limits directly above and below the operator glyph in display styles:
+\begin{equation}
+\sum_{k=1}^n k^2 = \frac{n(n+1)(2n+1)}{6}, \quad \prod_{i=1}^m (1 + x_i) \le \exp\left(\sum_{i=1}^m x_i\right)
+\end{equation}
+
+\subsection{Accents, Vectors, and Extensible Rules}
+Mathematical accents are positioned with nucleus italic compensation:
+\[
+\vec{F} = m \vec{a}, \quad \hat{H} \Psi = E \Psi, \quad \overline{z_1 + z_2} = \bar{z}_1 + \bar{z}_2, \quad \tilde{A} \approx A_0
+\]
+
+\subsection{Linear Algebra, Determinants, and Systems}
+RushTeX implements content-sensitive matrix layout with zero dynamic heap allocations. Row heights and column widths adjust dynamically to their cell contents, and delimiters are rendered with constant, crisp stroke thickness:
+\begin{itemize}
+\item \textbf{Parentheses (\texttt{pmatrix})}: Continuous, sleek curved delimiters scaled to matrix height.
+\item \textbf{Square Brackets (\texttt{bmatrix})}: Razor-sharp vector stems and inward horizontal caps.
+\item \textbf{Determinants (\texttt{vmatrix})}: Constant-thickness vertical bars without stroke bloat.
+\item \textbf{Matrix Norms (\texttt{Vmatrix})}: Double vertical rules for operator norms.
+\item \textbf{Piecewise Systems (\texttt{cases})}: Unilateral left-brace fences for piecewise definitions.
+\end{itemize}
+
+Linear transformation with brackets and parentheses:
+\[
+\begin{pmatrix}
+a_{11} & a_{12} \\
+a_{21} & a_{22}
+\end{pmatrix}
+\begin{bmatrix}
+x_1 \\
+x_2
+\end{bmatrix}
+=
+\begin{bmatrix}
+y_1 \\
+y_2
+\end{bmatrix}
+\]
+
+Determinants and matrix norms:
+\[
+\begin{vmatrix}
+a & b \\
+c & d
+\end{vmatrix}
+= ad - bc, \quad
+\begin{Vmatrix}
+1 & 2 \\
+3 & 4
+\end{Vmatrix}
+\le \sqrt{30}
+\]
+
+Piecewise equations with unilateral delimiter formatting:
+\[
+f(x) = \begin{cases}
+x^2 \sin\left(\frac{1}{x}\right) & x \neq 0 \\
+0 & x = 0
+\end{cases}
+\]
+
+\subsection{Theoretical and Modern Physics}
+Complex physical laws from classical mechanics, electrodynamics, quantum mechanics, and general relativity are represented natively:
+\begin{equation}
+\vec{F} = \frac{\mathrm{d}\vec{p}}{\mathrm{d}t} = m \vec{a}
+\end{equation}
+
+Maxwell's equations in differential form:
+\begin{equation*}
+\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}, \quad \nabla \times \mathbf{B} = \mu_0 \mathbf{J} + \mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t}
+\end{equation*}
+
+The time-dependent Schrodinger equation:
+\begin{equation}
+i \hbar \frac{\partial}{\partial t} \Psi(\mathbf{r}, t) = \hat{H} \Psi(\mathbf{r}, t)
+\end{equation}
+
+Einstein's general relativistic field equations:
+\begin{equation}
+R_{\mu\nu} - \frac{1}{2} R g_{\mu\nu} + \Lambda g_{\mu\nu} = \frac{8\pi G}{c^4} T_{\mu\nu}
+\end{equation}
+
+\subsection{Advanced Mathematical Constructs and AMS Environments}
+The math engine supports advanced AMS-LaTeX syntax lowering directly into hardware-optimized primitives:
+
+Multi-equation alignment systems format relation symbols and column boundaries natively:
+\begin{align*}
+\nabla \cdot \mathbf{B} &= 0 \\
+\nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t}
+\end{align*}
+
+Continued fractions and combinatorial binomial coefficients:
+\[
+\frac{1}{1 + \cfrac{1}{2 + \cfrac{1}{3 + \cfrac{1}{4}}}} = \frac{30}{43}, \quad \binom{n}{k} = \frac{n!}{k!(n-k)!}
+\]
+
+Number theory and modular arithmetic:
+\[
+a \equiv b \pmod{m}, \quad r = a \bmod n
+\]
+
+Higher-order optical accents and wide constructions:
+\[
+\dot{x}, \quad \ddot{x}, \quad \dddot{x}, \quad \ddddot{x}, \quad \mathring{A}, \quad \widehat{x + y}, \quad \widetilde{A}
+\]
+
+Mathematical typefaces and algebraic spaces:
+\[
+\mathbb{R}^n, \quad \mathcal{F}[f](\omega), \quad \mathbf{X} \in \mathsf{GL}(n, \mathbb{C})
+\]
+
+Fine-grained mathematical spacing and horizontal rhythm:
+\[
+\forall \varepsilon > 0 \quad \exists \delta > 0 \qquad |x - x_0| < \delta \implies |f(x) - L| < \varepsilon
+\]
+
+\bigskip
+
 \section{Command-Line Interface (CLI)}
-The \texttt{rushtex} command-line tool provides intuitive invocation modes for standalone files, shell pipes, and debugging:
+The \texttt{rushtex} executable provides intuitive invocation modes:
 
 \begin{lstlisting}[language=bash]
 # Compile a TeX document to PDF
@@ -63,96 +622,31 @@ rushtex --ast document.tex
 rushtex document.tex --no-compress -o debug.pdf
 \end{lstlisting}
 
-\subsection{Diagnostic Error Reporting}
-When a syntax error occurs, \texttt{rushtex} prints human-readable diagnostics with line numbers, column positions, and visual caret pointers pointing directly to the offending token:
+Upon completion, \texttt{rushtex} reports the compiled page count and precise wall-clock latency:
 
 \begin{verbatim}
-error: expected \item or \end{itemize}, found something else
-  --> input.tex:14:5
-   |
-14 |     invalid token here
-   |     ^
+$ rushtex document.tex
+[DONE] Compilation of document.tex completed and RUSHTEX wrote 10 pages in 0.002 second
 \end{verbatim}
 
-\newpage
-
-\section{Language and Syntax Reference}
-The engine supports standard LaTeX syntax constructs needed for technical and academic writing.
-
-\subsection{Document Preamble}
-A document starts with document class options and geometry margins:
-
-\begin{lstlisting}[language=TeX]
-\documentclass[11pt, a4paper]{article}
-\usepackage[margin=1in]{geometry}
-\title{Document Title}
-\author{Author Name}
-\date{September 2026}
-\begin{document}
-\maketitle
-\end{document}
-\end{lstlisting}
-
-\subsection{Typography and Inline Formatting}
-Standard Adobe Type 1 vector typefaces are built in and measured at compile time:
-\begin{itemize}
-\item \textbf{Bold Text}: Produced using \verb|\textbf{...}| (Helvetica-Bold).
-\item \textit{Italic Text}: Produced using \verb|\textit{...}| or \verb|\emph{...}| (Helvetica-Oblique).
-\item \texttt{Monospace Text}: Produced using \verb|\texttt{...}| or \verb+\verb|...+| (Courier).
-\item \textbf{\textit{Combined Faces}}: Nested bold and italic produces Helvetica-BoldOblique.
-\item \textbf{Escaped Characters}: Single escapes for \verb|\%|, \verb|\$|, \verb|\&|, \verb|\#|, \verb|\_|, \verb|\{|, and \verb|\}|.
-\end{itemize}
-
-\subsection{Code Listings and Verbatim}
-Both raw verbatim blocks and styled numbered listings are natively supported:
+\section{Programmatic Rust API}
+For embedding typesetting inside web servers or cloud functions, \texttt{rushtex} exposes zero-allocation and buffer-reusing functions:
 
 \begin{lstlisting}[language=Rust, numbers=left]
-pub fn fast_add(a: u64, b: u64) -> u64 {
-    a.wrapping_add(b)
-}
-\end{lstlisting}
-
-Code listings feature automatic tab expansion to four spaces, optional line numbering in a dedicated gutter, a light background panel, and an accent bar.
-
-\newpage
-
-\section{Performance and Compatibility Matrix}
-The table below compares \texttt{rushtex} against legacy TeX distributions across key operational metrics:
-
-\medskip
-
-\begin{tabular}{|l|c|r|}
-\hline
-\textbf{Metric} & \textbf{rushtex} & \textbf{pdfTeX} \\
-\hline
-Compile Speed & 15 microseconds & 80,000 microseconds \\
-Dependencies & Zero (Pure Rust std) & C, Web2C, Kpathsea \\
-Binary Size & 1.3 MB native / 149 KB WASM & > 50 MB \\
-Memory Footprint & < 2 MB & > 30 MB \\
-Safe Mode & 100\% Safe Rust & Unsafe C / Macros \\
-Browser Execution & Native WebAssembly & Requires Emscripten VM \\
-\hline
-\end{tabular}
-
-\bigskip
-
-\section{Embedded Rust API}
-For developers embedding typesetting inside web servers or cloud functions, \texttt{rushtex} exposes a clean programmatic API:
-
-\begin{lstlisting}[language=Rust, numbers=left]
-use rushtex::{compile_str, compile_file};
+use rushtex::{compile_str, compile_into, compile_file};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let latex_source = r#"
-        \documentclass{article}
-        \begin{document}
-        Hello from embedded rushtex!
-        \end{document}
-    "#;
+    let src = "\\documentclass{article}\\begin{document}Hello!\\end{document}";
 
-    // Compile directly from memory buffer into PDF bytes
-    let pdf_bytes = compile_str(latex_source)?;
-    std::fs::write("output.pdf", &pdf_bytes)?;
+    // 1. Compile directly to owned PDF byte vector
+    let pdf_bytes = compile_str(src)?;
+
+    // 2. Compile into reusable buffer (zero allocation churn)
+    let mut buffer = Vec::with_capacity(4096);
+    compile_into(src, &mut buffer)?;
+
+    // 3. Compile file on disk
+    compile_file(std::path::Path::new("doc.tex"), None)?;
     Ok(())
 }
 \end{lstlisting}

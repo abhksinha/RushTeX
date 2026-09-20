@@ -2912,5 +2912,65 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         // \! cancels \thinmuskip (1.6667pt) exactly:
         assert!((b_loose.w - b_tight.w - 1.6667).abs() < 0.01, "Expected 1.6667pt difference between loose and tight, got {}", b_loose.w - b_tight.w);
     }
+
+    #[test]
+    fn test_display_math_vertical_spacing_and_page_builder() {
+        // Case 1: Short preceding line -> abovedisplayshortskip (0pt)
+        let short_doc_src = r"\documentclass{article}
+\begin{document}
+Hi
+\begin{equation*}
+E = mc^2
+\end{equation*}
+\end{document}";
+        let doc_short = crate::tex_parser::parse(short_doc_src).expect("Parsing must succeed");
+        let pages_short = crate::layout::layout_engine::layout(&doc_short);
+        assert!(!pages_short.is_empty());
+
+        for (idx, op) in pages_short[0].ops.iter().enumerate() {
+            eprintln!("short op[{}]: {:?}", idx, op);
+        }
+
+        // Case 2: Long preceding line that fills almost the entire measure (> 400pt)
+        let long_doc_src = r"\documentclass{article}
+\begin{document}
+This is a very long paragraph that spans across the entire line so that the predisplaysize is large enough to exceed the equation clearance and reaches almost the right margin of the page.
+\begin{equation*}
+E = mc^2
+\end{equation*}
+\end{document}";
+        let doc_long = crate::tex_parser::parse(long_doc_src).expect("Parsing must succeed");
+        let pages_long = crate::layout::layout_engine::layout(&doc_long);
+        assert!(!pages_long.is_empty());
+
+        let text_y_short = match pages_short[0].ops[0] {
+            crate::layout::layout_engine::Paint::GlyphRun { y, .. } => y,
+            _ => panic!("Expected GlyphRun"),
+        };
+        let math_y_short = match pages_short[0].ops[1] {
+            crate::layout::layout_engine::Paint::GlyphRun { y, .. } => y,
+            _ => panic!("Expected GlyphRun"),
+        };
+
+        let last_text_y_long = match pages_long[0].ops[1] {
+            crate::layout::layout_engine::Paint::GlyphRun { y, .. } => y,
+            _ => panic!("Expected GlyphRun"),
+        };
+        let math_y_long = match pages_long[0].ops[2] {
+            crate::layout::layout_engine::Paint::GlyphRun { y, .. } => y,
+            _ => panic!("Expected GlyphRun"),
+        };
+
+        let delta_short = text_y_short - math_y_short;
+        let delta_long = last_text_y_long - math_y_long;
+        // The long paragraph's line reaches past the equation clearance, triggering
+        // abovedisplayskip (11.0pt), while the short line triggers abovedisplayshortskip (0.0pt).
+        // The difference must be exactly base_font_size (11.0pt).
+        assert!(
+            ((delta_long - delta_short) - 11.0).abs() < 1e-4,
+            "Expected exact 11.0pt skip difference, got {}",
+            delta_long - delta_short
+        );
+    }
 }
 

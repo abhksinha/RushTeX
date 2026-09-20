@@ -236,6 +236,10 @@ pub(crate) struct Layouter<'a> {
     pub(crate) list_item_sep: f32,
     pub(crate) list_par_indent: f32,
     pub(crate) after_heading: bool,
+    pub(crate) has_preceding_text: bool,
+    pub(crate) last_line_width: f32,
+    pub(crate) last_line_indent: f32,
+    pub(crate) prev_graf: i32,
     scratch_runs: Vec<FlatRun<'a>>,
     pub(crate) words_soa: ParagraphSoA<'a>,
     pub(crate) line_descriptors: Vec<LineDescriptor>,
@@ -291,6 +295,10 @@ impl<'a> Layouter<'a> {
             list_item_sep: config.list_item_sep,
             list_par_indent: config.list_par_indent,
             after_heading: true,
+            has_preceding_text: false,
+            last_line_width: 0.0,
+            last_line_indent: 0.0,
+            prev_graf: 0,
             scratch_runs: Vec::with_capacity(64),
             words_soa: ParagraphSoA::with_capacity(256),
             line_descriptors: Vec::with_capacity(32),
@@ -365,6 +373,10 @@ impl<'a> Layouter<'a> {
         );
         self.pages.push(previous_page);
         self.y = self.page_height - self.margin_top;
+        self.has_preceding_text = false;
+        self.last_line_width = 0.0;
+        self.last_line_indent = 0.0;
+        self.prev_graf = 0;
     }
 
     pub(crate) fn ensure_room(&mut self, required_height: f32) -> bool {
@@ -748,6 +760,10 @@ impl<'a> Layouter<'a> {
 
         self.y -= 16.0;
         self.after_heading = true;
+        self.has_preceding_text = false;
+        self.last_line_width = 0.0;
+        self.last_line_indent = 0.0;
+        self.prev_graf = 0;
     }
 
     fn layout_section(&mut self, level: u8, starred: bool, title: &'a [Inline<'a>]) {
@@ -843,6 +859,10 @@ impl<'a> Layouter<'a> {
             self.y -= skip_after;
         }
         self.after_heading = true;
+        self.has_preceding_text = false;
+        self.last_line_width = 0.0;
+        self.last_line_indent = 0.0;
+        self.prev_graf = 0;
     }
 
     fn layout_table(&mut self, table_data: &'a TableData<'a>) {
@@ -958,24 +978,65 @@ impl<'a> Layouter<'a> {
             0.0
         };
 
-        let above_skip = 8.0f32;
-        let below_skip = 8.0f32;
-        let total_h = above_skip + m_box.h + m_box.d + below_skip;
+        let quad = self.base_font_size;
+        let available_w = (self.right - self.right_skip) - (self.left + self.left_skip);
+        let (display_w, display_indent) = crate::math::DisplayShapeGeometryResolver::resolve_geometry(
+            available_w,
+            self.hang_indent,
+            self.hang_after,
+            self.prev_graf,
+        );
 
-        self.ensure_room(total_h);
+        let raw_predisplay = crate::math::DisplayMathParagraphBreaker::compute_predisplaysize(
+            self.last_line_width + self.last_line_indent,
+            quad,
+            2000.0,
+        );
+        let predisplaysize = crate::math::EmptyParagraphDisplayFilter::filter_predisplaysize(
+            self.has_preceding_text,
+            raw_predisplay,
+        );
 
-        self.y -= above_skip;
+        let displacement = crate::math::DisplayEquationCentering::compute_displacement(
+            display_w,
+            m_box.w,
+            num_w,
+        );
+        let is_left_tag = false;
+        let use_short_skip = crate::math::PreDisplayClearanceComparator::uses_short_skip(
+            displacement,
+            display_indent,
+            predisplaysize,
+            is_left_tag,
+        );
+
+        let (above_skip, below_skip) = if use_short_skip {
+            (0.0f32, self.base_font_size * 0.6f32)
+        } else {
+            (self.base_font_size * 1.0f32, self.base_font_size * 1.0f32)
+        };
+
+        let must_split_tag = eq_num.is_some()
+            && crate::math::EquationTagCollisionDisplacement::must_split_line(
+                m_box.w,
+                num_w,
+                display_w,
+                quad,
+            );
+
+        let tag_line_h = if must_split_tag { self.base_leading } else { 0.0 };
+        let total_h = above_skip + m_box.h + m_box.d + below_skip + tag_line_h;
+
+        let page_broken = self.ensure_room(total_h);
+        // In TeX, discardable vertical glue at top of page is discarded:
+        let actual_above_skip = if page_broken { 0.0f32 } else { above_skip };
+
+        self.y -= actual_above_skip;
         let baseline_y = self.y - m_box.h;
 
-        let available_w = (self.right - self.right_skip) - (self.left + self.left_skip);
-        let mut eq_x = (self.left + self.left_skip) + (available_w - m_box.w) * 0.5;
-
+        let eq_x = self.left + self.left_skip + display_indent + displacement;
         let right_margin = self.right - self.right_skip;
         let num_x = right_margin - num_w;
-
-        if eq_num.is_some() && eq_x + m_box.w > num_x - 12.0 {
-            eq_x = self.left + self.left_skip;
-        }
 
         if !self.is_dry_run {
             crate::math::render_math(
@@ -993,9 +1054,14 @@ impl<'a> Layouter<'a> {
                 | (1 << (Face::Italic as u8));
 
             if let Some(n) = eq_num {
+                let tag_y = if must_split_tag {
+                    baseline_y - m_box.d - self.base_leading * 0.8
+                } else {
+                    baseline_y
+                };
                 self.push_op(Paint::EquationNumber {
                     x: num_x,
-                    y: baseline_y,
+                    y: tag_y,
                     face: Face::Roman,
                     size: self.base_font_size,
                     n,
@@ -1003,7 +1069,15 @@ impl<'a> Layouter<'a> {
             }
         }
 
-        self.y = baseline_y - m_box.d - below_skip;
+        if must_split_tag {
+            self.y = baseline_y - m_box.d - self.base_leading * 0.8 - below_skip;
+        } else {
+            self.y = baseline_y - m_box.d - below_skip;
+        }
+
+        let mut space_factor = 1000u16;
+        crate::math::DisplayResumeStateRestorer::restore_state(&mut self.prev_graf, &mut space_factor);
+        self.has_preceding_text = false;
         self.after_heading = false;
     }
 
@@ -1306,6 +1380,20 @@ impl<'a> Layouter<'a> {
         for d in 0..self.line_descriptors.len() {
             let desc = self.line_descriptors[d];
             self.flush_line_descriptor(&desc);
+        }
+
+        let line_count = self.line_descriptors.len();
+        if line_count > 0 {
+            let last_desc = self.line_descriptors[line_count - 1];
+            self.last_line_width = last_desc.line_w;
+            self.last_line_indent = last_desc.line_indent;
+            self.has_preceding_text = true;
+            self.prev_graf = line_count as i32;
+        } else {
+            self.has_preceding_text = false;
+            self.last_line_width = 0.0;
+            self.last_line_indent = 0.0;
+            self.prev_graf = 0;
         }
     }
 

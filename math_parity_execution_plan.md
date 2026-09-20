@@ -30,3 +30,14 @@
         fractions, nested radicals, limits, scripts, multi-integrals, matrices, and cases.
   - [x] 4.2 Build an automated harness script that runs the corpus through `pdflatex`, extracts exact box dimensions, baselines, and glyph coordinates from TeX box dumps.
   - [x] 4.3 Assert that RushTeX's measurements match pdfTeX ground truth across all test cases.
+
+- [x] **Milestone 5: Display Math Vertical List & Page Builder Integration (`mlist_to_hlist` to Vertical Builder)**
+  - [x] 5.1 Track preceding paragraph geometry (`last_line_w`, `last_line_indent`, `has_preceding_text`, `prev_graf`) in `Layouter`.
+  - [x] 5.2 Wire TeX's canonical `\predisplaysize` calculation (`DisplayMathParagraphBreaker`, `EmptyParagraphDisplayFilter`).
+  - [x] 5.3 Implement TeX's dynamic display skip selection (`PreDisplayClearanceComparator`):
+        select `\abovedisplayshortskip` (0pt natural) vs `\abovedisplayskip` (1.0 * base font size) and `\belowdisplayshortskip` (0.6 * base font size) vs `\belowdisplayskip` (1.0 * base font size).
+  - [x] 5.4 Connect display penalties and page break guards:
+        discard vertical glue at top-of-page breaks following TeX's discardable boundary rule; enforce `EquationTagPageBreakGuard::INF_PENALTY` on multiline equation number splits (`must_split_line`).
+  - [x] 5.5 State restoration:
+        restore horizontal mode state via `DisplayResumeStateRestorer::restore_state`.
+

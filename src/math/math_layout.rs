@@ -8,7 +8,7 @@ use crate::backend::fonts::{self as metrics, Face, FontFamily};
 use crate::layout::engine::Paint;
 use crate::math::math_ast::{
     BigOpData, ColAlign, DelimitedData, FontVariantTier, MathContextFlags, MathNode, MathStyle,
-    MatrixData, MatrixDelim, StyleFrameStack,
+    MatrixData, MatrixDelim, MatrixEnvKind, StyleFrameStack,
 };
 use crate::math::math_box::MathBox;
 use crate::math::math_fonts::{
@@ -122,7 +122,25 @@ pub fn node_italic_correction(
     face_override: Option<Face>,
     family: FontFamily,
 ) -> f32 {
+    node_italic_correction_styled(node, face_override, family, MathStyle::Display)
+}
+
+pub fn node_italic_correction_styled(
+    node: &MathNode,
+    face_override: Option<Face>,
+    family: FontFamily,
+    style: MathStyle,
+) -> f32 {
     match node {
+        MathNode::MathChoice(choice) => {
+            let branch = match style.tier() {
+                0 => &choice.display,
+                1 => &choice.text,
+                2 => &choice.script,
+                _ => &choice.script_script,
+            };
+            node_italic_correction_styled(branch, face_override, family, style)
+        }
         MathNode::Variable(ch) => {
             let default_face = if family == FontFamily::ComputerModern {
                 Face::MathItalic
@@ -155,21 +173,24 @@ pub fn node_italic_correction(
         MathNode::Symbol { code: None, .. } => 0.0,
         MathNode::SubSup { .. } => 0.0,
         MathNode::StyleChange { face, content } => {
-            node_italic_correction(content, Some(*face), family)
+            node_italic_correction_styled(content, Some(*face), family, style)
         }
-        MathNode::StyleScope { content, .. } => {
-            node_italic_correction(content, face_override, family)
+        MathNode::StyleScope { content, style: inner_style } => {
+            node_italic_correction_styled(content, face_override, family, *inner_style)
         }
         MathNode::Row(nodes) => {
             for n in nodes.iter().rev() {
                 if !matches!(n, MathNode::Space(_)) {
-                    return node_italic_correction(n, face_override, family);
+                    return node_italic_correction_styled(n, face_override, family, style);
                 }
             }
             0.0
         }
         MathNode::BigOp(_) => 0.0,
-        MathNode::Accent { nucleus, .. } => node_italic_correction(nucleus, face_override, family),
+        MathNode::Accent { nucleus, .. } => {
+            node_italic_correction_styled(nucleus, face_override, family, style)
+        }
+        MathNode::Overbrace(_) | MathNode::Underbrace(_) => 0.0,
         _ => 0.0,
     }
 }
@@ -190,9 +211,9 @@ pub fn layout_delimiter<'a, 'p>(
     target_h: f32,
     font_size: f32,
     rule_t: f32,
-) -> f32 {
+) -> (f32, f32) {
     if delim.is_empty() || delim == "." {
-        return 0.0;
+        return (0.0, 0.0);
     }
 
     let dmetrics = delimiter_metrics(ctx.font_family);
@@ -205,7 +226,7 @@ pub fn layout_delimiter<'a, 'p>(
             let bar_y = y_center - bar_h * 0.5;
             let bar_t = (0.040 * font_size).max(0.40);
             ctx.emit_rule(x, bar_y, bar_t, bar_h);
-            return bar_t;
+            return (bar_t, bar_h);
         }
         if delim == "\\|" || delim == "||" {
             let bar_h = (target_h + bar_extra).max(target_h);
@@ -214,7 +235,7 @@ pub fn layout_delimiter<'a, 'p>(
             let sep_bars = 2.0 * bar_t;
             ctx.emit_rule(x, bar_y, bar_t, bar_h);
             ctx.emit_rule(x + bar_t + sep_bars, bar_y, bar_t, bar_h);
-            return 2.0 * bar_t + sep_bars;
+            return (2.0 * bar_t + sep_bars, bar_h);
         }
 
         if let Some((chain, recipe_opt)) = crate::math::math_delim::resolve_cmex_delimiter(delim, is_left) {
@@ -242,7 +263,7 @@ pub fn layout_delimiter<'a, 'p>(
                 let glyph_y = y_center + (d - h) * 0.5;
                 let s = crate::math::math_delim::byte_str(code);
                 ctx.emit_glyph_run(x, glyph_y, Face::Extension, font_size, s);
-                return w;
+                return (w, h + d);
             }
 
             if let Some(recipe) = recipe_opt {
@@ -321,7 +342,7 @@ pub fn layout_delimiter<'a, 'p>(
                 // 5. Bottom piece
                 emit_piece(recipe.bot, &mut curr_top_y);
 
-                return w;
+                return (w, total_h);
             }
         }
     }
@@ -331,7 +352,7 @@ pub fn layout_delimiter<'a, 'p>(
             let bar_h = (target_h + bar_extra).max(target_h);
             let bar_y = y_center - bar_h * 0.5;
             ctx.emit_rule(x, bar_y, delim_t, bar_h);
-            delim_t
+            (delim_t, bar_h)
         }
         "\\|" | "||" => {
             let bar_h = (target_h + bar_extra).max(target_h);
@@ -339,7 +360,7 @@ pub fn layout_delimiter<'a, 'p>(
             let sep_bars = 2.0 * delim_t;
             ctx.emit_rule(x, bar_y, delim_t, bar_h);
             ctx.emit_rule(x + delim_t + sep_bars, bar_y, delim_t, bar_h);
-            2.0 * delim_t + sep_bars
+            (2.0 * delim_t + sep_bars, bar_h)
         }
         "[" | "]" => {
             let cap_w = ((dmetrics.bracket_cap_w as f32 * 0.001) * font_size).max(2.8);
@@ -357,7 +378,7 @@ pub fn layout_delimiter<'a, 'p>(
                 ctx.emit_rule(x, y_top - delim_t, cap_w, delim_t);
                 ctx.emit_rule(x, brk_y, cap_w, delim_t);
             }
-            cap_w
+            (cap_w, brk_h)
         }
         "\\lfloor" | "\\rfloor" => {
             let cap_w = ((dmetrics.bracket_cap_w as f32 * 0.001) * font_size).max(2.8);
@@ -371,7 +392,7 @@ pub fn layout_delimiter<'a, 'p>(
                 ctx.emit_rule(x + cap_w - delim_t, brk_y, delim_t, brk_h);
                 ctx.emit_rule(x, brk_y, cap_w, delim_t);
             }
-            cap_w
+            (cap_w, brk_h)
         }
         "\\lceil" | "\\rceil" => {
             let cap_w = ((dmetrics.bracket_cap_w as f32 * 0.001) * font_size).max(2.8);
@@ -386,7 +407,7 @@ pub fn layout_delimiter<'a, 'p>(
                 ctx.emit_rule(x + cap_w - delim_t, brk_y, delim_t, brk_h);
                 ctx.emit_rule(x, y_top - delim_t, cap_w, delim_t);
             }
-            cap_w
+            (cap_w, brk_h)
         }
         "\\langle" | "\\rangle" | "<" | ">" => {
             let is_open = is_left || delim == "\\langle" || delim == "<";
@@ -410,7 +431,7 @@ pub fn layout_delimiter<'a, 'p>(
             let w = metrics::width_family(ch, Face::Symbol, delim_size, ctx.font_family);
             let glyph_y = y_center - (dmetrics.center_offset_y as f32 * 0.001) * delim_size;
             ctx.emit_glyph_run(x, glyph_y, Face::Symbol, delim_size, glyph);
-            w
+            (w, delim_size)
         }
         "(" | ")" => {
             let is_open = is_left || delim == "(";
@@ -437,7 +458,7 @@ pub fn layout_delimiter<'a, 'p>(
                 let w = metrics::width_family(ch, Face::Symbol, delim_size, ctx.font_family);
                 let glyph_y = y_center - (dmetrics.center_offset_y as f32 * 0.001) * delim_size;
                 ctx.emit_glyph_run(x, glyph_y, Face::Symbol, delim_size, glyph);
-                w
+                (w, delim_size)
             } else {
                 // Tier 2: Multi-piece extensible assembly
                 let piece_size = font_size * 1.25;
@@ -461,7 +482,10 @@ pub fn layout_delimiter<'a, 'p>(
                 }
                 ctx.emit_glyph_run(x, bot_y, Face::Symbol, piece_size, bot_glyph);
 
-                metrics::width_family('\u{00E6}', Face::Symbol, piece_size, ctx.font_family)
+                (
+                    metrics::width_family('\u{00E6}', Face::Symbol, piece_size, ctx.font_family),
+                    target_h,
+                )
             }
         }
         "{" | "}" => {
@@ -487,7 +511,7 @@ pub fn layout_delimiter<'a, 'p>(
                 let w = metrics::width_family(ch, Face::Symbol, delim_size, ctx.font_family);
                 let glyph_y = y_center - (dmetrics.center_offset_y as f32 * 0.001) * delim_size;
                 ctx.emit_glyph_run(x, glyph_y, Face::Symbol, delim_size, glyph);
-                w
+                (w, delim_size)
             } else {
                 // Tier 2: Multi-piece extensible assembly
                 let piece_size = font_size * 1.25;
@@ -525,7 +549,10 @@ pub fn layout_delimiter<'a, 'p>(
                 let bot_y = y_center - ((k_extenders + 1) as f32) * delta_y;
                 ctx.emit_glyph_run(x, bot_y, Face::Symbol, piece_size, bot_glyph);
 
-                metrics::width_family('\u{00EC}', Face::Symbol, piece_size, ctx.font_family)
+                (
+                    metrics::width_family('\u{00EC}', Face::Symbol, piece_size, ctx.font_family),
+                    target_h,
+                )
             }
         }
         _ => {
@@ -535,7 +562,7 @@ pub fn layout_delimiter<'a, 'p>(
             let w = metrics::width_family(ch, Face::Roman, delim_size, ctx.font_family);
             let glyph_y = y_center - 0.28 * delim_size;
             ctx.emit_glyph_run(x, glyph_y, Face::Roman, delim_size, delim);
-            w
+            (w, delim_size)
         }
     }
 }
@@ -552,7 +579,7 @@ pub fn layout_node<'a, 'p>(
     let font_size = ctx.font_tier.font_size(style);
     let scale = font_size * 0.001;
     let axis_h = (params.axis_height as f32) * scale;
-    let rule_t = ((params.rule_thickness as f32) * scale).max(0.5);
+    let rule_t = ((params.rule_thickness as f32) * scale).max(0.35);
 
     ctx.style_stack.push(style);
     let result = match node {
@@ -761,12 +788,18 @@ pub fn layout_node<'a, 'p>(
                 (w, (h_u as f32) * scale, (d_u as f32) * scale)
             } else {
                 let mut total_w = 0.0f32;
+                let mut max_h_u = 0u16;
+                let mut max_d_u = 0u16;
                 for ch in eff_glyph.chars() {
                     total_w += measure_char(ch, eff_face, font_size, ctx.font_family);
+                    let (ch_h, ch_d) = char_height_depth(ch, eff_face, ctx.font_family);
+                    max_h_u = max_h_u.max(ch_h);
+                    max_d_u = max_d_u.max(ch_d);
                 }
-                let first = eff_glyph.chars().next().unwrap_or('x');
-                let (h_u, d_u) = char_height_depth(first, eff_face, ctx.font_family);
-                (total_w, (h_u as f32) * scale, (d_u as f32) * scale)
+                if let Some(last_ch) = eff_glyph.chars().last() {
+                    total_w += (italic_correction(last_ch, eff_face, ctx.font_family) as f32) * scale;
+                }
+                (total_w, (max_h_u as f32) * scale, (max_d_u as f32) * scale)
             };
 
             ctx.emit_glyph_run(origin_x, origin_y, eff_face, font_size, eff_glyph);
@@ -774,6 +807,29 @@ pub fn layout_node<'a, 'p>(
         }
 
         MathNode::SubSup { nucleus, sub, sup } => {
+            if let MathNode::Overbrace(inner) = &**nucleus {
+                return layout_overbrace(
+                    ctx,
+                    inner,
+                    sub.as_deref(),
+                    sup.as_deref(),
+                    style,
+                    origin_x,
+                    origin_y,
+                );
+            }
+            if let MathNode::Underbrace(inner) = &**nucleus {
+                return layout_underbrace(
+                    ctx,
+                    inner,
+                    sub.as_deref(),
+                    sup.as_deref(),
+                    style,
+                    origin_x,
+                    origin_y,
+                );
+            }
+
             let nuc_box = layout_node(ctx, nucleus, style, origin_x, origin_y);
 
             let mut sup_box = MathBox::zero();
@@ -781,11 +837,21 @@ pub fn layout_node<'a, 'p>(
 
             if let Some(sp) = sup {
                 let mut dry_ctx = ctx.dry_context();
-                sup_box = layout_node(&mut dry_ctx, sp, style.sup_style(), 0.0, 0.0);
+                let sup_style = style.sup_style();
+                let mut mb = layout_node(&mut dry_ctx, sp, sup_style, 0.0, 0.0);
+                let ic = node_italic_correction_styled(sp, dry_ctx.face_override, dry_ctx.font_family, sup_style)
+                    * (dry_ctx.font_tier.font_size(sup_style) * 0.001);
+                mb.w += ic;
+                sup_box = mb;
             }
             if let Some(sb) = sub {
                 let mut dry_ctx = ctx.dry_context();
-                sub_box = layout_node(&mut dry_ctx, sb, style.sub_style(), 0.0, 0.0);
+                let sub_style = style.sub_style();
+                let mut mb = layout_node(&mut dry_ctx, sb, sub_style, 0.0, 0.0);
+                let ic = node_italic_correction_styled(sb, dry_ctx.face_override, dry_ctx.font_family, sub_style)
+                    * (dry_ctx.font_tier.font_size(sub_style) * 0.001);
+                mb.w += ic;
+                sub_box = mb;
             }
 
             // TeX Appendix G Rule 17: Italic correction is applied to the horizontal
@@ -796,6 +862,17 @@ pub fn layout_node<'a, 'p>(
 
             let x_height = (params.accent_base_height as f32) * scale;
 
+            let is_char = match &**nucleus {
+                MathNode::Variable(_) | MathNode::Symbol { .. } | MathNode::Number(_) => true,
+                MathNode::Row(children) if children.len() == 1 => {
+                    matches!(&children[0], MathNode::Variable(_) | MathNode::Symbol { .. } | MathNode::Number(_))
+                }
+                MathNode::StyleScope { content, .. } | MathNode::StyleChange { content, .. } => {
+                    matches!(&**content, MathNode::Variable(_) | MathNode::Symbol { .. } | MathNode::Number(_))
+                }
+                _ => false,
+            };
+
             // TeX Appendix G Rule 18a: Candidate shifts
             let sup_shift_std = if style.is_cramped() {
                 (params.sup3 as f32) * scale
@@ -805,7 +882,11 @@ pub fn layout_node<'a, 'p>(
                 (params.sup2 as f32) * scale
             };
             let sup_drop = (params.sup_drop as f32) * scale;
-            let mut sup_shift = sup_shift_std.max(nuc_box.h - sup_drop);
+            let mut sup_shift = if is_char {
+                sup_shift_std
+            } else {
+                sup_shift_std.max(nuc_box.h - sup_drop)
+            };
 
             let sub_shift_std = if sup.is_some() {
                 (params.sub2 as f32) * scale
@@ -813,7 +894,11 @@ pub fn layout_node<'a, 'p>(
                 (params.sub1 as f32) * scale
             };
             let sub_drop = (params.sub_drop as f32) * scale;
-            let mut sub_shift = sub_shift_std.max(nuc_box.d + sub_drop);
+            let mut sub_shift = if is_char {
+                sub_shift_std
+            } else {
+                sub_shift_std.max(nuc_box.d + sub_drop)
+            };
 
             // TeX Rule 18c: Superscript elevation constraint (bottom at least 1/4 x-height above baseline)
             if sup.is_some() {
@@ -897,11 +982,19 @@ pub fn layout_node<'a, 'p>(
             // 1. Measure numerator and denominator
             let num_box = {
                 let mut dry_ctx = ctx.dry_context();
-                layout_node(&mut dry_ctx, num, num_style, 0.0, 0.0)
+                let mut mb = layout_node(&mut dry_ctx, num, num_style, 0.0, 0.0);
+                let ic = node_italic_correction_styled(num, dry_ctx.face_override, dry_ctx.font_family, num_style)
+                    * (dry_ctx.font_tier.font_size(num_style) * 0.001);
+                mb.w += ic;
+                mb
             };
             let den_box = {
                 let mut dry_ctx = ctx.dry_context();
-                layout_node(&mut dry_ctx, den, den_style, 0.0, 0.0)
+                let mut mb = layout_node(&mut dry_ctx, den, den_style, 0.0, 0.0);
+                let ic = node_italic_correction_styled(den, dry_ctx.face_override, dry_ctx.font_family, den_style)
+                    * (dry_ctx.font_tier.font_size(den_style) * 0.001);
+                mb.w += ic;
+                mb
             };
 
             let frac_pad = if *has_rule {
@@ -988,7 +1081,11 @@ pub fn layout_node<'a, 'p>(
             // Measure radicand in cramped style (TeX Appendix G Rule 11)
             let rad_box = {
                 let mut dry_ctx = ctx.dry_context();
-                layout_node(&mut dry_ctx, radicand, rad_style, 0.0, 0.0)
+                let mut mb = layout_node(&mut dry_ctx, radicand, rad_style, 0.0, 0.0);
+                let ic = node_italic_correction_styled(radicand, dry_ctx.face_override, dry_ctx.font_family, rad_style)
+                    * (dry_ctx.font_tier.font_size(rad_style) * 0.001);
+                mb.w += ic;
+                mb
             };
 
             // Measure degree in CrampedScriptScript if present (LuaTeX / TeX Appendix G)
@@ -1143,7 +1240,7 @@ pub fn layout_node<'a, 'p>(
                 }
 
                 let total_w = rad_content_x + rad_box.w - origin_x;
-                let total_h = (rule_bottom_y + rule_t_cm) - origin_y;
+                let total_h = (rule_bottom_y + rule_t_cm + rule_t_cm) - origin_y;
                 let total_d = rad_box.d.max(rad_d - rad_box.h - actual_clr);
                 return MathBox::with_dims(total_w, total_h, total_d);
             }
@@ -1671,7 +1768,7 @@ pub fn layout_node<'a, 'p>(
             let y_center = origin_y + axis_h;
 
             let sep = ((dmetrics.bracket_cap_w as f32 * 0.001 * 0.65) * font_size).max(1.8);
-            let open_w = {
+            let (open_w, open_h) = {
                 let mut dry_ctx = ctx.dry_context();
                 layout_delimiter(
                     &mut dry_ctx,
@@ -1698,13 +1795,14 @@ pub fn layout_node<'a, 'p>(
                 layout_node(ctx, content, style, content_x, origin_y);
             }
 
-            let close_w = layout_delimiter(
+            let (close_w, close_h) = layout_delimiter(
                 ctx, close, false, close_x, y_center, target_h, font_size, rule_t,
             );
 
             let total_w = (close_x + close_w) - origin_x;
-            let half_h = (axis_h + target_h * 0.5).max(content_box.h);
-            let half_d = (target_h * 0.5 - axis_h).max(content_box.d);
+            let actual_delim_h = open_h.max(close_h).max(target_h);
+            let half_h = (axis_h + actual_delim_h * 0.5).max(content_box.h);
+            let half_d = (actual_delim_h * 0.5 - axis_h).max(content_box.d);
             MathBox::with_dims(total_w, half_h, half_d)
         }
 
@@ -1712,9 +1810,11 @@ pub fn layout_node<'a, 'p>(
             let MatrixData {
                 rows,
                 delim,
+                env_kind,
                 col_alignments,
             } = &**data;
             let delim = *delim;
+            let env_kind = *env_kind;
             if rows.is_empty() {
                 return MathBox::zero();
             }
@@ -1727,48 +1827,49 @@ pub fn layout_node<'a, 'p>(
             let num_rows = rows.len();
             let total_cells = num_rows * num_cols;
 
-            let mut stack_col_widths = [0.0f32; 16];
-            let mut stack_row_heights = [0.0f32; 16];
-            let mut stack_row_depths = [0.0f32; 16];
-            let mut stack_cell_widths = [0.0f32; 64];
+            let mut grid_buf = crate::math::math_matrix::MatrixGridBuffer::default();
 
             let mut heap_col_widths;
             let mut heap_row_heights;
             let mut heap_row_depths;
             let mut heap_cell_widths;
 
-            let col_widths: &mut [f32] = if num_cols <= 16 {
-                &mut stack_col_widths[..num_cols]
-            } else {
-                heap_col_widths = vec![0.0f32; num_cols];
-                &mut heap_col_widths[..]
-            };
+            let col_widths: &mut [f32] =
+                if num_cols <= crate::math::math_matrix::MATRIX_STACK_COLS {
+                    &mut grid_buf.col_widths[..num_cols]
+                } else {
+                    heap_col_widths = vec![0.0f32; num_cols];
+                    &mut heap_col_widths[..]
+                };
 
-            let row_heights: &mut [f32] = if num_rows <= 16 {
-                &mut stack_row_heights[..num_rows]
-            } else {
-                heap_row_heights = vec![0.0f32; num_rows];
-                &mut heap_row_heights[..]
-            };
+            let row_heights: &mut [f32] =
+                if num_rows <= crate::math::math_matrix::MATRIX_STACK_ROWS {
+                    &mut grid_buf.row_heights[..num_rows]
+                } else {
+                    heap_row_heights = vec![0.0f32; num_rows];
+                    &mut heap_row_heights[..]
+                };
 
-            let row_depths: &mut [f32] = if num_rows <= 16 {
-                &mut stack_row_depths[..num_rows]
-            } else {
-                heap_row_depths = vec![0.0f32; num_rows];
-                &mut heap_row_depths[..]
-            };
+            let row_depths: &mut [f32] =
+                if num_rows <= crate::math::math_matrix::MATRIX_STACK_ROWS {
+                    &mut grid_buf.row_depths[..num_rows]
+                } else {
+                    heap_row_depths = vec![0.0f32; num_rows];
+                    &mut heap_row_depths[..]
+                };
 
-            let cell_widths: &mut [f32] = if total_cells <= 64 {
-                &mut stack_cell_widths[..total_cells]
-            } else {
-                heap_cell_widths = vec![0.0f32; total_cells];
-                &mut heap_cell_widths[..]
-            };
+            let cell_widths: &mut [f32] =
+                if total_cells <= crate::math::math_matrix::MATRIX_STACK_CELLS {
+                    &mut grid_buf.cell_widths[..total_cells]
+                } else {
+                    heap_cell_widths = vec![0.0f32; total_cells];
+                    &mut heap_cell_widths[..]
+                };
 
-            let m_metrics = matrix_metrics(ctx.font_family);
-            let min_rh = (m_metrics.min_row_height as f32 * 0.001) * font_size;
-            let min_rd = (m_metrics.min_row_depth as f32 * 0.001) * font_size;
-            let row_sep = (m_metrics.row_sep as f32 * 0.001) * font_size;
+            let (min_rh, min_rd, row_sep) =
+                crate::math::math_matrix::MatrixLayoutMetricsEngine::row_parameters(
+                    env_kind, font_size,
+                );
             let cell_style = style.matrix_cell_style();
 
             // First pass: content-sensitive measurement of cell widths, row heights, and row depths
@@ -1792,26 +1893,29 @@ pub fn layout_node<'a, 'p>(
                 row_depths[r_idx] = row_depths[r_idx].max(min_rd);
             }
 
-            let is_align_env = delim == MatrixDelim::None
-                && col_alignments.first() == Some(&ColAlign::Right);
-
             let gap_after_col = |c: usize| -> f32 {
-                if is_align_env {
-                    if c.is_multiple_of(2) {
-                        0.0
-                    } else {
-                        2.0 * font_size
-                    }
-                } else if delim == MatrixDelim::LeftBrace {
-                    ((params.matrix_col_spacing as f32) * scale * 2.0).max(12.0)
-                } else {
-                    (params.matrix_col_spacing as f32) * scale
-                }
+                crate::math::math_matrix::MatrixLayoutMetricsEngine::col_gap(
+                    env_kind, c, font_size,
+                )
             };
 
+            let multline_gap = 1.0 * font_size; // \multlinegap = 1em = 10pt
             let mut matrix_w: f32 = col_widths.iter().sum::<f32>();
-            for c in 0..num_cols.saturating_sub(1) {
-                matrix_w += gap_after_col(c);
+            if env_kind == MatrixEnvKind::Multline {
+                if num_rows > 1 {
+                    matrix_w += 2.0 * multline_gap;
+                }
+            } else if env_kind == MatrixEnvKind::Aligned {
+                // In TeX aligned, each pair (e.g. col 0+1, 2+3) has \tabskip (1.0em = 10pt) after it
+                for c in 0..num_cols {
+                    if c % 2 == 1 {
+                        matrix_w += 1.0 * font_size;
+                    }
+                }
+            } else {
+                for c in 0..num_cols.saturating_sub(1) {
+                    matrix_w += gap_after_col(c);
+                }
             }
 
             // Total height from top of row 0 to bottom of row N-1:
@@ -1824,29 +1928,26 @@ pub fn layout_node<'a, 'p>(
             let top_y = origin_y + axis_h + (total_content_h * 0.5);
             let y_start = top_y - row_heights[0];
 
-            let (open_str, close_str) = match delim {
-                MatrixDelim::Parentheses => ("(", ")"),
-                MatrixDelim::Brackets => ("[", "]"),
-                MatrixDelim::Braces => ("{", "}"),
-                MatrixDelim::VBar => ("|", "|"),
-                MatrixDelim::DoubleVBar => ("||", "||"),
-                MatrixDelim::LeftBrace => ("{", ""),
-                MatrixDelim::None => ("", ""),
-            };
-
+            let (open_str, close_str) =
+                crate::math::math_matrix::MatrixDelimBinder::resolve_delims(delim);
             let has_delim = !open_str.is_empty();
-            let target_h =
-                total_content_h + ((m_metrics.extra_target_h as f32 * 0.001) * font_size).max(2.0);
             let y_center = origin_y + axis_h;
-
-            let sep_ratio = match delim {
-                MatrixDelim::VBar | MatrixDelim::DoubleVBar => m_metrics.vbar_sep,
-                MatrixDelim::Brackets => m_metrics.bracket_sep,
-                _ => m_metrics.default_sep,
+            let m_metrics = matrix_metrics(ctx.font_family);
+            let (target_h, sep) = if ctx.font_family == metrics::FontFamily::ComputerModern {
+                (total_content_h, 0.0)
+            } else {
+                let th = total_content_h
+                    + ((m_metrics.extra_target_h as f32 * 0.001) * font_size).max(2.0);
+                let sep_ratio = match delim {
+                    MatrixDelim::VBar | MatrixDelim::DoubleVBar => m_metrics.vbar_sep,
+                    MatrixDelim::Brackets => m_metrics.bracket_sep,
+                    _ => m_metrics.default_sep,
+                };
+                let s = ((sep_ratio as f32 * 0.001) * font_size).max(1.8);
+                (th, s)
             };
-            let sep = ((sep_ratio as f32 * 0.001) * font_size).max(1.8);
 
-            let open_w = if has_delim {
+            let (open_w, open_h) = if has_delim {
                 let mut dry_ctx = ctx.dry_context();
                 layout_delimiter(
                     &mut dry_ctx,
@@ -1859,19 +1960,13 @@ pub fn layout_node<'a, 'p>(
                     rule_t,
                 )
             } else {
-                0.0
+                (0.0, 0.0)
             };
 
             let cells_start_x = if has_delim {
                 origin_x + open_w + sep
             } else {
                 origin_x
-            };
-
-            let default_align = if delim == MatrixDelim::LeftBrace {
-                ColAlign::Left
-            } else {
-                ColAlign::Center
             };
 
             if !ctx.is_measuring() {
@@ -1882,15 +1977,41 @@ pub fn layout_node<'a, 'p>(
                     for (col_idx, cell) in r.iter().enumerate() {
                         let col_w = col_widths[col_idx];
                         let cell_w = cell_widths[r_idx * num_cols + col_idx];
-                        let align = col_alignments
-                            .get(col_idx)
-                            .copied()
-                            .unwrap_or(default_align);
-                        let offset_x = match align {
-                            ColAlign::Left => 0.0,
-                            ColAlign::Center => (col_w - cell_w) * 0.5,
-                            ColAlign::Right => col_w - cell_w,
+
+                        let offset_x = if env_kind == MatrixEnvKind::Multline {
+                            if num_rows == 1 {
+                                (matrix_w - cell_w) * 0.5
+                            } else if r_idx == 0 {
+                                multline_gap
+                            } else if r_idx == num_rows - 1 {
+                                matrix_w - multline_gap - cell_w
+                            } else {
+                                (matrix_w - cell_w) * 0.5
+                            }
+                        } else {
+                            let fallback_align = match env_kind {
+                                MatrixEnvKind::Aligned => {
+                                    if col_idx.is_multiple_of(2) {
+                                        ColAlign::Right
+                                    } else {
+                                        ColAlign::Left
+                                    }
+                                }
+                                MatrixEnvKind::Cases => ColAlign::Left,
+                                MatrixEnvKind::Gather => ColAlign::Center,
+                                _ => ColAlign::Center,
+                            };
+                            let align = col_alignments
+                                .get(col_idx)
+                                .copied()
+                                .unwrap_or(fallback_align);
+                            match align {
+                                ColAlign::Left => 0.0,
+                                ColAlign::Center => (col_w - cell_w) * 0.5,
+                                ColAlign::Right => col_w - cell_w,
+                            }
                         };
+
                         layout_node(ctx, cell, cell_style, curr_x + offset_x, curr_y);
                         curr_x += col_w + gap_after_col(col_idx);
                     }
@@ -1908,16 +2029,20 @@ pub fn layout_node<'a, 'p>(
 
             if has_delim {
                 let has_close = !close_str.is_empty();
-                let (close_x, close_w) = if has_close {
+                let (close_x, close_w, close_h) = if has_close {
                     let cx = cells_start_x + matrix_w + sep;
-                    let cw = layout_delimiter(
+                    let (cw, ch) = layout_delimiter(
                         ctx, close_str, false, cx, y_center, target_h, font_size, rule_t,
                     );
-                    (cx, cw)
+                    (cx, cw, ch)
+                } else if delim == MatrixDelim::LeftBrace {
+                    // Canonical \nulldelimiterspace margin (1.2pt = 0.12 * font_size)
+                    (cells_start_x + matrix_w, 0.12 * font_size, 0.0)
                 } else {
-                    (cells_start_x + matrix_w, 0.0)
+                    (cells_start_x + matrix_w, 0.0, 0.0)
                 };
-                let half_h = (target_h * 0.5).max(total_content_h * 0.5);
+                let delim_extent = open_h.max(close_h);
+                let half_h = (delim_extent * 0.5).max(total_content_h * 0.5);
                 MathBox::with_dims(
                     (close_x + close_w) - origin_x,
                     axis_h + half_h,
@@ -1937,18 +2062,154 @@ pub fn layout_node<'a, 'p>(
             };
             let nuc_box = layout_node(ctx, nucleus, nuc_style, origin_x, origin_y);
             let ic = node_italic_correction(nucleus, ctx.face_override, ctx.font_family) * scale;
-            let ic_offset = match &**nucleus {
+            let skew_offset = match &**nucleus {
                 MathNode::Variable(ch) => {
-                    let default_face = if ctx.font_family == metrics::FontFamily::ComputerModern {
-                        Face::MathItalic
+                    if ctx.font_family == metrics::FontFamily::ComputerModern {
+                        crate::math::math_tfm::cmmi_skew_kern(*ch) * font_size
                     } else {
-                        Face::Italic
-                    };
-                    let face = ctx.face_override.unwrap_or(default_face);
-                    (glyph_top_accent_offset(*ch, face, ctx.font_family) as f32) * scale
+                        let default_face = Face::Italic;
+                        let face = ctx.face_override.unwrap_or(default_face);
+                        (glyph_top_accent_offset(*ch, face, ctx.font_family) as f32) * scale
+                    }
                 }
                 _ => 0.5 * ic,
             };
+
+            // TeX Appendix G Rule 8 & 9: overline and underline
+            if *accent == "overline" {
+                let rule_w = nuc_box.w;
+                let rule_y = origin_y + nuc_box.h + 3.0 * rule_t;
+                ctx.emit_rule(origin_x, rule_y, rule_w, rule_t);
+                return MathBox::with_dims(
+                    nuc_box.w,
+                    nuc_box.h + 5.0 * rule_t,
+                    nuc_box.d,
+                );
+            }
+            if *accent == "underline" {
+                let rule_w = nuc_box.w;
+                let rule_y = origin_y - nuc_box.d - 3.0 * rule_t - rule_t;
+                ctx.emit_rule(origin_x, rule_y, rule_w, rule_t);
+                return MathBox::with_dims(
+                    nuc_box.w,
+                    nuc_box.h,
+                    nuc_box.d + 5.0 * rule_t,
+                );
+            }
+
+            // TeX Appendix G Rule 12 for Computer Modern
+            if ctx.font_family == metrics::FontFamily::ComputerModern {
+                let is_wide = matches!(*accent, "widehat" | "widetilde");
+                let x_height = (params.accent_base_height as f32) * scale;
+                let delta = nuc_box.h.min(x_height);
+
+                if is_wide {
+                    let (v0, v1, v2) = if *accent == "widehat" {
+                        (0x62u8, 0x63u8, 0x64u8)
+                    } else {
+                        (0x65u8, 0x66u8, 0x67u8)
+                    };
+                    let m_v1 = crate::math::math_tfm::cmex10_metric(v1);
+                    let w_v1 = (m_v1.w as f32) * (font_size * 0.001);
+                    let (code, m) = if nuc_box.w >= w_v1 {
+                        let m_v2 = crate::math::math_tfm::cmex10_metric(v2);
+                        let w_v2 = (m_v2.w as f32) * (font_size * 0.001);
+                        if nuc_box.w >= w_v2 {
+                            (v2, m_v2)
+                        } else {
+                            (v1, m_v1)
+                        }
+                    } else {
+                        (v0, crate::math::math_tfm::cmex10_metric(v0))
+                    };
+
+                    let acc_w = (m.w as f32) * (font_size * 0.001);
+                    let acc_h = (m.h as f32) * (font_size * 0.001);
+                    let acc_y = origin_y + nuc_box.h - delta;
+                    let acc_x = origin_x + (nuc_box.w - acc_w) * 0.5 + skew_offset;
+
+                    ctx.emit_glyph_run(
+                        acc_x,
+                        acc_y,
+                        Face::Extension,
+                        font_size,
+                        crate::math::math_delim::byte_str(code),
+                    );
+
+                    return MathBox::with_dims(
+                        nuc_box.w,
+                        (acc_y + acc_h - origin_y).max(nuc_box.h),
+                        nuc_box.d,
+                    );
+                }
+
+                let cm_accent_info: Option<(Face, u8, f32, f32)> = match *accent {
+                    "hat" => {
+                        let m = crate::math::math_tfm::cmr10_metric(0x5E);
+                        Some((Face::Roman, 0x5E, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    "tilde" => {
+                        let m = crate::math::math_tfm::cmr10_metric(0x7E);
+                        Some((Face::Roman, 0x7E, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    "vec" => {
+                        let m = crate::math::math_tfm::cmmi10_metric(0x7E);
+                        Some((Face::MathItalic, 0x7E, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    "acute" => {
+                        let m = crate::math::math_tfm::cmr10_metric(0x13);
+                        Some((Face::Roman, 0x13, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    "grave" => {
+                        let m = crate::math::math_tfm::cmr10_metric(0x12);
+                        Some((Face::Roman, 0x12, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    "check" => {
+                        let m = crate::math::math_tfm::cmr10_metric(0x14);
+                        Some((Face::Roman, 0x14, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    "breve" => {
+                        let m = crate::math::math_tfm::cmr10_metric(0x15);
+                        Some((Face::Roman, 0x15, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    "bar" => {
+                        let m = crate::math::math_tfm::cmr10_metric(0x16);
+                        Some((Face::Roman, 0x16, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    "dot" => {
+                        let m = crate::math::math_tfm::cmr10_metric(0x5F);
+                        Some((Face::Roman, 0x5F, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    "ddot" => {
+                        let m = crate::math::math_tfm::cmr10_metric(0x7F);
+                        Some((Face::Roman, 0x7F, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    "mathring" => {
+                        let m = crate::math::math_tfm::cmr10_metric(0x17);
+                        Some((Face::Roman, 0x17, (m.w as f32) * (font_size * 0.001), (m.h as f32) * (font_size * 0.001)))
+                    }
+                    _ => None,
+                };
+
+                if let Some((face, code, acc_w, acc_h)) = cm_accent_info {
+                    let acc_y = origin_y + nuc_box.h - delta;
+                    let acc_x = origin_x + (nuc_box.w - acc_w) * 0.5 + skew_offset;
+                    ctx.emit_glyph_run(
+                        acc_x,
+                        acc_y,
+                        face,
+                        font_size,
+                        crate::math::math_delim::byte_str(code),
+                    );
+                    return MathBox::with_dims(
+                        nuc_box.w,
+                        (acc_y + acc_h - origin_y).max(nuc_box.h),
+                        nuc_box.d,
+                    );
+                }
+            }
+
+            let ic_offset = skew_offset;
             if let Some(am) = lookup_accent_metrics(accent, ctx.font_family) {
                 let acc_lift = (am.lift as f32 * 0.001) * font_size;
                 let acc_extra_h = (am.extra_height as f32 * 0.001) * font_size;
@@ -2150,7 +2411,7 @@ pub fn layout_node<'a, 'p>(
             for (i, child) in nodes.iter().enumerate() {
                 if !matches!(child, MathNode::Space(_)) {
                     atom_node_indices[atom_count] = i as u8;
-                    atom_kinds[atom_count] = child.atom_kind();
+                    atom_kinds[atom_count] = child.atom_kind_in_style(style);
                     atom_count += 1;
                 }
             }
@@ -2191,12 +2452,19 @@ pub fn layout_node<'a, 'p>(
 
                         let prev_node_idx = atom_node_indices[prev_k] as usize;
                         let prev_node = &nodes[prev_node_idx];
-                        let ic = node_italic_correction(
+                        let ic = node_italic_correction_styled(
                             prev_node,
                             ctx.face_override,
                             ctx.font_family,
+                            style,
                         ) * scale;
                         space += ic;
+
+                        if ctx.font_family == metrics::FontFamily::ComputerModern {
+                            if let (MathNode::Variable(c1), MathNode::Variable(c2)) = (prev_node, child) {
+                                space += crate::math::math_tfm::cmmi_pair_kern(*c1, *c2, style.tier(), font_size);
+                            }
+                        }
 
                         curr_x += space;
                     }
@@ -2252,14 +2520,240 @@ pub fn layout_node<'a, 'p>(
             // Batch 1: Item 56 - MiddleDelimiterSupport
             let target_h = (params.axis_height as f32 * scale * 2.0).max(font_size);
             let y_center = origin_y + (params.axis_height as f32 * scale);
-            let w = layout_delimiter(
+            let (w, actual_h) = layout_delimiter(
                 ctx, delim, false, origin_x, y_center, target_h, font_size, rule_t,
             );
-            MathBox::with_dims(w, target_h * 0.5, target_h * 0.5)
+            MathBox::with_dims(w, actual_h * 0.5, actual_h * 0.5)
+        }
+
+        MathNode::Overbrace(inner) => {
+            layout_overbrace(ctx, inner, None, None, style, origin_x, origin_y)
+        }
+
+        MathNode::Underbrace(inner) => {
+            layout_underbrace(ctx, inner, None, None, style, origin_x, origin_y)
         }
     };
     ctx.style_stack.pop();
     result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_overbrace<'a, 'p>(
+    ctx: &mut MathLayoutContext<'a, 'p>,
+    nucleus: &MathNode<'a>,
+    sub: Option<&MathNode<'a>>,
+    sup: Option<&MathNode<'a>>,
+    style: MathStyle,
+    origin_x: f32,
+    origin_y: f32,
+) -> MathBox {
+    let font_size = ctx.font_tier.font_size(style);
+    let scale = font_size * 0.001;
+    let size_ratio = font_size / 10.0;
+    let params = ctx.font_params(style);
+    let nuc_style = MathStyle::Display;
+
+    let nuc_box = {
+        let mut dry_ctx = ctx.dry_context();
+        layout_node(&mut dry_ctx, nucleus, nuc_style, 0.0, 0.0)
+    };
+
+    let corner_w = if ctx.font_family == metrics::FontFamily::ComputerModern {
+        (crate::math::math_tfm::cmex10_metric(0x7A).w as f32) * (font_size * 0.001)
+    } else {
+        0.45 * font_size
+    };
+    let brace_h = if ctx.font_family == metrics::FontFamily::ComputerModern {
+        (crate::math::math_tfm::cmex10_metric(0x7A).h as f32) * (font_size * 0.001)
+    } else {
+        0.12 * font_size
+    };
+    let min_brace_w = 4.0 * corner_w;
+    let target_w = nuc_box.w.max(min_brace_w);
+    let nuc_offset_x = (target_w - nuc_box.w) * 0.5;
+
+    let kern3 = 3.0 * size_ratio;
+    let brace_y = origin_y + nuc_box.h + kern3;
+    let rule_seg_w = ((target_w - min_brace_w) * 0.5).max(0.0);
+
+    let inner_top_h = nuc_box.h + kern3 + brace_h + kern3;
+    let inner_bot_d = nuc_box.d;
+
+    let sup_box = sup.map(|s| {
+        let mut dry = ctx.dry_context();
+        layout_node(&mut dry, s, style.sup_style(), 0.0, 0.0)
+    }).unwrap_or_default();
+    let sub_box = sub.map(|s| {
+        let mut dry = ctx.dry_context();
+        layout_node(&mut dry, s, style.sub_style(), 0.0, 0.0)
+    }).unwrap_or_default();
+
+    let total_w = target_w.max(sup_box.w).max(sub_box.w);
+    let brace_shift_x = (total_w - target_w) * 0.5;
+    let base_brace_x = origin_x + brace_shift_x;
+    let actual_nuc_x = base_brace_x + nuc_offset_x;
+
+    let sup_clearance = ((params.big_op_spacing1 as f32) * scale).max(2.0 * size_ratio);
+    let extra_pad = (params.big_op_spacing5 as f32) * scale;
+    let sup_y = origin_y + inner_top_h + sup_clearance + sup_box.d;
+    let sup_x = origin_x + (total_w - sup_box.w) * 0.5;
+
+    let sub_clearance = ((params.big_op_spacing2 as f32) * scale).max(1.667 * size_ratio);
+    let sub_y = origin_y - inner_bot_d - sub_clearance - sub_box.h;
+    let sub_x = origin_x + (total_w - sub_box.w) * 0.5;
+
+    if !ctx.is_measuring() {
+        layout_node(ctx, nucleus, nuc_style, actual_nuc_x, origin_y);
+
+        if ctx.font_family == metrics::FontFamily::ComputerModern {
+            let x0 = base_brace_x;
+            ctx.emit_glyph_run(x0, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7A));
+            if rule_seg_w > 0.0 {
+                ctx.emit_rule(x0 + corner_w, brace_y, rule_seg_w, brace_h);
+            }
+            let x_mid1 = x0 + corner_w + rule_seg_w;
+            ctx.emit_glyph_run(x_mid1, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7D));
+            let x_mid2 = x_mid1 + corner_w;
+            ctx.emit_glyph_run(x_mid2, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7C));
+            if rule_seg_w > 0.0 {
+                ctx.emit_rule(x_mid2 + corner_w, brace_y, rule_seg_w, brace_h);
+            }
+            let x_end = x_mid2 + corner_w + rule_seg_w;
+            ctx.emit_glyph_run(x_end, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7B));
+        } else {
+            ctx.emit_rule(base_brace_x, brace_y, target_w, brace_h);
+        }
+
+        if let Some(s) = sup {
+            layout_node(ctx, s, style.sup_style(), sup_x, sup_y);
+        }
+        if let Some(s) = sub {
+            layout_node(ctx, s, style.sub_style(), sub_x, sub_y);
+        }
+    }
+
+    let final_h = if sup.is_some() {
+        (sup_y + sup_box.h + extra_pad) - origin_y
+    } else {
+        inner_top_h
+    };
+    let final_d = if sub.is_some() {
+        (origin_y - sub_y + extra_pad).max(inner_bot_d)
+    } else {
+        inner_bot_d
+    };
+
+    MathBox::with_dims(total_w, final_h, final_d)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_underbrace<'a, 'p>(
+    ctx: &mut MathLayoutContext<'a, 'p>,
+    nucleus: &MathNode<'a>,
+    sub: Option<&MathNode<'a>>,
+    sup: Option<&MathNode<'a>>,
+    style: MathStyle,
+    origin_x: f32,
+    origin_y: f32,
+) -> MathBox {
+    let font_size = ctx.font_tier.font_size(style);
+    let scale = font_size * 0.001;
+    let size_ratio = font_size / 10.0;
+    let params = ctx.font_params(style);
+    let nuc_style = MathStyle::Display;
+
+    let nuc_box = {
+        let mut dry_ctx = ctx.dry_context();
+        layout_node(&mut dry_ctx, nucleus, nuc_style, 0.0, 0.0)
+    };
+
+    let corner_w = if ctx.font_family == metrics::FontFamily::ComputerModern {
+        (crate::math::math_tfm::cmex10_metric(0x7A).w as f32) * (font_size * 0.001)
+    } else {
+        0.45 * font_size
+    };
+    let brace_h = if ctx.font_family == metrics::FontFamily::ComputerModern {
+        (crate::math::math_tfm::cmex10_metric(0x7A).h as f32) * (font_size * 0.001)
+    } else {
+        0.12 * font_size
+    };
+    let min_brace_w = 4.0 * corner_w;
+    let target_w = nuc_box.w.max(min_brace_w);
+    let nuc_offset_x = (target_w - nuc_box.w) * 0.5;
+
+    let kern3 = 3.0 * size_ratio;
+    let brace_y = origin_y - nuc_box.d - kern3 - brace_h;
+    let rule_seg_w = ((target_w - min_brace_w) * 0.5).max(0.0);
+
+    let inner_top_h = nuc_box.h;
+    let inner_bot_d = nuc_box.d + kern3 + brace_h + kern3;
+
+    let sup_box = sup.map(|s| {
+        let mut dry = ctx.dry_context();
+        layout_node(&mut dry, s, style.sup_style(), 0.0, 0.0)
+    }).unwrap_or_default();
+    let sub_box = sub.map(|s| {
+        let mut dry = ctx.dry_context();
+        layout_node(&mut dry, s, style.sub_style(), 0.0, 0.0)
+    }).unwrap_or_default();
+
+    let total_w = target_w.max(sup_box.w).max(sub_box.w);
+    let brace_shift_x = (total_w - target_w) * 0.5;
+    let base_brace_x = origin_x + brace_shift_x;
+    let actual_nuc_x = base_brace_x + nuc_offset_x;
+
+    let sup_clearance = ((params.big_op_spacing1 as f32) * scale).max(2.0 * size_ratio);
+    let extra_pad = (params.big_op_spacing5 as f32) * scale;
+    let sup_y = origin_y + inner_top_h + sup_clearance + sup_box.d;
+    let sup_x = origin_x + (total_w - sup_box.w) * 0.5;
+
+    let sub_clearance = ((params.big_op_spacing2 as f32) * scale).max(1.667 * size_ratio);
+    let sub_y = origin_y - inner_bot_d - sub_clearance - sub_box.h;
+    let sub_x = origin_x + (total_w - sub_box.w) * 0.5;
+
+    if !ctx.is_measuring() {
+        layout_node(ctx, nucleus, nuc_style, actual_nuc_x, origin_y);
+
+        if ctx.font_family == metrics::FontFamily::ComputerModern {
+            let x0 = base_brace_x;
+            ctx.emit_glyph_run(x0, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7C));
+            if rule_seg_w > 0.0 {
+                ctx.emit_rule(x0 + corner_w, brace_y, rule_seg_w, brace_h);
+            }
+            let x_mid1 = x0 + corner_w + rule_seg_w;
+            ctx.emit_glyph_run(x_mid1, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7B));
+            let x_mid2 = x_mid1 + corner_w;
+            ctx.emit_glyph_run(x_mid2, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7A));
+            if rule_seg_w > 0.0 {
+                ctx.emit_rule(x_mid2 + corner_w, brace_y, rule_seg_w, brace_h);
+            }
+            let x_end = x_mid2 + corner_w + rule_seg_w;
+            ctx.emit_glyph_run(x_end, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7D));
+        } else {
+            ctx.emit_rule(base_brace_x, brace_y, target_w, brace_h);
+        }
+
+        if let Some(s) = sup {
+            layout_node(ctx, s, style.sup_style(), sup_x, sup_y);
+        }
+        if let Some(s) = sub {
+            layout_node(ctx, s, style.sub_style(), sub_x, sub_y);
+        }
+    }
+
+    let final_h = if sup.is_some() {
+        (sup_y + sup_box.h + extra_pad) - origin_y
+    } else {
+        inner_top_h
+    };
+    let final_d = if sub.is_some() {
+        (origin_y - sub_y + extra_pad).max(inner_bot_d)
+    } else {
+        inner_bot_d
+    };
+
+    MathBox::with_dims(total_w, final_h, final_d)
 }
 
 /// Convenience function to measure a mathematical expression.
@@ -2271,7 +2765,7 @@ pub fn measure_math<'a>(
 ) -> MathBox {
     let mut ctx = MathLayoutContext::new(base_font_size, font_family, None, None, None, style);
     let mut b = layout_node(&mut ctx, node, style, 0.0, 0.0);
-    let trailing_ic = node_italic_correction(node, ctx.face_override, ctx.font_family)
+    let trailing_ic = node_italic_correction_styled(node, ctx.face_override, ctx.font_family, style)
         * (ctx.font_tier.font_size(style) * 0.001);
     b.w += trailing_ic;
     b
@@ -2298,7 +2792,7 @@ pub fn render_math<'a, 'p>(
         style,
     );
     let mut b = layout_node(&mut ctx, node, style, origin_x, origin_y);
-    let trailing_ic = node_italic_correction(node, ctx.face_override, ctx.font_family)
+    let trailing_ic = node_italic_correction_styled(node, ctx.face_override, ctx.font_family, style)
         * (ctx.font_tier.font_size(style) * 0.001);
     b.w += trailing_ic;
     b

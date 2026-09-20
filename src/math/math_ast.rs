@@ -478,6 +478,18 @@ pub struct MathChoiceData<'a> {
     pub script_script: MathNode<'a>,
 }
 
+/// Semantic environment kind for mathematical grids and multiline equations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum MatrixEnvKind {
+    #[default]
+    Matrix = 0,
+    Aligned = 1,
+    Cases = 2,
+    Gather = 3,
+    Multline = 4,
+}
+
 /// Column alignment for matrices and alignment grids.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -493,6 +505,7 @@ pub enum ColAlign {
 pub struct MatrixData<'a> {
     pub rows: Vec<Vec<MathNode<'a>>>,
     pub delim: MatrixDelim,
+    pub env_kind: MatrixEnvKind,
     pub col_alignments: Vec<ColAlign>,
 }
 
@@ -564,6 +577,10 @@ pub enum MathNode<'a> {
     MathChoice(Box<MathChoiceData<'a>>),
     /// Middle delimiter within a dynamic fence (`\middle |`).
     MiddleDelim { delim: &'a str, options: u8 },
+    /// Extensible horizontal overbrace (`\overbrace{content}`).
+    Overbrace(Box<MathNode<'a>>),
+    /// Extensible horizontal underbrace (`\underbrace{content}`).
+    Underbrace(Box<MathNode<'a>>),
 }
 
 #[cfg(target_pointer_width = "64")]
@@ -579,8 +596,10 @@ const _: () = {
 };
 
 const _: () = assert!(core::mem::size_of::<MatrixDelim>() == 1);
+const _: () = assert!(core::mem::size_of::<MatrixEnvKind>() == 1);
 const _: () = assert!(core::mem::size_of::<ColAlign>() == 1);
 const _: () = assert!(core::mem::size_of::<MathStyle>() == 1);
+const _: () = assert!(core::mem::size_of::<MatrixData>() <= 64);
 
 impl<'a> MathNode<'a> {
     /// Returns the trailing `MathAtomKind` for inter-element spacing calculations,
@@ -592,7 +611,7 @@ impl<'a> MathNode<'a> {
             MathNode::Variable(_) => MathAtomKind::Ord,
             MathNode::SubSup { nucleus, .. } => nucleus.atom_kind(),
             MathNode::Fraction { .. } => MathAtomKind::Inner,
-            MathNode::Radical { .. } => MathAtomKind::Inner,
+            MathNode::Radical { .. } => MathAtomKind::Ord,
             MathNode::BigOp(_) => MathAtomKind::Op,
             MathNode::Delimited(_) => MathAtomKind::Inner,
             MathNode::Matrix(_) => MathAtomKind::Inner,
@@ -612,6 +631,8 @@ impl<'a> MathNode<'a> {
             MathNode::Vcenter(_) => MathAtomKind::Ord,
             MathNode::MathChoice(choice) => choice.display.atom_kind(),
             MathNode::MiddleDelim { .. } => MathAtomKind::Inner,
+            MathNode::Overbrace(_) => MathAtomKind::Op,
+            MathNode::Underbrace(_) => MathAtomKind::Op,
         }
     }
 
@@ -630,6 +651,30 @@ impl<'a> MathNode<'a> {
             MathNode::Vcenter(_) => MathAtomKind::Ord,
             MathNode::MathChoice(choice) => choice.display.first_atom_kind(),
             MathNode::MiddleDelim { .. } => MathAtomKind::Inner,
+            MathNode::Overbrace(_) => MathAtomKind::Op,
+            MathNode::Underbrace(_) => MathAtomKind::Op,
+            _ => self.atom_kind(),
+        }
+    }
+
+    /// Returns the trailing `MathAtomKind` respecting the active `MathStyle` (especially for `MathChoice`).
+    pub fn atom_kind_in_style(&self, style: MathStyle) -> MathAtomKind {
+        match self {
+            MathNode::MathChoice(choice) => match style.tier() {
+                0 => choice.display.atom_kind_in_style(style),
+                1 => choice.text.atom_kind_in_style(style),
+                2 => choice.script.atom_kind_in_style(style),
+                _ => choice.script_script.atom_kind_in_style(style),
+            },
+            MathNode::SubSup { nucleus, .. } => nucleus.atom_kind_in_style(style),
+            MathNode::Row(nodes) => {
+                for n in nodes.iter().rev() {
+                    if !matches!(n, MathNode::Space(_)) {
+                        return n.atom_kind_in_style(style);
+                    }
+                }
+                MathAtomKind::Ord
+            }
             _ => self.atom_kind(),
         }
     }

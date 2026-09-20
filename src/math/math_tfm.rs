@@ -2415,6 +2415,81 @@ pub fn cmmi10_metric(code: u8) -> GlyphMetric {
     }
 }
 
+/// Canonical TeX skew kerns for Family 1 (CMMI10 / MathItalic) against skewchar '177.
+/// Packed into a 256-byte static array in .rodata (fits entirely in 4 L1 cache lines).
+/// Values are in 1/1000 design size units.
+pub static CMMI10_SKEW_KERNS: [i16; 128] = [
+      83,  167,   83,  167,   83,   56,   83,   56, // 0..7
+      83,   56,   83,   28,   83,    0,   56,   56, // 8..15
+      83,   56,   83,   56,    0,    0,   28,   28, // 16..23
+     111,    0,   83,    0,   28,   28,   83,   56, // 24..31
+     111,    0,   83,   83,    0,   83,   83,   83, // 32..39
+       0,    0,    0,    0,    0,    0,    0,    0, // 40..47
+       0,    0,    0,    0,    0,    0,    0,    0, // 48..55
+       0,    0,    0,    0,    0,    0,    0,    0, // 56..63
+      83,  139,   83,   83,   56,   83,   83,   83, // 64..71
+      56,  111,  167,   56,   28,   83,   83,   83, // 72..79
+      83,   83,   83,   83,   83,   28,    0,    0, // 80..87
+      83,    0,   83,    0,    0,    0,    0,    0, // 88..95
+     111,    0,    0,   56,  167,   56,  167,   28, // 96..103
+     -28,    0,    0,    0,   83,    0,    0,   56, // 104..111
+      83,   83,   56,   56,   83,   28,   28,   83, // 112..119
+      28,   56,   56,   28,   83,  111,    0,    0, // 120..127
+];
+
+const _: () = assert!(core::mem::size_of_val(&CMMI10_SKEW_KERNS) == 256);
+
+/// Returns the horizontal skew offset for an italic math character in design units (scaled by font_size).
+#[inline(always)]
+pub fn cmmi_skew_kern(ch: char) -> f32 {
+    let code = ch as u32;
+    if code < 128 {
+        CMMI10_SKEW_KERNS[code as usize] as f32 * 0.001
+    } else {
+        0.0
+    }
+}
+
+/// Returns the pairwise letter kern between two CMMI characters in points.
+#[inline(always)]
+pub fn cmmi_pair_kern(c1: char, c2: char, tier: u8, font_size: f32) -> f32 {
+    match (c1, c2) {
+        ('d', 'f') => {
+            let k = match tier {
+                0 | 1 => -0.166667,
+                2 => -0.184525,
+                _ => -0.208338,
+            };
+            k * font_size
+        }
+        ('d', 'j') => {
+            let k = match tier {
+                0 | 1 => -0.111112,
+                2 => -0.123016,
+                _ => -0.138891,
+            };
+            k * font_size
+        }
+        ('d', 'Y') => {
+            let k = match tier {
+                0 | 1 => 0.055555,
+                2 => 0.061508,
+                _ => 0.069446,
+            };
+            k * font_size
+        }
+        ('d', 'Z') => {
+            let k = match tier {
+                0 | 1 => -0.055555,
+                2 => -0.061508,
+                _ => -0.069446,
+            };
+            k * font_size
+        }
+        _ => 0.0,
+    }
+}
+
 pub static CMBX10_METRICS: [GlyphMetric; 128] = [
     GlyphMetric { w: 692, h: 686, d: 0, ic: 0 }, // 0x00
     GlyphMetric { w: 958, h: 686, d: 0, ic: 0 }, // 0x01

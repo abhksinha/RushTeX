@@ -2222,7 +2222,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
             ASCII_MATH_FAST_PATH.lookup(b','),
             (MathAtomKind::Punct, Face::Roman, true)
         );
-        assert_eq!(ASCII_MATH_FAST_PATH.lookup(b' ').2, false);
+        assert!(!ASCII_MATH_FAST_PATH.lookup(b' ').2);
     }
 
     #[test]
@@ -2943,6 +2943,162 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
     }
 
     #[test]
+    fn test_milestone_8_multiline_grid_parity() {
+        use crate::font_metrics::FontFamily;
+        use crate::math::math_parser::parse_math_str;
+        use crate::math::math_layout::measure_math;
+        use crate::math::math_ast::MathStyle;
+
+        let b_matrix = measure_math(&parse_math_str(r"\begin{matrix} a & b \\ c & d \end{matrix}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_aligned = measure_math(&parse_math_str(r"\begin{aligned} a &= b \\ c &= d \end{aligned}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_cases = measure_math(&parse_math_str(r"\begin{cases} a & b \\ c & d \end{cases}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_gathered = measure_math(&parse_math_str(r"\begin{gathered} a = b \\ c = d \end{gathered}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_pmatrix = measure_math(&parse_math_str(r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_bmatrix = measure_math(&parse_math_str(r"\begin{bmatrix} a & b \\ c & d \end{bmatrix}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_multline = measure_math(&parse_math_str(r"\begin{multline*} a + b \\ + c + d \end{multline*}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+
+        // 1. Matrix: 20.4908 pt width, 14.5000 pt height, 9.5000 pt depth
+        assert!((b_matrix.w - 20.4908).abs() < 0.01, "Matrix width parity: expected ~20.4908pt, got {}", b_matrix.w);
+        assert!((b_matrix.h - 14.5000).abs() < 0.01, "Matrix height parity: expected 14.5000pt, got {}", b_matrix.h);
+        assert!((b_matrix.d - 9.5000).abs() < 0.01, "Matrix depth parity: expected 9.5000pt, got {}", b_matrix.d);
+
+        // 2. Aligned: 33.8240 pt width, 16.0000 pt height, 11.0000 pt depth (\jot = 3pt baselineskip expansion)
+        assert!((b_aligned.w - 33.8240).abs() < 0.01, "Aligned width parity: expected ~33.8240pt, got {}", b_aligned.w);
+        assert!((b_aligned.h - 16.0000).abs() < 0.01, "Aligned height parity: expected 16.0000pt, got {}", b_aligned.h);
+        assert!((b_aligned.d - 11.0000).abs() < 0.01, "Aligned depth parity: expected 11.0000pt, got {}", b_aligned.d);
+
+        // 3. Cases: 29.7464 pt width, 17.5001 pt height, 12.5002 pt depth (\arraystretch = 1.2, left brace + null delim)
+        assert!((b_cases.w - 29.7464).abs() < 0.01, "Cases width parity: expected ~29.7464pt, got {}", b_cases.w);
+        assert!((b_cases.h - 17.5001).abs() < 0.01, "Cases height parity: expected ~17.5001pt, got {}", b_cases.h);
+        assert!((b_cases.d - 12.5002).abs() < 0.01, "Cases depth parity: expected ~12.5002pt, got {}", b_cases.d);
+
+        // 4. Gathered: 22.9108 pt width, 16.0000 pt height, 11.0000 pt depth (\jot = 3pt)
+        assert!((b_gathered.w - 22.9108).abs() < 0.01, "Gathered width parity: expected ~22.9108pt, got {}", b_gathered.w);
+        assert!((b_gathered.h - 16.0000).abs() < 0.01, "Gathered height parity: expected 16.0000pt, got {}", b_gathered.h);
+        assert!((b_gathered.d - 11.0000).abs() < 0.01, "Gathered depth parity: expected 11.0000pt, got {}", b_gathered.d);
+
+        // 5. Pmatrix & Bmatrix: 35.2130 pt and 31.0464 pt width, 14.5001 pt height, 9.5001 pt depth
+        assert!((b_pmatrix.w - 35.2130).abs() < 0.01, "Pmatrix width parity: expected ~35.2130pt, got {}", b_pmatrix.w);
+        assert!((b_pmatrix.h - 14.5001).abs() < 0.01, "Pmatrix height parity: expected ~14.5001pt, got {}", b_pmatrix.h);
+        assert!((b_bmatrix.w - 31.0464).abs() < 0.01, "Bmatrix width parity: expected ~31.0464pt, got {}", b_bmatrix.w);
+        assert!((b_bmatrix.h - 14.5001).abs() < 0.01, "Bmatrix height parity: expected ~14.5001pt, got {}", b_bmatrix.h);
+
+        // 6. Multline: 16.0000 pt height, 11.0000 pt depth, left/right \multlinegap alignment
+        assert!((b_multline.h - 16.0000).abs() < 0.01, "Multline height parity: expected 16.0000pt, got {}", b_multline.h);
+        assert!((b_multline.d - 11.0000).abs() < 0.01, "Multline depth parity: expected 11.0000pt, got {}", b_multline.d);
+
+        // Verify Multline rendering offsets:
+        let mut ops = Vec::new();
+        let mut pool = Vec::new();
+        let multline_node = parse_math_str(r"\begin{multline*} a + b \\ + c + d \end{multline*}");
+        crate::math::render_math(&multline_node, 10.0, FontFamily::ComputerModern, MathStyle::Display, 0.0, 0.0, &mut ops, &mut pool);
+
+        let op_a = ops.iter().find(|op| match op {
+            crate::layout::engine::Paint::GlyphRun { part_start, .. } => pool[*part_start as usize] == "a",
+            _ => false,
+        }).expect("glyph 'a' rendered");
+        let op_c = ops.iter().find(|op| match op {
+            crate::layout::engine::Paint::GlyphRun { part_start, .. } => pool[*part_start as usize] == "c",
+            _ => false,
+        }).expect("glyph 'c' rendered");
+
+        let x_a = match op_a { crate::layout::engine::Paint::GlyphRun { x, .. } => *x, _ => 0.0 };
+        let x_c = match op_c { crate::layout::engine::Paint::GlyphRun { x, .. } => *x, _ => 0.0 };
+
+        // Row 0 starts at multline_gap (10.0pt)
+        assert!((x_a - 10.0).abs() < 1e-2, "First line of multline indented by multlinegap (10pt): got {}", x_a);
+        // Row 1 is shifted further to the right
+        assert!(x_c > x_a, "Subsequent line in multline shifted toward right margin");
+    }
+
+    #[test]
+    fn test_milestone_9_advanced_accents_and_wide_delimiters() {
+        use crate::font_metrics::FontFamily;
+        use crate::math::math_parser::parse_math_str;
+        use crate::math::math_layout::measure_math;
+        use crate::math::math_ast::MathStyle;
+
+        // 1. Wide accents: \widehat and \widetilde variant selection
+        let b_wh_x = measure_math(&parse_math_str(r"\widehat{x}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_wh_xyz = measure_math(&parse_math_str(r"\widehat{xyz}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_wt_x = measure_math(&parse_math_str(r"\widetilde{x}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_wt_xyz = measure_math(&parse_math_str(r"\widetilde{xyz}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+
+        // Variant 0 (0x62) for single char 'x': ht=7.22223pt, wd=5.71527pt
+        assert!((b_wh_x.h - 7.22223).abs() < 0.01, r"\widehat{{x}} height parity: expected 7.22223pt, got {}", b_wh_x.h);
+        assert!((b_wh_x.w - 5.71527).abs() < 0.01, r"\widehat{{x}} width parity: expected 5.71527pt, got {}", b_wh_x.w);
+        assert!((b_wt_x.h - 7.22223).abs() < 0.01, r"\widetilde{{x}} height parity: expected 7.22223pt, got {}", b_wt_x.h);
+
+        // Variant 2 (0x64) for wider string 'xyz': ht=7.50000pt
+        assert!((b_wh_xyz.h - 7.50000).abs() < 0.01, r"\widehat{{xyz}} height parity: expected 7.50000pt, got {}", b_wh_xyz.h);
+        assert!((b_wt_xyz.h - 7.50000).abs() < 0.01, r"\widetilde{{xyz}} height parity: expected 7.50000pt, got {}", b_wt_xyz.h);
+
+        // 2. Canonical single accents and italic/slanted nuclei skew positioning
+        let b_vec_x = measure_math(&parse_math_str(r"\vec{x}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_vec_a = measure_math(&parse_math_str(r"\vec{A}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_hat_x = measure_math(&parse_math_str(r"\hat{x}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_bar_x = measure_math(&parse_math_str(r"\bar{x}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_overline = measure_math(&parse_math_str(r"\overline{x}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_underline = measure_math(&parse_math_str(r"\underline{x}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+
+        assert!((b_vec_x.h - 7.14444).abs() < 0.02, r"\vec{{x}} height parity: expected 7.14444pt, got {}", b_vec_x.h);
+        assert!((b_vec_a.h - 9.67221).abs() < 0.02, r"\vec{{A}} height parity: expected 9.67221pt, got {}", b_vec_a.h);
+        assert!((b_hat_x.h - 6.94444).abs() < 0.02, r"\hat{{x}} height parity: expected 6.94444pt, got {}", b_hat_x.h);
+        assert!((b_bar_x.h - 5.67776).abs() < 0.02, r"\bar{{x}} height parity: expected 5.67776pt, got {}", b_bar_x.h);
+        assert!((b_overline.h - 6.30544).abs() < 0.02, r"\overline{{x}} height parity: expected 6.30544pt, got {}", b_overline.h);
+        assert!((b_underline.d - 1.99990).abs() < 0.02, r"\underline{{x}} depth parity: expected 1.99990pt, got {}", b_underline.d);
+
+        // Verify that \vec{A} accent glyph is shifted right by skew kern:
+        let mut ops_vec_a = Vec::new();
+        let mut pool_vec_a = Vec::new();
+        crate::math::render_math(&parse_math_str(r"\vec{A}"), 10.0, FontFamily::ComputerModern, MathStyle::Display, 0.0, 0.0, &mut ops_vec_a, &mut pool_vec_a);
+        let arrow_glyph = ops_vec_a.iter().find(|op| match op {
+            crate::layout::engine::Paint::GlyphRun { face, part_start, .. } => *face == Face::MathItalic && pool_vec_a[*part_start as usize] != "A",
+            _ => false,
+        }).expect("arrow glyph rendered");
+        let arrow_x = match arrow_glyph { crate::layout::engine::Paint::GlyphRun { x, .. } => *x, _ => 0.0 };
+        // Unskewed center would be (7.50002 - 5.00002)/2 = 1.25pt. Skew kern adds 1.38893pt -> 2.63893pt!
+        assert!((arrow_x - 2.6389).abs() < 0.05, r"\vec{{A}} skew placement: expected ~2.6389pt, got {}", arrow_x);
+
+        // 3. Extensible horizontal braces: \overbrace and \underbrace
+        let b_over = measure_math(&parse_math_str(r"\overbrace{a+b+c}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_over_sup = measure_math(&parse_math_str(r"\overbrace{a+b+c}^k"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_under = measure_math(&parse_math_str(r"\underbrace{a+b+c}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_under_sub = measure_math(&parse_math_str(r"\underbrace{a+b+c}_k"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+
+        assert!((b_over.h - 14.14441).abs() < 0.01, r"\overbrace height parity: expected 14.14441pt, got {}", b_over.h);
+        assert!((b_over.d - 0.83333).abs() < 0.01, r"\overbrace depth parity: expected 0.83333pt, got {}", b_over.d);
+        assert!((b_over.w - 38.34938).abs() < 0.01, r"\overbrace width parity: expected 38.34938pt, got {}", b_over.w);
+
+        assert!((b_over_sup.h - 22.0055).abs() < 0.01, r"\overbrace^k height parity: expected 22.0055pt, got {}", b_over_sup.h);
+        assert!((b_over_sup.d - 0.83333).abs() < 0.01, r"\overbrace^k depth parity: expected 0.83333pt, got {}", b_over_sup.d);
+
+        assert!((b_under.h - 6.94444).abs() < 0.01, r"\underbrace height parity: expected 6.94444pt, got {}", b_under.h);
+        assert!((b_under.d - 8.03330).abs() < 0.01, r"\underbrace depth parity: expected 8.03330pt, got {}", b_under.d);
+        assert!((b_under.w - 38.34938).abs() < 0.01, r"\underbrace width parity: expected 38.34938pt, got {}", b_under.w);
+
+        assert!((b_under_sub.h - 6.94444).abs() < 0.01, r"\underbrace_k height parity: expected 6.94444pt, got {}", b_under_sub.h);
+        assert!((b_under_sub.d - 15.56105).abs() < 0.01, r"\underbrace_k depth parity: expected 15.56105pt, got {}", b_under_sub.d);
+
+        // 4. Authoritative \mathchoice 4-style evaluation
+        let choice_node = parse_math_str(r"\mathchoice{D}{T}{S}{SS}");
+        let b_d = measure_math(&choice_node, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let b_t = measure_math(&choice_node, 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_s = measure_math(&choice_node, 10.0, FontFamily::ComputerModern, MathStyle::Script);
+        let b_ss = measure_math(&choice_node, 10.0, FontFamily::ComputerModern, MathStyle::ScriptScript);
+
+        let d_only = measure_math(&parse_math_str("D"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let t_only = measure_math(&parse_math_str("T"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let s_only = measure_math(&parse_math_str("S"), 10.0, FontFamily::ComputerModern, MathStyle::Script);
+        let ss_only = measure_math(&parse_math_str("SS"), 10.0, FontFamily::ComputerModern, MathStyle::ScriptScript);
+
+        assert!((b_d.w - d_only.w).abs() < 1e-4, r"\mathchoice Display branch mismatch");
+        assert!((b_t.w - t_only.w).abs() < 1e-4, r"\mathchoice Text branch mismatch");
+        assert!((b_s.w - s_only.w).abs() < 1e-4, r"\mathchoice Script branch mismatch");
+        assert!((b_ss.w - ss_only.w).abs() < 1e-4, r"\mathchoice ScriptScript branch mismatch");
+    }
+
+    #[test]
     fn test_display_math_vertical_spacing_and_page_builder() {
         // Case 1: Short preceding line -> abovedisplayshortskip (0pt)
         let short_doc_src = r"\documentclass{article}
@@ -2999,6 +3155,106 @@ E = mc^2
             ((delta_long - delta_short) - 11.0).abs() < 1e-4,
             "Expected exact 11.0pt skip difference, got {}",
             delta_long - delta_short
+        );
+    }
+
+    #[test]
+    fn test_milestone_10_differential_regression_consolidation_and_certification() {
+        use crate::font_metrics::FontFamily;
+        use crate::math::math_parser::parse_math_str;
+        use crate::math::math_layout::measure_math;
+        use crate::math::math_ast::MathStyle;
+
+        // 50 Canonical Expressions directly measured from TeX Live / pdfLaTeX ground truth ($ ... $ mode)
+        let corpus: [(&str, f32, f32, f32); 50] = [
+            ("x", 5.7153, 4.3055, 0.0000),
+            ("x + y", 23.1990, 5.8333, 1.9444),
+            ("a - b", 21.7997, 6.9444, 0.8333),
+            ("a = b", 22.9108, 6.9444, 0.0000),
+            ("x < y", 24.3101, 5.3910, 1.9444),
+            ("x > y", 24.3101, 5.3910, 1.9444),
+            ("x^2", 10.2014, 8.1400, 0.0000),
+            ("x_1", 10.2014, 4.3055, 1.5000),
+            ("x_1^2", 10.2014, 8.1400, 2.4821),
+            ("x^2 + y_1 = z", 50.2360, 8.1400, 1.9444),
+            (r"\alpha + \beta = \gamma", 43.9063, 6.9444, 1.9444),
+            (r"\pi r^2", 15.3345, 8.1400, 0.0000),
+            (r"e^{-x^2}", 19.8438, 9.8689, 0.0000),
+            ("f(x) = x^2", 43.0000, 8.1400, 2.5000),
+            (r"\sin(x) + \cos(y)", 64.4213, 7.5000, 2.5000),
+            (r"\log(x) = 0", 44.7430, 7.5000, 2.5000),
+            (r"\theta \le \phi", 24.2638, 6.9444, 1.9444),
+            (r"\lambda \ge \mu", 25.1921, 6.9444, 1.9444),
+            (r"A \subset B", 28.9200, 6.8333, 0.3910),
+            (r"x \in \mathbb{R}", 25.1596, 6.8889, 0.3910),
+            (r"\frac{1}{2}", 6.3861, 8.4484, 3.4484),
+            (r"\frac{a}{b}", 6.7376, 6.9512, 3.4484),
+            (r"\frac{a+b}{c+d}", 16.3932, 8.7984, 4.2818),
+            (r"\frac{x^2}{y^2}", 10.8376, 10.1773, 4.8095),
+            (r"\frac{1}{1+x}", 17.0598, 8.4484, 4.2818),
+            (r"\frac{\alpha}{\beta}", 7.5988, 6.9512, 4.8095),
+            (r"\frac{x+y}{2}", 17.3804, 8.7944, 3.4484),
+            (r"\frac{-b}{2a}", 12.1667, 8.7984, 3.4484),
+            (r"\frac{d f}{d x}", 11.0976, 9.3222, 3.4484),
+            (r"\frac{\partial u}{\partial t}", 11.8291, 8.7984, 3.4484),
+            (r"\sqrt{x}", 14.0486, 8.0027, 2.3972),
+            (r"\sqrt{2}", 13.3334, 9.0722, 1.3278),
+            (r"\sqrt{x+y}", 31.5324, 7.7944, 2.6056),
+            (r"\sqrt{x^2+y^2}", 42.1713, 9.5778, 2.8223),
+            (r"\sqrt{\frac{1}{2}}", 16.3861, 12.3501, 6.0501),
+            (r"\sqrt{\frac{a}{b}}", 16.7377, 8.6014, 3.7987),
+            (r"\sqrt{1+x^2}", 35.7569, 9.1333, 1.2667),
+            (r"\sqrt{a^2+b^2}", 39.1053, 9.1333, 1.2667),
+            (r"\sqrt{x_1}", 18.5348, 7.2527, 3.1472),
+            (r"\sqrt{2\pi}", 19.3924, 9.0722, 1.3278),
+            (r"\int f(x) dx", 38.7188, 8.0556, 3.0556),
+            (r"\iint", 11.6667, 8.0556, 3.0556),
+            (r"\iiint", 16.6668, 8.0556, 3.0556),
+            (r"\sum x_i", 21.2668, 7.5001, 2.5001),
+            (r"\prod a_k", 21.3172, 7.5001, 2.5001),
+            ("(a + b)", 29.5775, 7.5000, 2.5000),
+            ("[x - y]", 28.7546, 7.5000, 2.5000),
+            ("(x + y)^2", 35.4629, 8.1400, 2.5000),
+            (r"\pm \sqrt{D}", 24.6681, 9.2666, 1.1334),
+            ("E = m c^2", 38.8854, 8.1400, 0.0000),
+        ];
+
+        let mut max_w_err = 0.0f32;
+        let mut max_h_err = 0.0f32;
+        let mut max_d_err = 0.0f32;
+
+        for (idx, &(expr, exp_w, exp_h, exp_d)) in corpus.iter().enumerate() {
+            let node = parse_math_str(expr);
+            let mb = measure_math(&node, 10.0, FontFamily::ComputerModern, MathStyle::Text);
+
+            let err_w = (mb.w - exp_w).abs();
+            let err_h = (mb.h - exp_h).abs();
+            let err_d = (mb.d - exp_d).abs();
+
+            max_w_err = max_w_err.max(err_w);
+            max_h_err = max_h_err.max(err_h);
+            max_d_err = max_d_err.max(err_d);
+
+            assert!(
+                err_w < 0.05,
+                "Formula [{}] '{}' width mismatch: actual={:.4}, expected={:.4}, err={:.4}",
+                idx, expr, mb.w, exp_w, err_w
+            );
+            assert!(
+                err_h < 0.05,
+                "Formula [{}] '{}' height mismatch: actual={:.4}, expected={:.4}, err={:.4}",
+                idx, expr, mb.h, exp_h, err_h
+            );
+            assert!(
+                err_d < 0.05,
+                "Formula [{}] '{}' depth mismatch: actual={:.4}, expected={:.4}, err={:.4}",
+                idx, expr, mb.d, exp_d, err_d
+            );
+        }
+
+        eprintln!(
+            "\n[Milestone 10 Parity Certification: 50/50 Formulas Validated]\n  Max width deviation:  {:.4} pt\n  Max height deviation: {:.4} pt\n  Max depth deviation:  {:.4} pt",
+            max_w_err, max_h_err, max_d_err
         );
     }
 }

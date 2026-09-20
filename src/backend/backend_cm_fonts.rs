@@ -522,6 +522,12 @@ const fn make_cmex_to_unicode() -> [u16; 128] {
     map[0x5F] = 0x22C0; // \bigvee display
     map[0x60] = 0x2210; // \coprod text
     map[0x61] = 0x2210; // \coprod display
+    map[0x62] = 0x0302; // \widehat variant 0
+    map[0x63] = 0x0302; // \widehat variant 1
+    map[0x64] = 0x0302; // \widehat variant 2
+    map[0x65] = 0x0303; // \widetilde variant 0
+    map[0x66] = 0x0303; // \widetilde variant 1
+    map[0x67] = 0x0303; // \widetilde variant 2
     map[0x70] = 0x221A; // radical variant 0
     map[0x71] = 0x221A; // radical variant 1
     map[0x72] = 0x221A; // radical variant 2
@@ -529,6 +535,10 @@ const fn make_cmex_to_unicode() -> [u16; 128] {
     map[0x74] = 0x221A; // radical bot
     map[0x75] = 0x221A; // radical rep
     map[0x76] = 0x221A; // radical top
+    map[0x7A] = 0x23DF; // \braceld (bottom curly bracket)
+    map[0x7B] = 0x23DF; // \bracerd (bottom curly bracket)
+    map[0x7C] = 0x23DE; // \bracelu (top curly bracket)
+    map[0x7D] = 0x23DE; // \braceru (top curly bracket)
     map
 }
 

@@ -3,8 +3,100 @@
 //! Provides Structure of Arrays column buffers, vectorized row alignment,
 //! Rule 12 \vcenter math axis centering, and delimiter binders.
 
-use crate::math::math_ast::{ColAlign, MatrixDelim};
+use crate::math::math_ast::{ColAlign, MatrixDelim, MatrixEnvKind};
 use crate::math::math_box::MathBox;
+
+/// Maximum stack columns before falling back to heap allocation.
+pub const MATRIX_STACK_COLS: usize = 16;
+/// Maximum stack rows before falling back to heap allocation.
+pub const MATRIX_STACK_ROWS: usize = 16;
+/// Maximum stack cells before falling back to heap allocation.
+pub const MATRIX_STACK_CELLS: usize = 64;
+
+/// Structure of Arrays (SoA) buffer for matrix column widths, row heights, and row depths.
+///
+/// 64-byte aligned to maximize L1 CPU cache line packing and eliminate heap allocations
+/// across standard mathematical matrices and multiline environments.
+#[repr(C, align(64))]
+pub struct MatrixGridBuffer {
+    pub col_widths: [f32; MATRIX_STACK_COLS],
+    pub row_heights: [f32; MATRIX_STACK_ROWS],
+    pub row_depths: [f32; MATRIX_STACK_ROWS],
+    pub cell_widths: [f32; MATRIX_STACK_CELLS],
+}
+
+impl Default for MatrixGridBuffer {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            col_widths: [0.0; MATRIX_STACK_COLS],
+            row_heights: [0.0; MATRIX_STACK_ROWS],
+            row_depths: [0.0; MATRIX_STACK_ROWS],
+            cell_widths: [0.0; MATRIX_STACK_CELLS],
+        }
+    }
+}
+
+const _: () = assert!(core::mem::align_of::<MatrixGridBuffer>() == 64);
+const _: () = assert!(core::mem::size_of::<MatrixGridBuffer>() == 448);
+
+/// Canonical typographic metrics engine for matrices, cases, and multiline environments.
+pub struct MatrixLayoutMetricsEngine;
+
+impl MatrixLayoutMetricsEngine {
+    /// Computes canonical minimum row height, minimum row depth, and inter-row separation
+    /// according to TeX Live / AMS-LaTeX mathematical layout rules.
+    #[inline(always)]
+    pub fn row_parameters(env_kind: MatrixEnvKind, font_size: f32) -> (f32, f32, f32) {
+        match env_kind {
+            MatrixEnvKind::Cases => {
+                // LaTeX cases uses \arraystretch = 1.2 on standard strut
+                let min_rh = 1.2 * 0.84 * font_size; // ~10.08pt at 10pt
+                let min_rd = 1.2 * 0.36 * font_size; // ~4.32pt at 10pt
+                let row_sep = 0.0;
+                (min_rh, min_rd, row_sep)
+            }
+            MatrixEnvKind::Aligned | MatrixEnvKind::Gather | MatrixEnvKind::Multline => {
+                // AMS multiline environments use standard strut + \jot (3pt = 0.30em)
+                let min_rh = 0.84 * font_size; // ~8.40pt at 10pt
+                let min_rd = 0.36 * font_size; // ~3.60pt at 10pt
+                let row_sep = 0.30 * font_size; // ~3.00pt (\jot) at 10pt
+                (min_rh, min_rd, row_sep)
+            }
+            MatrixEnvKind::Matrix => {
+                // Standard TeX matrix uses \strutbox (8.4pt + 3.6pt = 12pt baselineskip)
+                let min_rh = 0.84 * font_size;
+                let min_rd = 0.36 * font_size;
+                let row_sep = 0.0;
+                (min_rh, min_rd, row_sep)
+            }
+        }
+    }
+
+    /// Computes canonical inter-column separation following column `col_idx`.
+    #[inline(always)]
+    pub fn col_gap(env_kind: MatrixEnvKind, col_idx: usize, font_size: f32) -> f32 {
+        match env_kind {
+            MatrixEnvKind::Aligned => {
+                if col_idx.is_multiple_of(2) {
+                    0.0 // Exactly 0 between relation/right and left
+                } else {
+                    1.0 * font_size // 1em (\alignedspace) between equation pairs
+                }
+            }
+            MatrixEnvKind::Cases => {
+                1.0 * font_size // \quad = 1em
+            }
+            MatrixEnvKind::Gather => {
+                1.0 * font_size // \quad = 1em
+            }
+            MatrixEnvKind::Multline => 0.0,
+            MatrixEnvKind::Matrix => {
+                1.0 * font_size // 2 * \arraycolsep = 10pt = 1em
+            }
+        }
+    }
+}
 
 /// Structure of Arrays (SoA) layout for matrix column metrics.
 ///
@@ -95,8 +187,8 @@ impl MatrixDelimBinder {
             MatrixDelim::Brackets => ("[", "]"),
             MatrixDelim::Braces => ("{", "}"),
             MatrixDelim::VBar => ("|", "|"),
-            MatrixDelim::DoubleVBar => ("\u{2016}", "\u{2016}"),
-            MatrixDelim::LeftBrace => ("{", "."),
+            MatrixDelim::DoubleVBar => ("||", "||"),
+            MatrixDelim::LeftBrace => ("{", ""),
         }
     }
 }

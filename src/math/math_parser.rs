@@ -6,8 +6,8 @@
 use crate::backend::fonts::Face;
 use crate::math::math_ast::{
     BigOpData, ColAlign, DelimitedData, MathChoiceData, MathNode, MathStyle, MatrixData,
-    MatrixDelim, DELIMITER_OPT_NONE, FRACTION_OPT_EXACT, FRACTION_OPT_NOAXIS, FRACTION_OPT_NONE,
-    FRACTION_OPT_NORULE,
+    MatrixDelim, MatrixEnvKind, DELIMITER_OPT_NONE, FRACTION_OPT_EXACT, FRACTION_OPT_NOAXIS,
+    FRACTION_OPT_NONE, FRACTION_OPT_NORULE,
 };
 use crate::math::math_fonts::{
     lookup_math_command, mathcode_atom_kind, mathcode_char, mathcode_family, MATHCODE_TABLE,
@@ -861,6 +861,16 @@ impl<'a> MathParser<'a> {
                 })
             }
 
+            // Extensible horizontal braces
+            "overbrace" => {
+                let nucleus = Box::new(self.parse_mandatory_arg());
+                Some(MathNode::Overbrace(nucleus))
+            }
+            "underbrace" => {
+                let nucleus = Box::new(self.parse_mandatory_arg());
+                Some(MathNode::Underbrace(nucleus))
+            }
+
             // Font switches
             "mathrm" | "text" => {
                 let content = Box::new(self.parse_mandatory_arg());
@@ -915,15 +925,20 @@ impl<'a> MathParser<'a> {
             // Environments: `\begin{matrix}`, `\begin{align*}`, etc.
             "begin" => {
                 let env = self.parse_ident_arg();
-                let (delim, col_alignments) = match env {
-                    "pmatrix" => (MatrixDelim::Parentheses, Vec::new()),
-                    "bmatrix" => (MatrixDelim::Brackets, Vec::new()),
-                    "Bmatrix" => (MatrixDelim::Braces, Vec::new()),
-                    "vmatrix" => (MatrixDelim::VBar, Vec::new()),
-                    "Vmatrix" => (MatrixDelim::DoubleVBar, Vec::new()),
-                    "cases" => (MatrixDelim::LeftBrace, vec![ColAlign::Left, ColAlign::Left]),
+                let (delim, env_kind, col_alignments) = match env {
+                    "pmatrix" => (MatrixDelim::Parentheses, MatrixEnvKind::Matrix, Vec::new()),
+                    "bmatrix" => (MatrixDelim::Brackets, MatrixEnvKind::Matrix, Vec::new()),
+                    "Bmatrix" => (MatrixDelim::Braces, MatrixEnvKind::Matrix, Vec::new()),
+                    "vmatrix" => (MatrixDelim::VBar, MatrixEnvKind::Matrix, Vec::new()),
+                    "Vmatrix" => (MatrixDelim::DoubleVBar, MatrixEnvKind::Matrix, Vec::new()),
+                    "cases" => (
+                        MatrixDelim::LeftBrace,
+                        MatrixEnvKind::Cases,
+                        vec![ColAlign::Left, ColAlign::Left],
+                    ),
                     "aligned" | "align" | "align*" | "alignat" | "alignat*" | "split" => (
                         MatrixDelim::None,
+                        MatrixEnvKind::Aligned,
                         vec![
                             ColAlign::Right,
                             ColAlign::Left,
@@ -935,13 +950,14 @@ impl<'a> MathParser<'a> {
                             ColAlign::Left,
                         ],
                     ),
-                    "gather" | "gather*" | "gathered" => {
-                        (MatrixDelim::None, vec![ColAlign::Center; 8])
-                    }
-                    "multline" | "multline*" => (
+                    "gather" | "gather*" | "gathered" => (
                         MatrixDelim::None,
-                        vec![ColAlign::Left, ColAlign::Center, ColAlign::Right],
+                        MatrixEnvKind::Gather,
+                        vec![ColAlign::Center; 8],
                     ),
+                    "multline" | "multline*" => {
+                        (MatrixDelim::None, MatrixEnvKind::Multline, Vec::new())
+                    }
                     "array" => {
                         let align_str = self.parse_ident_arg();
                         let aligns: Vec<ColAlign> = align_str
@@ -953,11 +969,11 @@ impl<'a> MathParser<'a> {
                                 _ => None,
                             })
                             .collect();
-                        (MatrixDelim::None, aligns)
+                        (MatrixDelim::None, MatrixEnvKind::Matrix, aligns)
                     }
-                    _ => (MatrixDelim::None, Vec::new()),
+                    _ => (MatrixDelim::None, MatrixEnvKind::Matrix, Vec::new()),
                 };
-                let matrix_node = self.parse_matrix_body(env, delim, col_alignments);
+                let matrix_node = self.parse_matrix_body(env, delim, env_kind, col_alignments);
                 Some(matrix_node)
             }
 
@@ -1087,11 +1103,12 @@ impl<'a> MathParser<'a> {
         res.trim()
     }
 
-    /// Parses a matrix environment body with rows separated by `\\` and columns by `&`.
+    /// Parses a matrix environment body with rows separated by `\\` or `\cr` and columns by `&`.
     fn parse_matrix_body(
         &mut self,
         env_name: &str,
         delim: MatrixDelim,
+        env_kind: MatrixEnvKind,
         col_alignments: Vec<ColAlign>,
     ) -> MathNode<'a> {
         let mut rows = Vec::with_capacity(4);
@@ -1108,6 +1125,7 @@ impl<'a> MathParser<'a> {
             }
 
             let mut row = Vec::with_capacity(4);
+            let mut col_idx = 0usize;
             loop {
                 self.skip_ws();
                 if self.is_eof() || self.is_at_end_env(env_name) {
@@ -1116,13 +1134,47 @@ impl<'a> MathParser<'a> {
                 if self.eat("\\hline") {
                     continue;
                 }
-                let cell = self.parse_cell_expression(env_name);
+                let mut cell = self.parse_cell_expression(env_name);
+
+                // AMS Parity: prepend empty Ord atom `{}` for operator spacing:
+                // 1. In `aligned` odd columns (col 1, 3, 5...), LaTeX uses `${}#$`.
+                //    If cell starts with a Rel or Bin, `{}` gives it its left clearance.
+                // 2. In `multline` subsequent rows (row > 0), binary operators like `+`
+                //    must retain binary operator spacing instead of unary promotion.
+                let needs_phantom_ord = match env_kind {
+                    MatrixEnvKind::Aligned => {
+                        (col_idx % 2 == 1)
+                            && matches!(
+                                cell.first_atom_kind(),
+                                MathAtomKind::Rel | MathAtomKind::Bin
+                            )
+                    }
+                    MatrixEnvKind::Multline => {
+                        !rows.is_empty() && cell.first_atom_kind() == MathAtomKind::Bin
+                    }
+                    _ => false,
+                };
+
+                if needs_phantom_ord {
+                    match cell {
+                        MathNode::Row(ref mut nodes) => {
+                            nodes.insert(0, MathNode::Row(Vec::new()));
+                        }
+                        other => {
+                            cell = MathNode::Row(vec![MathNode::Row(Vec::new()), other]);
+                        }
+                    }
+                }
+
                 row.push(cell);
+                col_idx += 1;
                 self.skip_ws();
                 if self.eat("&") {
                     continue;
                 }
-                self.eat("\\\\");
+                if !self.eat("\\\\") {
+                    self.eat("\\cr");
+                }
                 break;
             }
             if !row.is_empty() {
@@ -1133,6 +1185,7 @@ impl<'a> MathParser<'a> {
         MathNode::Matrix(Box::new(MatrixData {
             rows,
             delim,
+            env_kind,
             col_alignments,
         }))
     }

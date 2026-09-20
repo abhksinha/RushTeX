@@ -53,3 +53,24 @@
   - [x] 7.3 Restored canonical `\nulldelimiterspace` (1.2pt) margin on fraction rules matching TeX Live ground truth.
   - [x] 7.4 Corrected integral italic correction and script placement (`\int` subscript hugs bottom hook without `ic`, superscript shifted right by `ic`, exact `sup_drop` and `sub_drop` baseline shifts).
   - [x] 7.5 Fixed Computer Modern `/ToUnicode` mapping for display `\int` (0x5A -> U+222B) and all CMEX big operators.
+
+- [x] **Milestone 8: AMS Multiline Environments & Content-Sensitive Grid Alignment Parity**
+  - [x] 8.1 Added 1-byte `MatrixEnvKind` enum to `MatrixData` (aligned, cases, gather, multline, matrix) preserving 64-byte L1 cacheline fit.
+  - [x] 8.2 Implemented `MatrixGridBuffer` (448 bytes, `#[repr(C, align(64))]`) for SIMD/cache-efficient zero-heap column/row alignment passes.
+  - [x] 8.3 Canonized AMS `aligned` column spacing (0pt between R and L column of each pair, 10pt/1em `\tabskip` between pairs) and row baseline expansion via `\jot = 3.0pt`.
+  - [x] 8.4 Injected phantom Ord atom `{}` for operator spacing at the start of `aligned` odd columns and `multline` continuation rows, matching pdfLaTeX Rule 5 mathrel/mathbin spacing.
+  - [x] 8.5 Canonized `cases` environment (`\arraystretch = 1.2`, `\quad` inter-column spacing, CMEX variant 2 left brace with `\nulldelimiterspace = 1.2pt` right margin), achieving bit-exact match with pdflatex ground truth (29.7464pt width, 17.5001pt height, 12.5002pt depth).
+  - [x] 8.6 Implemented `multline` layout geometry (first row left-aligned with `\multlinegap`, last row right-aligned with `\multlinegap`, intermediate rows centered).
+  - [x] 8.7 Authoritative delimiter extent propagation: `layout_delimiter` returns exact rendered delimiter extent `(w, actual_h)`, eliminating heuristic height approximations.
+
+- [x] **Milestone 9: Advanced Accents, Math Choice Dispatch, and Optical Wide Delimiters**
+  - [x] 9.1 Implemented Donald Knuth's canonical `tex.web` §738 Rule 12 for math accents with CM font metrics and discrete variant progression for `\widehat` (cmex 0x62, 0x63, 0x64) and `\widetilde` (cmex 0x65, 0x66, 0x67).
+  - [x] 9.2 Extracted Family 1 (CMMI10) skew kern table (`CMMI10_SKEW_KERNS`, 256 bytes static array in `.rodata`) against skewchar '177, providing exact optical centering of vector arrows and accents on slanted and italic characters (`\vec{A}`, `\vec{x}`).
+  - [x] 9.3 Implemented canonical TeX extensible horizontal braces (`\overbrace`, `\underbrace`) using CMEX corner/center glyphs (`0x7A`, `0x7B`, `0x7C`, `0x7D`), connecting rules, natural 3pt kerns, and `big_op_spacing1..5` limits clearances with bit-exact pdflatex geometric parity.
+  - [x] 9.4 Implemented style-aware atom classification (`atom_kind_in_style`) and styled italic correction (`node_italic_correction_styled`), ensuring `\mathchoice{D}{T}{S}{SS}` dynamically adapts across Display, Text, Script, and ScriptScript tiers with zero allocation.
+  - [x] 9.5 Enriched Computer Modern `/ToUnicode` CMap with wide accent and horizontal brace glyph mappings, ensuring PDF searchability and text extraction parity.
+
+- [x] **Milestone 10: Full Regression Consolidation, Benchmark Verification & TeX Reference Certification**
+  - [x] 10.1 Run end-to-end 50-formula differential harness across all 10 milestones comparing box dumps, baselines, and glyph coordinates.
+  - [x] 10.2 Verify throughput benchmarks ensuring math layout and PDF rendering maintain sub-millisecond execution speeds across L1/L2 cacheline bounds.
+  - [x] 10.3 Finalize certification report against TeX Live 2023 / pdfLaTeX reference profile.

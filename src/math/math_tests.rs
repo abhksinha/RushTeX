@@ -1146,6 +1146,39 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         let stem_box = measure_math(&stem_ops, 10.0, FontFamily::Times, MathStyle::Display);
         assert!(stem_box.w > 0.0);
 
+        // 3c. Computer Modern native big operators (\bigoplus, \bigotimes, \bigodot, \bigsqcup)
+        ops.clear();
+        pool.clear();
+        let bigop_test = parse_math_str(r"\bigoplus \bigotimes \bigodot \bigsqcup");
+        render_math(
+            &bigop_test,
+            10.0,
+            FontFamily::ComputerModern,
+            MathStyle::Display,
+            0.0,
+            0.0,
+            &mut ops,
+            &mut pool,
+        );
+        assert!(pool.contains(&"M"), "Display \\bigoplus in CM must emit 0x4D ('M')");
+        assert!(pool.contains(&"O"), "Display \\bigotimes in CM must emit 0x4F ('O')");
+        assert!(pool.contains(&"K"), "Display \\bigodot in CM must emit 0x4B ('K')");
+        assert!(pool.contains(&"G"), "Display \\bigsqcup in CM must emit 0x47 ('G')");
+
+        // 3d. Delimiter resolution for vertical bars and slashes
+        use crate::math::math_delim::resolve_cmex_delimiter;
+        let (vert_chain, vert_recipe) = resolve_cmex_delimiter("|", true).expect("vert must resolve");
+        assert_eq!(vert_chain.len(), 4);
+        assert_eq!(vert_recipe.expect("vert recipe").rep, 0x0C);
+
+        let (vert_d_chain, vert_d_recipe) = resolve_cmex_delimiter(r"\|", true).expect("double vert must resolve");
+        assert_eq!(vert_d_chain.len(), 4);
+        assert_eq!(vert_d_recipe.expect("double vert recipe").rep, 0x0D);
+
+        let (slash_chain, slash_recipe) = resolve_cmex_delimiter("/", true).expect("slash must resolve");
+        assert_eq!(slash_chain[0], 0x0E);
+        assert!(slash_recipe.is_none());
+
         // 4. Higher-order dot accents (Rule 12)
         ops.clear();
         pool.clear();

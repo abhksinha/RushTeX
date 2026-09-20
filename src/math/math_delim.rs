@@ -134,7 +134,10 @@ pub struct CmexDelimiterTable {
     pub ceil_right: [u8; 4],
     pub angle_left: [u8; 4],
     pub angle_right: [u8; 4],
-    pub _pad: [u8; 16],
+    pub slash: [u8; 4],
+    pub backslash: [u8; 4],
+    pub vert: [u8; 4],
+    pub vert_double: [u8; 4],
 }
 
 const _: () = assert!(core::mem::size_of::<CmexDelimiterTable>() == 64);
@@ -153,7 +156,10 @@ pub static CMEX_DELIMITER_TABLE: CmexDelimiterTable = CmexDelimiterTable {
     ceil_right: [0x07, 0x6d, 0x19, 0x27],
     angle_left: [0x0a, 0x44, 0x1c, 0x2a],
     angle_right: [0x0b, 0x45, 0x1d, 0x2b],
-    _pad: [0; 16],
+    slash: [0x0e, 0x2e, 0x1e, 0x2c],
+    backslash: [0x0f, 0x2f, 0x1f, 0x2d],
+    vert: [0x0c, 0x0c, 0x0c, 0x0c],
+    vert_double: [0x0d, 0x0d, 0x0d, 0x0d],
 };
 
 pub static CMEX_PAREN_RECIPE: DelimiterRecipe = DelimiterRecipe { top: 0x30, mid: 0, bot: 0x40, rep: 0x42 };
@@ -166,6 +172,8 @@ pub static CMEX_FLOOR_RECIPE: DelimiterRecipe = DelimiterRecipe { top: 0, mid: 0
 pub static CMEX_FLOOR_RIGHT_RECIPE: DelimiterRecipe = DelimiterRecipe { top: 0, mid: 0, bot: 0x35, rep: 0x37 };
 pub static CMEX_CEIL_RECIPE: DelimiterRecipe = DelimiterRecipe { top: 0x32, mid: 0, bot: 0, rep: 0x36 };
 pub static CMEX_CEIL_RIGHT_RECIPE: DelimiterRecipe = DelimiterRecipe { top: 0x33, mid: 0, bot: 0, rep: 0x37 };
+pub static CMEX_VERT_RECIPE: DelimiterRecipe = DelimiterRecipe { top: 0, mid: 0, bot: 0, rep: 0x0c };
+pub static CMEX_VERT_DOUBLE_RECIPE: DelimiterRecipe = DelimiterRecipe { top: 0, mid: 0, bot: 0, rep: 0x0d };
 
 /// Resolves a mathematical delimiter into its CMEX10 variant chain and extensible assembly recipe.
 #[inline(always)]
@@ -195,6 +203,10 @@ pub fn resolve_cmex_delimiter(delim: &str, is_left: bool) -> Option<(&'static [u
         "\\rceil" => (&CMEX_DELIMITER_TABLE.ceil_right[..], Some(CMEX_CEIL_RIGHT_RECIPE)),
         "\\langle" | "<" => (&CMEX_DELIMITER_TABLE.angle_left[..], None),
         "\\rangle" | ">" => (&CMEX_DELIMITER_TABLE.angle_right[..], None),
+        "/" => (&CMEX_DELIMITER_TABLE.slash[..], None),
+        "\\" | "\\backslash" => (&CMEX_DELIMITER_TABLE.backslash[..], None),
+        "|" | "\\vert" | "\\mid" => (&CMEX_DELIMITER_TABLE.vert[..], Some(CMEX_VERT_RECIPE)),
+        "\\|" | "\\Vert" | "\\parallel" => (&CMEX_DELIMITER_TABLE.vert_double[..], Some(CMEX_VERT_DOUBLE_RECIPE)),
         _ => return None,
     };
     Some(res)

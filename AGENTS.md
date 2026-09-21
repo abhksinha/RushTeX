@@ -1,14 +1,24 @@
 # RUSHTEX Agent Guidelines
-For each user prompt, internally classify if user is asking question or he is asking you to work on his codebase. If he is asking you to work then follow **Reporting** and if he is asking architecture related work you need to communicate to user as per **General Answers**. 
-## Communication Style & Reporting
-- **Executive Summaries in Brevity**: Always provide concise, high-level executive summaries; but work in depth. 
-- **No Unsolicited Code Details**: Do not include code snippets, method signatures, file diff breakdowns, or implementation minutiae in final responses unless the user explicitly requests technical details.
-- **Work Style**: Use `graphify` repository knowledge tool for understanding project. Read only what is required, and move function by function.  
-- **Follow**: Follow god_instruction.md along bit packing of data structure with suitable Structure of Arrays (SoA) and Arrays of Structure (AoS) wherever applicable so that L1, L2, L3 cache of CPU is utilised in most efficient way possible.
-- **Math Typsetting**: Use RushTeX_Math_Architecture_Blueprint.md to steer the work for mathematical typesetting.
-- **Reporting**: If user is not asking question, and has instructed you to work on something or your are executing any code changes and you want to report then follow:
-  1. What the issue / task was
-  2. What was done at a high level
-  3. Was it most optimised way to utilised L1, L2 and L3 cache, and it not why not. Reply "Not Applibale if there was no changaes made."
-  4. Recommendation cum permission to / from user in order to implement the work demand of user in most optimised way.
-- **General Answers**: When user asks your question, answer in simplified manner in brevity with balanced paragraphs and enumerations.
+
+For every user prompt, first classify the request as one of:
+- **Question** — asking about architecture, design, or how something works → follow **General Answers**.
+- **Work request** — asking you to modify the codebase or execute changes → follow **Reporting**.
+
+## Work Style
+- Use the `graphify` repository knowledge tool to understand the project before editing.
+- Read only what is required for the task; work function by function, not file by file.
+- Follow `god_instruction.md` for data-structure bit packing, choosing Structure of Arrays (SoA) or Array of Structures (AoS) as appropriate to maximize L1/L2/L3 cache utilization.
+- Use `RushTeX_Math_Architecture_Blueprint.md` to guide mathematical typesetting work.
+
+## Reporting (for work requests)
+After completing (or attempting) a code change, report:
+1. **Task** — what the issue or task was.
+2. **Summary** — what was done, at a high level.
+3. **Cache optimization** — whether the change used the most cache-efficient layout (SoA/AoS) for L1/L2/L3; if not, why not. If no code was changed, state "Not applicable."
+4. **Next step** — a recommendation for the most optimized way to implement the remaining work, and a request for the user's permission to proceed.
+
+Do not include code snippets, method signatures, diffs, or implementation minutiae in this report unless the user explicitly asks for technical detail.
+
+## General Answers (for questions)
+Answer directly, in brief, well-balanced paragraphs and/or enumerations. No unsolicited implementation detail.
+

@@ -33,6 +33,18 @@ pub enum FontFamily {
     ComputerModern = 3,
 }
 
+impl FontFamily {
+    #[inline(always)]
+    pub fn default_math_ps_name(self) -> &'static str {
+        match self {
+            FontFamily::ComputerModern => "NewCMMath-Regular",
+            FontFamily::Times => "STIXTwoMath-Regular",
+            FontFamily::Helvetica => "FiraMath-Regular",
+            FontFamily::Palatino => "Asana-Math",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Face {
@@ -122,10 +134,7 @@ impl Face {
             return "CMSY5";
         }
         if self == Face::Extension {
-            return match family {
-                FontFamily::ComputerModern => "CMEX10",
-                _ => "Symbol",
-            };
+            return "CMEX10";
         }
         if self == Face::Dingbats {
             return "ZapfDingbats";

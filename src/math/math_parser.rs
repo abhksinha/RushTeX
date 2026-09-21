@@ -792,7 +792,7 @@ impl<'a> MathParser<'a> {
             }
 
             // Integrals (default limits to the right)
-            "int" | "iint" | "iiint" | "oint" => Some(MathNode::BigOp(Box::new(BigOpData {
+            "int" | "iint" | "iiint" | "oint" | "oiint" | "oiiint" => Some(MathNode::BigOp(Box::new(BigOpData {
                 op: cmd,
                 sub: None,
                 sup: None,
@@ -903,6 +903,13 @@ impl<'a> MathParser<'a> {
                     content,
                 })
             }
+            "boldsymbol" | "bm" => {
+                let content = Box::new(self.parse_mandatory_arg());
+                Some(MathNode::StyleChange {
+                    face: Face::BoldItalic,
+                    content,
+                })
+            }
             "mathit" => {
                 let content = Box::new(self.parse_mandatory_arg());
                 Some(MathNode::StyleChange {
@@ -927,7 +934,7 @@ impl<'a> MathParser<'a> {
             "mathcal" | "mathscr" => {
                 let content = Box::new(self.parse_mandatory_arg());
                 Some(MathNode::StyleChange {
-                    face: Face::Italic,
+                    face: Face::Symbol,
                     content,
                 })
             }
@@ -935,6 +942,13 @@ impl<'a> MathParser<'a> {
                 let content = Box::new(self.parse_mandatory_arg());
                 Some(MathNode::StyleChange {
                     face: Face::AmsB,
+                    content,
+                })
+            }
+            "mathfrak" | "frak" => {
+                let content = Box::new(self.parse_mandatory_arg());
+                Some(MathNode::StyleChange {
+                    face: Face::AmsA,
                     content,
                 })
             }

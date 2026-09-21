@@ -150,6 +150,32 @@ pub fn trace_math_geometry(
             Paint::Rule { x, y, w, h, .. } => {
                 rules.push(RulePlacement { x, y, w, h });
             }
+            Paint::VectorGlyph {
+                x,
+                y,
+                size,
+                glyph_id,
+            }
+            | Paint::CidGlyphRun {
+                x,
+                y,
+                size,
+                glyph_id,
+            } => {
+                let text = if (1120..=1145).contains(&glyph_id) {
+                    let ch = (b'A' + (glyph_id - 1120) as u8) as char;
+                    ch.to_string()
+                } else {
+                    format!("vglyph_{glyph_id}")
+                };
+                glyphs.push(GlyphPlacement {
+                    x,
+                    y,
+                    face: Face::Symbol,
+                    size,
+                    text,
+                });
+            }
             _ => {}
         }
     }

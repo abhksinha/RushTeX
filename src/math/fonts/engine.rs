@@ -28,6 +28,12 @@ impl<'a> OpenTypeMathEngine<'a> {
         }
     }
 
+    /// Returns the underlying OpenTypeMathConstants table reference.
+    #[inline(always)]
+    pub fn constants(&self) -> &'a OpenTypeMathConstants {
+        self.constants
+    }
+
     /// Scale factor for design units to points at the base font size.
     #[inline(always)]
     fn scale(&self, val: i16) -> f32 {

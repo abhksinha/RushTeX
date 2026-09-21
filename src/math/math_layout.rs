@@ -6,6 +6,7 @@
 
 use crate::backend::fonts::{self as metrics, Face, FontFamily};
 use crate::layout::engine::Paint;
+use crate::math::fonts::MathFont;
 use crate::math::math_ast::{
     BigOpData, ColAlign, DelimitedData, FontVariantTier, MathContextFlags, MathNode, MathStyle,
     MatrixData, MatrixDelim, MatrixEnvKind, StyleFrameStack,
@@ -14,8 +15,8 @@ use crate::math::math_box::MathBox;
 use crate::math::math_fonts::{
     big_op_metrics, char_height_depth, delimiter_metrics, glyph_top_accent_offset, hbar_metrics,
     italic_correction, lookup_accent_metrics, math_font_parameters_styled,
-    matrix_metrics, measure_char, radical_metrics, resolve_cm_symbol, resolve_optical_face,
-    symbol_height_depth_family, symbol_italic_correction, symbol_italic_correction_family,
+    matrix_metrics, measure_char, resolve_cm_symbol, resolve_optical_face,
+    symbol_height_depth_family, symbol_italic_correction,
     MathFontParameters,
 };
 use crate::math::math_spacing::{atom_spacing, atom_spacing_sp, normalize_atom_kinds, MathAtomKind};
@@ -79,6 +80,17 @@ impl<'a, 'p> MathLayoutContext<'a, 'p> {
     }
 
     #[inline(always)]
+    pub fn opentype_engine(&self) -> crate::math::fonts::OpenTypeMathEngine<'static> {
+        let constants = match self.font_family {
+            FontFamily::Times => &crate::math::fonts::STIX2_MATH_CONSTANTS,
+            FontFamily::Helvetica => &crate::math::fonts::FIRAMATH_CONSTANTS,
+            FontFamily::Palatino => &crate::math::fonts::ASANA_MATH_CONSTANTS,
+            _ => &crate::math::fonts::NEWCM_MATH_CONSTANTS,
+        };
+        crate::math::fonts::OpenTypeMathEngine::new(constants, self.base_font_size)
+    }
+
+    #[inline(always)]
     pub fn is_measuring(&self) -> bool {
         self.out_ops.is_none()
     }
@@ -111,6 +123,30 @@ impl<'a, 'p> MathLayoutContext<'a, 'p> {
                 w,
                 h,
                 fill: true,
+            });
+        }
+    }
+
+    #[inline(always)]
+    pub fn emit_vector_glyph(&mut self, x: f32, y: f32, size: f32, glyph_id: u16) {
+        if let Some(ops) = self.out_ops.as_deref_mut() {
+            ops.push(Paint::VectorGlyph {
+                x,
+                y,
+                size,
+                glyph_id,
+            });
+        }
+    }
+
+    #[inline(always)]
+    pub fn emit_cid_glyph(&mut self, x: f32, y: f32, size: f32, glyph_id: u16) {
+        if let Some(ops) = self.out_ops.as_deref_mut() {
+            ops.push(Paint::CidGlyphRun {
+                x,
+                y,
+                size,
+                glyph_id,
             });
         }
     }
@@ -148,6 +184,38 @@ pub fn node_italic_correction_styled(
                 Face::Italic
             };
             let face = face_override.unwrap_or(default_face);
+            if face == Face::Symbol && ch.is_ascii_uppercase() {
+                if let Some(sg) = crate::math::fonts::script_glyph(*ch, family) {
+                    return sg.ic as f32;
+                }
+            }
+            if family != FontFamily::ComputerModern {
+                if let Some(font) = crate::math::fonts::active_math_font(family) {
+                    let u = if face == Face::Symbol && ch.is_ascii_uppercase() {
+                        crate::math::fonts::to_unicode_script(*ch)
+                            .map(|c| c as u32)
+                            .unwrap_or(*ch as u32)
+                    } else if face == Face::Bold {
+                        crate::math::fonts::to_unicode_bold(*ch).map(|c| c as u32).unwrap_or(*ch as u32)
+                    } else if face == Face::BoldItalic {
+                        crate::math::fonts::to_unicode_bold_italic(*ch)
+                            .or_else(|| crate::math::fonts::to_unicode_bold(*ch))
+                            .map(|c| c as u32)
+                            .unwrap_or(*ch as u32)
+                    } else if face == Face::AmsB {
+                        crate::math::fonts::to_unicode_blackboard(*ch).map(|c| c as u32).unwrap_or(*ch as u32)
+                    } else if face == Face::AmsA {
+                        crate::math::fonts::to_unicode_fraktur(*ch).map(|c| c as u32).unwrap_or(*ch as u32)
+                    } else {
+                        *ch as u32
+                    };
+                    if let Some(gid) = font.glyph_for_unicode(u) {
+                        if let Some(ic) = font.glyph_italic_correction(gid.0) {
+                            return ic as f32;
+                        }
+                    }
+                }
+            }
             italic_correction(*ch, face, family) as f32
         }
         MathNode::Symbol { code: Some(c), face, .. } => {
@@ -220,39 +288,51 @@ pub fn layout_delimiter<'a, 'p>(
     let delim_t = (rule_t * (dmetrics.thickness_scale as f32 * 0.001)).max(0.60);
     let bar_extra = (dmetrics.bar_extra_h as f32 * 0.001) * font_size;
 
-    if ctx.font_family == metrics::FontFamily::ComputerModern {
-        if delim == "|" {
-            let bar_h = (target_h + bar_extra).max(target_h);
-            let bar_y = y_center - bar_h * 0.5;
-            let bar_t = (0.040 * font_size).max(0.40);
-            ctx.emit_rule(x, bar_y, bar_t, bar_h);
-            return (bar_t, bar_h);
-        }
-        if delim == "\\|" || delim == "||" {
-            let bar_h = (target_h + bar_extra).max(target_h);
-            let bar_y = y_center - bar_h * 0.5;
-            let bar_t = (0.040 * font_size).max(0.40);
-            let sep_bars = 2.0 * bar_t;
-            ctx.emit_rule(x, bar_y, bar_t, bar_h);
-            ctx.emit_rule(x + bar_t + sep_bars, bar_y, bar_t, bar_h);
-            return (2.0 * bar_t + sep_bars, bar_h);
-        }
+    if delim == "|" {
+        let bar_h = (target_h + bar_extra).max(target_h);
+        let bar_y = y_center - bar_h * 0.5;
+        let bar_t = (0.040 * font_size).max(0.40);
+        ctx.emit_rule(x, bar_y, bar_t, bar_h);
+        return (bar_t, bar_h);
+    }
+    if delim == "\\|" || delim == "||" {
+        let bar_h = (target_h + bar_extra).max(target_h);
+        let bar_y = y_center - bar_h * 0.5;
+        let bar_t = (0.040 * font_size).max(0.40);
+        let sep_bars = 2.0 * bar_t;
+        ctx.emit_rule(x, bar_y, bar_t, bar_h);
+        ctx.emit_rule(x + bar_t + sep_bars, bar_y, bar_t, bar_h);
+        return (2.0 * bar_t + sep_bars, bar_h);
+    }
 
-        if let Some((chain, recipe_opt)) = crate::math::math_delim::resolve_cmex_delimiter(delim, is_left) {
-            let scale = font_size * 0.1;
-            let tier = if target_h <= 12.0 * scale {
-                0
-            } else if target_h <= 18.0 * scale {
-                1
-            } else if target_h <= 24.0 * scale {
-                2
-            } else if target_h <= 30.0 * scale {
-                3
-            } else if recipe_opt.is_none() {
-                chain.len() - 1
-            } else {
-                4
-            };
+    if target_h <= 1.15 * font_size {
+        match delim {
+            "(" | ")" | "[" | "]" => {
+                let ch = delim.chars().next().unwrap();
+                let w = metrics::width_family(ch, Face::Roman, font_size, ctx.font_family);
+                let glyph_y = y_center - (dmetrics.center_offset_y as f32 * 0.001) * font_size;
+                ctx.emit_glyph_run(x, glyph_y, Face::Roman, font_size, delim);
+                return (w, font_size);
+            }
+            _ => {}
+        }
+    }
+
+    if let Some((chain, recipe_opt)) = crate::math::math_delim::resolve_cmex_delimiter(delim, is_left) {
+        let scale = font_size * 0.1;
+        let tier = if target_h <= 14.0 * scale {
+            0
+        } else if target_h <= 18.0 * scale {
+            1
+        } else if target_h <= 24.0 * scale {
+            2
+        } else if target_h <= 30.0 * scale {
+            3
+        } else if recipe_opt.is_none() {
+            chain.len() - 1
+        } else {
+            4
+        };
 
             if tier < chain.len() {
                 let code = chain[tier];
@@ -308,6 +388,21 @@ pub fn layout_delimiter<'a, 'p>(
                     fixed_h + (n_rep as f32) * u
                 };
 
+                let min_overlap_pt = if let Some(otf) = crate::math::fonts::active_opentype_math_font(ctx.font_family) {
+                    if let Some(kind) = crate::math::fonts::OpenTypeDelimKind::from_delim_direction(delim, is_left) {
+                        let u = kind.unicode_scalar();
+                        if let Some(base_gid) = otf.glyph_for_unicode(u.0) {
+                            (otf.vertical_assembly_min_connector_overlap(base_gid).unwrap_or(0) as f32 * 0.001) * font_size
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+
                 let mut curr_top_y = y_center + total_h * 0.5;
 
                 let mut emit_piece = |code: u8, top_y: &mut f32| {
@@ -316,7 +411,7 @@ pub fn layout_delimiter<'a, 'p>(
                         let baseline_y = *top_y - (m.h as f32 * 0.001) * font_size;
                         let s = crate::math::math_delim::byte_str(code);
                         ctx.emit_glyph_run(x, baseline_y, Face::Extension, font_size, s);
-                        *top_y = baseline_y - (m.d as f32 * 0.001) * font_size;
+                        *top_y = baseline_y - (m.d as f32 * 0.001) * font_size + min_overlap_pt;
                     }
                 };
 
@@ -345,7 +440,6 @@ pub fn layout_delimiter<'a, 'p>(
                 return (w, total_h);
             }
         }
-    }
 
     match delim {
         "|" => {
@@ -567,6 +661,100 @@ pub fn layout_delimiter<'a, 'p>(
     }
 }
 
+/// Computes the optical top accent attachment skew offset for any mathematical nucleus.
+/// Adheres to OpenType MATH `TopAccentAttachment` rules for styled alphanumerics and Greek symbols,
+/// falling back to classic TeX CMMI skewchar kerning for Computer Modern unstyled variables.
+fn compute_top_accent_skew_offset<'a, 'p>(
+    nucleus: &MathNode<'a>,
+    ctx: &MathLayoutContext<'a, 'p>,
+    font_size: f32,
+    scale: f32,
+    ic: f32,
+) -> f32 {
+    let (target_node, effective_face) = match nucleus {
+        MathNode::StyleChange { face, content } => (&**content, *face),
+        _ => {
+            let default_face = if ctx.font_family == metrics::FontFamily::ComputerModern {
+                Face::MathItalic
+            } else {
+                Face::Italic
+            };
+            (nucleus, ctx.face_override.unwrap_or(default_face))
+        }
+    };
+
+    let unicode_target = match target_node {
+        MathNode::Variable(ch) => match effective_face {
+            Face::Bold => crate::math::fonts::to_unicode_bold(*ch).map(|c| c as u32),
+            Face::BoldItalic => crate::math::fonts::to_unicode_bold_italic(*ch)
+                .or_else(|| crate::math::fonts::to_unicode_bold(*ch))
+                .map(|c| c as u32),
+            Face::Symbol if ch.is_ascii_uppercase() => {
+                crate::math::fonts::to_unicode_script(*ch).map(|c| c as u32)
+            }
+            Face::AmsB => crate::math::fonts::to_unicode_blackboard(*ch).map(|c| c as u32),
+            Face::AmsA => crate::math::fonts::to_unicode_fraktur(*ch).map(|c| c as u32),
+            _ => Some(*ch as u32),
+        },
+        MathNode::Symbol { glyph, code, face: sym_face, .. } => {
+            let face = if matches!(nucleus, MathNode::StyleChange { .. }) {
+                effective_face
+            } else {
+                ctx.face_override.unwrap_or(*sym_face)
+            };
+            let greek = code.and_then(crate::math::fonts::symbol_to_unicode_greek)
+                .or_else(|| glyph.chars().next().filter(|ch| ('\u{0391}'..='\u{03C9}').contains(ch)));
+            if let Some(g) = greek {
+                match face {
+                    Face::Bold => crate::math::fonts::to_unicode_bold(g).map(|c| c as u32),
+                    Face::BoldItalic => crate::math::fonts::to_unicode_bold_italic(g)
+                        .or_else(|| crate::math::fonts::to_unicode_bold(g))
+                        .map(|c| c as u32),
+                    _ => Some(g as u32),
+                }
+            } else if face == Face::AmsB {
+                glyph.chars().next().and_then(crate::math::fonts::to_unicode_blackboard).map(|c| c as u32)
+            } else if face == Face::AmsA {
+                glyph.chars().next().and_then(crate::math::fonts::to_unicode_fraktur).map(|c| c as u32)
+            } else {
+                glyph.chars().next().map(|c| c as u32)
+            }
+        }
+        _ => None,
+    };
+
+    // For classic unstyled Computer Modern MathItalic: adhere to classic TeX cmmi_skew_kern
+    if ctx.font_family == metrics::FontFamily::ComputerModern && !matches!(nucleus, MathNode::StyleChange { .. }) {
+        if let MathNode::Variable(ch) = target_node {
+            if effective_face == Face::MathItalic {
+                return crate::math::math_tfm::cmmi_skew_kern(*ch) * font_size;
+            }
+        }
+    }
+
+    if let Some(u) = unicode_target {
+        if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+            if let Some(gid) = font.glyph_for_unicode(u) {
+                if let Some(attach) = font.glyph_top_accent_attachment(gid.0) {
+                    let adv = font.h_advance(gid.0).unwrap_or(1000);
+                    return (attach as f32 - 0.5 * adv as f32) * scale;
+                }
+            }
+        }
+    }
+
+    if let MathNode::Variable(ch) = target_node {
+        if effective_face == Face::Symbol && ch.is_ascii_uppercase() {
+            if let Some(sg) = crate::math::fonts::script_glyph(*ch, ctx.font_family) {
+                return (sg.top_accent as f32) * scale;
+            }
+        }
+        return (glyph_top_accent_offset(*ch, effective_face, ctx.font_family) as f32) * scale;
+    }
+
+    0.5 * ic
+}
+
 /// Lays out a `MathNode` at a given `(origin_x, origin_y)` with `style` and returns its bounding box.
 pub fn layout_node<'a, 'p>(
     ctx: &mut MathLayoutContext<'a, 'p>,
@@ -591,10 +779,124 @@ pub fn layout_node<'a, 'p>(
             };
             let base_face = ctx.face_override.unwrap_or(default_face);
             let face = resolve_optical_face(base_face, style, ctx.font_family);
-            let w = measure_char(*ch, face, font_size, ctx.font_family);
-            let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
-            let h = (h_u as f32) * scale;
-            let d = (d_u as f32) * scale;
+
+            let (w, h, d, dynamic_gid) = if base_face == Face::Symbol && ch.is_ascii_uppercase() {
+                let u = crate::math::fonts::to_unicode_script(*ch)
+                    .map(|c| c as u32)
+                    .unwrap_or(*ch as u32);
+                if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+                    if let Some(gid) = font.glyph_for_unicode(u) {
+                        let adv = font.h_advance(gid.0).unwrap_or(650) as f32 * scale;
+                        let h = 0.69 * font_size;
+                        let d = if matches!(*ch, 'G' | 'J' | 'Y') {
+                            0.13 * font_size
+                        } else {
+                            0.0
+                        };
+                        (adv, h, d, Some(gid.0))
+                    } else if let Some(sg) = crate::math::fonts::script_glyph(*ch, ctx.font_family) {
+                        (
+                            (sg.w as f32) * scale,
+                            (sg.h as f32) * scale,
+                            (sg.d as f32) * scale,
+                            Some(sg.glyph_id),
+                        )
+                    } else {
+                        let w = measure_char(*ch, face, font_size, ctx.font_family);
+                        let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                        (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                    }
+                } else if let Some(sg) = crate::math::fonts::script_glyph(*ch, ctx.font_family) {
+                    (
+                        (sg.w as f32) * scale,
+                        (sg.h as f32) * scale,
+                        (sg.d as f32) * scale,
+                        Some(sg.glyph_id),
+                    )
+                } else {
+                    let w = measure_char(*ch, face, font_size, ctx.font_family);
+                    let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                    (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                }
+            } else if base_face == Face::AmsB {
+                let u_char = crate::math::fonts::to_unicode_blackboard(*ch);
+                if let Some(u_char) = u_char {
+                    if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+                        if let Some(gid) = font.glyph_for_unicode(u_char as u32) {
+                            let adv = font.h_advance(gid.0).unwrap_or(600) as f32 * scale;
+                            let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                            (adv, (h_u as f32) * scale, (d_u as f32) * scale, Some(gid.0))
+                        } else {
+                            let w = measure_char(*ch, face, font_size, ctx.font_family);
+                            let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                            (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                        }
+                    } else {
+                        let w = measure_char(*ch, face, font_size, ctx.font_family);
+                        let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                        (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                    }
+                } else {
+                    let w = measure_char(*ch, face, font_size, ctx.font_family);
+                    let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                    (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                }
+            } else if base_face == Face::AmsA {
+                let u_char = crate::math::fonts::to_unicode_fraktur(*ch);
+                if let Some(u_char) = u_char {
+                    if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+                        if let Some(gid) = font.glyph_for_unicode(u_char as u32) {
+                            let adv = font.h_advance(gid.0).unwrap_or(600) as f32 * scale;
+                            let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                            (adv, (h_u as f32) * scale, (d_u as f32) * scale, Some(gid.0))
+                        } else {
+                            let w = measure_char(*ch, face, font_size, ctx.font_family);
+                            let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                            (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                        }
+                    } else {
+                        let w = measure_char(*ch, face, font_size, ctx.font_family);
+                        let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                        (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                    }
+                } else {
+                    let w = measure_char(*ch, face, font_size, ctx.font_family);
+                    let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                    (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                }
+            } else if base_face == Face::Bold || base_face == Face::BoldItalic {
+                let bold_u = if base_face == Face::BoldItalic {
+                    crate::math::fonts::to_unicode_bold_italic(*ch)
+                        .or_else(|| crate::math::fonts::to_unicode_bold(*ch))
+                } else {
+                    crate::math::fonts::to_unicode_bold(*ch)
+                };
+                if let Some(u_char) = bold_u {
+                    if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+                        if let Some(gid) = font.glyph_for_unicode(u_char as u32) {
+                            let adv = font.h_advance(gid.0).unwrap_or(600) as f32 * scale;
+                            let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                            (adv, (h_u as f32) * scale, (d_u as f32) * scale, Some(gid.0))
+                        } else {
+                            let w = measure_char(*ch, face, font_size, ctx.font_family);
+                            let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                            (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                        }
+                    } else {
+                        let w = measure_char(*ch, face, font_size, ctx.font_family);
+                        let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                        (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                    }
+                } else {
+                    let w = measure_char(*ch, face, font_size, ctx.font_family);
+                    let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                    (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+                }
+            } else {
+                let w = measure_char(*ch, face, font_size, ctx.font_family);
+                let (h_u, d_u) = char_height_depth(*ch, face, ctx.font_family);
+                (w, (h_u as f32) * scale, (d_u as f32) * scale, None)
+            };
 
             let s = match *ch {
                 'a' => "a",
@@ -652,6 +954,13 @@ pub fn layout_node<'a, 'p>(
                 _ => "x",
             };
 
+            if let Some(gid) = dynamic_gid {
+                if crate::math::fonts::get_vector_glyph_path(gid).is_some() {
+                    ctx.emit_vector_glyph(origin_x, origin_y, font_size, gid);
+                    return MathBox::with_dims(w, h, d);
+                }
+            }
+
             ctx.emit_glyph_run(origin_x, origin_y, face, font_size, s);
             MathBox::with_dims(w, h, d)
         }
@@ -691,9 +1000,76 @@ pub fn layout_node<'a, 'p>(
             } else {
                 (*face, *glyph, *code)
             };
-            let eff_face = resolve_optical_face(raw_face, style, ctx.font_family);
+            let override_face = ctx.face_override;
+            let eff_face = if let Some(ov) = override_face {
+                if ctx.font_family == metrics::FontFamily::ComputerModern {
+                    if ov == Face::Bold || ov == Face::BoldItalic {
+                        Face::Bold
+                    } else {
+                        resolve_optical_face(ov, style, ctx.font_family)
+                    }
+                } else {
+                    resolve_optical_face(ov, style, ctx.font_family)
+                }
+            } else {
+                resolve_optical_face(raw_face, style, ctx.font_family)
+            };
 
-            let (w, h, d) = if let Some(c) = eff_code {
+            let mut dynamic_gid: Option<u16> = None;
+            if eff_face == Face::Bold || eff_face == Face::BoldItalic {
+                let greek = eff_code.and_then(crate::math::fonts::symbol_to_unicode_greek)
+                    .or_else(|| eff_glyph.chars().next().filter(|ch| ('\u{0391}'..='\u{03C9}').contains(ch)));
+                let bold_u = greek.and_then(|g| {
+                    if eff_face == Face::BoldItalic {
+                        crate::math::fonts::to_unicode_bold_italic(g)
+                            .or_else(|| crate::math::fonts::to_unicode_bold(g))
+                    } else {
+                        crate::math::fonts::to_unicode_bold(g)
+                    }
+                });
+                if let Some(u_char) = bold_u {
+                    if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+                        if let Some(gid) = font.glyph_for_unicode(u_char as u32) {
+                            dynamic_gid = Some(gid.0);
+                        }
+                    }
+                }
+            } else if eff_face == Face::AmsB {
+                if let Some(ch) = eff_glyph.chars().next() {
+                    if let Some(u_char) = crate::math::fonts::to_unicode_blackboard(ch) {
+                        if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+                            if let Some(gid) = font.glyph_for_unicode(u_char as u32) {
+                                dynamic_gid = Some(gid.0);
+                            }
+                        }
+                    }
+                }
+            } else if eff_face == Face::AmsA {
+                if let Some(ch) = eff_glyph.chars().next() {
+                    if let Some(u_char) = crate::math::fonts::to_unicode_fraktur(ch) {
+                        if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+                            if let Some(gid) = font.glyph_for_unicode(u_char as u32) {
+                                dynamic_gid = Some(gid.0);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let (w, h, d) = if let Some(gid) = dynamic_gid {
+                let adv = if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+                    font.h_advance(gid).unwrap_or(600) as f32 * scale
+                } else {
+                    600.0 * scale
+                };
+                let (h_u, d_u) = if let Some(c) = eff_code {
+                    symbol_height_depth_family(c, ctx.font_family)
+                } else {
+                    let first = eff_glyph.chars().next().unwrap_or('x');
+                    char_height_depth(first, eff_face, ctx.font_family)
+                };
+                (adv, (h_u as f32) * scale, (d_u as f32) * scale)
+            } else if let Some(c) = eff_code {
                 let w = if ctx.font_family == metrics::FontFamily::ComputerModern {
                     match eff_face {
                         Face::MathItalic => crate::math::math_tfm::cmmi10_metric(c).w as f32 * scale,
@@ -710,6 +1086,30 @@ pub fn layout_node<'a, 'p>(
                         Face::Symbol7 => crate::math::math_tfm::cmsy7_metric(c).w as f32 * scale,
                         Face::Symbol5 => crate::math::math_tfm::cmsy5_metric(c).w as f32 * scale,
                         _ => crate::math::math_tfm::cmsy10_metric(c).w as f32 * scale,
+                    }
+                } else if (eff_face == Face::Bold || eff_face == Face::BoldItalic) && ctx.font_family != metrics::FontFamily::ComputerModern {
+                    let greek = eff_code.and_then(crate::math::fonts::symbol_to_unicode_greek)
+                        .or_else(|| eff_glyph.chars().next().filter(|ch| ('\u{0391}'..='\u{03C9}').contains(ch)));
+                    let bold_u = greek.and_then(|g| {
+                        if eff_face == Face::BoldItalic {
+                            crate::math::fonts::to_unicode_bold_italic(g)
+                                .or_else(|| crate::math::fonts::to_unicode_bold(g))
+                        } else {
+                            crate::math::fonts::to_unicode_bold(g)
+                        }
+                    });
+                    if let Some(u_char) = bold_u {
+                        if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+                            if let Some(gid) = font.glyph_for_unicode(u_char as u32) {
+                                font.h_advance(gid.0).unwrap_or(600) as f32 * scale
+                            } else {
+                                metrics::SYMBOL_WIDTHS[c as usize] as f32 * scale
+                            }
+                        } else {
+                            metrics::SYMBOL_WIDTHS[c as usize] as f32 * scale
+                        }
+                    } else {
+                        metrics::SYMBOL_WIDTHS[c as usize] as f32 * scale
                     }
                 } else if eff_face == Face::Symbol {
                     metrics::SYMBOL_WIDTHS[c as usize] as f32 * scale
@@ -802,6 +1202,13 @@ pub fn layout_node<'a, 'p>(
                 (total_w, (max_h_u as f32) * scale, (max_d_u as f32) * scale)
             };
 
+            if let Some(gid) = dynamic_gid {
+                if crate::math::fonts::get_vector_glyph_path(gid).is_some() {
+                    ctx.emit_vector_glyph(origin_x, origin_y, font_size, gid);
+                    return MathBox::with_dims(w, h, d);
+                }
+            }
+
             ctx.emit_glyph_run(origin_x, origin_y, eff_face, font_size, eff_glyph);
             MathBox::with_dims(w, h, d)
         }
@@ -857,7 +1264,19 @@ pub fn layout_node<'a, 'p>(
             // TeX Appendix G Rule 17: Italic correction is applied to the horizontal
             // placement of the superscript, but not the subscript.
             let ic = node_italic_correction(nucleus, ctx.face_override, ctx.font_family) * scale;
-            let sup_x = origin_x + nuc_box.w + ic;
+            let math_kern = if let MathNode::Variable(ch) = &**nucleus {
+                if let Some(font) = crate::math::fonts::active_math_font(ctx.font_family) {
+                    let u = *ch as u32;
+                    font.glyph_for_unicode(u)
+                        .and_then(|gid| font.glyph_top_right_math_kern(gid.0))
+                        .unwrap_or(0) as f32 * scale
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            let sup_x = origin_x + nuc_box.w + ic + math_kern;
             let sub_x = origin_x + nuc_box.w;
 
             let x_height = (params.accent_base_height as f32) * scale;
@@ -1096,68 +1515,76 @@ pub fn layout_node<'a, 'p>(
                 MathBox::zero()
             };
 
-            let min_clearance = if style.is_display() {
-                (params.rad_clearance_display as f32) * scale
-            } else {
-                (params.rad_clearance_text as f32) * scale
-            };
-            let rad_m = radical_metrics(ctx.font_family);
-            let vspan_ratio = rad_m.vspan as f32 * 0.001;
-            let bar_thickness = ((rad_m.overbar_thickness as f32 * 0.001) * font_size).max(rule_t);
-            let min_needed_h = rad_box.h + rad_box.d + min_clearance + bar_thickness;
-
-            // In vector fonts, single-glyph scaling seamlessly supports tall radicands up to \Bigg
-            let h_limit_single_glyph = 2.45 * font_size;
-            let is_extensible = min_needed_h > h_limit_single_glyph;
 
             // Plain TeX / LuaTeX \r@@t degree positioning: tucked into hook with clearance to diagonal
+            let otf_math = crate::math::fonts::active_opentype_math_font(ctx.font_family);
+
             let (_deg_advance, deg_x_offset, rad_origin_x) = if degree.is_some() {
-                let kern_before = 0.18 * font_size;
-                let tuck = (deg_box.w * 0.25).min(0.15 * font_size);
-                let advance = kern_before + deg_box.w - tuck;
-                (advance, kern_before, origin_x + advance)
+                if let Some(otf) = otf_math {
+                    let kern_before = (otf.constants.radical_kern_before_degree as f32 * 0.001) * font_size;
+                    let kern_after = (otf.constants.radical_kern_after_degree as f32 * 0.001) * font_size;
+                    let advance = (kern_before + deg_box.w + kern_after).max(0.0);
+                    (advance, kern_before, origin_x + advance)
+                } else {
+                    let kern_before = 0.18 * font_size;
+                    let tuck = (deg_box.w * 0.25).min(0.15 * font_size);
+                    let advance = kern_before + deg_box.w - tuck;
+                    (advance, kern_before, origin_x + advance)
+                }
             } else {
                 (0.0, 0.0, origin_x)
             };
 
-            if ctx.font_family == metrics::FontFamily::ComputerModern {
-                let rule_t_cm = (0.040 * font_size).max(0.398);
-                let x_height_cm = 0.43055 * font_size;
-                let min_clr = if style.is_display() {
-                    rule_t_cm + (x_height_cm * 0.25)
+            let (rule_t_cm, min_clr, deg_raise_percent) = if let Some(otf) = otf_math {
+                let c = &otf.constants;
+                let rt = (c.radical_rule_thickness as f32 * 0.001) * font_size;
+                let vgap = if style.is_display() {
+                    (c.radical_display_style_vertical_gap as f32 * 0.001) * font_size
                 } else {
-                    rule_t_cm + (rule_t_cm * 0.25)
+                    (c.radical_vertical_gap as f32 * 0.001) * font_size
                 };
-                let v = rad_box.h + rad_box.d + min_clr + rule_t_cm;
-
-                // 1. Check small radical in cmsy10 first (Family 2, char 0x70)
-                let small_m = crate::math::math_tfm::cmsy10_metric(0x70);
-                let small_hd = ((small_m.h + small_m.d) as f32 * 0.001) * font_size;
-
-                let (rad_w, rad_h, rad_d, is_ext, rad_code, n_rep) = if v <= small_hd {
-                    let w = (small_m.w as f32 * 0.001) * font_size;
-                    let h = (small_m.h as f32 * 0.001) * font_size;
-                    let d = (small_m.d as f32 * 0.001) * font_size;
-                    (w, h, d, false, 0x70u8, 0usize)
+                let raise = c.radical_degree_bottom_raise_percent;
+                (rt.max(0.398), vgap, raise)
+            } else {
+                let rt = (0.040 * font_size).max(0.398);
+                let x_height_cm = 0.43055 * font_size;
+                let clr = if style.is_display() {
+                    rt + (x_height_cm * 0.25)
                 } else {
-                    // 2. Check large discrete variants in cmex10 (Family 3, char 0x70..0x73)
-                    let variants: [u8; 4] = [0x70, 0x71, 0x72, 0x73];
-                    let mut found = None;
-                    for &code in &variants {
-                        let m = crate::math::math_tfm::cmex10_metric(code);
-                        let hd = ((m.h + m.d) as f32 * 0.001) * font_size;
-                        if hd >= v {
-                            let w = (m.w as f32 * 0.001) * font_size;
-                            let h = (m.h as f32 * 0.001) * font_size;
-                            let d = (m.d as f32 * 0.001) * font_size;
-                            found = Some((w, h, d, false, code, 0usize));
-                            break;
-                        }
+                    rt + (rt * 0.25)
+                };
+                (rt, clr, 60u16)
+            };
+            let v = rad_box.h + rad_box.d + min_clr + rule_t_cm;
+
+            // 1. Check small radical in cmsy10 first (Family 2, char 0x70)
+            let small_m = crate::math::math_tfm::cmsy10_metric(0x70);
+            let small_hd = ((small_m.h + small_m.d) as f32 * 0.001) * font_size;
+
+            let (rad_w, rad_h, rad_d, is_ext, rad_code, n_rep) = if let Some(_otf) = otf_math {
+                let kind = crate::math::fonts::OpenTypeDelimKind::Radical;
+                match kind.select_variant_tier(v, font_size) {
+                    Some(0) => {
+                        let w = (small_m.w as f32 * 0.001) * font_size;
+                        let h = (small_m.h as f32 * 0.001) * font_size;
+                        let d = (small_m.d as f32 * 0.001) * font_size;
+                        (w, h, d, false, 0x70u8, 0usize)
                     }
-                    if let Some(res) = found {
-                        res
-                    } else {
-                        // 3. Extensible radical in cmex10 (top 0x76, rep 0x75, bot 0x74)
+                    Some(tier) => {
+                        let code = match tier {
+                            1 => 0x70,
+                            2 => 0x71,
+                            3 => 0x72,
+                            _ => 0x73,
+                        };
+                        let m = crate::math::math_tfm::cmex10_metric(code);
+                        let w = (m.w as f32 * 0.001) * font_size;
+                        let h = (m.h as f32 * 0.001) * font_size;
+                        let d = (m.d as f32 * 0.001) * font_size;
+                        (w, h, d, false, code, 0usize)
+                    }
+                    None => {
+                        // Extensible radical in cmex10 (top 0x76, rep 0x75, bot 0x74)
                         let m_top = crate::math::math_tfm::cmex10_metric(0x76);
                         let m_bot = crate::math::math_tfm::cmex10_metric(0x74);
                         let m_rep = crate::math::math_tfm::cmex10_metric(0x75);
@@ -1174,7 +1601,48 @@ pub fn layout_node<'a, 'p>(
                         let d = total_hd - h;
                         (w, h, d, true, 0x74u8, n)
                     }
-                };
+                }
+            } else if v <= small_hd {
+                let w = (small_m.w as f32 * 0.001) * font_size;
+                let h = (small_m.h as f32 * 0.001) * font_size;
+                let d = (small_m.d as f32 * 0.001) * font_size;
+                (w, h, d, false, 0x70u8, 0usize)
+            } else {
+                // 2. Check large discrete variants in cmex10 (Family 3, char 0x70..0x73)
+                let variants: [u8; 4] = [0x70, 0x71, 0x72, 0x73];
+                let mut found = None;
+                for &code in &variants {
+                    let m = crate::math::math_tfm::cmex10_metric(code);
+                    let hd = ((m.h + m.d) as f32 * 0.001) * font_size;
+                    if hd >= v {
+                        let w = (m.w as f32 * 0.001) * font_size;
+                        let h = (m.h as f32 * 0.001) * font_size;
+                        let d = (m.d as f32 * 0.001) * font_size;
+                        found = Some((w, h, d, false, code, 0usize));
+                        break;
+                    }
+                }
+                if let Some(res) = found {
+                    res
+                } else {
+                    // 3. Extensible radical in cmex10 (top 0x76, rep 0x75, bot 0x74)
+                    let m_top = crate::math::math_tfm::cmex10_metric(0x76);
+                    let m_bot = crate::math::math_tfm::cmex10_metric(0x74);
+                    let m_rep = crate::math::math_tfm::cmex10_metric(0x75);
+                    let h_fixed = ((m_top.h + m_top.d + m_bot.h + m_bot.d) as f32 * 0.001) * font_size;
+                    let u = ((m_rep.h + m_rep.d) as f32 * 0.001) * font_size;
+                    let n = if u > 0.0 && v > h_fixed {
+                        ((v - h_fixed) / u).ceil() as usize
+                    } else {
+                        0
+                    };
+                    let total_hd = h_fixed + (n as f32) * u;
+                    let w = (m_rep.w as f32 * 0.001) * font_size;
+                    let h = (m_top.h as f32 * 0.001) * font_size;
+                    let d = total_hd - h;
+                    (w, h, d, true, 0x74u8, n)
+                }
+            };
 
                 // TeX Appendix G Rule 11: Distribute excess height evenly
                 let delta = rad_d - (rad_box.h + rad_box.d + min_clr);
@@ -1191,7 +1659,7 @@ pub fn layout_node<'a, 'p>(
 
                 if !ctx.is_measuring() {
                     if !is_ext {
-                        if rad_code == 0x70 && v <= small_hd {
+                        if rad_code == 0x70 && v <= small_hd && ctx.font_family == metrics::FontFamily::ComputerModern {
                             // Small radical from cmsy10
                             ctx.emit_glyph_run(rad_origin_x, rad_y, Face::Symbol, font_size, "p");
                         } else {
@@ -1222,8 +1690,8 @@ pub fn layout_node<'a, 'p>(
                     if let Some(deg) = degree {
                         let deg_style = MathStyle::CrampedScriptScript;
                         let deg_x = origin_x + deg_x_offset;
-                        let net_h = (rad_box.h - rad_box.d).max(0.0);
-                        let deg_y = origin_y + 0.60 * net_h + 0.20 * font_size;
+                        let rad_bottom_y = rad_y - rad_d;
+                        let deg_y = rad_bottom_y + (deg_raise_percent as f32 * 0.01) * (rad_h + rad_d);
                         layout_node(ctx, deg, deg_style, deg_x, deg_y);
                     }
 
@@ -1242,111 +1710,7 @@ pub fn layout_node<'a, 'p>(
                 let total_w = rad_content_x + rad_box.w - origin_x;
                 let total_h = (rule_bottom_y + rule_t_cm + rule_t_cm) - origin_y;
                 let total_d = rad_box.d.max(rad_d - rad_box.h - actual_clr);
-                return MathBox::with_dims(total_w, total_h, total_d);
-            }
-
-            let (rad_size, rule_x, rad_content_x, bar_thickness, target_bottom_y, rule_bottom_y) =
-                if !is_extensible {
-                    let size = (min_needed_h / vspan_ratio).max(font_size);
-                    let actual_vspan = size * vspan_ratio;
-                    let actual_b_thick =
-                        ((rad_m.overbar_thickness as f32 * 0.001) * size).max(rule_t);
-
-                    // TeX Appendix G Rule 11: Distribute excess height evenly so radicand is vertically centered
-                    let excess = (actual_vspan - min_needed_h).max(0.0);
-                    let eff_clearance = min_clearance + excess * 0.5;
-
-                    let r_bottom_y = origin_y + rad_box.h + eff_clearance;
-                    let t_bottom_y = r_bottom_y - actual_vspan;
-
-                    let (rx, cx) = if ctx.font_family == metrics::FontFamily::ComputerModern {
-                        let hook_w = (crate::math::math_tfm::cmsy10_metric(0x70).w as f32 * 0.001) * size;
-                        (rad_origin_x + hook_w, rad_origin_x + hook_w)
-                    } else {
-                        (
-                            rad_origin_x + (rad_m.rule_start_x as f32 * 0.001) * size,
-                            rad_origin_x + (rad_m.content_start_x as f32 * 0.001) * size + 1.0,
-                        )
-                    };
-
-                    let actual_b_thick = if ctx.font_family == metrics::FontFamily::ComputerModern {
-                        (0.040 * font_size).max(0.398)
-                    } else {
-                        actual_b_thick
-                    };
-
-                    (size, rx, cx, actual_b_thick, t_bottom_y, r_bottom_y)
-                } else {
-                    let hook_size = font_size * 1.25;
-                    let rx = rad_origin_x + (rad_m.rule_start_x as f32 * 0.001) * hook_size;
-                    let cx =
-                        rad_origin_x + (rad_m.content_start_x as f32 * 0.001) * hook_size + 1.0;
-
-                    let r_bottom_y = origin_y + rad_box.h + min_clearance;
-                    let vertex_depth = (rad_m.vertex_depth as f32 * 0.001) * font_size;
-                    let t_bottom_y = origin_y - rad_box.d - vertex_depth;
-
-                    (hook_size, rx, cx, rule_t, t_bottom_y, r_bottom_y)
-                };
-
-            let rule_w = (rad_content_x + rad_box.w) - rule_x + 1.0;
-            let rad_y = if !is_extensible {
-                if ctx.font_family == metrics::FontFamily::ComputerModern {
-                    rule_bottom_y - (crate::math::math_tfm::cmsy10_metric(0x70).h as f32 * 0.001) * rad_size
-                } else {
-                    rule_bottom_y - (rad_m.junction_y as f32 * 0.001) * rad_size
-                }
-            } else {
-                target_bottom_y + (rad_m.vertex_depth as f32 * 0.001) * rad_size
-            };
-
-            if !ctx.is_measuring() {
-                if ctx.font_family == metrics::FontFamily::ComputerModern {
-                    ctx.emit_glyph_run(rad_origin_x, rad_y, Face::Symbol, rad_size, "p");
-                } else {
-                    ctx.emit_glyph_run(rad_origin_x, rad_y, Face::Symbol, rad_size, "\u{00D6}");
-                }
-
-                if is_extensible {
-                    // Vertical connecting rule from hook diagonal to overbar
-                    let stem_y_start = rad_y + (rad_m.junction_y as f32 * 0.001) * rad_size;
-                    let stem_h = (rule_bottom_y + bar_thickness) - stem_y_start;
-                    if stem_h > 0.0 {
-                        ctx.emit_rule(
-                            rule_x - bar_thickness * 0.5,
-                            stem_y_start,
-                            bar_thickness,
-                            stem_h,
-                        );
-                    }
-                }
-
-                if let Some(deg) = degree {
-                    let deg_style = MathStyle::CrampedScriptScript;
-                    let deg_x = origin_x + deg_x_offset;
-                    // Plain TeX / Appendix G: raise degree by 0.6 * (height - depth), tucked in hook
-                    let net_h = (rad_box.h - rad_box.d).max(0.0);
-                    let deg_y = origin_y + 0.60 * net_h + 0.20 * font_size;
-                    layout_node(ctx, deg, deg_style, deg_x, deg_y);
-                }
-
-                // Paint radicand
-                layout_node(ctx, radicand, rad_style, rad_content_x, origin_y);
-
-                // Horizontal overbar rule connects seamlessly to the glyph / vertical stem:
-                ctx.emit_rule(
-                    rule_x - bar_thickness * 0.5,
-                    rule_bottom_y,
-                    rule_w + bar_thickness * 0.5,
-                    bar_thickness,
-                );
-            }
-
-            let total_w = (rule_x + rule_w) - origin_x + 1.0;
-            let total_h = (rule_bottom_y + bar_thickness) - origin_y;
-            let total_d = origin_y - target_bottom_y;
-
-            MathBox::with_dims(total_w, total_h, total_d)
+                MathBox::with_dims(total_w, total_h, total_d)
         }
 
         MathNode::BigOp(data) => {
@@ -1364,124 +1728,97 @@ pub fn layout_node<'a, 'p>(
             let is_display_limits = *limits && style.is_display();
             let op_m = big_op_metrics(op, ctx.font_family);
             let mut cm_op_code: u8 = 0;
-            let (op_face, op_size, op_w, op_h, op_d, op_ic) = if ctx.font_family == metrics::FontFamily::ComputerModern {
-                if is_text_op {
-                    let w = metrics::string_width_family(op, Face::Roman, font_size, ctx.font_family);
-                    (Face::Roman, font_size, w, (op_m.text_height as f32 * 0.001) * font_size, 0.0, 0.0)
-                } else if is_integral {
-                    let code = if *op == "oint" {
-                        if style.is_display() { 0x49 } else { 0x48 }
-                    } else if style.is_display() {
-                        0x5A
-                    } else {
-                        0x52
-                    };
-                    cm_op_code = code;
-                    let m = crate::math::math_tfm::cmex10_metric(code);
-                    let single_w = ((m.w + m.ic) as f32) * (font_size * 0.001);
-                    let h = (m.h as f32) * (font_size * 0.001);
-                    let d = (m.d as f32) * (font_size * 0.001);
-                    let ic = (m.ic as f32) * (font_size * 0.001);
-                    let offset = if style.is_display() {
-                        single_w - (6.0 / 18.0) * font_size
-                    } else {
-                        single_w - (3.0 / 18.0) * font_size
-                    };
-                    let w = match *op {
-                        "iint" => single_w + offset,
-                        "iiint" => single_w + 2.0 * offset,
-                        _ => single_w,
-                    };
-                    (Face::Extension, font_size, w, h, d, ic)
-                } else {
-                    let cmex_code = if style.is_display() {
-                        match *op {
-                            "prod" => 0x59,
-                            "coprod" => 0x61,
-                            "bigcap" => 0x5C,
-                            "bigcup" => 0x5B,
-                            "biguplus" => 0x5D,
-                            "bigsqcup" => 0x47,
-                            "bigodot" => 0x4B,
-                            "bigoplus" => 0x4D,
-                            "bigotimes" => 0x4F,
-                            "bigwedge" => 0x5E,
-                            "bigvee" => 0x5F,
-                            _ => 0x58, // sum
-                        }
-                    } else {
-                        match *op {
-                            "prod" => 0x51,
-                            "coprod" => 0x60,
-                            "bigcap" => 0x54,
-                            "bigcup" => 0x53,
-                            "biguplus" => 0x55,
-                            "bigsqcup" => 0x46,
-                            "bigodot" => 0x4A,
-                            "bigoplus" => 0x4C,
-                            "bigotimes" => 0x4E,
-                            "bigwedge" => 0x56,
-                            "bigvee" => 0x57,
-                            _ => 0x50, // sum
-                        }
-                    };
-                    cm_op_code = cmex_code;
-                    let m = crate::math::math_tfm::cmex10_metric(cmex_code);
-                    let w = ((m.w + m.ic) as f32) * (font_size * 0.001);
-                    let h = (m.h as f32) * (font_size * 0.001);
-                    let d = (m.d as f32) * (font_size * 0.001);
-                    let ic = (m.ic as f32) * (font_size * 0.001);
-                    (Face::Extension, font_size, w, h, d, ic)
-                }
+            let otf_resolved = if !is_text_op {
+                crate::math::fonts::OpenTypeBigOpKind::from_command(op).and_then(|kind| {
+                    crate::math::fonts::active_opentype_math_font(ctx.font_family)
+                        .and_then(|otf| kind.resolve_font_operator(otf, style))
+                })
             } else {
-                let size = if style.is_display() {
-                    font_size * (op_m.display_scale as f32 * 0.001)
+                None
+            };
+            let (op_face, op_size, op_w, op_h, op_d, op_ic) = if is_text_op {
+                let w = metrics::string_width_family(op, Face::Roman, font_size, ctx.font_family);
+                (Face::Roman, font_size, w, (op_m.text_height as f32 * 0.001) * font_size, 0.0, 0.0)
+            } else if is_integral {
+                let code = if *op == "oint" || *op == "oiint" || *op == "oiiint" {
+                    if style.is_display() { 0x49 } else { 0x48 }
+                } else if style.is_display() {
+                    0x5A
                 } else {
-                    font_size
+                    0x52
                 };
-                let h = (op_m.text_height as f32 * 0.001) * size;
-                let d = (op_m.text_depth as f32 * 0.001) * size;
-                let (face, eff_size, w) = if is_text_op {
-                    let w = metrics::string_width_family(op, Face::Roman, font_size, ctx.font_family);
-                    (Face::Roman, font_size, w)
-                } else if is_integral {
-                    let s = font_size * 1.35;
-                    let single_w = metrics::SYMBOL_WIDTHS[0xF2] as f32 * (s * 0.001);
-                    let offset = single_w * 0.75;
-                    let w = match *op {
-                        "iint" => single_w + offset,
-                        "iiint" => single_w + 2.0 * offset,
-                        _ => single_w,
-                    };
-                    (Face::Symbol, s, w)
-                } else {
-                    let scale_factor = if style.is_display() {
-                        (op_m.display_scale as f32) * 0.001
+                cm_op_code = code;
+                let m = crate::math::math_tfm::cmex10_metric(code);
+                let single_w = ((m.w + m.ic) as f32) * (font_size * 0.001);
+                let h = (m.h as f32) * (font_size * 0.001);
+                let d = (m.d as f32) * (font_size * 0.001);
+                let ic = if let Some(res) = otf_resolved {
+                    if res.italic_correction > 0 {
+                        (res.italic_correction as f32 * 0.001) * font_size
                     } else {
-                        1.0
-                    };
-                    let s = font_size * scale_factor;
-                    let code = match *op {
-                        "prod" | "coprod" => 0xD5,
-                        "bigcap" => 0xC7,
-                        "bigcup" => 0xC8,
-                        "bigvee" => 0xDA,
-                        "bigwedge" => 0xD9,
-                        "bigoplus" => 0xC4,
-                        "bigotimes" => 0xC5,
-                        "bigodot" => 0xC4,
-                        "biguplus" | "bigsqcup" => 0xC8,
-                        _ => 0xE5,
-                    };
-                    let w = metrics::SYMBOL_WIDTHS[code as usize] as f32 * (s * 0.001);
-                    (Face::Symbol, s, w)
-                };
-                let ic = if is_integral {
-                    (symbol_italic_correction_family(0xF2, ctx.font_family) as f32) * (eff_size * 0.001)
+                        (m.ic as f32) * (font_size * 0.001)
+                    }
                 } else {
-                    0.0
+                    (m.ic as f32) * (font_size * 0.001)
                 };
-                (face, eff_size, w, h, d, ic)
+                let offset = if style.is_display() {
+                    single_w - (6.0 / 18.0) * font_size
+                } else {
+                    single_w - (3.0 / 18.0) * font_size
+                };
+                let w = match *op {
+                    "iint" | "oiint" => single_w + offset,
+                    "iiint" | "oiiint" => single_w + 2.0 * offset,
+                    _ => single_w,
+                };
+                (Face::Extension, font_size, w, h, d, ic)
+            } else {
+                let cmex_code = if style.is_display() {
+                    match *op {
+                        "prod" => 0x59,
+                        "coprod" => 0x61,
+                        "bigcap" => 0x5C,
+                        "bigcup" => 0x5B,
+                        "biguplus" => 0x5D,
+                        "bigsqcup" => 0x47,
+                        "bigodot" => 0x4B,
+                        "bigoplus" => 0x4D,
+                        "bigotimes" => 0x4F,
+                        "bigwedge" => 0x5E,
+                        "bigvee" => 0x5F,
+                        _ => 0x58, // sum
+                    }
+                } else {
+                    match *op {
+                        "prod" => 0x51,
+                        "coprod" => 0x60,
+                        "bigcap" => 0x54,
+                        "bigcup" => 0x53,
+                        "biguplus" => 0x55,
+                        "bigsqcup" => 0x46,
+                        "bigodot" => 0x4A,
+                        "bigoplus" => 0x4C,
+                        "bigotimes" => 0x4E,
+                        "bigwedge" => 0x56,
+                        "bigvee" => 0x57,
+                        _ => 0x50, // sum
+                    }
+                };
+                cm_op_code = cmex_code;
+                let m = crate::math::math_tfm::cmex10_metric(cmex_code);
+                let w = ((m.w + m.ic) as f32) * (font_size * 0.001);
+                let h = (m.h as f32) * (font_size * 0.001);
+                let d = (m.d as f32) * (font_size * 0.001);
+                let ic = if let Some(res) = otf_resolved {
+                    if res.italic_correction > 0 {
+                        (res.italic_correction as f32 * 0.001) * font_size
+                    } else {
+                        (m.ic as f32) * (font_size * 0.001)
+                    }
+                } else {
+                    (m.ic as f32) * (font_size * 0.001)
+                };
+                (Face::Extension, font_size, w, h, d, ic)
             };
 
             // TeX Appendix G Rule 13: shift operator vertically so center is at math axis
@@ -1499,99 +1836,45 @@ pub fn layout_node<'a, 'p>(
                 if is_text_op {
                     ctx.emit_glyph_run(x, y, op_face, op_size, op);
                 } else if is_integral {
-                    if ctx.font_family == metrics::FontFamily::ComputerModern {
-                        let int_glyph = crate::math::math_delim::byte_str(cm_op_code);
-                        let m = crate::math::math_tfm::cmex10_metric(cm_op_code);
-                        let single_w = ((m.w + m.ic) as f32) * (op_size * 0.001);
-                        let offset = if style.is_display() {
-                            single_w - (6.0 / 18.0) * op_size
-                        } else {
-                            single_w - (3.0 / 18.0) * op_size
-                        };
-                        if *op == "iint" {
-                            ctx.emit_glyph_run(x, y, Face::Extension, op_size, int_glyph);
-                            ctx.emit_glyph_run(
-                                x + offset,
-                                y,
-                                Face::Extension,
-                                op_size,
-                                int_glyph,
-                            );
-                        } else if *op == "iiint" {
-                            ctx.emit_glyph_run(x, y, Face::Extension, op_size, int_glyph);
-                            ctx.emit_glyph_run(
-                                x + offset,
-                                y,
-                                Face::Extension,
-                                op_size,
-                                int_glyph,
-                            );
-                            ctx.emit_glyph_run(
-                                x + 2.0 * offset,
-                                y,
-                                Face::Extension,
-                                op_size,
-                                int_glyph,
-                            );
-                        } else {
-                            ctx.emit_glyph_run(x, y, Face::Extension, op_size, int_glyph);
-                        }
+                    let int_glyph = crate::math::math_delim::byte_str(cm_op_code);
+                    let m = crate::math::math_tfm::cmex10_metric(cm_op_code);
+                    let single_w = ((m.w + m.ic) as f32) * (op_size * 0.001);
+                    let offset = if style.is_display() {
+                        single_w - (6.0 / 18.0) * op_size
                     } else {
-                        let single_w = metrics::SYMBOL_WIDTHS[0xF2] as f32 * (op_size * 0.001);
-                        let offset = single_w * 0.75;
-                        if *op == "oint" {
-                            ctx.emit_glyph_run(x, y, Face::Symbol, op_size, "\u{00F2}");
-                            let ring_size = op_size * 0.55;
-                            let ring_w = metrics::SYMBOL_WIDTHS[0xB0] as f32 * (ring_size * 0.001);
-                            let ring_x = x + (single_w - ring_w) * 0.5;
-                            let ring_y = y + (op_h - op_d) * 0.5 - 0.40 * ring_size;
-                            ctx.emit_glyph_run(ring_x, ring_y, Face::Symbol, ring_size, "\u{00B0}");
-                        } else if *op == "iint" {
-                            ctx.emit_glyph_run(x, y, Face::Symbol, op_size, "\u{00F2}");
-                            ctx.emit_glyph_run(
-                                x + offset,
-                                y,
-                                Face::Symbol,
-                                op_size,
-                                "\u{00F2}",
-                            );
-                        } else if *op == "iiint" {
-                            ctx.emit_glyph_run(x, y, Face::Symbol, op_size, "\u{00F2}");
-                            ctx.emit_glyph_run(
-                                x + offset,
-                                y,
-                                Face::Symbol,
-                                op_size,
-                                "\u{00F2}",
-                            );
-                            ctx.emit_glyph_run(
-                                x + 2.0 * offset,
-                                y,
-                                Face::Symbol,
-                                op_size,
-                                "\u{00F2}",
-                            );
-                        } else {
-                            ctx.emit_glyph_run(x, y, Face::Symbol, op_size, "\u{00F2}");
-                        }
+                        single_w - (3.0 / 18.0) * op_size
+                    };
+                    if *op == "iint" || *op == "oiint" {
+                        ctx.emit_glyph_run(x, y, Face::Extension, op_size, int_glyph);
+                        ctx.emit_glyph_run(
+                            x + offset,
+                            y,
+                            Face::Extension,
+                            op_size,
+                            int_glyph,
+                        );
+                    } else if *op == "iiint" || *op == "oiiint" {
+                        ctx.emit_glyph_run(x, y, Face::Extension, op_size, int_glyph);
+                        ctx.emit_glyph_run(
+                            x + offset,
+                            y,
+                            Face::Extension,
+                            op_size,
+                            int_glyph,
+                        );
+                        ctx.emit_glyph_run(
+                            x + 2.0 * offset,
+                            y,
+                            Face::Extension,
+                            op_size,
+                            int_glyph,
+                        );
+                    } else {
+                        ctx.emit_glyph_run(x, y, Face::Extension, op_size, int_glyph);
                     }
-                } else if ctx.font_family == metrics::FontFamily::ComputerModern {
+                } else {
                     let s = crate::math::math_delim::byte_str(cm_op_code);
                     ctx.emit_glyph_run(x, y, Face::Extension, op_size, s);
-                } else {
-                    let glyph_str = match *op {
-                        "prod" | "coprod" => "\u{00D5}",
-                        "bigcap" => "\u{00C7}",
-                        "bigcup" => "\u{00C8}",
-                        "bigvee" => "\u{00DA}",
-                        "bigwedge" => "\u{00D9}",
-                        "bigoplus" => "\u{00C4}",
-                        "bigotimes" => "\u{00C5}",
-                        "bigodot" => "\u{00C4}",
-                        "biguplus" | "bigsqcup" => "\u{00C8}",
-                        _ => "\u{00E5}",
-                    };
-                    ctx.emit_glyph_run(x, y, Face::Symbol, op_size, glyph_str);
                 }
             };
 
@@ -1615,11 +1898,23 @@ pub fn layout_node<'a, 'p>(
                 let max_w = op_w.max(sub_box.w + half_ic).max(sup_box.w + half_ic);
                 let op_x = origin_x + (max_w - op_w) * 0.5;
 
-                // TeX Appendix G Rule 13a: upper and lower clearances
-                let sup_clearance = ((params.big_op_spacing1 as f32) * scale).max(2.0);
-                let sup_min_elev = ((params.big_op_spacing3 as f32) * scale).max(3.0);
-                let sub_clearance = ((params.big_op_spacing2 as f32) * scale).max(2.0);
-                let sub_min_drop = ((params.big_op_spacing4 as f32) * scale).max(3.0);
+                // OpenType MATH or TeX Appendix G Rule 13a: upper and lower clearances
+                let (sup_clearance, sup_min_elev, sub_clearance, sub_min_drop) = if let Some(otf) = crate::math::fonts::active_opentype_math_font(ctx.font_family) {
+                    let c = &otf.constants;
+                    (
+                        ((c.upper_limit_gap_min as f32) * 0.001 * font_size).max(2.0),
+                        ((c.upper_limit_baseline_rise_min as f32) * 0.001 * font_size).max(3.0),
+                        ((c.lower_limit_gap_min as f32) * 0.001 * font_size).max(2.0),
+                        ((c.lower_limit_baseline_drop_min as f32) * 0.001 * font_size).max(3.0),
+                    )
+                } else {
+                    (
+                        ((params.big_op_spacing1 as f32) * scale).max(2.0),
+                        ((params.big_op_spacing3 as f32) * scale).max(3.0),
+                        ((params.big_op_spacing2 as f32) * scale).max(2.0),
+                        ((params.big_op_spacing4 as f32) * scale).max(3.0),
+                    )
+                };
 
                 let sup_bot_y = (op_top_y + sup_clearance).max(origin_y + axis_h + sup_min_elev);
                 let sup_y = sup_bot_y + sup_box.d;
@@ -1680,7 +1975,12 @@ pub fn layout_node<'a, 'p>(
                     } else {
                         // Slanted integral limits: upper limit staggered right, lower limit tucked under
                         let sx = origin_x + op_w + op_ic + (op_m.sup_kern as f32 * 0.001) * op_size;
-                        let bx = (origin_x + op_w + (op_m.sub_kern as f32 * 0.001) * op_size)
+                        let lower_kern = if let Some(res) = otf_resolved {
+                            (res.lower_limit_kern as f32 * 0.001) * op_size
+                        } else {
+                            (op_m.sub_kern as f32 * 0.001) * op_size
+                        };
+                        let bx = (origin_x + op_w + lower_kern)
                             .max(origin_x + 0.15 * op_w);
                         let s_shift = ((op_m.sup_min_shift as f32 * 0.001) * op_size)
                             .max(0.40 * op_size + sup_box.d);
@@ -1875,8 +2175,8 @@ pub fn layout_node<'a, 'p>(
                 };
 
             let (min_rh, min_rd, row_sep) =
-                crate::math::math_matrix::MatrixLayoutMetricsEngine::row_parameters(
-                    env_kind, font_size,
+                crate::math::math_matrix::MatrixLayoutMetricsEngine::row_parameters_font(
+                    env_kind, font_size, Some(ctx.opentype_engine().constants()),
                 );
             let cell_style = if env_kind == MatrixEnvKind::SmallMatrix {
                 MathStyle::Script
@@ -2074,18 +2374,7 @@ pub fn layout_node<'a, 'p>(
             };
             let nuc_box = layout_node(ctx, nucleus, nuc_style, origin_x, origin_y);
             let ic = node_italic_correction(nucleus, ctx.face_override, ctx.font_family) * scale;
-            let skew_offset = match &**nucleus {
-                MathNode::Variable(ch) => {
-                    if ctx.font_family == metrics::FontFamily::ComputerModern {
-                        crate::math::math_tfm::cmmi_skew_kern(*ch) * font_size
-                    } else {
-                        let default_face = Face::Italic;
-                        let face = ctx.face_override.unwrap_or(default_face);
-                        (glyph_top_accent_offset(*ch, face, ctx.font_family) as f32) * scale
-                    }
-                }
-                _ => 0.5 * ic,
-            };
+            let skew_offset = compute_top_accent_skew_offset(nucleus, ctx, font_size, scale, ic);
 
             // TeX Appendix G Rule 8 & 9: overline and underline
             if *accent == "overline" {
@@ -2304,63 +2593,112 @@ pub fn layout_node<'a, 'p>(
                         }
                         _ => MathBox::with_dims(nuc_box.w, nuc_box.h, nuc_box.d),
                     }
-                } else if *accent == "overrightarrow" {
-                    let arrow_size = acc_scale * font_size;
-                    let arrow_w = (metrics::SYMBOL_WIDTHS[0xAE] as f32 * 0.001) * arrow_size;
-                    let arrow_y = origin_y + nuc_box.h + acc_lift;
-                    let shaft_y = arrow_y + 0.13 * arrow_size;
-                    if nuc_box.w > arrow_w {
-                        let arrow_x = origin_x + nuc_box.w - arrow_w + ic_offset;
-                        let rule_w = (arrow_x - (origin_x + ic_offset)).max(1.0);
-                        ctx.emit_rule(
-                            origin_x + ic_offset,
-                            shaft_y,
-                            rule_w + arrow_w * 0.25,
-                            rule_t,
-                        );
-                        ctx.emit_glyph_run(arrow_x, arrow_y, Face::Symbol, arrow_size, "\u{00AE}");
-                    } else {
-                        let arrow_x = origin_x + (nuc_box.w - arrow_w) * 0.5 + ic_offset;
-                        ctx.emit_glyph_run(arrow_x, arrow_y, Face::Symbol, arrow_size, "\u{00AE}");
+                } else if *accent == "overrightarrow" || *accent == "overleftarrow" {
+                    let mut drew_otf = false;
+                    if let Some(kind) = crate::math::fonts::OpenTypeHorizKind::from_name(accent) {
+                        if let Some(otf) = crate::math::fonts::active_opentype_math_font(ctx.font_family) {
+                            if let Some(res) = kind.resolve_font_horizontal(otf, nuc_box.w, font_size) {
+                                match res {
+                                    crate::math::fonts::ResolvedHorizontal::Variant { glyph_id, advance } => {
+                                        let eff_w = (advance as f32) * (font_size * 0.001);
+                                        let acc_x = origin_x + (nuc_box.w - eff_w) * 0.5 + ic_offset;
+                                        let acc_y = origin_y + nuc_box.h + acc_lift;
+                                        ctx.emit_vector_glyph(acc_x, acc_y, font_size, glyph_id.0);
+                                        drew_otf = true;
+                                    }
+                                    crate::math::fonts::ResolvedHorizontal::Assembly { recipe, min_overlap } => {
+                                        let left_w = (otf.advance_width(recipe.left_glyph).unwrap_or(500) as f32) * (font_size * 0.001);
+                                        let right_w = (otf.advance_width(recipe.right_glyph).unwrap_or(500) as f32) * (font_size * 0.001);
+                                        let ext_w = (otf.advance_width(recipe.ext_glyph).unwrap_or(337) as f32) * (font_size * 0.001);
+                                        let overlap_pt = (min_overlap as f32) * (font_size * 0.001);
+                                        let acc_y = origin_y + nuc_box.h + acc_lift;
+                                        let acc_x = origin_x + ic_offset;
+
+                                        ctx.emit_vector_glyph(acc_x, acc_y, font_size, recipe.left_glyph.0);
+                                        let right_x = acc_x + nuc_box.w - right_w;
+                                        ctx.emit_vector_glyph(right_x, acc_y, font_size, recipe.right_glyph.0);
+                                        let span = (right_x + overlap_pt) - (acc_x + left_w - overlap_pt);
+                                        if span > 0.0 && ext_w > overlap_pt {
+                                            let step = ext_w - overlap_pt;
+                                            let n_ext = (span / step).ceil().max(1.0) as usize;
+                                            let actual_step = span / n_ext as f32;
+                                            let start_x = acc_x + left_w - overlap_pt;
+                                            for i in 0..n_ext {
+                                                ctx.emit_vector_glyph(start_x + (i as f32) * actual_step, acc_y, font_size, recipe.ext_glyph.0);
+                                            }
+                                        }
+                                        drew_otf = true;
+                                    }
+                                }
+                            }
+                        }
                     }
-                    MathBox::with_dims(nuc_box.w, nuc_box.h + acc_extra_h, nuc_box.d)
-                } else if *accent == "overleftarrow" {
-                    let arrow_size = acc_scale * font_size;
-                    let arrow_w = (metrics::SYMBOL_WIDTHS[0xAC] as f32 * 0.001) * arrow_size;
-                    let arrow_y = origin_y + nuc_box.h + acc_lift;
-                    let shaft_y = arrow_y + 0.13 * arrow_size;
-                    if nuc_box.w > arrow_w {
-                        let arrow_x = origin_x + ic_offset;
-                        let rule_start = arrow_x + arrow_w * 0.75;
-                        let rule_w = (origin_x + nuc_box.w + ic_offset - rule_start).max(1.0);
-                        ctx.emit_glyph_run(arrow_x, arrow_y, Face::Symbol, arrow_size, "\u{00AC}");
-                        ctx.emit_rule(rule_start, shaft_y, rule_w, rule_t);
-                    } else {
-                        let arrow_x = origin_x + (nuc_box.w - arrow_w) * 0.5 + ic_offset;
-                        ctx.emit_glyph_run(arrow_x, arrow_y, Face::Symbol, arrow_size, "\u{00AC}");
+                    if !drew_otf {
+                        let arrow_size = acc_scale * font_size;
+                        let is_right = *accent == "overrightarrow";
+                        let sym_idx = if is_right { 0xAE } else { 0xAC };
+                        let arrow_w = (metrics::SYMBOL_WIDTHS[sym_idx] as f32 * 0.001) * arrow_size;
+                        let arrow_y = origin_y + nuc_box.h + acc_lift;
+                        let shaft_y = arrow_y + 0.13 * arrow_size;
+                        let sym_str = if is_right { "\u{00AE}" } else { "\u{00AC}" };
+                        if nuc_box.w > arrow_w {
+                            if is_right {
+                                let arrow_x = origin_x + nuc_box.w - arrow_w + ic_offset;
+                                let rule_w = (arrow_x - (origin_x + ic_offset)).max(1.0);
+                                ctx.emit_rule(origin_x + ic_offset, shaft_y, rule_w + arrow_w * 0.25, rule_t);
+                                ctx.emit_glyph_run(arrow_x, arrow_y, Face::Symbol, arrow_size, sym_str);
+                            } else {
+                                let arrow_x = origin_x + ic_offset;
+                                let rule_start = arrow_x + arrow_w * 0.75;
+                                let rule_w = (origin_x + nuc_box.w + ic_offset - rule_start).max(1.0);
+                                ctx.emit_glyph_run(arrow_x, arrow_y, Face::Symbol, arrow_size, sym_str);
+                                ctx.emit_rule(rule_start, shaft_y, rule_w, rule_t);
+                            }
+                        } else {
+                            let arrow_x = origin_x + (nuc_box.w - arrow_w) * 0.5 + ic_offset;
+                            ctx.emit_glyph_run(arrow_x, arrow_y, Face::Symbol, arrow_size, sym_str);
+                        }
                     }
                     MathBox::with_dims(nuc_box.w, nuc_box.h + acc_extra_h, nuc_box.d)
                 } else {
                     let is_wide = matches!(*accent, "widehat" | "widetilde");
-                    let base_w = (am.width_ratio as f32 * 0.001) * font_size;
-                    let (eff_size, eff_w, eff_extra_h) = if is_wide && nuc_box.w > base_w * 1.1 {
-                        let scale_factor = (nuc_box.w / base_w).clamp(1.0, 3.5);
-                        (
-                            acc_scale * font_size * scale_factor,
-                            base_w * scale_factor,
-                            acc_extra_h * scale_factor,
-                        )
-                    } else {
-                        (
-                            acc_scale * font_size,
-                            base_w.min(nuc_box.w + 1.0),
-                            acc_extra_h,
-                        )
-                    };
-                    let acc_x = origin_x + (nuc_box.w - eff_w) * 0.5 + ic_offset;
-                    let acc_y = origin_y + nuc_box.h + acc_lift;
-                    ctx.emit_glyph_run(acc_x, acc_y, am.face, eff_size, am.glyph);
-                    MathBox::with_dims(nuc_box.w, nuc_box.h + eff_extra_h, nuc_box.d)
+                    let mut drew_otf = false;
+                    if is_wide {
+                        if let Some(kind) = crate::math::fonts::OpenTypeHorizKind::from_name(accent) {
+                            if let Some(otf) = crate::math::fonts::active_opentype_math_font(ctx.font_family) {
+                                if let Some(crate::math::fonts::ResolvedHorizontal::Variant { glyph_id, advance }) = kind.resolve_font_horizontal(otf, nuc_box.w, font_size) {
+                                    let eff_w = (advance as f32) * (font_size * 0.001);
+                                    let acc_x = origin_x + (nuc_box.w - eff_w) * 0.5 + ic_offset;
+                                    let acc_y = origin_y + nuc_box.h + acc_lift;
+                                    ctx.emit_vector_glyph(acc_x, acc_y, font_size, glyph_id.0);
+                                    drew_otf = true;
+                                }
+                            }
+                        }
+                    }
+                    let mut final_extra_h = acc_extra_h;
+                    if !drew_otf {
+                        let base_w = (am.width_ratio as f32 * 0.001) * font_size;
+                        let (eff_size, eff_w, eff_extra_h) = if is_wide && nuc_box.w > base_w * 1.1 {
+                            let scale_factor = (nuc_box.w / base_w).clamp(1.0, 3.5);
+                            (
+                                acc_scale * font_size * scale_factor,
+                                base_w * scale_factor,
+                                acc_extra_h * scale_factor,
+                            )
+                        } else {
+                            (
+                                acc_scale * font_size,
+                                base_w.min(nuc_box.w + 1.0),
+                                acc_extra_h,
+                            )
+                        };
+                        final_extra_h = eff_extra_h;
+                        let acc_x = origin_x + (nuc_box.w - eff_w) * 0.5 + ic_offset;
+                        let acc_y = origin_y + nuc_box.h + acc_lift;
+                        ctx.emit_glyph_run(acc_x, acc_y, am.face, eff_size, am.glyph);
+                    }
+                    MathBox::with_dims(nuc_box.w, nuc_box.h + final_extra_h, nuc_box.d)
                 }
             } else {
                 MathBox::with_dims(nuc_box.w, nuc_box.h, nuc_box.d)
@@ -2622,23 +2960,75 @@ fn layout_overbrace<'a, 'p>(
     if !ctx.is_measuring() {
         layout_node(ctx, nucleus, nuc_style, actual_nuc_x, origin_y);
 
-        if ctx.font_family == metrics::FontFamily::ComputerModern {
-            let x0 = base_brace_x;
-            ctx.emit_glyph_run(x0, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7A));
-            if rule_seg_w > 0.0 {
-                ctx.emit_rule(x0 + corner_w, brace_y, rule_seg_w, brace_h);
+        let mut drew_otf = false;
+        if let Some(otf) = crate::math::fonts::active_opentype_math_font(ctx.font_family) {
+            if let Some(res) = crate::math::fonts::OpenTypeHorizKind::OverBrace.resolve_font_horizontal(otf, target_w, font_size) {
+                match res {
+                    crate::math::fonts::ResolvedHorizontal::Variant { glyph_id, advance } => {
+                        let var_w = (advance as f32) * (font_size * 0.001);
+                        let brace_x = base_brace_x + (target_w - var_w) * 0.5;
+                        ctx.emit_vector_glyph(brace_x, brace_y, font_size, glyph_id.0);
+                        drew_otf = true;
+                    }
+                    crate::math::fonts::ResolvedHorizontal::Assembly { recipe, min_overlap } => {
+                        let left_w = (otf.advance_width(recipe.left_glyph).unwrap_or(1002) as f32) * (font_size * 0.001);
+                        let mid_w = (otf.advance_width(recipe.mid_glyph).unwrap_or(2003) as f32) * (font_size * 0.001);
+                        let right_w = (otf.advance_width(recipe.right_glyph).unwrap_or(1001) as f32) * (font_size * 0.001);
+                        let ext_w = (otf.advance_width(recipe.ext_glyph).unwrap_or(994) as f32) * (font_size * 0.001);
+                        let overlap_pt = (min_overlap as f32) * (font_size * 0.001);
+
+                        ctx.emit_vector_glyph(base_brace_x, brace_y, font_size, recipe.left_glyph.0);
+                        let mid_x = base_brace_x + (target_w - mid_w) * 0.5;
+                        ctx.emit_vector_glyph(mid_x, brace_y, font_size, recipe.mid_glyph.0);
+                        let right_x = base_brace_x + target_w - right_w;
+                        ctx.emit_vector_glyph(right_x, brace_y, font_size, recipe.right_glyph.0);
+
+                        let span_left = (mid_x + overlap_pt) - (base_brace_x + left_w - overlap_pt);
+                        if span_left > 0.0 && ext_w > overlap_pt {
+                            let step = ext_w - overlap_pt;
+                            let n_ext = (span_left / step).ceil().max(1.0) as usize;
+                            let actual_step = span_left / n_ext as f32;
+                            let start_x = base_brace_x + left_w - overlap_pt;
+                            for i in 0..n_ext {
+                                ctx.emit_vector_glyph(start_x + (i as f32) * actual_step, brace_y, font_size, recipe.ext_glyph.0);
+                            }
+                        }
+
+                        let span_right = (right_x + overlap_pt) - (mid_x + mid_w - overlap_pt);
+                        if span_right > 0.0 && ext_w > overlap_pt {
+                            let step = ext_w - overlap_pt;
+                            let n_ext = (span_right / step).ceil().max(1.0) as usize;
+                            let actual_step = span_right / n_ext as f32;
+                            let start_x = mid_x + mid_w - overlap_pt;
+                            for i in 0..n_ext {
+                                ctx.emit_vector_glyph(start_x + (i as f32) * actual_step, brace_y, font_size, recipe.ext_glyph.0);
+                            }
+                        }
+                        drew_otf = true;
+                    }
+                }
             }
-            let x_mid1 = x0 + corner_w + rule_seg_w;
-            ctx.emit_glyph_run(x_mid1, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7D));
-            let x_mid2 = x_mid1 + corner_w;
-            ctx.emit_glyph_run(x_mid2, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7C));
-            if rule_seg_w > 0.0 {
-                ctx.emit_rule(x_mid2 + corner_w, brace_y, rule_seg_w, brace_h);
+        }
+
+        if !drew_otf {
+            if ctx.font_family == metrics::FontFamily::ComputerModern {
+                let x0 = base_brace_x;
+                ctx.emit_glyph_run(x0, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7A));
+                if rule_seg_w > 0.0 {
+                    ctx.emit_rule(x0 + corner_w, brace_y, rule_seg_w, brace_h);
+                }
+                let x_mid1 = x0 + corner_w + rule_seg_w;
+                ctx.emit_glyph_run(x_mid1, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7D));
+                let x_mid2 = x_mid1 + corner_w;
+                ctx.emit_glyph_run(x_mid2, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7C));
+                if rule_seg_w > 0.0 {
+                    ctx.emit_rule(x_mid2 + corner_w, brace_y, rule_seg_w, brace_h);
+                }
+                let x_end = x_mid2 + corner_w + rule_seg_w;
+                ctx.emit_glyph_run(x_end, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7B));
+            } else {
+                ctx.emit_rule(base_brace_x, brace_y, target_w, brace_h);
             }
-            let x_end = x_mid2 + corner_w + rule_seg_w;
-            ctx.emit_glyph_run(x_end, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7B));
-        } else {
-            ctx.emit_rule(base_brace_x, brace_y, target_w, brace_h);
         }
 
         if let Some(s) = sup {
@@ -2731,23 +3121,75 @@ fn layout_underbrace<'a, 'p>(
     if !ctx.is_measuring() {
         layout_node(ctx, nucleus, nuc_style, actual_nuc_x, origin_y);
 
-        if ctx.font_family == metrics::FontFamily::ComputerModern {
-            let x0 = base_brace_x;
-            ctx.emit_glyph_run(x0, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7C));
-            if rule_seg_w > 0.0 {
-                ctx.emit_rule(x0 + corner_w, brace_y, rule_seg_w, brace_h);
+        let mut drew_otf = false;
+        if let Some(otf) = crate::math::fonts::active_opentype_math_font(ctx.font_family) {
+            if let Some(res) = crate::math::fonts::OpenTypeHorizKind::UnderBrace.resolve_font_horizontal(otf, target_w, font_size) {
+                match res {
+                    crate::math::fonts::ResolvedHorizontal::Variant { glyph_id, advance } => {
+                        let var_w = (advance as f32) * (font_size * 0.001);
+                        let brace_x = base_brace_x + (target_w - var_w) * 0.5;
+                        ctx.emit_vector_glyph(brace_x, brace_y, font_size, glyph_id.0);
+                        drew_otf = true;
+                    }
+                    crate::math::fonts::ResolvedHorizontal::Assembly { recipe, min_overlap } => {
+                        let left_w = (otf.advance_width(recipe.left_glyph).unwrap_or(1002) as f32) * (font_size * 0.001);
+                        let mid_w = (otf.advance_width(recipe.mid_glyph).unwrap_or(2003) as f32) * (font_size * 0.001);
+                        let right_w = (otf.advance_width(recipe.right_glyph).unwrap_or(1001) as f32) * (font_size * 0.001);
+                        let ext_w = (otf.advance_width(recipe.ext_glyph).unwrap_or(994) as f32) * (font_size * 0.001);
+                        let overlap_pt = (min_overlap as f32) * (font_size * 0.001);
+
+                        ctx.emit_vector_glyph(base_brace_x, brace_y, font_size, recipe.left_glyph.0);
+                        let mid_x = base_brace_x + (target_w - mid_w) * 0.5;
+                        ctx.emit_vector_glyph(mid_x, brace_y, font_size, recipe.mid_glyph.0);
+                        let right_x = base_brace_x + target_w - right_w;
+                        ctx.emit_vector_glyph(right_x, brace_y, font_size, recipe.right_glyph.0);
+
+                        let span_left = (mid_x + overlap_pt) - (base_brace_x + left_w - overlap_pt);
+                        if span_left > 0.0 && ext_w > overlap_pt {
+                            let step = ext_w - overlap_pt;
+                            let n_ext = (span_left / step).ceil().max(1.0) as usize;
+                            let actual_step = span_left / n_ext as f32;
+                            let start_x = base_brace_x + left_w - overlap_pt;
+                            for i in 0..n_ext {
+                                ctx.emit_vector_glyph(start_x + (i as f32) * actual_step, brace_y, font_size, recipe.ext_glyph.0);
+                            }
+                        }
+
+                        let span_right = (right_x + overlap_pt) - (mid_x + mid_w - overlap_pt);
+                        if span_right > 0.0 && ext_w > overlap_pt {
+                            let step = ext_w - overlap_pt;
+                            let n_ext = (span_right / step).ceil().max(1.0) as usize;
+                            let actual_step = span_right / n_ext as f32;
+                            let start_x = mid_x + mid_w - overlap_pt;
+                            for i in 0..n_ext {
+                                ctx.emit_vector_glyph(start_x + (i as f32) * actual_step, brace_y, font_size, recipe.ext_glyph.0);
+                            }
+                        }
+                        drew_otf = true;
+                    }
+                }
             }
-            let x_mid1 = x0 + corner_w + rule_seg_w;
-            ctx.emit_glyph_run(x_mid1, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7B));
-            let x_mid2 = x_mid1 + corner_w;
-            ctx.emit_glyph_run(x_mid2, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7A));
-            if rule_seg_w > 0.0 {
-                ctx.emit_rule(x_mid2 + corner_w, brace_y, rule_seg_w, brace_h);
+        }
+
+        if !drew_otf {
+            if ctx.font_family == metrics::FontFamily::ComputerModern {
+                let x0 = base_brace_x;
+                ctx.emit_glyph_run(x0, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7C));
+                if rule_seg_w > 0.0 {
+                    ctx.emit_rule(x0 + corner_w, brace_y, rule_seg_w, brace_h);
+                }
+                let x_mid1 = x0 + corner_w + rule_seg_w;
+                ctx.emit_glyph_run(x_mid1, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7B));
+                let x_mid2 = x_mid1 + corner_w;
+                ctx.emit_glyph_run(x_mid2, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7A));
+                if rule_seg_w > 0.0 {
+                    ctx.emit_rule(x_mid2 + corner_w, brace_y, rule_seg_w, brace_h);
+                }
+                let x_end = x_mid2 + corner_w + rule_seg_w;
+                ctx.emit_glyph_run(x_end, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7D));
+            } else {
+                ctx.emit_rule(base_brace_x, brace_y, target_w, brace_h);
             }
-            let x_end = x_mid2 + corner_w + rule_seg_w;
-            ctx.emit_glyph_run(x_end, brace_y, Face::Extension, font_size, crate::math::math_delim::byte_str(0x7D));
-        } else {
-            ctx.emit_rule(base_brace_x, brace_y, target_w, brace_h);
         }
 
         if let Some(s) = sup {

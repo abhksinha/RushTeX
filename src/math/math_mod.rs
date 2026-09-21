@@ -17,6 +17,7 @@ pub mod math_fonts;
 pub mod math_fraction;
 pub mod math_layout;
 pub mod math_matrix;
+pub mod math_oracle;
 pub mod math_parser;
 pub mod math_radical;
 pub mod math_scripts;
@@ -27,8 +28,12 @@ pub mod math_tfm;
 pub mod fonts;
 
 pub use fonts::{
-    OpenTypeFont, OpenTypeMathConstants, OpenTypeMathEngine, NEWCM_MATH_CONSTANTS,
-    STIX2_MATH_CONSTANTS,
+    script_glyph, to_unicode_blackboard, to_unicode_fraktur, to_unicode_script,
+    CalligraphicNib, CalligraphicStrokeBuffer, OpenTypeAssemblyRecipe, OpenTypeBigOpKind,
+    OpenTypeDelimKind, OpenTypeFont, OpenTypeMathConstants, OpenTypeMathEngine,
+    OpenTypeOperatorMetrics, OpenTypeScriptGlyph, ASANA_MATH_CONSTANTS, FIRAMATH_CONSTANTS,
+    NEWCM_MATH_CONSTANTS, NEWCM_OPERATOR_METRICS, NEWCM_SCRIPT_GLYPHS, STIX2_MATH_CONSTANTS,
+    STIX2_SCRIPT_GLYPHS,
 };
 
 pub use math_display::{

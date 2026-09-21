@@ -118,6 +118,19 @@ pub static BIG_OP_VARIANT_TIER: BigOpVariantTier = BigOpVariantTier {
 const _: () = assert!(core::mem::size_of::<BigOpVariantTier>() == 64);
 const _: () = assert!(core::mem::align_of::<BigOpVariantTier>() == 64);
 
+impl BigOpVariantTier {
+    /// Dynamically resolves an operator variant from a MathFont.
+    #[inline(always)]
+    pub fn resolve_font_op(
+        op: &str,
+        font: &impl crate::math::fonts::opentype::MathFont,
+        style: MathStyle,
+    ) -> Option<crate::math::fonts::operators::ResolvedBigOp> {
+        crate::math::fonts::operators::OpenTypeBigOpKind::from_command(op)
+            .and_then(|kind| kind.resolve_font_operator(font, style))
+    }
+}
+
 /// Precomputed overhang corrector for integrals ($\int, \iint, \iiint, \oint$).
 pub struct IntegralOverhangCorrector;
 

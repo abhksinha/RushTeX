@@ -48,11 +48,24 @@ pub fn emit_into_opts(
     destination_buffer.reserve(pages.len() * 2048 + 4096);
     let total_pages = pages.len().max(1);
 
-    // Collect all faces used across all pages in this document
+    // Collect all faces and OpenType math glyphs used across all pages
     let mut doc_used_faces = 0u32;
-    for page in pages {
+    let mut math_cids: Vec<u16> = Vec::new();
+    for page in pages.iter().take(total_pages) {
         doc_used_faces |= page.compute_used_faces();
+        for op in &page.ops {
+            match op {
+                Paint::VectorGlyph { glyph_id, .. } | Paint::CidGlyphRun { glyph_id, .. } => {
+                    math_cids.push(*glyph_id);
+                }
+                _ => {}
+            }
+        }
     }
+    math_cids.sort_unstable();
+    math_cids.dedup();
+    let has_math_font = !math_cids.is_empty();
+
     // If document has no text at all (e.g. blank document), default to Roman
     if doc_used_faces == 0 {
         doc_used_faces = 1 << (Face::Roman as u8);
@@ -60,7 +73,7 @@ pub fn emit_into_opts(
     let font_family = pages.first().map(|p| p.font_family).unwrap_or_default();
     let num_fonts = doc_used_faces.count_ones() as usize;
 
-    let mut writer = Writer::new(destination_buffer, total_pages, num_fonts * 3);
+    let mut writer = Writer::new(destination_buffer, total_pages, num_fonts * 3 + 12);
     writer.write_all(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
 
     // Object plan:
@@ -82,7 +95,7 @@ pub fn emit_into_opts(
     for (face_idx, obj_id) in font_object_ids.iter_mut().enumerate() {
         if (doc_used_faces & (1 << face_idx)) != 0 {
             let face = Face::from_u8(face_idx as u8);
-            let is_cm_embedded = font_family == FontFamily::ComputerModern
+            let is_cm_embedded = (font_family == FontFamily::ComputerModern
                 && matches!(
                     face,
                     Face::Roman
@@ -90,7 +103,6 @@ pub fn emit_into_opts(
                         | Face::Italic
                         | Face::MathItalic
                         | Face::Symbol
-                        | Face::Extension
                         | Face::Roman7
                         | Face::Roman5
                         | Face::MathItalic7
@@ -99,7 +111,8 @@ pub fn emit_into_opts(
                         | Face::Symbol5
                         | Face::AmsA
                         | Face::AmsB
-                );
+                ))
+                || face == Face::Extension;
             *obj_id = next_font_id;
             next_font_id += 1;
             if is_cm_embedded {
@@ -150,12 +163,6 @@ pub fn emit_into_opts(
             next_font_id += 1;
         }
 
-        let has_omx = (doc_used_faces & (1 << Face::Extension as u8)) != 0;
-        if has_omx {
-            omx_tounicode_id = next_font_id;
-            next_font_id += 1;
-        }
-
         let has_msam = (doc_used_faces & (1 << Face::AmsA as u8)) != 0;
         if has_msam {
             msam_tounicode_id = next_font_id;
@@ -165,6 +172,39 @@ pub fn emit_into_opts(
         let has_msbm = (doc_used_faces & (1 << Face::AmsB as u8)) != 0;
         if has_msbm {
             msbm_tounicode_id = next_font_id;
+            next_font_id += 1;
+        }
+    }
+
+    let has_omx = (doc_used_faces & (1 << Face::Extension as u8)) != 0;
+    if has_omx {
+        omx_tounicode_id = next_font_id;
+        next_font_id += 1;
+    }
+
+    let mut math_font_id = 0u32;
+    let mut math_cidfont_id = 0u32;
+    let mut math_descriptor_id = 0u32;
+    let mut math_tounicode_id = 0u32;
+    let mut math_file_id = None;
+
+    let active_otf = if has_math_font {
+        crate::math::fonts::active_opentype_math_font(font_family)
+    } else {
+        None
+    };
+
+    if has_math_font {
+        math_font_id = next_font_id;
+        next_font_id += 1;
+        math_cidfont_id = next_font_id;
+        next_font_id += 1;
+        math_descriptor_id = next_font_id;
+        next_font_id += 1;
+        math_tounicode_id = next_font_id;
+        next_font_id += 1;
+        if active_otf.as_ref().and_then(|f| f.font.cff_table()).is_some() {
+            math_file_id = Some(next_font_id);
         }
     }
 
@@ -213,6 +253,10 @@ pub fn emit_into_opts(
                     w.write_ref(font_id);
                 }
             }
+            if has_math_font {
+                w.write_all(b" /F_Math ");
+                w.write_ref(math_font_id);
+            }
             w.write_all(b" >> >> /Contents ");
             w.write_ref(content_object_id);
             w.write_all(b" >>\n");
@@ -221,7 +265,7 @@ pub fn emit_into_opts(
 
     for (page_idx, page) in pages.iter().enumerate().take(total_pages) {
         uncompressed_stream.clear();
-        build_stream_into(page, &mut uncompressed_stream);
+        build_stream_into(page, &mut uncompressed_stream, has_math_font);
         let content_object_id = first_content_id + page_idx as u32;
         if enable_compression {
             compressed_stream.clear();
@@ -405,7 +449,26 @@ pub fn emit_into_opts(
                 }
             } else {
                 match face {
-                    Face::Symbol | Face::Extension => write_font(&mut writer, id, "Symbol", false),
+                    Face::Extension => {
+                        let ids = CmFontObjectIds {
+                            font_id: id,
+                            descriptor_id: font_descriptor_ids[face_idx],
+                            file_id: font_file_ids[face_idx],
+                            tounicode_id: if omx_tounicode_id > 0 {
+                                Some(omx_tounicode_id)
+                            } else {
+                                None
+                            },
+                        };
+                        write_embedded_cm_font(
+                            &mut writer,
+                            ids,
+                            &crate::backend::cm_fonts::CMEX10_PROGRAM,
+                            &crate::backend::backend_fonts::CMEX10_WIDTHS,
+                            false,
+                        );
+                    }
+                    Face::Symbol => write_font(&mut writer, id, "Symbol", false),
                     Face::Dingbats => write_font(&mut writer, id, "ZapfDingbats", false),
                     _ => write_font(&mut writer, id, face.pdf_name(font_family), true),
                 }
@@ -432,7 +495,149 @@ pub fn emit_into_opts(
         emit_tounicode_cmap(&mut writer, msbm_tounicode_id, &crate::backend::cm_fonts::MSBM_TO_UNICODE);
     }
 
+    if has_math_font {
+        let math_ps_name = active_otf
+            .as_ref()
+            .and_then(|f| f.font.cff_postscript_name())
+            .unwrap_or_else(|| font_family.default_math_ps_name());
+
+        // 1. Type 0 composite font
+        writer.obj(math_font_id, |w| {
+            w.write_all(b"<< /Type /Font /Subtype /Type0 /BaseFont /");
+            w.write_all(math_ps_name.as_bytes());
+            w.write_all(b" /Encoding /Identity-H /DescendantFonts [ ");
+            w.write_ref(math_cidfont_id);
+            w.write_all(b" ] /ToUnicode ");
+            w.write_ref(math_tounicode_id);
+            w.write_all(b" >>\n");
+        });
+
+        // 2. Descendant CIDFontType0
+        writer.obj(math_cidfont_id, |w| {
+            w.write_all(b"<< /Type /Font /Subtype /CIDFontType0 /BaseFont /");
+            w.write_all(math_ps_name.as_bytes());
+            w.write_all(b" /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ");
+            w.write_ref(math_descriptor_id);
+            w.write_all(b" /DW 1000 /W [");
+            for &cid in &math_cids {
+                let adv = active_otf.as_ref().and_then(|f| f.font.h_advance(cid)).unwrap_or(1000);
+                w.write_all(b" ");
+                w.write_int(cid as i32);
+                w.write_all(b" [");
+                w.write_int(adv as i32);
+                w.write_all(b"]");
+            }
+            w.write_all(b" ] >>\n");
+        });
+
+        // 3. FontDescriptor
+        let bbox = active_otf
+            .as_ref()
+            .and_then(|f| f.font.cff_font_bbox())
+            .unwrap_or([-1042, -3060, 4082, 3560]);
+        writer.obj(math_descriptor_id, |w| {
+            w.write_all(b"<< /Type /FontDescriptor /FontName /");
+            w.write_all(math_ps_name.as_bytes());
+            w.write_all(b" /Flags 4 /FontBBox [");
+            w.write_int(bbox[0] as i32);
+            w.write_all(b" ");
+            w.write_int(bbox[1] as i32);
+            w.write_all(b" ");
+            w.write_int(bbox[2] as i32);
+            w.write_all(b" ");
+            w.write_int(bbox[3] as i32);
+            w.write_all(b"] /Ascent 800 /Descent -200 /CapHeight 700 /ItalicAngle 0 /StemV 80");
+            if let Some(fid) = math_file_id {
+                w.write_all(b" /FontFile3 ");
+                w.write_ref(fid);
+            }
+            w.write_all(b" >>\n");
+        });
+
+        // 4. FontFile3 (CFF stream)
+        if let Some(fid) = math_file_id {
+            if enable_compression {
+                let comp_bytes_opt = get_or_create_subset_compressed(font_family, active_otf, &math_cids)
+                    .or_else(|| crate::math::fonts::get_compressed_cff(font_family).map(|s| s.to_vec()));
+                if let Some(comp_bytes) = comp_bytes_opt {
+                    writer.obj(fid, |w| {
+                        w.write_all(b"<< /Subtype /CIDFontType0C /Filter /FlateDecode /Length ");
+                        w.write_int(comp_bytes.len() as i32);
+                        w.write_all(b" >>\nstream\n");
+                        w.write_all(&comp_bytes);
+                        w.write_all(b"\nendstream\n");
+                    });
+                }
+            } else {
+                let orig_cff = active_otf.as_ref().and_then(|f| f.font.cff_table());
+                let subsetted_cff = orig_cff.and_then(|cff| crate::math::fonts::opentype::subset_cff(cff, &math_cids));
+                let cff_to_write = subsetted_cff.as_deref().or(orig_cff);
+                if let Some(cff_bytes) = cff_to_write {
+                    writer.obj(fid, |w| {
+                        w.write_all(b"<< /Subtype /CIDFontType0C /Length ");
+                        w.write_int(cff_bytes.len() as i32);
+                        w.write_all(b" >>\nstream\n");
+                        w.write_all(cff_bytes);
+                        if !cff_bytes.ends_with(b"\n") {
+                            w.write_all(b"\n");
+                        }
+                        w.write_all(b"endstream\n");
+                    });
+                }
+            }
+        }
+
+        // 5. ToUnicode CMap
+        let mut cmap_entries: Vec<(u16, u32)> = Vec::with_capacity(math_cids.len());
+        for &cid in &math_cids {
+            let u = active_otf
+                .as_ref()
+                .and_then(|f| f.font.unicode_for_glyph(cid))
+                .or_else(|| fallback_unicode_for_glyph(cid))
+                .unwrap_or(cid as u32);
+            cmap_entries.push((cid, u));
+        }
+        emit_cid_tounicode_cmap(&mut writer, math_tounicode_id, &cmap_entries);
+    }
+
     writer.finish(catalog_id)
+}
+
+struct CachedSubsetStream {
+    family: FontFamily,
+    cids: Vec<u16>,
+    compressed: Vec<u8>,
+}
+
+thread_local! {
+    static SUBSET_COMPRESSED_CACHE: std::cell::RefCell<Option<CachedSubsetStream>> = const { std::cell::RefCell::new(None) };
+}
+
+fn get_or_create_subset_compressed(
+    font_family: FontFamily,
+    active_otf: Option<&crate::math::fonts::OpenTypeMathFont>,
+    math_cids: &[u16],
+) -> Option<Vec<u8>> {
+    SUBSET_COMPRESSED_CACHE.with(|cache| {
+        let mut cache_ref = cache.borrow_mut();
+        if let Some(entry) = cache_ref.as_ref() {
+            if entry.family == font_family && entry.cids.as_slice() == math_cids {
+                return Some(entry.compressed.clone());
+            }
+        }
+        let orig_cff = active_otf.and_then(|f| f.font.cff_table())?;
+        let sub_cff = crate::math::fonts::opentype::subset_cff(orig_cff, math_cids)?;
+        let mut comp = Vec::with_capacity(sub_cff.len() / 2);
+        let mut compressor = crate::deflate_compress::DeflateCompressor::new();
+        compressor.compress_zlib(&sub_cff, &mut comp);
+        let result = comp.clone();
+        *cache_ref = Some(CachedSubsetStream {
+            family: font_family,
+            cids: math_cids.to_vec(),
+            compressed: comp,
+        });
+        Some(result)
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -599,7 +804,97 @@ fn emit_tounicode_cmap(writer: &mut Writer, id: u32, map: &[u16; 128]) {
     });
 }
 
-fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
+#[allow(dead_code)]
+fn emit_cid_tounicode_cmap(writer: &mut Writer, id: u32, entries: &[(u16, u32)]) {
+    let mut s = Vec::with_capacity(4096);
+    s.extend_from_slice(b"/CIDInit /ProcSet findresource begin\n");
+    s.extend_from_slice(b"12 dict begin\nbegincmap\n");
+    s.extend_from_slice(b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n");
+    s.extend_from_slice(b"/CMapName /RushTeX-CIDToUnicode def\n");
+    s.extend_from_slice(b"/CMapType 2 def\n");
+    s.extend_from_slice(b"1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n");
+
+    let mut i = 0;
+    while i < entries.len() {
+        let chunk = (entries.len() - i).min(100);
+        write_u64(&mut s, chunk as u64);
+        s.extend_from_slice(b" beginbfchar\n");
+        for j in 0..chunk {
+            let (gid, u) = entries[i + j];
+            let mut gid_buf = [0u8; 6];
+            write_hex4(&mut gid_buf[0..6], gid);
+            s.extend_from_slice(&gid_buf);
+            s.push(b' ');
+            if u <= 0xFFFF {
+                let mut u_buf = [0u8; 6];
+                write_hex4(&mut u_buf[0..6], u as u16);
+                s.extend_from_slice(&u_buf);
+            } else {
+                let cp = u - 0x10000;
+                let lead = (0xD800 + (cp >> 10)) as u16;
+                let trail = (0xDC00 + (cp & 0x3FF)) as u16;
+                let mut lead_buf = [0u8; 6];
+                let mut trail_buf = [0u8; 6];
+                write_hex4(&mut lead_buf[0..6], lead);
+                write_hex4(&mut trail_buf[0..6], trail);
+                s.extend_from_slice(&lead_buf[0..5]);
+                s.extend_from_slice(&trail_buf[1..6]);
+            }
+            s.push(b'\n');
+        }
+        s.extend_from_slice(b"endbfchar\n");
+        i += chunk;
+    }
+
+    s.extend_from_slice(b"endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+
+    writer.obj(id, |w| {
+        w.write_all(b"<< /Length ");
+        w.write_int(s.len() as i32);
+        w.write_all(b" >>\nstream\n");
+        w.write_all(&s);
+        if !s.ends_with(b"\n") {
+            w.write_all(b"\n");
+        }
+        w.write_all(b"endstream\n");
+    });
+}
+
+#[inline(always)]
+fn emit_hex_gid(s: &mut Vec<u8>, gid: u16) {
+    let mut buf = [0u8; 6];
+    write_hex4(&mut buf, gid);
+    s.extend_from_slice(&buf);
+}
+
+fn fallback_unicode_for_glyph(gid: u16) -> Option<u32> {
+    for glyph in &crate::math::fonts::calligraphy::NEWCM_SCRIPT_GLYPHS {
+        if glyph.glyph_id == gid {
+            return Some(glyph.unicode);
+        }
+    }
+    for glyph in &crate::math::fonts::calligraphy::STIX2_SCRIPT_GLYPHS {
+        if glyph.glyph_id == gid {
+            return Some(glyph.unicode);
+        }
+    }
+    match gid {
+        832..=835 => Some(0x222B),
+        1075..=1080 => Some(0x221A),
+        1085..=1088 => Some(0x0028),
+        1089..=1092 => Some(0x0029),
+        1093..=1096 => Some(0x005B),
+        1097..=1100 => Some(0x005D),
+        1101..=1104 => Some(0x007B),
+        1105..=1108 => Some(0x007D),
+        1300..=1305 => Some(0x2211),
+        1306..=1310 => Some(0x220F),
+        2121 => Some(0x1D42F),
+        _ => None,
+    }
+}
+
+fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>, has_math_font: bool) {
     s.extend_from_slice(b"BT\n");
     let mut last_face: Option<Face> = None;
     let mut last_size: Option<f32> = None;
@@ -636,6 +931,77 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
             continue;
         }
 
+        if let Paint::VectorGlyph {
+            x,
+            y,
+            size,
+            glyph_id,
+        } = op
+        {
+            if in_text {
+                if last_word_spacing.is_some_and(|w| w != 0.0) {
+                    s.extend_from_slice(b"0 Tw\n");
+                    last_word_spacing = Some(0.0);
+                }
+                s.extend_from_slice(b"ET\n");
+                in_text = false;
+            }
+            if let Some(path) = crate::math::fonts::get_vector_glyph_path(*glyph_id) {
+                s.extend_from_slice(b"q\n");
+                write_f32_4dec(s, *size * 0.001);
+                s.extend_from_slice(b" 0 0 ");
+                write_f32_4dec(s, *size * 0.001);
+                s.push(b' ');
+                write_f32(s, *x);
+                s.push(b' ');
+                write_f32(s, *y);
+                s.extend_from_slice(b" cm\n");
+                s.extend_from_slice(path);
+                s.extend_from_slice(b"\nf\nQ\n");
+            }
+            if has_math_font {
+                s.extend_from_slice(b"BT\n/F_Math ");
+                write_f32(s, *size);
+                s.extend_from_slice(b" Tf\n3 Tr\n1 0 0 1 ");
+                write_f32(s, *x);
+                s.push(b' ');
+                write_f32(s, *y);
+                s.extend_from_slice(b" Tm\n");
+                emit_hex_gid(s, *glyph_id);
+                s.extend_from_slice(b" Tj\n0 Tr\nET\n");
+            }
+            pos_inited = false;
+            continue;
+        }
+
+        if let Paint::CidGlyphRun {
+            x,
+            y,
+            size,
+            glyph_id,
+        } = op
+        {
+            if in_text {
+                if last_word_spacing.is_some_and(|w| w != 0.0) {
+                    s.extend_from_slice(b"0 Tw\n");
+                    last_word_spacing = Some(0.0);
+                }
+                s.extend_from_slice(b"ET\n");
+                in_text = false;
+            }
+            s.extend_from_slice(b"BT\n/F_Math ");
+            write_f32(s, *size);
+            s.extend_from_slice(b" Tf\n1 0 0 1 ");
+            write_f32(s, *x);
+            s.push(b' ');
+            write_f32(s, *y);
+            s.extend_from_slice(b" Tm\n");
+            emit_hex_gid(s, *glyph_id);
+            s.extend_from_slice(b" Tj\nET\n");
+            pos_inited = false;
+            continue;
+        }
+
         let (x, y, face, size, word_spacing) = match op {
             Paint::GlyphRun {
                 x,
@@ -666,7 +1032,7 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
             Paint::CaptionTag { x, y, .. } | Paint::TableCaptionTag { x, y, .. } => {
                 (*x, *y, Face::Roman, crate::page_layout::FONT_SIZE, 0.0)
             }
-            Paint::Rule { .. } => unreachable!(),
+            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } => unreachable!(),
         };
 
         if !in_text {
@@ -776,7 +1142,7 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>) {
                 write_u64(s, *n as u64);
                 s.push(b')');
             }
-            Paint::Rule { .. } => {}
+            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } => {}
         }
         s.extend_from_slice(b") Tj\n");
 
@@ -981,6 +1347,44 @@ fn write_f32(out: &mut Vec<u8>, v: f32) {
     }
 }
 
+fn write_f32_4dec(out: &mut Vec<u8>, v: f32) {
+    if !v.is_finite() {
+        out.push(b'0');
+        return;
+    }
+    let scaled = (v * 10000.0).round() as i64;
+    let neg = scaled < 0;
+    let n = scaled.unsigned_abs();
+    let whole = n / 10000;
+    let frac = (n % 10000) as usize;
+    if neg {
+        out.push(b'-');
+    }
+    write_u64(out, whole);
+    if frac == 0 {
+        return;
+    }
+    out.push(b'.');
+    let high = frac / 100;
+    let low = frac % 100;
+    let h_idx = high * 2;
+    let l_idx = low * 2;
+    let d0 = DEC_DIGITS_LUT[h_idx];
+    let d1 = DEC_DIGITS_LUT[h_idx + 1];
+    let d2 = DEC_DIGITS_LUT[l_idx];
+    let d3 = DEC_DIGITS_LUT[l_idx + 1];
+    out.push(d0);
+    if d1 != b'0' || d2 != b'0' || d3 != b'0' {
+        out.push(d1);
+        if d2 != b'0' || d3 != b'0' {
+            out.push(d2);
+            if d3 != b'0' {
+                out.push(d3);
+            }
+        }
+    }
+}
+
 struct Writer<'w> {
     buf: &'w mut Vec<u8>,
     offsets: Vec<usize>,
@@ -1102,4 +1506,28 @@ fn write_xref_entry(out: &mut Vec<u8>, off: usize) {
     }
     out.extend_from_slice(&buf);
     out.extend_from_slice(b" 00000 n \n");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cid_tounicode_cmap_generation() {
+        let mut buf = Vec::new();
+        let mut writer = Writer::new(&mut buf, 1, 1);
+        let entries = [
+            (832u16, 0x222Bu32),
+            (1236u16, 0x211Du32),
+            (2121u16, 0x1D42Fu32),
+        ];
+        emit_cid_tounicode_cmap(&mut writer, 42, &entries);
+        let _ = writer.finish(42);
+        let s = String::from_utf8_lossy(&buf);
+        assert!(s.contains("/CMapName /RushTeX-CIDToUnicode def\n"));
+        assert!(s.contains("3 beginbfchar\n"));
+        assert!(s.contains("<0340> <222B>\n"));
+        assert!(s.contains("<04D4> <211D>\n"));
+        assert!(s.contains("<0849> <D835DC2F>\n"));
+    }
 }

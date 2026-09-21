@@ -62,7 +62,7 @@ impl<'a> Page<'a> {
             Paint::CaptionTag { .. } | Paint::TableCaptionTag { .. } => {
                 self.used_faces |= 1 << (Face::Roman as u8);
             }
-            Paint::Rule { .. } => {}
+            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } => {}
         }
         self.ops.push(op);
     }
@@ -84,7 +84,7 @@ impl<'a> Page<'a> {
                 Paint::CaptionTag { .. } | Paint::TableCaptionTag { .. } => {
                     mask |= 1 << (Face::Roman as u8);
                 }
-                Paint::Rule { .. } => {}
+                Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } => {}
             }
         }
         mask
@@ -177,6 +177,20 @@ pub enum Paint {
         face: Face,
         size: f32,
         n: u32,
+    },
+    /// Native resolution-independent OpenType vector glyph outline rendered via Bézier paths.
+    VectorGlyph {
+        x: f32,
+        y: f32,
+        size: f32,
+        glyph_id: u16,
+    },
+    /// OpenType dynamic CID glyph emission rendered via composite CIDFont text operators.
+    CidGlyphRun {
+        x: f32,
+        y: f32,
+        size: f32,
+        glyph_id: u16,
     },
 }
 

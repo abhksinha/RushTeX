@@ -45,39 +45,53 @@ pub struct MatrixLayoutMetricsEngine;
 
 impl MatrixLayoutMetricsEngine {
     /// Computes canonical minimum row height, minimum row depth, and inter-row separation
-    /// according to TeX Live / AMS-LaTeX mathematical layout rules.
+    /// parameterized by the active font's OpenType mathematical constants.
     #[inline(always)]
-    pub fn row_parameters(env_kind: MatrixEnvKind, font_size: f32) -> (f32, f32, f32) {
+    pub fn row_parameters_font(
+        env_kind: MatrixEnvKind,
+        font_size: f32,
+        constants: Option<&crate::math::fonts::OpenTypeMathConstants>,
+    ) -> (f32, f32, f32) {
+        let (base_rh, base_rd) = if let Some(c) = constants {
+            let scale = font_size / 1000.0;
+            let axis = c.axis_height as f32 * scale;
+            let strut_h = 0.84 * font_size + (axis - 0.25 * font_size) * 0.1;
+            let strut_d = 0.36 * font_size;
+            (strut_h, strut_d)
+        } else {
+            (0.84 * font_size, 0.36 * font_size)
+        };
+
         match env_kind {
             MatrixEnvKind::Cases => {
                 // LaTeX cases uses \arraystretch = 1.2 on standard strut
-                let min_rh = 1.2 * 0.84 * font_size; // ~10.08pt at 10pt
-                let min_rd = 1.2 * 0.36 * font_size; // ~4.32pt at 10pt
+                let min_rh = 1.2 * base_rh;
+                let min_rd = 1.2 * base_rd;
                 let row_sep = 0.0;
                 (min_rh, min_rd, row_sep)
             }
             MatrixEnvKind::Aligned | MatrixEnvKind::Gather | MatrixEnvKind::Multline => {
                 // AMS multiline environments use standard strut + \jot (3pt = 0.30em)
-                let min_rh = 0.84 * font_size; // ~8.40pt at 10pt
-                let min_rd = 0.36 * font_size; // ~3.60pt at 10pt
-                let row_sep = 0.30 * font_size; // ~3.00pt (\jot) at 10pt
-                (min_rh, min_rd, row_sep)
+                let row_sep = 0.30 * font_size;
+                (base_rh, base_rd, row_sep)
             }
             MatrixEnvKind::Matrix => {
-                // Standard TeX matrix uses \strutbox (8.4pt + 3.6pt = 12pt baselineskip)
-                let min_rh = 0.84 * font_size;
-                let min_rd = 0.36 * font_size;
                 let row_sep = 0.0;
-                (min_rh, min_rd, row_sep)
+                (base_rh, base_rd, row_sep)
             }
             MatrixEnvKind::SmallMatrix => {
-                // AMS-LaTeX smallmatrix uses compact script-size metrics
                 let min_rh = 0.60 * font_size;
                 let min_rd = 0.25 * font_size;
                 let row_sep = 0.0;
                 (min_rh, min_rd, row_sep)
             }
         }
+    }
+
+    /// Backwards-compatible convenience wrapper around `row_parameters_font`.
+    #[inline(always)]
+    pub fn row_parameters(env_kind: MatrixEnvKind, font_size: f32) -> (f32, f32, f32) {
+        Self::row_parameters_font(env_kind, font_size, None)
     }
 
     /// Computes canonical inter-column separation following column `col_idx`.

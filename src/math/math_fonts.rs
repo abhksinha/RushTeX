@@ -88,6 +88,8 @@ pub fn lookup_math_command(cmd: &str) -> Option<MathSymbolDef> {
         "wedge" | "land" => (MathAtomKind::Bin, Face::Symbol, "\u{00D9}", Some(0xD9)),
         "circ" => (MathAtomKind::Bin, Face::Symbol, "\u{00B0}", Some(0xB0)),
         "bullet" => (MathAtomKind::Bin, Face::Symbol, "\u{00B7}", Some(0xD7)),
+        "dagger" => (MathAtomKind::Bin, Face::Roman, "†", Some(0x79)),
+        "ddagger" => (MathAtomKind::Bin, Face::Roman, "‡", Some(0x7A)),
         "setminus" => (MathAtomKind::Bin, Face::Symbol, "\\", Some(b'\\')),
 
         // Standard Functions (Roman Operators)
@@ -157,7 +159,7 @@ pub fn lookup_math_command(cmd: &str) -> Option<MathSymbolDef> {
         "rfloor" => (MathAtomKind::Close, Face::Symbol, "\u{00FB}", Some(0xFB)),
         "lceil" => (MathAtomKind::Open, Face::Symbol, "\u{00E9}", Some(0xE9)),
         "rceil" => (MathAtomKind::Close, Face::Symbol, "\u{00F9}", Some(0xF9)),
-        "vert" => (MathAtomKind::Ord, Face::Roman, "|", Some(b'|')),
+        "vert" => (MathAtomKind::Ord, Face::Symbol, "|", Some(0x6A)),
         "Vert" => (MathAtomKind::Ord, Face::Roman, "||", None),
         "aleph" => (MathAtomKind::Ord, Face::Symbol, "\u{00C0}", Some(0xC0)),
         "Re" => (MathAtomKind::Ord, Face::Symbol, "\u{00C2}", Some(0xC2)),
@@ -289,6 +291,9 @@ const fn build_cm_symbol_dispatch() -> CmSymbolDispatch {
     table[0x40] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x27 }; // simeq
     table[0xB5] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x2F }; // propto
     table[0xD0] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x27 }; // angle
+    table[0x79] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x79 }; // dagger
+    table[0x7A] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x7A }; // ddagger
+    table[0x6A] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x6A }; // vertical bar |
 
     // CMMI10 (MathItalic)
     table[0xB6] = CmSymbolEntry { face: Face::MathItalic, glyph_code: 0x40 }; // partial

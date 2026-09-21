@@ -997,6 +997,8 @@ pub fn layout_node<'a, 'p>(
                 } else {
                     (*face, *glyph, *code)
                 }
+            } else if *glyph == "†" || *glyph == "‡" || *glyph == "|" {
+                (Face::Roman, *glyph, *code)
             } else {
                 (*face, *glyph, *code)
             };
@@ -1653,20 +1655,14 @@ pub fn layout_node<'a, 'p>(
                 };
 
                 let rule_bottom_y = origin_y + rad_box.h + actual_clr;
-                let rad_y = rule_bottom_y - rad_h;
+                let rad_y = rule_bottom_y;
                 let rad_content_x = rad_origin_x + rad_w;
-                let rule_w = rad_box.w + 0.5;
+                let rule_w = rad_box.w;
 
                 if !ctx.is_measuring() {
                     if !is_ext {
-                        if rad_code == 0x70 && v <= small_hd && ctx.font_family == metrics::FontFamily::ComputerModern {
-                            // Small radical from cmsy10
-                            ctx.emit_glyph_run(rad_origin_x, rad_y, Face::Symbol, font_size, "p");
-                        } else {
-                            // Discrete variant from cmex10
-                            let s = crate::math::math_delim::byte_str(rad_code);
-                            ctx.emit_glyph_run(rad_origin_x, rad_y, Face::Extension, font_size, s);
-                        }
+                        let s = crate::math::math_delim::byte_str(rad_code);
+                        ctx.emit_glyph_run(rad_origin_x, rad_y, Face::Extension, font_size, s);
                     } else {
                         // Extensible radical from cmex10
                         let mut curr_top_y = rule_bottom_y + rad_h;

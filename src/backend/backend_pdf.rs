@@ -201,11 +201,12 @@ pub fn emit_into_opts(
         next_font_id += 1;
         math_descriptor_id = next_font_id;
         next_font_id += 1;
-        math_tounicode_id = next_font_id;
-        next_font_id += 1;
         if active_otf.as_ref().and_then(|f| f.font.cff_table()).is_some() {
             math_file_id = Some(next_font_id);
+            next_font_id += 1;
         }
+        math_tounicode_id = next_font_id;
+        let _ = next_font_id;
     }
 
     // 1 Catalog

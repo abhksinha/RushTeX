@@ -13,7 +13,7 @@ pub use layout_hz as hz;
 pub use layout_listing as listing;
 
 pub use layout_engine::{
-    layout, marker_width, marker_width_family, to_roman, to_upper_roman, CellLineRange,
-    LineDescriptor, Marker, Page, Paint, ParagraphSoA, WordKind, CELL_PAD, FIG_H, FONT_SIZE,
-    LEADING, LIST_INDENT, MARGIN, PAGE_H, PAGE_W, PARA_SKIP,
+    layout, marker_width, marker_width_family, to_roman, to_upper_roman, CellLineRange, CellSpan,
+    LineDescriptor, Marker, Page, Paint, ParagraphSoA, SparseMathNode, WordKind, CELL_PAD, FIG_H,
+    FONT_SIZE, LEADING, LIST_INDENT, MARGIN, PAGE_H, PAGE_W, PARA_SKIP,
 };

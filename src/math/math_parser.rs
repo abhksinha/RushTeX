@@ -889,7 +889,11 @@ impl<'a> MathParser<'a> {
             }
 
             // Font switches
-            "mathrm" | "text" => {
+            "text" => {
+                let node = self.parse_text_arg();
+                Some(node)
+            }
+            "mathrm" => {
                 let content = Box::new(self.parse_mandatory_arg());
                 Some(MathNode::StyleChange {
                     face: Face::Roman,
@@ -1082,6 +1086,68 @@ impl<'a> MathParser<'a> {
             atom
         } else {
             MathNode::Row(Vec::new())
+        }
+    }
+
+    /// Parses a `\text{...}` argument, preserving literal whitespace as inter-word spacing.
+    fn parse_text_arg(&mut self) -> MathNode<'a> {
+        self.skip_ws();
+        if !self.eat("{") {
+            let atom = self.parse_single_atom().unwrap_or(MathNode::Row(Vec::new()));
+            return MathNode::StyleChange {
+                face: Face::Roman,
+                content: Box::new(atom),
+            };
+        }
+        let start = self.pos;
+        let mut depth = 1;
+        while let Some(ch) = self.peek_char() {
+            if ch == '{' {
+                depth += 1;
+            } else if ch == '}' {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            self.pos += ch.len_utf8();
+        }
+        let raw = &self.src[start..self.pos];
+        self.eat("}");
+
+        let mut nodes = Vec::new();
+        let bytes = raw.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i].is_ascii_whitespace() {
+                nodes.push(MathNode::Space(3.3333));
+                while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+            } else {
+                let w_start = i;
+                while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                let word = &raw[w_start..i];
+                nodes.push(MathNode::Symbol {
+                    kind: MathAtomKind::Ord,
+                    face: Face::Roman,
+                    glyph: word,
+                    code: None,
+                });
+            }
+        }
+
+        let content = if nodes.len() == 1 {
+            nodes.pop().unwrap()
+        } else {
+            MathNode::Row(nodes)
+        };
+
+        MathNode::StyleChange {
+            face: Face::Roman,
+            content: Box::new(content),
         }
     }
 

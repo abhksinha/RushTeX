@@ -705,19 +705,29 @@ pub fn hz_break_paragraph_optimal<'a>(
         }
     }
 
-    // Reconstruct optimal path from back to front
-    let mut breaks = Vec::with_capacity(16);
+    // Reconstruct optimal path from back to front with zero heap allocation
+    let mut stack_breaks = [(0usize, 0usize, 0i8, 0u8); 64];
+    let mut break_count = 0;
+    let mut heap_breaks = Vec::new();
     let mut curr = num_words;
     while curr > 0 {
         let node = nodes[curr];
         let p = node.prev as usize;
-        breaks.push((p, curr, node.exp, node.prot));
+        if break_count < 64 && heap_breaks.is_empty() {
+            stack_breaks[break_count] = (p, curr, node.exp, node.prot);
+            break_count += 1;
+        } else {
+            if heap_breaks.is_empty() {
+                heap_breaks.reserve(break_count + 32);
+                heap_breaks.extend_from_slice(&stack_breaks[..break_count]);
+            }
+            heap_breaks.push((p, curr, node.exp, node.prot));
+        }
         curr = p;
     }
-    breaks.reverse();
 
-    // Emit formatted line descriptors
-    for (line_idx, &(start, end, exp, prot_tenths)) in breaks.iter().enumerate() {
+    // Emit formatted line descriptors (iterating in reverse order avoids an in-place reverse pass)
+    let emit_line = |out_lines: &mut Vec<HzLineDescriptor>, line_idx: usize, start: usize, end: usize, exp: i8, prot_tenths: u8| {
         let indent =
             calculate_line_indent(line_idx, first_line_indent, custom_hang_indent, hang_after);
         let line_w = prefix[end].w - prefix[start].w;
@@ -734,6 +744,16 @@ pub fn hz_break_paragraph_optimal<'a>(
             indent,
             prot_tenths as f32 * 0.1,
         ));
+    };
+
+    if heap_breaks.is_empty() {
+        for (line_idx, &(start, end, exp, prot_tenths)) in stack_breaks[..break_count].iter().rev().enumerate() {
+            emit_line(out_lines, line_idx, start, end, exp, prot_tenths);
+        }
+    } else {
+        for (line_idx, &(start, end, exp, prot_tenths)) in heap_breaks.iter().rev().enumerate() {
+            emit_line(out_lines, line_idx, start, end, exp, prot_tenths);
+        }
     }
 }
 

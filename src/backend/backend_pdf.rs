@@ -30,7 +30,7 @@ use crate::page_layout::{Marker, Page, Paint, PAGE_H, PAGE_W};
 use crate::Error;
 
 pub fn emit(pages: &[Page<'_>]) -> Result<Vec<u8>, Error> {
-    let mut destination_buffer = Vec::with_capacity(pages.len() * 1024 + 2048);
+    let mut destination_buffer = Vec::with_capacity((pages.len() * 10240).max(16384));
     emit_into(pages, &mut destination_buffer)?;
     Ok(destination_buffer)
 }
@@ -45,12 +45,12 @@ pub fn emit_into_opts(
     enable_compression: bool,
 ) -> Result<(), Error> {
     destination_buffer.clear();
-    destination_buffer.reserve(pages.len() * 2048 + 4096);
+    destination_buffer.reserve((pages.len() * 10240).max(16384));
     let total_pages = pages.len().max(1);
 
     // Collect all faces and OpenType math glyphs used across all pages
     let mut doc_used_faces = 0u32;
-    let mut math_cids: Vec<u16> = Vec::new();
+    let mut math_cids: Vec<u16> = Vec::with_capacity(128);
     for page in pages.iter().take(total_pages) {
         doc_used_faces |= page.compute_used_faces();
         for op in &page.ops {
@@ -188,12 +188,6 @@ pub fn emit_into_opts(
     let mut math_tounicode_id = 0u32;
     let mut math_file_id = None;
 
-    let active_otf = if has_math_font {
-        crate::math::fonts::active_opentype_math_font(font_family)
-    } else {
-        None
-    };
-
     if has_math_font {
         math_font_id = next_font_id;
         next_font_id += 1;
@@ -201,10 +195,8 @@ pub fn emit_into_opts(
         next_font_id += 1;
         math_descriptor_id = next_font_id;
         next_font_id += 1;
-        if active_otf.as_ref().and_then(|f| f.font.cff_table()).is_some() {
-            math_file_id = Some(next_font_id);
-            next_font_id += 1;
-        }
+        math_file_id = Some(next_font_id);
+        next_font_id += 1;
         math_tounicode_id = next_font_id;
         let _ = next_font_id;
     }
@@ -478,29 +470,26 @@ pub fn emit_into_opts(
     }
 
     if ot1_tounicode_id > 0 {
-        emit_tounicode_cmap(&mut writer, ot1_tounicode_id, &crate::backend::cm_fonts::CMR_TO_UNICODE);
+        emit_tounicode_cmap(&mut writer, ot1_tounicode_id, &crate::backend::cm_fonts::CMR_TO_UNICODE, &mut uncompressed_stream);
     }
     if oml_tounicode_id > 0 {
-        emit_tounicode_cmap(&mut writer, oml_tounicode_id, &crate::backend::cm_fonts::CMMI_TO_UNICODE);
+        emit_tounicode_cmap(&mut writer, oml_tounicode_id, &crate::backend::cm_fonts::CMMI_TO_UNICODE, &mut uncompressed_stream);
     }
     if oms_tounicode_id > 0 {
-        emit_tounicode_cmap(&mut writer, oms_tounicode_id, &crate::backend::cm_fonts::CMSY_TO_UNICODE);
+        emit_tounicode_cmap(&mut writer, oms_tounicode_id, &crate::backend::cm_fonts::CMSY_TO_UNICODE, &mut uncompressed_stream);
     }
     if omx_tounicode_id > 0 {
-        emit_tounicode_cmap(&mut writer, omx_tounicode_id, &crate::backend::cm_fonts::CMEX_TO_UNICODE);
+        emit_tounicode_cmap(&mut writer, omx_tounicode_id, &crate::backend::cm_fonts::CMEX_TO_UNICODE, &mut uncompressed_stream);
     }
     if msam_tounicode_id > 0 {
-        emit_tounicode_cmap(&mut writer, msam_tounicode_id, &crate::backend::cm_fonts::MSAM_TO_UNICODE);
+        emit_tounicode_cmap(&mut writer, msam_tounicode_id, &crate::backend::cm_fonts::MSAM_TO_UNICODE, &mut uncompressed_stream);
     }
     if msbm_tounicode_id > 0 {
-        emit_tounicode_cmap(&mut writer, msbm_tounicode_id, &crate::backend::cm_fonts::MSBM_TO_UNICODE);
+        emit_tounicode_cmap(&mut writer, msbm_tounicode_id, &crate::backend::cm_fonts::MSBM_TO_UNICODE, &mut uncompressed_stream);
     }
 
     if has_math_font {
-        let math_ps_name = active_otf
-            .as_ref()
-            .and_then(|f| f.font.cff_postscript_name())
-            .unwrap_or_else(|| font_family.default_math_ps_name());
+        let math_ps_name = font_family.default_math_ps_name();
 
         // 1. Type 0 composite font
         writer.obj(math_font_id, |w| {
@@ -521,7 +510,7 @@ pub fn emit_into_opts(
             w.write_ref(math_descriptor_id);
             w.write_all(b" /DW 1000 /W [");
             for &cid in &math_cids {
-                let adv = active_otf.as_ref().and_then(|f| f.font.h_advance(cid)).unwrap_or(1000);
+                let adv = crate::math::fonts::static_script_advance(cid, font_family).unwrap_or(1000);
                 w.write_all(b" ");
                 w.write_int(cid as i32);
                 w.write_all(b" [");
@@ -532,21 +521,21 @@ pub fn emit_into_opts(
         });
 
         // 3. FontDescriptor
-        let bbox = active_otf
-            .as_ref()
-            .and_then(|f| f.font.cff_font_bbox())
-            .unwrap_or([-1042, -3060, 4082, 3560]);
+        let bbox = match font_family {
+            FontFamily::Times => [-1042, -3060, 4082, 3560],
+            _ => [-983, -3150, 2997, 3350],
+        };
         writer.obj(math_descriptor_id, |w| {
             w.write_all(b"<< /Type /FontDescriptor /FontName /");
             w.write_all(math_ps_name.as_bytes());
             w.write_all(b" /Flags 4 /FontBBox [");
-            w.write_int(bbox[0] as i32);
+            w.write_int(bbox[0]);
             w.write_all(b" ");
-            w.write_int(bbox[1] as i32);
+            w.write_int(bbox[1]);
             w.write_all(b" ");
-            w.write_int(bbox[2] as i32);
+            w.write_int(bbox[2]);
             w.write_all(b" ");
-            w.write_int(bbox[3] as i32);
+            w.write_int(bbox[3]);
             w.write_all(b"] /Ascent 800 /Descent -200 /CapHeight 700 /ItalicAngle 0 /StemV 80");
             if let Some(fid) = math_file_id {
                 w.write_all(b" /FontFile3 ");
@@ -558,87 +547,34 @@ pub fn emit_into_opts(
         // 4. FontFile3 (CFF stream)
         if let Some(fid) = math_file_id {
             if enable_compression {
-                let comp_bytes_opt = get_or_create_subset_compressed(font_family, active_otf, &math_cids)
-                    .or_else(|| crate::math::fonts::get_compressed_cff(font_family).map(|s| s.to_vec()));
-                if let Some(comp_bytes) = comp_bytes_opt {
-                    writer.obj(fid, |w| {
-                        w.write_all(b"<< /Subtype /CIDFontType0C /Filter /FlateDecode /Length ");
-                        w.write_int(comp_bytes.len() as i32);
-                        w.write_all(b" >>\nstream\n");
-                        w.write_all(&comp_bytes);
-                        w.write_all(b"\nendstream\n");
-                    });
-                }
+                let comp_bytes = crate::math::fonts::static_cff_compressed(font_family);
+                writer.obj(fid, |w| {
+                    w.write_all(b"<< /Subtype /CIDFontType0C /Filter /FlateDecode /Length ");
+                    w.write_int(comp_bytes.len() as i32);
+                    w.write_all(b" >>\nstream\n");
+                    w.write_all(comp_bytes);
+                    w.write_all(b"\nendstream\n");
+                });
             } else {
-                let orig_cff = active_otf.as_ref().and_then(|f| f.font.cff_table());
-                let subsetted_cff = orig_cff.and_then(|cff| crate::math::fonts::opentype::subset_cff(cff, &math_cids));
-                let cff_to_write = subsetted_cff.as_deref().or(orig_cff);
-                if let Some(cff_bytes) = cff_to_write {
-                    writer.obj(fid, |w| {
-                        w.write_all(b"<< /Subtype /CIDFontType0C /Length ");
-                        w.write_int(cff_bytes.len() as i32);
-                        w.write_all(b" >>\nstream\n");
-                        w.write_all(cff_bytes);
-                        if !cff_bytes.ends_with(b"\n") {
-                            w.write_all(b"\n");
-                        }
-                        w.write_all(b"endstream\n");
-                    });
-                }
+                let raw_bytes = crate::math::fonts::static_cff_raw(font_family);
+                writer.obj(fid, |w| {
+                    w.write_all(b"<< /Subtype /CIDFontType0C /Length ");
+                    w.write_int(raw_bytes.len() as i32);
+                    w.write_all(b" >>\nstream\n");
+                    w.write_all(raw_bytes);
+                    if !raw_bytes.ends_with(b"\n") {
+                        w.write_all(b"\n");
+                    }
+                    w.write_all(b"endstream\n");
+                });
             }
         }
 
         // 5. ToUnicode CMap
-        let mut cmap_entries: Vec<(u16, u32)> = Vec::with_capacity(math_cids.len());
-        for &cid in &math_cids {
-            let u = active_otf
-                .as_ref()
-                .and_then(|f| f.font.unicode_for_glyph(cid))
-                .or_else(|| fallback_unicode_for_glyph(cid))
-                .unwrap_or(cid as u32);
-            cmap_entries.push((cid, u));
-        }
-        emit_cid_tounicode_cmap(&mut writer, math_tounicode_id, &cmap_entries);
+        emit_cid_tounicode_cmap(&mut writer, math_tounicode_id, &math_cids, &mut uncompressed_stream);
     }
 
     writer.finish(catalog_id)
-}
-
-struct CachedSubsetStream {
-    family: FontFamily,
-    cids: Vec<u16>,
-    compressed: Vec<u8>,
-}
-
-thread_local! {
-    static SUBSET_COMPRESSED_CACHE: std::cell::RefCell<Option<CachedSubsetStream>> = const { std::cell::RefCell::new(None) };
-}
-
-fn get_or_create_subset_compressed(
-    font_family: FontFamily,
-    active_otf: Option<&crate::math::fonts::OpenTypeMathFont>,
-    math_cids: &[u16],
-) -> Option<Vec<u8>> {
-    SUBSET_COMPRESSED_CACHE.with(|cache| {
-        let mut cache_ref = cache.borrow_mut();
-        if let Some(entry) = cache_ref.as_ref() {
-            if entry.family == font_family && entry.cids.as_slice() == math_cids {
-                return Some(entry.compressed.clone());
-            }
-        }
-        let orig_cff = active_otf.and_then(|f| f.font.cff_table())?;
-        let sub_cff = crate::math::fonts::opentype::subset_cff(orig_cff, math_cids)?;
-        let mut comp = Vec::with_capacity(sub_cff.len() / 2);
-        let mut compressor = crate::deflate_compress::DeflateCompressor::new();
-        compressor.compress_zlib(&sub_cff, &mut comp);
-        let result = comp.clone();
-        *cache_ref = Some(CachedSubsetStream {
-            family: font_family,
-            cids: math_cids.to_vec(),
-            compressed: comp,
-        });
-        Some(result)
-    })
 }
 
 #[derive(Clone, Copy)]
@@ -755,8 +691,8 @@ fn write_hex4(out: &mut [u8], val: u16) {
     out[5] = b'>';
 }
 
-fn emit_tounicode_cmap(writer: &mut Writer, id: u32, map: &[u16; 128]) {
-    let mut s = Vec::with_capacity(2048);
+fn emit_tounicode_cmap(writer: &mut Writer, id: u32, map: &[u16; 128], s: &mut Vec<u8>) {
+    s.clear();
     s.extend_from_slice(b"/CIDInit /ProcSet findresource begin\n");
     s.extend_from_slice(b"12 dict begin\nbegincmap\n");
     s.extend_from_slice(b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n");
@@ -776,7 +712,7 @@ fn emit_tounicode_cmap(writer: &mut Writer, id: u32, map: &[u16; 128]) {
     let mut i = 0;
     while i < count {
         let chunk = (count - i).min(100);
-        write_u64(&mut s, chunk as u64);
+        write_u64(s, chunk as u64);
         s.extend_from_slice(b" beginbfchar\n");
         for j in 0..chunk {
             let (src, dst) = entries[i + j];
@@ -797,7 +733,7 @@ fn emit_tounicode_cmap(writer: &mut Writer, id: u32, map: &[u16; 128]) {
         w.write_all(b"<< /Length ");
         w.write_int(s.len() as i32);
         w.write_all(b" >>\nstream\n");
-        w.write_all(&s);
+        w.write_all(s);
         if !s.ends_with(b"\n") {
             w.write_all(b"\n");
         }
@@ -805,9 +741,8 @@ fn emit_tounicode_cmap(writer: &mut Writer, id: u32, map: &[u16; 128]) {
     });
 }
 
-#[allow(dead_code)]
-fn emit_cid_tounicode_cmap(writer: &mut Writer, id: u32, entries: &[(u16, u32)]) {
-    let mut s = Vec::with_capacity(4096);
+fn emit_cid_tounicode_cmap(writer: &mut Writer, id: u32, cids: &[u16], s: &mut Vec<u8>) {
+    s.clear();
     s.extend_from_slice(b"/CIDInit /ProcSet findresource begin\n");
     s.extend_from_slice(b"12 dict begin\nbegincmap\n");
     s.extend_from_slice(b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n");
@@ -816,12 +751,13 @@ fn emit_cid_tounicode_cmap(writer: &mut Writer, id: u32, entries: &[(u16, u32)])
     s.extend_from_slice(b"1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n");
 
     let mut i = 0;
-    while i < entries.len() {
-        let chunk = (entries.len() - i).min(100);
-        write_u64(&mut s, chunk as u64);
+    while i < cids.len() {
+        let chunk = (cids.len() - i).min(100);
+        write_u64(s, chunk as u64);
         s.extend_from_slice(b" beginbfchar\n");
         for j in 0..chunk {
-            let (gid, u) = entries[i + j];
+            let gid = cids[i + j];
+            let u = fallback_unicode_for_glyph(gid).unwrap_or(gid as u32);
             let mut gid_buf = [0u8; 6];
             write_hex4(&mut gid_buf[0..6], gid);
             s.extend_from_slice(&gid_buf);
@@ -853,7 +789,7 @@ fn emit_cid_tounicode_cmap(writer: &mut Writer, id: u32, entries: &[(u16, u32)])
         w.write_all(b"<< /Length ");
         w.write_int(s.len() as i32);
         w.write_all(b" >>\nstream\n");
-        w.write_all(&s);
+        w.write_all(s);
         if !s.ends_with(b"\n") {
             w.write_all(b"\n");
         }
@@ -869,10 +805,8 @@ fn emit_hex_gid(s: &mut Vec<u8>, gid: u16) {
 }
 
 fn fallback_unicode_for_glyph(gid: u16) -> Option<u32> {
-    for glyph in &crate::math::fonts::calligraphy::NEWCM_SCRIPT_GLYPHS {
-        if glyph.glyph_id == gid {
-            return Some(glyph.unicode);
-        }
+    if (1120..=1145).contains(&gid) {
+        return Some(crate::math::fonts::calligraphy::NEWCM_SCRIPT_GLYPHS[(gid - 1120) as usize].unicode);
     }
     for glyph in &crate::math::fonts::calligraphy::STIX2_SCRIPT_GLYPHS {
         if glyph.glyph_id == gid {
@@ -890,7 +824,33 @@ fn fallback_unicode_for_glyph(gid: u16) -> Option<u32> {
         1105..=1108 => Some(0x007D),
         1300..=1305 => Some(0x2211),
         1306..=1310 => Some(0x220F),
-        2121 => Some(0x1D42F),
+        // Blackboard bold:
+        636 | 1236 => Some(0x211D),
+        614 | 1217 => Some(0x2102),
+        628 | 1230 => Some(0x2115),
+        640 | 1238 => Some(0x2124),
+        633 | 1233 => Some(0x211A),
+        632 | 1232 => Some(0x2119),
+        // Bold Latin:
+        2121 | 3295 => Some(0x1D42F),
+        2224 | 3407 => Some(0x1D483),
+        2074 | 3246 => Some(0x1D400),
+        2101 | 3273 => Some(0x1D41B),
+        2123 | 3297 => Some(0x1D431),
+        2124 | 3298 => Some(0x1D432),
+        2125 | 3299 => Some(0x1D433),
+        // Bold Greek:
+        2754 | 3957 => Some(0x1D6C2),
+        2755 | 3958 => Some(0x1D6C3),
+        2756 | 3959 => Some(0x1D6C4),
+        2762 | 3965 => Some(0x1D6CA),
+        2770 | 3973 => Some(0x1D6D2),
+        2772 | 3975 => Some(0x1D6D4),
+        2776 | 3979 => Some(0x1D6D8),
+        // Fraktur:
+        2349 | 3536 => Some(0x1D524),
+        620 | 1222 => Some(0x210C),
+        2322 | 3509 => Some(0x1D504),
         _ => None,
     }
 }
@@ -1202,11 +1162,21 @@ fn write_marker(out: &mut Vec<u8>, marker: Marker) {
     }
 }
 
+const NEEDS_ESCAPE: [bool; 256] = {
+    let mut lut = [true; 256];
+    let mut b = 32u8;
+    while b < 127 {
+        if b != b'\\' && b != b'(' && b != b')' {
+            lut[b as usize] = false;
+        }
+        b += 1;
+    }
+    lut
+};
+
 fn pdf_escape(out: &mut Vec<u8>, text: &str, face: Face) {
     let bytes = text.as_bytes();
-    let needs_escape = bytes
-        .iter()
-        .any(|&b| !(32..127).contains(&b) || matches!(b, b'\\' | b'(' | b')'));
+    let needs_escape = bytes.iter().any(|&b| NEEDS_ESCAPE[b as usize]);
     if !needs_escape {
         out.extend_from_slice(bytes);
         return;
@@ -1274,9 +1244,13 @@ fn pdf_escape(out: &mut Vec<u8>, text: &str, face: Face) {
     }
 }
 
+#[inline]
 fn to_winansi(c: char) -> u8 {
+    let cp = c as u32;
+    if cp < 0x80 || (0xA0..=0xFF).contains(&cp) {
+        return cp as u8;
+    }
     match c {
-        ch if ch.is_ascii() => ch as u8,
         '–' => 0x96,
         '—' => 0x97,
         '‘' => 0x91,
@@ -1285,25 +1259,6 @@ fn to_winansi(c: char) -> u8 {
         '”' => 0x94,
         '…' => 0x85,
         '•' => 0x95,
-        ' ' => 0xA0,
-        'ä' => 0xE4,
-        'ö' => 0xF6,
-        'ü' => 0xFC,
-        'Ä' => 0xC4,
-        'Ö' => 0xD6,
-        'Ü' => 0xDC,
-        'ß' => 0xDF,
-        'é' => 0xE9,
-        'è' => 0xE8,
-        'à' => 0xE0,
-        'ç' => 0xE7,
-        '±' => 0xB1,
-        '×' => 0xD7,
-        '÷' => 0xF7,
-        'µ' => 0xB5,
-        '°' => 0xB0,
-        '§' => 0xA7,
-        '¶' => 0xB6,
         '†' => 0x86,
         '‡' => 0x87,
         _ => b'?',
@@ -1330,22 +1285,54 @@ fn write_f32(out: &mut Vec<u8>, v: f32) {
     let scaled = (v * 100.0).round() as i64;
     let neg = scaled < 0;
     let n = scaled.unsigned_abs();
-    let whole = n / 100;
+    let mut whole = n / 100;
     let frac = (n % 100) as usize;
+
+    let mut buf = [0u8; 32];
+    let mut i = 24;
+
+    if whole == 0 {
+        i -= 1;
+        buf[i] = b'0';
+    } else {
+        while whole >= 100 {
+            let rem = ((whole % 100) as usize) * 2;
+            whole /= 100;
+            i -= 2;
+            buf[i] = DEC_DIGITS_LUT[rem];
+            buf[i + 1] = DEC_DIGITS_LUT[rem + 1];
+        }
+        if whole < 10 {
+            i -= 1;
+            buf[i] = b'0' + whole as u8;
+        } else {
+            let rem = (whole as usize) * 2;
+            i -= 2;
+            buf[i] = DEC_DIGITS_LUT[rem];
+            buf[i + 1] = DEC_DIGITS_LUT[rem + 1];
+        }
+    }
+
     if neg {
-        out.push(b'-');
+        i -= 1;
+        buf[i] = b'-';
     }
-    write_u64(out, whole);
-    if frac == 0 {
-        return;
+
+    let mut end = 24;
+    if frac != 0 {
+        buf[end] = b'.';
+        let frac_idx = frac * 2;
+        buf[end + 1] = DEC_DIGITS_LUT[frac_idx];
+        let d2 = DEC_DIGITS_LUT[frac_idx + 1];
+        if d2 != b'0' {
+            buf[end + 2] = d2;
+            end += 3;
+        } else {
+            end += 2;
+        }
     }
-    out.push(b'.');
-    let frac_idx = frac * 2;
-    out.push(DEC_DIGITS_LUT[frac_idx]);
-    let d2 = DEC_DIGITS_LUT[frac_idx + 1];
-    if d2 != b'0' {
-        out.push(d2);
-    }
+
+    out.extend_from_slice(&buf[i..end]);
 }
 
 fn write_f32_4dec(out: &mut Vec<u8>, v: f32) {
@@ -1356,34 +1343,70 @@ fn write_f32_4dec(out: &mut Vec<u8>, v: f32) {
     let scaled = (v * 10000.0).round() as i64;
     let neg = scaled < 0;
     let n = scaled.unsigned_abs();
-    let whole = n / 10000;
+    let mut whole = n / 10000;
     let frac = (n % 10000) as usize;
-    if neg {
-        out.push(b'-');
-    }
-    write_u64(out, whole);
-    if frac == 0 {
-        return;
-    }
-    out.push(b'.');
-    let high = frac / 100;
-    let low = frac % 100;
-    let h_idx = high * 2;
-    let l_idx = low * 2;
-    let d0 = DEC_DIGITS_LUT[h_idx];
-    let d1 = DEC_DIGITS_LUT[h_idx + 1];
-    let d2 = DEC_DIGITS_LUT[l_idx];
-    let d3 = DEC_DIGITS_LUT[l_idx + 1];
-    out.push(d0);
-    if d1 != b'0' || d2 != b'0' || d3 != b'0' {
-        out.push(d1);
-        if d2 != b'0' || d3 != b'0' {
-            out.push(d2);
-            if d3 != b'0' {
-                out.push(d3);
-            }
+
+    let mut buf = [0u8; 32];
+    let mut i = 24;
+
+    if whole == 0 {
+        i -= 1;
+        buf[i] = b'0';
+    } else {
+        while whole >= 100 {
+            let rem = ((whole % 100) as usize) * 2;
+            whole /= 100;
+            i -= 2;
+            buf[i] = DEC_DIGITS_LUT[rem];
+            buf[i + 1] = DEC_DIGITS_LUT[rem + 1];
+        }
+        if whole < 10 {
+            i -= 1;
+            buf[i] = b'0' + whole as u8;
+        } else {
+            let rem = (whole as usize) * 2;
+            i -= 2;
+            buf[i] = DEC_DIGITS_LUT[rem];
+            buf[i + 1] = DEC_DIGITS_LUT[rem + 1];
         }
     }
+
+    if neg {
+        i -= 1;
+        buf[i] = b'-';
+    }
+
+    let mut end = 24;
+    if frac != 0 {
+        buf[end] = b'.';
+        let high = frac / 100;
+        let low = frac % 100;
+        let h_idx = high * 2;
+        let l_idx = low * 2;
+        let d0 = DEC_DIGITS_LUT[h_idx];
+        let d1 = DEC_DIGITS_LUT[h_idx + 1];
+        let d2 = DEC_DIGITS_LUT[l_idx];
+        let d3 = DEC_DIGITS_LUT[l_idx + 1];
+        buf[end + 1] = d0;
+        if d1 != b'0' || d2 != b'0' || d3 != b'0' {
+            buf[end + 2] = d1;
+            if d2 != b'0' || d3 != b'0' {
+                buf[end + 3] = d2;
+                if d3 != b'0' {
+                    buf[end + 4] = d3;
+                    end += 5;
+                } else {
+                    end += 4;
+                }
+            } else {
+                end += 3;
+            }
+        } else {
+            end += 2;
+        }
+    }
+
+    out.extend_from_slice(&buf[i..end]);
 }
 
 struct Writer<'w> {
@@ -1396,7 +1419,7 @@ impl<'w> Writer<'w> {
         let n = page_count.max(1);
         Self {
             buf,
-            offsets: Vec::with_capacity(2 * n + 2 + font_count),
+            offsets: Vec::with_capacity(2 * n + 16 + font_count * 4),
         }
     }
 
@@ -1431,6 +1454,7 @@ impl<'w> Writer<'w> {
 
     fn finish(self, root: u32) -> Result<(), Error> {
         let max_id = self.offsets.len() as u32;
+        self.buf.reserve((max_id as usize) * 20 + 256);
         let xref_at = self.buf.len();
         self.buf.extend_from_slice(b"xref\n0 ");
         write_u64(self.buf, max_id as u64 + 1);
@@ -1451,12 +1475,35 @@ impl<'w> Writer<'w> {
 }
 
 fn write_i64(out: &mut Vec<u8>, n: i64) {
-    if n < 0 {
-        out.push(b'-');
-        write_u64(out, n.unsigned_abs());
+    let mut buf = [0u8; 21];
+    let mut i = 21;
+    let mut u = n.unsigned_abs();
+    if u == 0 {
+        i -= 1;
+        buf[i] = b'0';
     } else {
-        write_u64(out, n as u64);
+        while u >= 100 {
+            let rem = ((u % 100) as usize) * 2;
+            u /= 100;
+            i -= 2;
+            buf[i] = DEC_DIGITS_LUT[rem];
+            buf[i + 1] = DEC_DIGITS_LUT[rem + 1];
+        }
+        if u < 10 {
+            i -= 1;
+            buf[i] = b'0' + u as u8;
+        } else {
+            let rem = (u as usize) * 2;
+            i -= 2;
+            buf[i] = DEC_DIGITS_LUT[rem];
+            buf[i + 1] = DEC_DIGITS_LUT[rem + 1];
+        }
     }
+    if n < 0 {
+        i -= 1;
+        buf[i] = b'-';
+    }
+    out.extend_from_slice(&buf[i..]);
 }
 
 fn write_u64(out: &mut Vec<u8>, mut n: u64) {
@@ -1485,8 +1532,9 @@ fn write_u64(out: &mut Vec<u8>, mut n: u64) {
     out.extend_from_slice(&buf[i..]);
 }
 
+#[inline]
 fn write_xref_entry(out: &mut Vec<u8>, off: usize) {
-    let mut buf = [b'0'; 10];
+    let mut buf = *b"0000000000 00000 n \n";
     let mut n = off;
     let mut i = 10;
     while n >= 100 && i >= 2 {
@@ -1506,7 +1554,6 @@ fn write_xref_entry(out: &mut Vec<u8>, off: usize) {
         buf[i] = b'0' + n as u8;
     }
     out.extend_from_slice(&buf);
-    out.extend_from_slice(b" 00000 n \n");
 }
 
 #[cfg(test)]
@@ -1517,12 +1564,9 @@ mod tests {
     fn test_cid_tounicode_cmap_generation() {
         let mut buf = Vec::new();
         let mut writer = Writer::new(&mut buf, 1, 1);
-        let entries = [
-            (832u16, 0x222Bu32),
-            (1236u16, 0x211Du32),
-            (2121u16, 0x1D42Fu32),
-        ];
-        emit_cid_tounicode_cmap(&mut writer, 42, &entries);
+        let cids = [832u16, 1236u16, 2121u16];
+        let mut scratch = Vec::new();
+        emit_cid_tounicode_cmap(&mut writer, 42, &cids, &mut scratch);
         let _ = writer.finish(42);
         let s = String::from_utf8_lossy(&buf);
         assert!(s.contains("/CMapName /RushTeX-CIDToUnicode def\n"));

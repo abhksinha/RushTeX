@@ -399,7 +399,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_blocks(&mut self) -> Result<Vec<Block<'a>>, ParseError> {
-        let mut blocks = Vec::new();
+        let mut blocks = Vec::with_capacity(32);
         loop {
             self.skip_ws();
             if self.peek().is_none() {
@@ -910,7 +910,7 @@ impl<'a> Parser<'a> {
                 options = parse_list_options(opt_str);
             }
         }
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(8);
         loop {
             self.skip_ws();
             if self.eat_end_env(name) {
@@ -1076,7 +1076,7 @@ impl<'a> Parser<'a> {
             self.eat("]");
         }
         let mut graphic = None;
-        let mut caption = Vec::new();
+        let mut caption = Vec::with_capacity(8);
         loop {
             self.skip_ws();
             if self.eat_end_env("figure") {
@@ -1247,13 +1247,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_para_inlines(&mut self) -> Result<Vec<Inline<'a>>, ParseError> {
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(16);
         loop {
             match self.peek() {
                 None => break,
                 Some('%') => self.skip_comment(),
                 Some('\n') if self.at_blank_line() => break,
-                Some(_)
+                Some('\\' | '$') => {
                     if self.starts_with("\\begin")
                         || self.starts_with("\\end")
                         || self.at_item()
@@ -1272,14 +1272,17 @@ impl<'a> Parser<'a> {
                         || self.cmd_ends_at("\\listoftables")
                         || self.cmd_ends_at("\\vspace")
                         || self.starts_with("$$")
-                        || self.starts_with("\\[") =>
-                {
-                    break;
-                }
-                Some(_) if self.starts_with("\\\\") => {
-                    self.eat("\\\\");
-                    out.push(Inline::Break);
-                    self.skip_hws();
+                        || self.starts_with("\\[")
+                    {
+                        break;
+                    }
+                    if self.starts_with("\\\\") {
+                        self.eat("\\\\");
+                        out.push(Inline::Break);
+                        self.skip_hws();
+                    } else {
+                        out.push(self.parse_inline()?);
+                    }
                 }
                 Some(_) => out.push(self.parse_inline()?),
             }
@@ -1329,7 +1332,7 @@ impl<'a> Parser<'a> {
 
     fn parse_until_rbrace(&mut self) -> Result<Vec<Inline<'a>>, ParseError> {
         let open_offset = self.byte_offset.saturating_sub(1);
-        let mut inner = Vec::new();
+        let mut inner = Vec::with_capacity(4);
         loop {
             match self.peek() {
                 Some('}') => {
@@ -1424,6 +1427,17 @@ impl<'a> Parser<'a> {
             ));
         }
         self.skip_hws();
+        // Fast-path for ubiquitous formatting commands (instruction-cache and branch predictor optimal)
+        match name.as_bytes() {
+            b"textbf" => return Ok(Inline::Bold(self.require_group()?)),
+            b"textit" | b"emph" => return Ok(Inline::Italic(self.require_group()?)),
+            b"texttt" => return Ok(Inline::Mono(self.require_group()?)),
+            b"par" => return Ok(Inline::Break),
+            b"noindent" => return Ok(Inline::NoIndent),
+            b"indent" => return Ok(Inline::Indent),
+            b"verb" => return self.parse_verb(cmd_start),
+            _ => {}
+        }
         match name {
             "textbf" => Ok(Inline::Bold(self.require_group()?)),
             "textit" | "emph" => Ok(Inline::Italic(self.require_group()?)),

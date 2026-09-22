@@ -104,8 +104,9 @@ fn parse_table_body<'a>(
 ) -> Result<Block<'a>, ParseError> {
     p.skip_hws();
     let (cols, col_widths, rule_right) = parse_colspec(p)?;
-    let mut rows = Vec::new();
-    let mut pending_rules = Vec::new();
+    let col_count = cols.len();
+    let mut rows = Vec::with_capacity(8);
+    let mut pending_rules = Vec::with_capacity(2);
     let mut header_row_count = 0;
     let mut first_header_row_count = 0;
     let mut footer_row_count = 0;
@@ -242,7 +243,7 @@ fn parse_table_body<'a>(
         }
 
         // Parse row cells
-        let mut cells = Vec::new();
+        let mut cells = Vec::with_capacity(col_count);
         loop {
             p.skip_hws();
             if p.cmd_ends_at("\\multicolumn") {
@@ -263,9 +264,14 @@ fn parse_table_body<'a>(
         }
 
         let rule_above = !pending_rules.is_empty();
+        let rules_above = if pending_rules.is_empty() {
+            Vec::new()
+        } else {
+            std::mem::replace(&mut pending_rules, Vec::with_capacity(2))
+        };
         rows.push(TableRow {
             rule_above,
-            rules_above: std::mem::take(&mut pending_rules),
+            rules_above,
             cells,
         });
     }
@@ -301,8 +307,8 @@ fn parse_colspec<'a>(p: &mut Parser<'a>) -> Result<ParsedColSpec, ParseError> {
             Some("specify column alignments using '{l}', '{c}', '{r}', or '{p{width}}'"),
         ));
     }
-    let mut cols = Vec::new();
-    let mut col_widths = Vec::new();
+    let mut cols = Vec::with_capacity(4);
+    let mut col_widths = Vec::with_capacity(4);
     let mut rule_left = false;
 
     loop {

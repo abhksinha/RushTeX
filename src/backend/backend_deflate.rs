@@ -305,11 +305,11 @@ impl<'a> BitWriter<'a> {
     }
 
     #[inline(always)]
-    fn finish(mut self) {
-        while self.bit_count > 0 {
-            self.buf.push((self.bit_buf & 0xFF) as u8);
-            self.bit_buf >>= 8;
-            self.bit_count = self.bit_count.saturating_sub(8);
+    fn finish(self) {
+        let bytes = (self.bit_count as usize).div_ceil(8);
+        if bytes > 0 {
+            let le = self.bit_buf.to_le_bytes();
+            self.buf.extend_from_slice(&le[..bytes]);
         }
     }
 }
@@ -344,8 +344,7 @@ impl DeflateCompressor {
     /// Compresses `input_data` into zlib-wrapped DEFLATE format (RFC 1950) appending to `destination_buffer`.
     pub fn compress_zlib(&mut self, input_data: &[u8], destination_buffer: &mut Vec<u8>) {
         // 1. Write zlib header: CMF = 0x78 (32K window, deflate), FLG = 0x9C (default)
-        destination_buffer.push(0x78);
-        destination_buffer.push(0x9C);
+        destination_buffer.extend_from_slice(&[0x78, 0x9C]);
 
         let start_len = destination_buffer.len();
 

@@ -28,8 +28,9 @@ pub use asana::ASANA_MATH_CONSTANTS;
 pub use calligraphy::{
     script_glyph, symbol_to_unicode_greek, to_unicode_blackboard, to_unicode_bold, to_unicode_bold_italic,
     to_unicode_fraktur, to_unicode_script, NEWCM_SCRIPT_GLYPHS, STIX2_SCRIPT_GLYPHS, OpenTypeScriptGlyph,
+    static_cff_compressed, static_cff_raw, static_script_advance,
 };
-pub use vector_paths::get_vector_glyph_path;
+pub use vector_paths::{get_vector_glyph_path, vector_glyph_for_unicode};
 pub use delimiters::{
     OpenTypeAssemblyRecipe, OpenTypeDelimKind, OpenTypeHorizAssemblyRecipe, OpenTypeHorizKind,
     ResolvedDelimiter, ResolvedHorizontal, NEWCM_BAR_VARIANTS, NEWCM_BRACE_VARIANTS,
@@ -142,6 +143,17 @@ static NEWCM_MATH_INSTANCE: OnceLock<Option<OpenTypeMathFont<'static>>> = OnceLo
 static STIX2_MATH_INSTANCE: OnceLock<Option<OpenTypeMathFont<'static>>> = OnceLock::new();
 static FIRAMATH_INSTANCE: OnceLock<Option<OpenTypeMathFont<'static>>> = OnceLock::new();
 static ASANA_MATH_INSTANCE: OnceLock<Option<OpenTypeMathFont<'static>>> = OnceLock::new();
+
+/// Returns the statically precomputed OpenType math constants for the given font family directly from .rodata.
+#[inline(always)]
+pub fn math_constants_for_family(family: crate::backend::fonts::FontFamily) -> &'static OpenTypeMathConstants {
+    match family {
+        crate::backend::fonts::FontFamily::Times => &STIX2_MATH_CONSTANTS,
+        crate::backend::fonts::FontFamily::Helvetica => &FIRAMATH_CONSTANTS,
+        crate::backend::fonts::FontFamily::Palatino => &ASANA_MATH_CONSTANTS,
+        _ => &NEWCM_MATH_CONSTANTS,
+    }
+}
 
 /// Resolves the cached `OpenTypeMathFont` instance with pre-parsed constants.
 pub fn active_opentype_math_font(family: crate::backend::fonts::FontFamily) -> Option<&'static OpenTypeMathFont<'static>> {

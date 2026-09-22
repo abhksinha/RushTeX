@@ -376,3 +376,44 @@ pub fn get_vector_glyph_path(glyph_id: u16) -> Option<&'static [u8]> {
         _ => None,
     }
 }
+
+/// Returns the precomputed OpenType glyph ID for supported alphanumeric/bold vector symbols.
+#[inline(always)]
+pub fn vector_glyph_for_unicode(unicode: u32, family: crate::backend::fonts::FontFamily) -> Option<u16> {
+    let is_times = family == crate::backend::fonts::FontFamily::Times;
+    match unicode {
+        // Blackboard bold:
+        0x211D => Some(if is_times { 1236 } else { 636 }), // R
+        0x2102 => Some(if is_times { 1217 } else { 614 }), // C
+        0x2115 => Some(if is_times { 1230 } else { 628 }), // N
+        0x2124 => Some(if is_times { 1238 } else { 640 }), // Z
+        0x211A => Some(if is_times { 1233 } else { 633 }), // Q
+        0x2119 => Some(if is_times { 1232 } else { 632 }), // P
+
+        // Bold Latin:
+        0x1D42F => Some(if is_times { 3295 } else { 2121 }), // bold v
+        0x1D483 => Some(if is_times { 3407 } else { 2224 }), // bold italic v
+        0x1D400 | 0x1D468 => Some(if is_times { 3246 } else { 2074 }), // bold A
+        0x1D41B => Some(if is_times { 3273 } else { 2101 }), // bold B
+        0x1D431 | 0x1D48F => Some(if is_times { 3297 } else { 2123 }), // bold X
+        0x1D432 | 0x1D490 => Some(if is_times { 3298 } else { 2124 }), // bold Y
+        0x1D433 | 0x1D491 => Some(if is_times { 3299 } else { 2125 }), // bold Z
+
+        // Bold Greek:
+        0x1D6C2 | 0x1D736 => Some(if is_times { 3957 } else { 2754 }), // alpha
+        0x1D6C3 | 0x1D737 => Some(if is_times { 3958 } else { 2755 }), // beta
+        0x1D6C4 | 0x1D738 => Some(if is_times { 3959 } else { 2756 }), // gamma
+        0x1D6CA | 0x1D73E => Some(if is_times { 3965 } else { 2762 }), // theta
+        0x1D6D2 | 0x1D746 => Some(if is_times { 3973 } else { 2770 }), // pi
+        0x1D6D4 | 0x1D748 => Some(if is_times { 3975 } else { 2772 }), // sigma
+        0x1D6D8 | 0x1D74C => Some(if is_times { 3979 } else { 2776 }), // omega
+
+        // Fraktur:
+        0x1D524 => Some(if is_times { 3536 } else { 2349 }), // g
+        0x210C => Some(if is_times { 1222 } else { 620 }),  // H
+        0x1D504 => Some(if is_times { 3509 } else { 2322 }), // A
+
+        _ => None,
+    }
+}
+

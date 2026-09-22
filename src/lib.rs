@@ -185,7 +185,7 @@ pub fn compile_file_opts(
     let document = tex::parse(&source_code)?;
     let pages = layout::layout(&document);
     let page_count = pages.len();
-    let mut pdf_buffer = Vec::with_capacity(page_count * 2048 + 4096);
+    let mut pdf_buffer = Vec::with_capacity((page_count * 10240).max(16384));
     pdf::emit_into_opts(&pages, &mut pdf_buffer, enable_compression)?;
     let destination = match output_path {
         Some(path) => path.to_path_buf(),
@@ -650,6 +650,84 @@ Some text here.
         eprintln!("------------------------------------------------------------------");
         eprintln!("Total [Default Compressed PDF]:      avg = {:.2} ms, min = {:.2} ms  (Parse + Layout + Compressed Emit)", avg(&total_compressed_times), min(&total_compressed_times));
         eprintln!("Total [Optional Uncompressed PDF]:    avg = {:.2} ms, min = {:.2} ms  (Parse + Layout + Uncompressed Emit)", avg(&total_uncompressed_times), min(&total_uncompressed_times));
+    }
+
+    #[test]
+    fn test_bench_manual_detailed_breakdown() {
+        let path = "docs/manual.tex";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let src = std::fs::read_to_string(path).expect("read manual.tex");
+
+        // Warmup
+        let _ = compile_str(&src).unwrap();
+
+        const ITERS: usize = 20;
+        let mut parse_times = Vec::with_capacity(ITERS);
+        let mut layout_times = Vec::with_capacity(ITERS);
+        let mut emit_uncompressed_times = Vec::with_capacity(ITERS);
+        let mut emit_compressed_times = Vec::with_capacity(ITERS);
+        let mut total_compressed_times = Vec::with_capacity(ITERS);
+
+        let mut uncompressed_buf = Vec::with_capacity(2 * 1024 * 1024);
+        let mut compressed_buf = Vec::with_capacity(1024 * 1024);
+
+        for _ in 0..ITERS {
+            uncompressed_buf.clear();
+            compressed_buf.clear();
+
+            let t0 = std::time::Instant::now();
+            let doc = tex::parse(&src).unwrap();
+            let t1 = std::time::Instant::now();
+            let pages = layout::layout(&doc);
+            let t2 = std::time::Instant::now();
+            pdf::emit_into_opts(&pages, &mut uncompressed_buf, false).unwrap();
+            let t3 = std::time::Instant::now();
+            pdf::emit_into_opts(&pages, &mut compressed_buf, true).unwrap();
+            let t4 = std::time::Instant::now();
+
+            let parse_ms = (t1 - t0).as_secs_f64() * 1000.0;
+            let layout_ms = (t2 - t1).as_secs_f64() * 1000.0;
+            let uncompressed_emit_ms = (t3 - t2).as_secs_f64() * 1000.0;
+            let compressed_emit_ms = (t4 - t3).as_secs_f64() * 1000.0;
+
+            parse_times.push(parse_ms);
+            layout_times.push(layout_ms);
+            emit_uncompressed_times.push(uncompressed_emit_ms);
+            emit_compressed_times.push(compressed_emit_ms);
+            total_compressed_times.push(parse_ms + layout_ms + compressed_emit_ms);
+        }
+
+        let avg = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let min = |v: &[f64]| v.iter().copied().fold(f64::INFINITY, f64::min);
+
+        eprintln!(
+            "\n=== MANUAL.TEX BENCHMARK BREAKDOWN ({} iterations) ===",
+            ITERS
+        );
+        eprintln!(
+            "Parse (AST):                         avg = {:.2} ms, min = {:.2} ms",
+            avg(&parse_times),
+            min(&parse_times)
+        );
+        eprintln!(
+            "Layout (Knuth-Plass + Math):         avg = {:.2} ms, min = {:.2} ms",
+            avg(&layout_times),
+            min(&layout_times)
+        );
+        eprintln!(
+            "Emit [Uncompressed - stream only]:   avg = {:.2} ms, min = {:.2} ms",
+            avg(&emit_uncompressed_times),
+            min(&emit_uncompressed_times)
+        );
+        eprintln!(
+            "Emit [Compressed - stream+DEFLATE]:  avg = {:.2} ms, min = {:.2} ms",
+            avg(&emit_compressed_times),
+            min(&emit_compressed_times)
+        );
+        eprintln!("------------------------------------------------------------------");
+        eprintln!("Total [Default Compressed PDF]:      avg = {:.2} ms, min = {:.2} ms", avg(&total_compressed_times), min(&total_compressed_times));
     }
 
     #[test]

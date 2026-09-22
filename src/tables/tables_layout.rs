@@ -1,7 +1,7 @@
 //! Layout calculation, multi-page streaming, and vector painting for tables.
 
 use crate::backend::fonts::Face;
-use crate::layout::engine::{explode_inlines_into_family, Layouter, Paint, CELL_PAD};
+use crate::layout::engine::{explode_inlines_into_family, CellSpan, Layouter, Paint, CELL_PAD};
 use crate::tables::tables_model::{TableData, TableRow, TableRule};
 use crate::tables::tables_spec::{ColAlign, ColSpec};
 
@@ -13,9 +13,17 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
     }
     let n = cols.len();
 
-    // 1. Compute natural column widths
-    let mut widths = vec![0.0f32; n];
-    let mut col_w = vec![0.0f32; n];
+    // 1. Compute natural column widths (stack buffer sized for up to 64 columns)
+    let mut widths_buf = [0.0f32; 64];
+    let mut col_w_buf = [0.0f32; 64];
+    let (mut widths_heap, mut col_w_heap);
+    let (widths, col_w) = if n <= 64 {
+        (&mut widths_buf[..n], &mut col_w_buf[..n])
+    } else {
+        widths_heap = vec![0.0f32; n];
+        col_w_heap = vec![0.0f32; n];
+        (widths_heap.as_mut_slice(), col_w_heap.as_mut_slice())
+    };
 
     // Initialize with fixed widths if specified via p{width}
     for (i, &fw) in table_data.col_widths.iter().enumerate().take(n) {
@@ -93,6 +101,20 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
         raw_table_w
     };
 
+    // Prefix sums of column offsets for O(1) cell span and rule width calculation
+    let mut col_offsets_buf = [0.0f32; 65];
+    let mut col_offsets_heap;
+    let col_offsets = if n <= 64 {
+        &mut col_offsets_buf[..=n]
+    } else {
+        col_offsets_heap = vec![0.0f32; n + 1];
+        col_offsets_heap.as_mut_slice()
+    };
+    col_offsets[0] = 0.0;
+    for i in 0..n {
+        col_offsets[i + 1] = col_offsets[i] + col_w[i];
+    }
+
     let origin_x = layouter.left + layouter.left_skip;
 
     // 4. Render Caption Above (if present)
@@ -112,52 +134,7 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
     let mut row_idx = 0;
     while row_idx < rows.len() {
         let row = &rows[row_idx];
-        layouter.cell_words_soa.clear();
-        layouter.cell_lines.clear();
-        layouter.cell_line_spans.clear();
-
-        // Break cell words into lines
-        let mut c_idx = 0;
-        for cell in &row.cells {
-            if c_idx >= n {
-                break;
-            }
-            let colspan = cell.colspan.max(1) as usize;
-            let span_end = (c_idx + colspan).min(n);
-            let item_w: f32 = col_w[c_idx..span_end].iter().sum();
-            let inner_w = (item_w - 2.0 * CELL_PAD).max(1.0);
-
-            let start_idx = layouter.cell_words_soa.len();
-            explode_inlines_into_family(
-                &cell.inlines,
-                Face::Roman,
-                layouter.base_font_size,
-                &mut layouter.cell_words_soa,
-                layouter.font_family,
-            );
-            let end_idx = layouter.cell_words_soa.len();
-
-            if start_idx == end_idx {
-                layouter
-                    .cell_line_spans
-                    .push((layouter.cell_lines.len(), 0));
-            } else {
-                let lines_start = layouter.cell_lines.len();
-                layouter.break_cell_words_into_lines(start_idx, end_idx, inner_w);
-                let lines_count = layouter.cell_lines.len() - lines_start;
-                layouter.cell_line_spans.push((lines_start, lines_count));
-            }
-            c_idx += colspan;
-        }
-
-        let max_lines = layouter
-            .cell_line_spans
-            .iter()
-            .map(|&(_, c)| c)
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        let row_h = (max_lines as f32) * layouter.base_leading + 4.0;
+        let row_h = prepare_row_cells(layouter, row, n, col_w, col_offsets);
 
         let broken = layouter.ensure_room(row_h);
         if broken {
@@ -168,15 +145,19 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
                 && row_idx >= table_data.header_row_count
             {
                 for h_row in rows.iter().take(table_data.header_row_count) {
-                    render_single_row(
-                        layouter, h_row, cols, &col_w, origin_x, table_w, rule_right, &mut y_top,
+                    let h_row_h = prepare_row_cells(layouter, h_row, n, col_w, col_offsets);
+                    paint_prepared_row(
+                        layouter, h_row, cols, col_w, col_offsets, origin_x, table_w, rule_right, &mut y_top,
+                        h_row_h,
                     );
                 }
+                // Re-prepare the current row since header rendering overwrote layouter's cell buffers
+                prepare_row_cells(layouter, row, n, col_w, col_offsets);
             }
         }
 
-        render_single_row(
-            layouter, row, cols, &col_w, origin_x, table_w, rule_right, &mut y_top,
+        paint_prepared_row(
+            layouter, row, cols, col_w, col_offsets, origin_x, table_w, rule_right, &mut y_top, row_h,
         );
 
         row_idx += 1;
@@ -184,7 +165,7 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
 
     // 6. Emit Bottom Rules
     for rule in &table_data.bottom_rules {
-        emit_table_rule(layouter, rule, origin_x, &col_w, table_w, &mut y_top);
+        emit_table_rule(layouter, rule, origin_x, col_offsets, table_w, &mut y_top);
     }
     if rule_bottom && table_data.bottom_rules.is_empty() {
         let rule_t = 0.6f32;
@@ -213,22 +194,81 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
     layouter.y = y_top - layouter.par_skip;
 }
 
+fn prepare_row_cells<'a>(
+    layouter: &mut Layouter<'a>,
+    row: &'a TableRow<'a>,
+    n: usize,
+    col_w: &[f32],
+    col_offsets: &[f32],
+) -> f32 {
+    layouter.cell_words_soa.clear();
+    layouter.cell_lines.clear();
+    layouter.cell_line_spans.clear();
+
+    let mut max_lines = 1u16;
+    let mut c_idx = 0;
+    for cell in &row.cells {
+        if c_idx >= n {
+            break;
+        }
+        let colspan = cell.colspan.max(1) as usize;
+        let span_end = (c_idx + colspan).min(n);
+        let item_w = if colspan == 1 {
+            col_w[c_idx]
+        } else {
+            col_offsets[span_end] - col_offsets[c_idx]
+        };
+        let inner_w = (item_w - 2.0 * CELL_PAD).max(1.0);
+
+        let start_idx = layouter.cell_words_soa.len();
+        explode_inlines_into_family(
+            &cell.inlines,
+            Face::Roman,
+            layouter.base_font_size,
+            &mut layouter.cell_words_soa,
+            layouter.font_family,
+        );
+        let end_idx = layouter.cell_words_soa.len();
+
+        if start_idx == end_idx {
+            layouter.cell_line_spans.push(CellSpan {
+                start: layouter.cell_lines.len() as u16,
+                count: 0,
+            });
+        } else {
+            let lines_start = layouter.cell_lines.len();
+            layouter.break_cell_words_into_lines(start_idx, end_idx, inner_w);
+            let lines_count = (layouter.cell_lines.len() - lines_start) as u16;
+            layouter.cell_line_spans.push(CellSpan {
+                start: lines_start as u16,
+                count: lines_count,
+            });
+            max_lines = max_lines.max(lines_count);
+        }
+        c_idx += colspan;
+    }
+
+    (max_lines as f32) * layouter.base_leading + 4.0
+}
+
 #[allow(clippy::too_many_arguments)]
-fn render_single_row<'a>(
+fn paint_prepared_row<'a>(
     layouter: &mut Layouter<'a>,
     row: &'a TableRow<'a>,
     cols: &[ColSpec],
     col_w: &[f32],
+    col_offsets: &[f32],
     origin_x: f32,
     table_w: f32,
     rule_right: bool,
     y_top: &mut f32,
+    row_h: f32,
 ) {
     let n = cols.len();
 
     // 1. Draw rules above row
     for rule in &row.rules_above {
-        emit_table_rule(layouter, rule, origin_x, col_w, table_w, y_top);
+        emit_table_rule(layouter, rule, origin_x, col_offsets, table_w, y_top);
     }
     if row.rule_above && row.rules_above.is_empty() {
         let rule_t = 0.6f32;
@@ -244,65 +284,23 @@ fn render_single_row<'a>(
         *y_top -= rule_t;
     }
 
-    // 2. Prepare cell lines for rendering
-    layouter.cell_words_soa.clear();
-    layouter.cell_lines.clear();
-    layouter.cell_line_spans.clear();
-
-    let mut c_idx = 0;
-    for cell in &row.cells {
-        if c_idx >= n {
-            break;
-        }
-        let colspan = cell.colspan.max(1) as usize;
-        let span_end = (c_idx + colspan).min(n);
-        let item_w: f32 = col_w[c_idx..span_end].iter().sum();
-        let inner_w = (item_w - 2.0 * CELL_PAD).max(1.0);
-
-        let start_idx = layouter.cell_words_soa.len();
-        explode_inlines_into_family(
-            &cell.inlines,
-            Face::Roman,
-            layouter.base_font_size,
-            &mut layouter.cell_words_soa,
-            layouter.font_family,
-        );
-        let end_idx = layouter.cell_words_soa.len();
-
-        if start_idx == end_idx {
-            layouter
-                .cell_line_spans
-                .push((layouter.cell_lines.len(), 0));
-        } else {
-            let lines_start = layouter.cell_lines.len();
-            layouter.break_cell_words_into_lines(start_idx, end_idx, inner_w);
-            let lines_count = layouter.cell_lines.len() - lines_start;
-            layouter.cell_line_spans.push((lines_start, lines_count));
-        }
-        c_idx += colspan;
-    }
-
-    let max_lines = layouter
-        .cell_line_spans
-        .iter()
-        .map(|&(_, c)| c)
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    let row_h = (max_lines as f32) * layouter.base_leading + 4.0;
     let row_bottom = *y_top - row_h;
     let rule_t = 0.6f32;
 
-    // 3. Paint vertical rules and cell contents
-    let mut x = origin_x;
+    // 2. Paint vertical rules and cell contents
     let mut cell_idx = 0;
-    c_idx = 0;
+    let mut c_idx = 0;
 
     while c_idx < n && cell_idx < row.cells.len() {
         let cell = &row.cells[cell_idx];
         let colspan = cell.colspan.max(1) as usize;
         let span_end = (c_idx + colspan).min(n);
-        let item_w: f32 = col_w[c_idx..span_end].iter().sum();
+        let x = origin_x + col_offsets[c_idx];
+        let item_w = if colspan == 1 {
+            col_w[c_idx]
+        } else {
+            col_offsets[span_end] - col_offsets[c_idx]
+        };
         let inner_w = (item_w - 2.0 * CELL_PAD).max(1.0);
 
         // Draw left vertical rule
@@ -320,7 +318,9 @@ fn render_single_row<'a>(
         }
 
         // Draw cell lines
-        let (span_start, span_count) = layouter.cell_line_spans[cell_idx];
+        let span = layouter.cell_line_spans[cell_idx];
+        let span_start = span.start as usize;
+        let span_count = span.count as usize;
         let align = cell.align.unwrap_or_else(|| cols[c_idx].align());
 
         for l in 0..span_count {
@@ -351,7 +351,6 @@ fn render_single_row<'a>(
             });
         }
 
-        x += item_w;
         c_idx += colspan;
         cell_idx += 1;
     }
@@ -373,7 +372,7 @@ fn emit_table_rule<'a>(
     layouter: &mut Layouter<'a>,
     rule: &TableRule,
     origin_x: f32,
-    col_w: &[f32],
+    col_offsets: &[f32],
     table_w: f32,
     y_top: &mut f32,
 ) {
@@ -436,7 +435,7 @@ fn emit_table_rule<'a>(
             let h = 0.4f32;
             if !layouter.is_dry_run {
                 let (rx, rw) =
-                    col_range_extent(origin_x, col_w, *start_col as usize, *end_col as usize);
+                    col_range_extent(origin_x, col_offsets, *start_col as usize, *end_col as usize);
                 layouter.push_op(Paint::Rule {
                     x: rx,
                     y: *y_top - h,
@@ -456,7 +455,7 @@ fn emit_table_rule<'a>(
             let h = 0.5f32;
             if !layouter.is_dry_run {
                 let (mut rx, mut rw) =
-                    col_range_extent(origin_x, col_w, *start_col as usize, *end_col as usize);
+                    col_range_extent(origin_x, col_offsets, *start_col as usize, *end_col as usize);
                 if *trim_left {
                     rx += 2.0;
                     rw = (rw - 2.0).max(1.0);
@@ -477,13 +476,14 @@ fn emit_table_rule<'a>(
     }
 }
 
-fn col_range_extent(origin_x: f32, col_w: &[f32], start_col: usize, end_col: usize) -> (f32, f32) {
-    let n = col_w.len();
+#[inline]
+fn col_range_extent(origin_x: f32, col_offsets: &[f32], start_col: usize, end_col: usize) -> (f32, f32) {
+    let n = col_offsets.len().saturating_sub(1);
     let s = (start_col.max(1) - 1).min(n);
     let e = end_col.max(s).min(n);
 
-    let offset_x: f32 = col_w[..s].iter().sum();
-    let span_w: f32 = col_w[s..e].iter().sum();
+    let offset_x = col_offsets[s];
+    let span_w = col_offsets[e] - offset_x;
     (origin_x + offset_x, span_w)
 }
 

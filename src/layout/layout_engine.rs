@@ -206,8 +206,7 @@ pub fn layout<'a>(document: &'a Document<'a>) -> Vec<Page<'a>> {
         let mut dry_registry = IndexRegistry::new();
         pre_scan_entries(&document.blocks, &mut dry_registry);
 
-        let mut dry_layouter = Layouter::new(&document.preamble.config);
-        dry_layouter.is_dry_run = true;
+        let mut dry_layouter = Layouter::new_dry_run(&document.preamble.config);
         dry_layouter.registry = dry_registry;
         dry_layouter.layout_blocks(&document.blocks, 0);
         dry_layouter.registry
@@ -259,7 +258,7 @@ pub(crate) struct Layouter<'a> {
     pub(crate) line_descriptors: Vec<LineDescriptor>,
     pub(crate) cell_words_soa: ParagraphSoA<'a>,
     pub(crate) cell_lines: Vec<CellLineRange>,
-    pub(crate) cell_line_spans: Vec<(usize, usize)>,
+    pub(crate) cell_line_spans: Vec<CellSpan>,
     pub(crate) registry: IndexRegistry<'a>,
     pub(crate) is_dry_run: bool,
     pub(crate) current_sec_idx: usize,
@@ -269,19 +268,40 @@ pub(crate) struct Layouter<'a> {
 }
 
 impl<'a> Layouter<'a> {
-    fn new(config: &DocumentConfig) -> Self {
+    pub(crate) fn new(config: &DocumentConfig) -> Self {
+        Self::new_with_caps(config, 256, 1024, false)
+    }
+
+    pub(crate) fn new_dry_run(config: &DocumentConfig) -> Self {
+        Self::new_with_caps(config, 0, 0, true)
+    }
+
+    fn new_with_caps(
+        config: &DocumentConfig,
+        ops_cap: usize,
+        pool_cap: usize,
+        is_dry_run: bool,
+    ) -> Self {
         let left = config.margin_left;
         let right = config.page_width - config.margin_right;
         let y = config.page_height - config.margin_top;
         Self {
-            pages: Vec::new(),
+            pages: Vec::with_capacity(32),
             current_page: Page {
                 width: config.page_width,
                 height: config.page_height,
                 font_family: config.font_family,
                 used_faces: 0,
-                ops: Vec::with_capacity(128),
-                text_pool: Vec::with_capacity(256),
+                ops: if ops_cap > 0 {
+                    Vec::with_capacity(ops_cap)
+                } else {
+                    Vec::new()
+                },
+                text_pool: if pool_cap > 0 {
+                    Vec::with_capacity(pool_cap)
+                } else {
+                    Vec::new()
+                },
             },
             y,
             left,
@@ -316,11 +336,11 @@ impl<'a> Layouter<'a> {
             scratch_runs: Vec::with_capacity(64),
             words_soa: ParagraphSoA::with_capacity(256),
             line_descriptors: Vec::with_capacity(32),
-            cell_words_soa: ParagraphSoA::with_capacity(64),
-            cell_lines: Vec::with_capacity(16),
-            cell_line_spans: Vec::with_capacity(8),
+            cell_words_soa: ParagraphSoA::with_capacity(128),
+            cell_lines: Vec::with_capacity(32),
+            cell_line_spans: Vec::with_capacity(32),
             registry: IndexRegistry::new(),
-            is_dry_run: false,
+            is_dry_run,
             current_sec_idx: 0,
             current_fig_idx: 0,
             current_tbl_idx: 0,
@@ -374,6 +394,11 @@ impl<'a> Layouter<'a> {
     }
 
     pub(crate) fn new_page(&mut self) {
+        let (ops, text_pool) = if self.is_dry_run {
+            (Vec::new(), Vec::new())
+        } else {
+            (Vec::with_capacity(256), Vec::with_capacity(1024))
+        };
         let previous_page = std::mem::replace(
             &mut self.current_page,
             Page {
@@ -381,8 +406,8 @@ impl<'a> Layouter<'a> {
                 height: self.page_height,
                 font_family: self.font_family,
                 used_faces: 0,
-                ops: Vec::with_capacity(128),
-                text_pool: Vec::with_capacity(256),
+                ops,
+                text_pool,
             },
         );
         self.pages.push(previous_page);
@@ -740,8 +765,9 @@ impl<'a> Layouter<'a> {
             self.paint_inlines_at_size(title, Face::Bold, 18.0, title_x, self.y);
             self.y -= title_leading + 4.0;
         } else {
-            let lines = self.cell_lines.clone();
-            for line_desc in lines {
+            let line_count = self.cell_lines.len();
+            for i in 0..line_count {
+                let line_desc = self.cell_lines[i];
                 let line_x = self.left + self.left_skip + (max_w - line_desc.line_w).max(0.0) * 0.5;
                 self.paint_cell_line_at(
                     line_desc.start_word as usize,
@@ -857,8 +883,9 @@ impl<'a> Layouter<'a> {
             );
             self.y -= font_size + skip_after;
         } else {
-            let lines = self.cell_lines.clone();
-            for (line_idx, line_desc) in lines.into_iter().enumerate() {
+            let line_count = self.cell_lines.len();
+            for line_idx in 0..line_count {
+                let line_desc = self.cell_lines[line_idx];
                 let line_x = self.left + self.left_skip + if line_idx == 0 { num_w } else { 0.0 };
                 self.paint_cell_line_at(
                     line_desc.start_word as usize,
@@ -952,8 +979,9 @@ impl<'a> Layouter<'a> {
             } else {
                 self.cell_lines.clear();
                 self.break_cell_words_into_lines(0, self.cell_words_soa.len(), cap_max_w);
-                let lines = self.cell_lines.clone();
-                for (idx, line_desc) in lines.into_iter().enumerate() {
+                let line_count = self.cell_lines.len();
+                for idx in 0..line_count {
+                    let line_desc = self.cell_lines[idx];
                     let cur_y = self.y;
                     self.paint_cell_line(
                         line_desc.start_word as usize,
@@ -961,7 +989,7 @@ impl<'a> Layouter<'a> {
                         cap_x,
                         cur_y,
                     );
-                    if idx + 1 < self.cell_lines.len() {
+                    if idx + 1 < line_count {
                         self.y -= self.base_leading;
                     }
                 }
@@ -1496,7 +1524,7 @@ impl<'a> Layouter<'a> {
                 continue;
             }
             if k == WordKind::Math {
-                if let Some(node) = self.words_soa.math_nodes[i] {
+                if let Some(node) = self.words_soa.get_math(i) {
                     let m_box = crate::math::render_math(
                         node,
                         self.base_font_size,
@@ -1727,7 +1755,7 @@ impl<'a> Layouter<'a> {
                 continue;
             }
             if k == WordKind::Math {
-                if let Some(node) = self.cell_words_soa.math_nodes[i] {
+                if let Some(node) = self.cell_words_soa.get_math(i) {
                     let m_box = crate::math::render_math(
                         node,
                         font_size,
@@ -1924,13 +1952,19 @@ pub enum WordKind {
     Math,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SparseMathNode<'a> {
+    pub word_idx: u32,
+    pub node: &'a crate::math::MathNode<'a>,
+}
+
 #[derive(Default)]
 pub struct ParagraphSoA<'a> {
     pub widths: Vec<f32>,
     pub kinds: Vec<WordKind>,
     pub texts: Vec<&'a str>,
     pub faces: Vec<Face>,
-    pub math_nodes: Vec<Option<&'a crate::math::MathNode<'a>>>,
+    pub math_nodes: Vec<SparseMathNode<'a>>,
 }
 
 impl<'a> ParagraphSoA<'a> {
@@ -1944,7 +1978,7 @@ impl<'a> ParagraphSoA<'a> {
             kinds: Vec::with_capacity(cap),
             texts: Vec::with_capacity(cap),
             faces: Vec::with_capacity(cap),
-            math_nodes: Vec::with_capacity(cap),
+            math_nodes: Vec::with_capacity(4),
         }
     }
 
@@ -1963,16 +1997,24 @@ impl<'a> ParagraphSoA<'a> {
         self.kinds.push(kind);
         self.texts.push(text);
         self.faces.push(face);
-        self.math_nodes.push(None);
     }
 
     #[inline]
     pub fn push_math(&mut self, width: f32, node: &'a crate::math::MathNode<'a>) {
+        let idx = self.widths.len() as u32;
         self.widths.push(width);
         self.kinds.push(WordKind::Math);
         self.texts.push("");
         self.faces.push(Face::Roman);
-        self.math_nodes.push(Some(node));
+        self.math_nodes.push(SparseMathNode { word_idx: idx, node });
+    }
+
+    #[inline]
+    pub fn get_math(&self, word_idx: usize) -> Option<&'a crate::math::MathNode<'a>> {
+        self.math_nodes
+            .binary_search_by_key(&(word_idx as u32), |m| m.word_idx)
+            .ok()
+            .map(|idx| self.math_nodes[idx].node)
     }
 
     #[inline]
@@ -2003,6 +2045,12 @@ pub struct CellLineRange {
     pub start_word: u16,
     pub word_count: u16,
     pub line_w: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CellSpan {
+    pub start: u16,
+    pub count: u16,
 }
 
 fn inlines_have_break(inls: &[Inline<'_>]) -> bool {

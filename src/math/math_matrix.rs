@@ -20,8 +20,10 @@ pub const MATRIX_STACK_CELLS: usize = 64;
 #[repr(C, align(64))]
 pub struct MatrixGridBuffer {
     pub col_widths: [f32; MATRIX_STACK_COLS],
+    pub col_offsets: [f32; MATRIX_STACK_COLS],
     pub row_heights: [f32; MATRIX_STACK_ROWS],
     pub row_depths: [f32; MATRIX_STACK_ROWS],
+    pub row_baseline_offsets: [f32; MATRIX_STACK_ROWS],
     pub cell_widths: [f32; MATRIX_STACK_CELLS],
 }
 
@@ -30,15 +32,46 @@ impl Default for MatrixGridBuffer {
     fn default() -> Self {
         Self {
             col_widths: [0.0; MATRIX_STACK_COLS],
+            col_offsets: [0.0; MATRIX_STACK_COLS],
             row_heights: [0.0; MATRIX_STACK_ROWS],
             row_depths: [0.0; MATRIX_STACK_ROWS],
+            row_baseline_offsets: [0.0; MATRIX_STACK_ROWS],
             cell_widths: [0.0; MATRIX_STACK_CELLS],
         }
     }
 }
 
+impl MatrixGridBuffer {
+    /// Computes column offsets, total matrix width, row baseline offsets, and total content height
+    /// directly within the 64-byte aligned stack buffer in a single SIMD-friendly pass.
+    #[inline(always)]
+    pub fn compute_metrics(
+        &mut self,
+        num_cols: usize,
+        num_rows: usize,
+        env_kind: MatrixEnvKind,
+        font_size: f32,
+        row_sep: f32,
+    ) -> (f32, f32) {
+        let matrix_w = MatrixLayoutMetricsEngine::compute_col_offsets_and_width(
+            &self.col_widths[..num_cols],
+            &mut self.col_offsets[..num_cols],
+            env_kind,
+            font_size,
+            num_rows,
+        );
+        let total_content_h = MatrixLayoutMetricsEngine::compute_row_baseline_offsets_and_total_height(
+            &self.row_heights[..num_rows],
+            &self.row_depths[..num_rows],
+            &mut self.row_baseline_offsets[..num_rows],
+            row_sep,
+        );
+        (matrix_w, total_content_h)
+    }
+}
+
 const _: () = assert!(core::mem::align_of::<MatrixGridBuffer>() == 64);
-const _: () = assert!(core::mem::size_of::<MatrixGridBuffer>() == 448);
+const _: () = assert!(core::mem::size_of::<MatrixGridBuffer>() == 576);
 
 /// Canonical typographic metrics engine for matrices, cases, and multiline environments.
 pub struct MatrixLayoutMetricsEngine;
@@ -117,6 +150,127 @@ impl MatrixLayoutMetricsEngine {
             }
             MatrixEnvKind::Matrix => {
                 1.0 * font_size // 2 * \arraycolsep = 10pt = 1em
+            }
+        }
+    }
+
+    /// Computes cumulative column offsets and total matrix width.
+    ///
+    /// Evaluates inter-column spacing in a single pass according to environment rules
+    /// (e.g., Aligned equation pairs, Multline gaps, Cases quad, etc.).
+    #[inline(always)]
+    pub fn compute_col_offsets_and_width(
+        col_widths: &[f32],
+        col_offsets: &mut [f32],
+        env_kind: MatrixEnvKind,
+        font_size: f32,
+        num_rows: usize,
+    ) -> f32 {
+        let num_cols = col_widths.len();
+        if num_cols == 0 {
+            return 0.0;
+        }
+
+        let mut curr_x = 0.0f32;
+        let multline_gap = 1.0 * font_size;
+
+        for c in 0..num_cols {
+            col_offsets[c] = curr_x;
+            let gap = Self::col_gap(env_kind, c, font_size);
+            curr_x += col_widths[c] + gap;
+        }
+
+        let mut matrix_w: f32 = col_widths.iter().sum::<f32>();
+        if env_kind == MatrixEnvKind::Multline {
+            if num_rows > 1 {
+                matrix_w += 2.0 * multline_gap;
+            }
+        } else if env_kind == MatrixEnvKind::Aligned {
+            for c in 0..num_cols {
+                if c % 2 == 1 {
+                    matrix_w += 1.0 * font_size;
+                }
+            }
+        } else {
+            for c in 0..num_cols.saturating_sub(1) {
+                matrix_w += Self::col_gap(env_kind, c, font_size);
+            }
+        }
+
+        matrix_w
+    }
+
+    /// Computes cumulative row baseline offsets from top and total content height.
+    #[inline(always)]
+    pub fn compute_row_baseline_offsets_and_total_height(
+        row_heights: &[f32],
+        row_depths: &[f32],
+        row_baseline_offsets: &mut [f32],
+        row_sep: f32,
+    ) -> f32 {
+        let num_rows = row_heights.len();
+        if num_rows == 0 {
+            return 0.0;
+        }
+
+        row_baseline_offsets[0] = row_heights[0];
+        for r in 1..num_rows {
+            row_baseline_offsets[r] =
+                row_baseline_offsets[r - 1] + row_depths[r - 1] + row_sep + row_heights[r];
+        }
+
+        row_baseline_offsets[num_rows - 1] + row_depths[num_rows - 1]
+    }
+
+    /// Resolves canonical alignment for a given column index.
+    #[inline(always)]
+    pub fn resolve_alignment(
+        env_kind: MatrixEnvKind,
+        col_alignments: &[ColAlign],
+        col_idx: usize,
+    ) -> ColAlign {
+        let fallback_align = match env_kind {
+            MatrixEnvKind::Aligned => {
+                if col_idx.is_multiple_of(2) {
+                    ColAlign::Right
+                } else {
+                    ColAlign::Left
+                }
+            }
+            MatrixEnvKind::Cases => ColAlign::Left,
+            MatrixEnvKind::Gather => ColAlign::Center,
+            _ => ColAlign::Center,
+        };
+        col_alignments.get(col_idx).copied().unwrap_or(fallback_align)
+    }
+
+    /// Computes horizontal offset within a cell for content alignment.
+    #[inline(always)]
+    pub fn compute_cell_offset_x(
+        env_kind: MatrixEnvKind,
+        align: ColAlign,
+        col_w: f32,
+        cell_w: f32,
+        matrix_w: f32,
+        r_idx: usize,
+        num_rows: usize,
+        multline_gap: f32,
+    ) -> f32 {
+        if env_kind == MatrixEnvKind::Multline {
+            if num_rows == 1 {
+                (matrix_w - cell_w) * 0.5
+            } else if r_idx == 0 {
+                multline_gap
+            } else if r_idx == num_rows - 1 {
+                matrix_w - multline_gap - cell_w
+            } else {
+                (matrix_w - cell_w) * 0.5
+            }
+        } else {
+            match align {
+                ColAlign::Left => 0.0,
+                ColAlign::Center => (col_w - cell_w) * 0.5,
+                ColAlign::Right => col_w - cell_w,
             }
         }
     }

@@ -417,3 +417,16 @@ pub fn vector_glyph_for_unicode(unicode: u32, family: crate::backend::fonts::Fon
     }
 }
 
+/// Returns the vertical coordinate of the radical variant top right connector hook in 1/1000 units.
+#[inline(always)]
+pub fn vector_radical_hook_y(glyph_id: u16) -> i16 {
+    match glyph_id {
+        815 | 1657 => 40,
+        5009 | 1658 => 850,
+        5010 | 1659 => 1150,
+        5011 | 1660 => 1450,
+        5012 => 1750,
+        _ => 40,
+    }
+}
+

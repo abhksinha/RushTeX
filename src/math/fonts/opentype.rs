@@ -59,6 +59,16 @@ fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
     }
 }
 
+/// Four corners for OpenType math staircase kerning (mlist.c find_math_kern).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MathKernCorner {
+    TopRight = 0,
+    TopLeft = 1,
+    BottomRight = 2,
+    BottomLeft = 3,
+}
+
 impl<'a> OpenTypeFont<'a> {
     /// Constructs a font reference from a raw OpenType/TrueType binary buffer.
     #[inline(always)]
@@ -616,6 +626,52 @@ impl<'a> OpenTypeFont<'a> {
         read_i16(kern_table, kern_val_offset)
     }
 
+    /// Evaluates staircase math kerning at a given corner and correction height,
+    /// matching mlist.c math_kern_at.
+    pub fn glyph_math_kern_at(&self, glyph_id: u16, corner: MathKernCorner, correction_height: i16) -> Option<i16> {
+        let math = self.math_table()?;
+        let info_offset = read_u16(math, 6)? as usize;
+        let info = math.get(info_offset..)?;
+        let kern_info_offset = read_u16(info, 6)? as usize;
+        if kern_info_offset == 0 {
+            return None;
+        }
+        let table = info.get(kern_info_offset..)?;
+        let coverage_offset = read_u16(table, 0)? as usize;
+        let coverage = table.get(coverage_offset..)?;
+        let index = lookup_coverage(coverage, glyph_id)? as usize;
+        let count = read_u16(table, 2)? as usize;
+        if index >= count {
+            return None;
+        }
+        let rec_offset = 4 + index * 8 + (corner as usize) * 2;
+        let corner_offset = read_u16(table, rec_offset)? as usize;
+        if corner_offset == 0 {
+            return None;
+        }
+        let kern_table = table.get(corner_offset..)?;
+        let height_count = read_u16(kern_table, 0)? as usize;
+        if height_count == 0 {
+            return read_i16(kern_table, 2);
+        }
+        let mut idx = 0;
+        while idx < height_count {
+            let h = read_i16(kern_table, 2 + idx * 4)?;
+            if correction_height < h {
+                break;
+            }
+            idx += 1;
+        }
+        let kern_val_offset = 2 + height_count * 4 + idx * 4;
+        read_i16(kern_table, kern_val_offset)
+    }
+
+    /// Evaluates top-right staircase math kerning at a given correction height,
+    /// matching mlist.c math_kern_at staircase evaluation.
+    pub fn glyph_top_right_math_kern_at(&self, glyph_id: u16, correction_height: i16) -> Option<i16> {
+        self.glyph_math_kern_at(glyph_id, MathKernCorner::TopRight, correction_height)
+    }
+
     /// Returns the count of discrete vertical variants for a delimiter glyph ID via MathVariants.
     pub fn vert_variant_count(&self, glyph_id: u16) -> usize {
         let math = match self.math_table() {
@@ -1010,6 +1066,43 @@ impl<'a> OpenTypeFont<'a> {
     }
 }
 
+/// Computes pairwise math kerning between a nucleus glyph and a script glyph (mlist.c find_math_kern).
+#[allow(clippy::too_many_arguments)]
+pub fn find_math_kern(
+    nuc_font: &OpenTypeFont<'_>,
+    nuc_glyph: u16,
+    nuc_h: i16,
+    nuc_d: i16,
+    script_font: &OpenTypeFont<'_>,
+    script_glyph: u16,
+    script_h: i16,
+    script_d: i16,
+    is_superscript: bool,
+    shift: i16,
+) -> i16 {
+    if is_superscript {
+        let corr_height_top = nuc_h;
+        let corr_height_bot = -script_d + shift;
+        let krn_l1 = nuc_font.glyph_math_kern_at(nuc_glyph, MathKernCorner::TopRight, corr_height_top).unwrap_or(0);
+        let krn_r1 = script_font.glyph_math_kern_at(script_glyph, MathKernCorner::BottomLeft, corr_height_top).unwrap_or(0);
+        let krn1 = krn_l1 + krn_r1;
+        let krn_l2 = nuc_font.glyph_math_kern_at(nuc_glyph, MathKernCorner::TopRight, corr_height_bot).unwrap_or(0);
+        let krn_r2 = script_font.glyph_math_kern_at(script_glyph, MathKernCorner::BottomLeft, corr_height_bot).unwrap_or(0);
+        let krn2 = krn_l2 + krn_r2;
+        krn1.max(krn2)
+    } else {
+        let corr_height_top = script_h - shift;
+        let corr_height_bot = -nuc_d;
+        let krn_l1 = nuc_font.glyph_math_kern_at(nuc_glyph, MathKernCorner::BottomRight, corr_height_top).unwrap_or(0);
+        let krn_r1 = script_font.glyph_math_kern_at(script_glyph, MathKernCorner::TopLeft, corr_height_top).unwrap_or(0);
+        let krn1 = krn_l1 + krn_r1;
+        let krn_l2 = nuc_font.glyph_math_kern_at(nuc_glyph, MathKernCorner::BottomRight, corr_height_bot).unwrap_or(0);
+        let krn_r2 = script_font.glyph_math_kern_at(script_glyph, MathKernCorner::TopLeft, corr_height_bot).unwrap_or(0);
+        let krn2 = krn_l2 + krn_r2;
+        krn1.max(krn2)
+    }
+}
+
 /// Zero-allocation OpenType cmap Format 12 lookup (segmented 32-bit coverage).
 fn lookup_cmap_format_12(subtable: &[u8], unicode: u32) -> Option<u16> {
     let format = read_u16(subtable, 0)?;
@@ -1389,6 +1482,38 @@ fn find_top_dict_private_offset_pos(top_dict: &[u8]) -> Option<usize> {
     }
 }
 
+/// 8192-bit stack-resident bitmask for O(1) glyph reference tracking in CFF subsetting.
+#[repr(C, align(64))]
+#[derive(Clone, Copy)]
+pub struct GlyphBitSet {
+    pub words: [u64; 128],
+}
+
+impl GlyphBitSet {
+    #[inline(always)]
+    pub const fn new() -> Self {
+        Self { words: [0u64; 128] }
+    }
+
+    #[inline(always)]
+    pub fn set(&mut self, gid: u16) {
+        let idx = (gid as usize) >> 6;
+        if idx < 128 {
+            self.words[idx] |= 1u64 << ((gid as usize) & 63);
+        }
+    }
+
+    #[inline(always)]
+    pub fn contains(&self, gid: usize) -> bool {
+        let idx = gid >> 6;
+        if idx < 128 {
+            (self.words[idx] & (1u64 << (gid & 63))) != 0
+        } else {
+            false
+        }
+    }
+}
+
 /// Subsets a CFF 1.0 table by preserving only the CharStrings for referenced Glyph IDs
 /// and replacing all unused glyphs with a 1-byte `endchar` operator (14).
 ///
@@ -1432,34 +1557,37 @@ pub fn subset_cff(cff: &[u8], used_gids: &[u16]) -> Option<Vec<u8>> {
     let priv_operand_pos = find_top_dict_private_offset_pos(top_dict)?;
 
     // Build boolean lookup for used glyphs (GID 0 is always preserved for .notdef)
-    let mut is_used = vec![false; cs_count];
-    if !is_used.is_empty() {
-        is_used[0] = true;
-    }
+    let mut bitset = GlyphBitSet::new();
+    bitset.set(0);
     for &gid in used_gids {
         if (gid as usize) < cs_count {
-            is_used[gid as usize] = true;
+            bitset.set(gid);
         }
     }
 
-    // Build new CharStrings INDEX
-    let mut new_offsets = Vec::with_capacity(cs_count + 1);
-    new_offsets.push(1usize);
-    let mut cur_offset = 1usize;
-
-    for (gid, &used) in is_used.iter().enumerate() {
-        let len = if used {
-            let start = read_cff_offset(cff, cs_offsets + gid * cs_off_size, cs_off_size)?.saturating_sub(1);
-            let end = read_cff_offset(cff, cs_offsets + (gid + 1) * cs_off_size, cs_off_size)?.saturating_sub(1);
-            end.saturating_sub(start)
-        } else {
-            1 // 0x0E (endchar)
-        };
-        cur_offset = cur_offset.checked_add(len)?;
-        new_offsets.push(cur_offset);
+    // Fast O(used_gids) calculation of total CharStrings data length:
+    // Every glyph occupies at least 1 byte (endchar = 14).
+    // For each unique referenced glyph, add (end - start) - 1.
+    let mut total_data_len = cs_count;
+    for (w_idx, &word) in bitset.words.iter().enumerate() {
+        if word != 0 {
+            let base = w_idx << 6;
+            let mut temp = word;
+            while temp != 0 {
+                let trailing = temp.trailing_zeros() as usize;
+                let gid = base + trailing;
+                if gid < cs_count {
+                    let start = read_cff_offset(cff, cs_offsets + gid * cs_off_size, cs_off_size)?.saturating_sub(1);
+                    let end = read_cff_offset(cff, cs_offsets + (gid + 1) * cs_off_size, cs_off_size)?.saturating_sub(1);
+                    let actual_len = end.saturating_sub(start);
+                    total_data_len = total_data_len.checked_add(actual_len.saturating_sub(1))?;
+                }
+                temp &= temp - 1;
+            }
+        }
     }
 
-    let total_data_len = cur_offset.saturating_sub(1);
+    let cur_offset = total_data_len.checked_add(1)?;
     let new_off_size = if cur_offset <= 0xFF {
         1
     } else if cur_offset <= 0xFFFF {
@@ -1476,26 +1604,42 @@ pub fn subset_cff(cff: &[u8], used_gids: &[u16]) -> Option<Vec<u8>> {
     // Copy up to cs_off
     new_cff.extend_from_slice(&cff[..cs_off]);
 
-    // Write new CharStrings INDEX
+    // Write new CharStrings INDEX header
     new_cff.extend_from_slice(&(cs_count as u16).to_be_bytes());
     new_cff.push(new_off_size as u8);
-    for &off_val in &new_offsets {
-        match new_off_size {
-            1 => new_cff.push(off_val as u8),
-            2 => new_cff.extend_from_slice(&(off_val as u16).to_be_bytes()),
+
+    #[inline(always)]
+    fn write_offset_val(buf: &mut Vec<u8>, val: usize, off_size: usize) {
+        match off_size {
+            1 => buf.push(val as u8),
+            2 => buf.extend_from_slice(&(val as u16).to_be_bytes()),
             3 => {
-                new_cff.push((off_val >> 16) as u8);
-                new_cff.push((off_val >> 8) as u8);
-                new_cff.push(off_val as u8);
+                buf.push((val >> 16) as u8);
+                buf.push((val >> 8) as u8);
+                buf.push(val as u8);
             }
-            4 => new_cff.extend_from_slice(&(off_val as u32).to_be_bytes()),
-            _ => return None,
+            _ => buf.extend_from_slice(&(val as u32).to_be_bytes()),
         }
     }
 
-    // Write CharStrings payload
-    for (gid, &used) in is_used.iter().enumerate() {
-        if used {
+    // Write offset table directly without intermediate heap allocations
+    let mut running_off = 1usize;
+    write_offset_val(&mut new_cff, running_off, new_off_size);
+    for gid in 0..cs_count {
+        let len = if bitset.contains(gid) {
+            let start = read_cff_offset(cff, cs_offsets + gid * cs_off_size, cs_off_size)?.saturating_sub(1);
+            let end = read_cff_offset(cff, cs_offsets + (gid + 1) * cs_off_size, cs_off_size)?.saturating_sub(1);
+            end.saturating_sub(start)
+        } else {
+            1
+        };
+        running_off += len;
+        write_offset_val(&mut new_cff, running_off, new_off_size);
+    }
+
+    // Write CharStrings payload directly
+    for gid in 0..cs_count {
+        if bitset.contains(gid) {
             let start = read_cff_offset(cff, cs_offsets + gid * cs_off_size, cs_off_size)?.saturating_sub(1);
             let end = read_cff_offset(cff, cs_offsets + (gid + 1) * cs_off_size, cs_off_size)?.saturating_sub(1);
             let slice = cff.get(cs_data + start..cs_data + end)?;

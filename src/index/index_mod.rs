@@ -21,7 +21,10 @@ use crate::frontend::ast::Block;
 
 /// Scans the document block tree and populates the registry with all headings,
 /// figure captions, and table captions in document order prior to layout.
-pub fn pre_scan_entries<'a>(blocks: &'a [Block<'a>], registry: &mut IndexRegistry<'a>) {
+pub fn pre_scan_entries<'a>(
+    blocks: &[Block<'a>],
+    registry: &mut IndexRegistry<'a>,
+) {
     let mut section_counters = [0u16; 4];
     let mut fig_counter = 0u32;
     let mut table_counter = 0u32;
@@ -36,7 +39,7 @@ pub fn pre_scan_entries<'a>(blocks: &'a [Block<'a>], registry: &mut IndexRegistr
 }
 
 fn scan_inner<'a>(
-    blocks: &'a [Block<'a>],
+    blocks: &[Block<'a>],
     registry: &mut IndexRegistry<'a>,
     section_counters: &mut [u16; 4],
     fig_counter: &mut u32,
@@ -56,7 +59,7 @@ fn scan_inner<'a>(
                     registry.toc_entries.push(TocEntry {
                         level: *level,
                         number: *section_counters,
-                        title,
+                        title: title.clone(),
                         page: 1,
                     });
                 }
@@ -65,7 +68,7 @@ fn scan_inner<'a>(
                 *fig_counter += 1;
                 registry.figure_entries.push(FigureEntry {
                     number: *fig_counter,
-                    caption: &f.caption,
+                    caption: f.caption.clone(),
                     page: 1,
                 });
             }
@@ -74,7 +77,7 @@ fn scan_inner<'a>(
                     *table_counter += 1;
                     registry.table_entries.push(TableEntry {
                         number: *table_counter,
-                        caption: cap,
+                        caption: cap.clone(),
                         page: 1,
                     });
                 }

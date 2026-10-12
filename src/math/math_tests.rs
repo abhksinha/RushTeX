@@ -20,6 +20,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<MathStyle>(), 1);
         assert_eq!(std::mem::size_of::<WordKind>(), 1);
         assert_eq!(std::mem::size_of_val(&MATH_SPACING_TABLE), 64);
+        assert_eq!(std::mem::size_of_val(&crate::math::MATH_SPACING_MU_TABLE), 64);
+        assert_eq!(std::mem::align_of_val(&crate::math::MATH_SPACING_MU_TABLE), 64);
         assert_eq!(
             std::mem::size_of::<crate::math::math_fonts::MathFontParameters>(),
             64
@@ -78,6 +80,8 @@ mod tests {
 
     #[test]
     fn test_math_spacing_table_rules() {
+        use crate::math::math_spacing::atom_spacing_mu;
+
         // Ord followed by Bin in display style gets med_space (4/18 em = 0.2222...)
         let sp = inter_atom_spacing(MathAtomKind::Ord, MathAtomKind::Bin, true);
         assert!((sp - 4.0 / 18.0).abs() < 1e-4);
@@ -89,6 +93,20 @@ mod tests {
         // In script style, Ord followed by Bin has zero space
         let sp_script = inter_atom_spacing(MathAtomKind::Ord, MathAtomKind::Bin, false);
         assert_eq!(sp_script, 0.0);
+
+        // Verify branchless atom_spacing_mu across representative atom pairs
+        assert_eq!(atom_spacing_mu(MathAtomKind::Ord, MathAtomKind::Op, true), 3);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Ord, MathAtomKind::Op, false), 3);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Ord, MathAtomKind::Bin, true), 4);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Ord, MathAtomKind::Bin, false), 0);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Ord, MathAtomKind::Rel, true), 5);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Ord, MathAtomKind::Rel, false), 0);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Ord, MathAtomKind::Ord, true), 0);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Open, MathAtomKind::Ord, true), 0);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Close, MathAtomKind::Op, true), 3);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Punct, MathAtomKind::Ord, true), 3);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Inner, MathAtomKind::Bin, true), 4);
+        assert_eq!(atom_spacing_mu(MathAtomKind::Inner, MathAtomKind::Bin, false), 0);
     }
 
     #[test]
@@ -2389,6 +2407,18 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         assert_eq!(nx, 5.0);
         assert_eq!(dx, 0.0);
 
+        let (tw_p, nx_p, dx_p) = NumeratorDenominatorAligner::align_centered_padded(10.0, 20.0, 1.0);
+        assert_eq!(tw_p, 22.0);
+        assert_eq!(nx_p, 6.0);
+        assert_eq!(dx_p, 1.0);
+
+        use crate::math::math_fraction::FractionShiftResolver;
+        let cm_params = crate::math::math_fonts::math_font_parameters(crate::backend::fonts::FontFamily::ComputerModern);
+        let res_frac = FractionShiftResolver::resolve(MathStyle::Display, true, 2.5, 0.4, 1.0, 4.0, 1.0, &cm_params);
+        assert!(res_frac.num_shift > 0.0);
+        assert!(res_frac.den_shift > 0.0);
+        assert_eq!(res_frac.rule_thickness, 0.4);
+
         assert_eq!(std::mem::size_of::<BinomialDelimiterCache>(), 64);
         assert_eq!(std::mem::align_of::<BinomialDelimiterCache>(), 64);
         assert_eq!(BINOMIAL_DELIMITER_CACHE.resolve_glyph(8.0), 0x28);
@@ -2474,6 +2504,24 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         assert_eq!(std::mem::size_of::<TransientScriptPair>(), 32);
         assert_eq!(std::mem::align_of::<TransientScriptPair>(), 32);
 
+        use crate::math::math_scripts::{ScriptShiftResolver, SCRIPT_STYLE_TO_SUP_IDX};
+        assert_eq!(SCRIPT_STYLE_TO_SUP_IDX[MathStyle::Display as usize], 1);
+        assert_eq!(SCRIPT_STYLE_TO_SUP_IDX[MathStyle::CrampedDisplay as usize], 2);
+        assert_eq!(SCRIPT_STYLE_TO_SUP_IDX[MathStyle::Text as usize], 0);
+        assert_eq!(SCRIPT_STYLE_TO_SUP_IDX[MathStyle::CrampedText as usize], 2);
+
+        let font_params = crate::math::math_fonts::math_font_parameters(crate::backend::fonts::FontFamily::ComputerModern);
+        let resolved = ScriptShiftResolver::resolve(
+            true, true, MathStyle::Display, true, 8.0, 2.0, 1.5, 4.0, 4.5, 1.0, &font_params,
+        );
+        assert!(resolved.sup_shift > 0.0);
+        assert!(resolved.sub_shift > 0.0);
+        let pair = TransientScriptPair::new(MathBox::with_dims(5.0, 6.0, 1.0), MathBox::with_dims(4.0, 3.0, 2.0));
+        assert!(pair.total_height(true, 8.0, resolved.sup_shift) >= 8.0);
+        assert!(pair.total_depth(true, 2.0, resolved.sub_shift) >= 2.0);
+        let r_bound = pair.right_bound(true, true, 0.0, 10.0, 10.0, 10.0, 0.5);
+        assert!(r_bound >= 15.5);
+
         // BATCH 6: Big Operators & Limits (Items 31–36)
         assert_eq!(std::mem::size_of::<PackedBigOpMetrics>(), 16);
         assert!(OperatorLimitSwitch::should_render_limits(
@@ -2496,15 +2544,41 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
             AtomLimits::NoLimits,
             MathStyle::Display
         ));
+        assert!(OperatorLimitSwitch::is_display_limits(true, MathStyle::Display));
+        assert!(!OperatorLimitSwitch::is_display_limits(true, MathStyle::Text));
+        assert!(OperatorLimitSwitch::is_text_operator("lim"));
+        assert!(!OperatorLimitSwitch::is_text_operator("sum"));
+        assert!(OperatorLimitSwitch::is_integral_operator("iint"));
+        assert!(!OperatorLimitSwitch::is_integral_operator("prod"));
 
         assert_eq!(std::mem::size_of::<BigOpVariantTier>(), 64);
         assert_eq!(std::mem::align_of::<BigOpVariantTier>(), 64);
         assert_eq!(BIG_OP_VARIANT_TIER.text_codes[0], 0xE5); // Sum
         assert_eq!(BIG_OP_VARIANT_TIER.display_codes[0], 0x72);
 
+        // Branchless CMEX glyph code resolution
+        assert_eq!(BigOpVariantTier::resolve_cmex_code("prod", false), 0x51);
+        assert_eq!(BigOpVariantTier::resolve_cmex_code("prod", true), 0x59);
+        assert_eq!(BigOpVariantTier::resolve_cmex_code("sum", false), 0x50);
+        assert_eq!(BigOpVariantTier::resolve_cmex_code("sum", true), 0x58);
+        assert_eq!(BigOpVariantTier::resolve_integral_cmex_code("int", false), 0x52);
+        assert_eq!(BigOpVariantTier::resolve_integral_cmex_code("int", true), 0x5A);
+        assert_eq!(BigOpVariantTier::resolve_integral_cmex_code("oint", false), 0x48);
+        assert_eq!(BigOpVariantTier::resolve_integral_cmex_code("oint", true), 0x49);
+
         let (oh_up, oh_dn) = IntegralOverhangCorrector::limit_offsets(2.0);
         assert_eq!(oh_up, 1.0);
         assert_eq!(oh_dn, -1.0);
+        let int_off = IntegralOverhangCorrector::integral_offset(10.0, 10.0, false);
+        assert!((int_off - (10.0 - 3.0 / 18.0 * 10.0)).abs() < 1e-5);
+        let (int_total_w, _) = IntegralOverhangCorrector::total_integral_width("iint", 10.0, 10.0, false);
+        assert_eq!(int_total_w, 10.0 + int_off);
+
+        use crate::math::math_bigop::{BigOpShiftResolver, Rule13OperatorAxis};
+        let delta_y = Rule13OperatorAxis::compute_delta_y(false, 2.5, 8.0, 3.0);
+        assert_eq!(delta_y, 0.0);
+        let delta_y_text = Rule13OperatorAxis::compute_delta_y(true, 2.5, 8.0, 3.0);
+        assert_eq!(delta_y_text, 0.0);
 
         let big_metrics = PackedBigOpMetrics::new(1.0, 1.0, 0.5, 0.5);
         let (up_s, dn_s) = LimitClearanceGovernor::compute_limit_shifts(
@@ -2517,6 +2591,23 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         assert_eq!(up_s, 8.0 + 1.0 + 1.0);
         assert_eq!(dn_s, 3.0 + 1.0 + 3.0);
 
+        let (sup_pos_y, sub_pos_y) = LimitClearanceGovernor::compute_limit_positions(
+            10.0,
+            2.0,
+            1.0,
+            3.0,
+            &big_metrics,
+        );
+        assert_eq!(sup_pos_y, 10.0 + 1.0 + 1.0);
+        assert_eq!(sub_pos_y, 2.0 - 1.0 - 3.0);
+
+        let l_box = LimitClearanceGovernor::compute_limits_box(
+            12.0, 0.0, 8.0, 2.0, true, 12.0, 4.0, true, -6.0, 1.0, 0.5, 10.0,
+        );
+        assert!(l_box.w >= 12.0);
+        assert_eq!(l_box.h, 16.5);
+        assert_eq!(l_box.d, 7.5);
+
         let (mw, ox, ux, lx) =
             OperatorCenteringEngine::center_limits(10.0, Some(6.0), Some(8.0), 1.0, -1.0);
         assert_eq!(mw, 10.0);
@@ -2524,7 +2615,50 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         assert_eq!(ux, 2.0 + 1.0);
         assert_eq!(lx, 1.0 - 1.0);
 
+        let (mw_p, ox_p, ux_p, lx_p) = OperatorCenteringEngine::center_limits_positioned(
+            5.0, 10.0, 6.0, 8.0, true, true, 0.5,
+        );
+        assert_eq!(mw_p, 10.0);
+        assert_eq!(ox_p, 5.0);
+        assert_eq!(ux_p, 5.0 + 2.0 + 0.5);
+        assert_eq!(lx_p, 5.0 + 1.0 - 0.5);
+
+        let resolved_limits = BigOpShiftResolver::resolve_limit_metrics(
+            crate::backend::fonts::FontFamily::ComputerModern,
+            10.0,
+            1.0,
+            &cm_params,
+        );
+        assert!(resolved_limits.upper_clearance > 0.0);
+        assert!(resolved_limits.lower_clearance > 0.0);
+
+        let (sx_rel, bx_rel, sup_shift, sub_shift) = BigOpShiftResolver::resolve_side_scripts(
+            "int", true, true, 10.0, 8.0, 3.0, 1.0, 0.0, 10.0, 1.0, true, true, &cm_params,
+        );
+        assert_eq!(sx_rel, 10.0 + 0.5);
+        assert_eq!(bx_rel, 10.0 - 2.2);
+        assert!(sup_shift >= 9.5);
+        assert!(sub_shift >= 7.5);
+
+        let (adj_sup, adj_sub) = BigOpShiftResolver::enforce_side_script_clearance(
+            2.0, 2.0, 1.0, 1.0, 4.0, 4.5,
+        );
+        assert!((adj_sup - 4.6).abs() < 1e-5);
+        assert!((adj_sub - 1.4).abs() < 1e-5);
+
+        let side_box = BigOpShiftResolver::compute_side_scripts_box(
+            10.0, 0.0, 8.0, 2.0, true, 10.5, 4.0, 9.0, 3.0, true, 8.0, 4.0, 6.0, 1.0,
+        );
+        assert_eq!(side_box.w, 14.5);
+        assert_eq!(side_box.h, 12.0);
+        assert_eq!(side_box.d, 7.0);
+
         // BATCH 7: Extensible Delimiters (Items 37–41)
+        use crate::math::math_delim::{
+            DelimiterBarRenderer, ExtensibleAssemblyMetrics, OverUnderDelimiterEngine,
+            CMEX_PAREN_RECIPE,
+        };
+        assert_eq!(std::mem::size_of::<ExtensibleAssemblyMetrics>(), 16);
         let delim_match = DelimiterPairMatch::new(DelimiterPairMatch::PAREN);
         assert!(!delim_match.is_null());
         let null_match = DelimiterPairMatch::new(DelimiterPairMatch::NULL);
@@ -2546,8 +2680,46 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         let target_dh = DelimiterSizingGovernor::target_height(10.0, 5.0, 2.5, 10.0);
         assert!(target_dh >= 10.0);
 
+        let atop_min_d = DelimiterSizingGovernor::atop_min_delimiter(true, 12000, 0.001, 10.0);
+        assert!((atop_min_d - 12.0).abs() < 1e-5);
+        let atop_min_t = DelimiterSizingGovernor::atop_min_delimiter(false, 12000, 0.001, 10.0);
+        assert_eq!(atop_min_t, 12.0);
+
+        let mut measure_ctx = crate::math::math_layout::MathLayoutContext::new(
+            10.0,
+            crate::backend::fonts::FontFamily::ComputerModern,
+            None,
+            None,
+            None,
+            MathStyle::Display,
+        );
+        let bar_res = DelimiterBarRenderer::render_bar(&mut measure_ctx, "|", 0.0, 5.0, 10.0, 10.0, 0.4);
+        assert!(bar_res.is_some());
+        assert_eq!(bar_res.unwrap().1, 10.0);
+
+        let d_box = DelimiterSizingGovernor::compute_delimited_box(
+            5.0, 15.0, 20.0, 10.0, 4.0, 5.0, 15.0, 15.0, 2.5,
+        );
+        assert_eq!(d_box.w, 30.0);
+        assert_eq!(d_box.h, 10.0);
+        assert_eq!(d_box.d, 5.0);
+
         let reps = ExtensibleAssemblyEngine::calculate_repeats(40.0, 10.0, 15.0);
         assert_eq!(reps, 3);
+
+        let asm_geom = ExtensibleAssemblyEngine::compute_assembly_geometry(
+            CMEX_PAREN_RECIPE,
+            40.0,
+            10.0,
+        );
+        assert!(asm_geom.width > 0.0);
+        assert!(asm_geom.total_h >= 40.0);
+        assert!(asm_geom.n_rep >= 1);
+
+        let over_s = OverUnderDelimiterEngine::compute_over_shift(1.0, 2.0, 8.0, 1.0, MathStyle::Display);
+        assert!(over_s >= 8.0 + 3.0);
+        let under_s = OverUnderDelimiterEngine::compute_under_shift(1.0, 2.0, 4.0, 1.0, MathStyle::Display);
+        assert!(under_s >= 4.0 + 3.0);
 
         // BATCH 8: Matrices & Vcenter (Items 42–46)
         let mut col_soa = MatrixColumnSoA::with_capacity(3);
@@ -3726,5 +3898,877 @@ Hello world without any math.
         // 4. End-to-End Searchability & Text Extraction Overlay
         assert!(pdf_str.contains("Tj\n"), "Must contain visible and/or invisible text operators");
     }
+
+    #[test]
+    fn test_advanced_mathematical_typesetting_latex_parity() {
+        use crate::font_metrics::FontFamily;
+        use crate::math::math_parser::parse_math_str;
+        use crate::math::math_layout::measure_math;
+        use crate::math::math_ast::MathStyle;
+
+        // Ground-truth measurements directly from TeX Live / pdfLaTeX ($ ... $ mode)
+        let advanced_corpus: [(&str, f32, f32, f32); 16] = [
+            (r"\frac{1}{1 + \frac{1}{x}}", 18.1620, 8.4480, 6.4160),
+            (r"\binom{n}{k}", 14.1020, 8.5000, 3.5000),
+            (r"\sqrt[3]{x}", 14.6750, 8.0050, 2.3950),
+            (r"\sqrt[3]{x^2+1}", 36.3823, 9.1340, 1.2660),
+            (r"\left( \frac{a}{b} \right)", 15.9000, 8.5000, 3.5000),
+            (r"\left[ \frac{1}{2} \right]", 14.7230, 8.5000, 3.5000),
+            (r"\left\{ \frac{x^2}{y^2} \right\}", 24.1810, 11.5000, 6.5000),
+            (r"\sum_{i=1}^n x_i", 35.2246, 7.5000, 3.0000),
+            (r"\prod_{k=1}^m a_k", 36.9506, 7.5000, 3.0000),
+            (r"\int_0^\infty e^{-x^2} dx", 47.5816, 9.8670, 3.5000),
+            (r"\hat{x} + \vec{A} + \bar{z}", 42.7587, 9.6600, 0.8300),
+            (r"\overline{x+y}", 23.2043, 7.8300, 1.9400),
+            (r"\underline{a-b}", 21.8043, 6.9400, 2.8300),
+            (r"\begin{matrix} a & b \\ c & d \end{matrix}", 20.4900, 14.5000, 9.5000),
+            (r"\begin{pmatrix} 1 & 0 \\ 0 & 1 \end{pmatrix}", 34.7200, 14.5000, 9.5000),
+            (r"\begin{cases} x & x > 0 \\ -x & x \le 0 \end{cases}", 56.8154, 17.5000, 12.5000),
+        ];
+
+        for (idx, &(expr, exp_w, exp_h, exp_d)) in advanced_corpus.iter().enumerate() {
+            let node = parse_math_str(expr);
+            let mb = measure_math(&node, 10.0, FontFamily::ComputerModern, MathStyle::Text);
+
+            let err_w = (mb.w - exp_w).abs();
+            let err_h = (mb.h - exp_h).abs();
+            let err_d = (mb.d - exp_d).abs();
+
+            assert!(
+                err_w < 0.05,
+                "Advanced [{}] '{}' width mismatch: actual={:.4}, expected={:.4}, err={:.4}",
+                idx, expr, mb.w, exp_w, err_w
+            );
+            assert!(
+                err_h < 0.05,
+                "Advanced [{}] '{}' height mismatch: actual={:.4}, expected={:.4}, err={:.4}",
+                idx, expr, mb.h, exp_h, err_h
+            );
+            assert!(
+                err_d < 0.06,
+                "Advanced [{}] '{}' depth mismatch: actual={:.4}, expected={:.4}, err={:.4}",
+                idx, expr, mb.d, exp_d, err_d
+            );
+        }
+    }
+
+    #[test]
+    fn test_chapter_18_fine_points_of_mathematics_typing() {
+        use crate::math::math_ast::{EllipsisKind, MathNode};
+        use crate::math::math_spacing::MathAtomKind;
+
+        // 1. Spacing control sequences
+        let b_thin = measure_math(&parse_math_str(r"x \, y"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_nospace = measure_math(&parse_math_str(r"x y"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let thin_diff = b_thin.w - b_nospace.w;
+        assert!((thin_diff - (3.0 / 18.0 * 10.0)).abs() < 0.01, "Expected thinmuskip 1.6667pt, got {}", thin_diff);
+
+        let b_med = measure_math(&parse_math_str(r"x \: y"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let med_diff = b_med.w - b_nospace.w;
+        assert!((med_diff - (4.0 / 18.0 * 10.0)).abs() < 0.01, "Expected medmuskip 2.2222pt, got {}", med_diff);
+
+        let b_thick = measure_math(&parse_math_str(r"x \; y"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let thick_diff = b_thick.w - b_nospace.w;
+        assert!((thick_diff - (5.0 / 18.0 * 10.0)).abs() < 0.01, "Expected thickmuskip 2.7778pt, got {}", thick_diff);
+
+        let b_neg = measure_math(&parse_math_str(r"x \! y"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let neg_diff = b_nospace.w - b_neg.w;
+        assert!((neg_diff - (3.0 / 18.0 * 10.0)).abs() < 0.01, "Expected negthinmuskip 1.6667pt, got {}", neg_diff);
+
+        // 2. Colon vs \colon
+        let node_colon_rel = parse_math_str(":");
+        assert_eq!(node_colon_rel.atom_kind(), MathAtomKind::Rel);
+        let node_colon_punct = parse_math_str(r"\colon");
+        assert_eq!(node_colon_punct.atom_kind(), MathAtomKind::Punct);
+
+        let b_rel = measure_math(&parse_math_str("f: X"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_punct = measure_math(&parse_math_str(r"f\colon X"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        // Relation has thick space on both sides, punct has space on right only:
+        assert!(b_rel.w > b_punct.w, "Expected relation colon to have wider spacing than punctuation colon");
+
+        // 3. Ellipses (The TeXbook Chapter 18)
+        let node_ldots = parse_math_str(r"\ldots");
+        assert_eq!(node_ldots, MathNode::Ellipsis(EllipsisKind::Low));
+        assert_eq!(node_ldots.atom_kind(), MathAtomKind::Inner);
+
+        let node_cdots = parse_math_str(r"\cdots");
+        assert_eq!(node_cdots, MathNode::Ellipsis(EllipsisKind::Centered));
+        assert_eq!(node_cdots.atom_kind(), MathAtomKind::Inner);
+
+        let node_vdots = parse_math_str(r"\vdots");
+        assert_eq!(node_vdots, MathNode::Ellipsis(EllipsisKind::Vertical));
+        assert_eq!(node_vdots.atom_kind(), MathAtomKind::Ord);
+
+        let node_ddots = parse_math_str(r"\ddots");
+        assert_eq!(node_ddots, MathNode::Ellipsis(EllipsisKind::Diagonal));
+        assert_eq!(node_ddots.atom_kind(), MathAtomKind::Inner);
+
+        // 4. Intelligent \dots lookahead
+        let node_dots_bin = parse_math_str(r"x_1 + \dots + x_n");
+        if let MathNode::Row(nodes) = node_dots_bin {
+            let dots = nodes.iter().find(|n| matches!(n, MathNode::Ellipsis(_))).unwrap();
+            assert_eq!(*dots, MathNode::Ellipsis(EllipsisKind::Centered));
+        } else {
+            panic!("Expected Row node");
+        }
+
+        let node_dots_punct = parse_math_str(r"(x_1, \dots, x_n)");
+        if let MathNode::Row(nodes) = node_dots_punct {
+            let dots = nodes.iter().find(|n| matches!(n, MathNode::Ellipsis(_))).unwrap();
+            assert_eq!(*dots, MathNode::Ellipsis(EllipsisKind::Low));
+        } else {
+            panic!("Expected Row node");
+        }
+
+        // 5. Binary operator vs unary sign (Appendix G Rule 5)
+        let b_unary = measure_math(&parse_math_str("+y"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_bin = measure_math(&parse_math_str("x + y"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_x = measure_math(&parse_math_str("x"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        // In binary "x + y", + has medmuskip before and after. In unary "+y", + has 0 space between + and y.
+        let extra_bin_space = b_bin.w - b_unary.w - b_x.w;
+        assert!((extra_bin_space - 2.0 * (4.0 / 18.0 * 10.0)).abs() < 0.02, "Expected 2 * medmuskip = 4.4444pt, got {}", extra_bin_space);
+    }
+
+    #[test]
+    fn test_chapter_19_displayed_equations() {
+        // 1. Display equation numbering (\eqno / \leqno)
+        let n_eqno = parse_math_str(r"x + y = z \eqno (1)");
+        match n_eqno {
+            MathNode::Tagged { formula, tag, is_left, starred } => {
+                assert!(!is_left, "eqno must position tag on the right");
+                assert!(!starred, "eqno should not be starred");
+                assert!(measure_math(&formula, 10.0, FontFamily::ComputerModern, MathStyle::Display).w > 0.0);
+                assert!(measure_math(&tag, 10.0, FontFamily::ComputerModern, MathStyle::Text).w > 0.0);
+            }
+            _ => panic!("Expected Tagged node for eqno"),
+        }
+
+        let n_leqno = parse_math_str(r"x + y = z \leqno (2)");
+        match n_leqno {
+            MathNode::Tagged { formula: _, tag: _, is_left, starred } => {
+                assert!(is_left, "leqno must position tag on the left");
+                assert!(!starred, "leqno should not be starred");
+            }
+            _ => panic!("Expected Tagged node for leqno"),
+        }
+
+        // 2. LaTeX \tag{...} and \tag*{...}
+        let n_tag = parse_math_str(r"e^{i\pi} + 1 = 0 \tag{Euler}");
+        match n_tag {
+            MathNode::Tagged { formula: _, tag: _, is_left, starred } => {
+                assert!(!is_left, "tag defaults to right");
+                assert!(!starred, "tag{{}} should be parenthesized (unstarred)");
+            }
+            _ => panic!("Expected Tagged node for \\tag"),
+        }
+
+        let n_tag_star = parse_math_str(r"e^{i\pi} + 1 = 0 \tag*{[A]}");
+        match n_tag_star {
+            MathNode::Tagged { formula: _, tag: _, is_left, starred } => {
+                assert!(!is_left);
+                assert!(starred, "tag*{{}} must be starred");
+            }
+            _ => panic!("Expected Tagged node for \\tag*"),
+        }
+
+        // 3. LaTeX \label{...}, \notag, \nonumber
+        let n_notag = parse_math_str(r"x = y \label{eq:sample}\notag");
+        assert!(!matches!(n_notag, MathNode::Row(ref r) if r.is_empty()));
+
+        // 4. TeX Display Equation Centering & Collision Displacement
+        let display_w = 400.0;
+        let m_w = 100.0;
+        let tag_w = 30.0;
+        let quad = 10.0;
+        let displacement = crate::math::DisplayEquationCentering::compute_displacement(display_w, m_w, tag_w);
+        // Display equation should be centered: (400 - 100) / 2 = 150.0
+        assert!((displacement - 150.0).abs() < 1e-3);
+
+        // When equation is too wide to fit with tag, must_split_line triggers:
+        let wide_m_w = 360.0;
+        let must_split = crate::math::EquationTagCollisionDisplacement::must_split_line(wide_m_w, tag_w, display_w, quad);
+        assert!(must_split, "Wide equation + tag exceeding line width must split into separate lines");
+
+        // 5. PreDisplay Clearance & Short Skip
+        let use_short = crate::math::PreDisplayClearanceComparator::uses_short_skip(displacement, 0.0, 50.0, false);
+        assert!(use_short, "Clearance greater than predisplay size should use short display skip");
+        let no_short_for_left = crate::math::PreDisplayClearanceComparator::uses_short_skip(displacement, 0.0, 50.0, true);
+        assert!(!no_short_for_left, "Left-tagged equation should never use short skip due to left tag margin collision risk");
+
+        // 6. Integration Document Layout with Tagged Equations
+        let doc_src = r"\documentclass{article}
+\begin{document}
+Standard equation:
+\begin{equation}
+a^2 + b^2 = c^2
+\end{equation}
+Tagged equation:
+\begin{equation}
+e^{i\pi} + 1 = 0 \tag{Euler}
+\end{equation}
+Unparenthesized custom tag:
+\begin{equation}
+E = mc^2 \tag*{[Relativity]}
+\end{equation}
+Left-tagged equation:
+\begin{equation}
+H\psi = E\psi \leqno (Schrodinger)
+\end{equation}
+\end{document}";
+        let doc = crate::tex_parser::parse(doc_src).expect("Parsing must succeed");
+        let pages = crate::layout::layout_engine::layout(&doc);
+        assert!(!pages.is_empty(), "Layout must generate pages");
+
+        let p0 = &pages[0];
+        // Ensure EquationNumber was painted for the standard equation (1):
+        let eq_nums: Vec<_> = p0.ops.iter().filter_map(|op| {
+            if let crate::layout::layout_engine::Paint::EquationNumber { n, .. } = op {
+                Some(*n)
+            } else {
+                None
+            }
+        }).collect();
+        assert_eq!(eq_nums, vec![1]);
+
+        // Ensure custom tag parentheses and glyphs are emitted
+        let has_parens = p0.text_pool.contains(&"(") && p0.text_pool.contains(&")");
+        assert!(has_parens, "Text pool must contain tag parentheses");
+    }
+
+    #[test]
+    fn test_chapter_22_26_alignment_and_summary_of_math_mode() {
+        use crate::math::math_ast::{ColAlign, MatrixEnvKind};
+
+        // 1. Plain TeX matrix and pmatrix macros with \cr and \crcr
+        let n_matrix = parse_math_str(r"\matrix{ 1 & 2 \cr 3 & 4 \cr }");
+        match n_matrix {
+            MathNode::Matrix(data) => {
+                assert_eq!(data.rows.len(), 2, "Matrix must parse 2 rows");
+                assert_eq!(data.rows[0].len(), 2, "Row 1 must have 2 cells");
+                assert_eq!(data.rows[1].len(), 2, "Row 2 must have 2 cells");
+                assert_eq!(data.delim, MatrixDelim::None);
+            }
+            _ => panic!("Expected Matrix node"),
+        }
+
+        let n_pmatrix = parse_math_str(r"\pmatrix{ a & b \crcr c & d \crcr }");
+        match n_pmatrix {
+            MathNode::Matrix(data) => {
+                assert_eq!(data.rows.len(), 2);
+                assert_eq!(data.delim, MatrixDelim::Parentheses);
+            }
+            _ => panic!("Expected Matrix node with parentheses"),
+        }
+
+        // 2. Plain TeX \cases macro
+        let n_cases = parse_math_str(r"\cases{ 1 & x > 0 \cr 0 & \text{otherwise} }");
+        match n_cases {
+            MathNode::Matrix(data) => {
+                assert_eq!(data.rows.len(), 2);
+                assert_eq!(data.delim, MatrixDelim::LeftBrace);
+                assert_eq!(data.env_kind, MatrixEnvKind::Cases);
+                assert_eq!(data.col_alignments, vec![ColAlign::Left, ColAlign::Left]);
+            }
+            _ => panic!("Expected Cases matrix node"),
+        }
+
+        // 3. Plain TeX \eqalign and \eqalignno macros
+        let n_eqalign = parse_math_str(r"\eqalign{ a &= b + c \cr d &= e }");
+        match n_eqalign {
+            MathNode::Matrix(data) => {
+                assert_eq!(data.rows.len(), 2);
+                assert_eq!(data.env_kind, MatrixEnvKind::Aligned);
+                assert_eq!(data.col_alignments, vec![ColAlign::Right, ColAlign::Left]);
+            }
+            _ => panic!("Expected Aligned matrix node"),
+        }
+
+        let n_eqalignno = parse_math_str(r"\eqalignno{ a &= b & (1) \cr c &= d & (2) }");
+        match n_eqalignno {
+            MathNode::Matrix(data) => {
+                assert_eq!(data.rows.len(), 2);
+                assert_eq!(data.rows[0].len(), 3);
+                assert_eq!(data.col_alignments, vec![ColAlign::Right, ColAlign::Left, ColAlign::Right]);
+            }
+            _ => panic!("Expected eqalignno matrix node"),
+        }
+
+        let n_leqalignno = parse_math_str(r"\leqalignno{ (1) & a &= b \cr (2) & c &= d }");
+        match n_leqalignno {
+            MathNode::Matrix(data) => {
+                assert_eq!(data.rows.len(), 2);
+                assert_eq!(data.col_alignments, vec![ColAlign::Left, ColAlign::Right, ColAlign::Left]);
+            }
+            _ => panic!("Expected leqalignno matrix node"),
+        }
+
+        // 4. \noalign support inside matrix
+        let n_noalign = parse_math_str(r"\eqalign{ a &= b \cr \noalign{\vskip 2pt} c &= d \cr }");
+        match n_noalign {
+            MathNode::Matrix(data) => {
+                assert_eq!(data.rows.len(), 2, "Noalign must be skipped without creating dummy rows");
+            }
+            _ => panic!("Expected matrix with noalign"),
+        }
+
+        // 5. TeX \strut primitive
+        let strut_box = measure_math(&MathNode::Strut, 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert_eq!(strut_box.w, 0.0);
+        assert!((strut_box.h - 8.5).abs() < 1e-3, "Strut height must be 8.5pt at 10pt font, got {}", strut_box.h);
+        assert!((strut_box.d - 3.5).abs() < 1e-3, "Strut depth must be 3.5pt at 10pt font, got {}", strut_box.d);
+
+        // 6. Phantoms (\phantom, \hphantom, \vphantom)
+        let sample = parse_math_str(r"\sum_{i=1}^n x_i");
+        let sample_box = measure_math(&sample, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let ph_full = measure_math(&parse_math_str(r"\phantom{\sum_{i=1}^n x_i}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert!((ph_full.w - sample_box.w).abs() < 1e-3);
+        assert!((ph_full.h - sample_box.h).abs() < 1e-3);
+        assert!((ph_full.d - sample_box.d).abs() < 1e-3);
+
+        let ph_h = measure_math(&parse_math_str(r"\hphantom{\sum_{i=1}^n x_i}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert!((ph_h.w - sample_box.w).abs() < 1e-3);
+        assert_eq!(ph_h.h, 0.0);
+        assert_eq!(ph_h.d, 0.0);
+
+        let ph_v = measure_math(&parse_math_str(r"\vphantom{\sum_{i=1}^n x_i}"), 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert_eq!(ph_v.w, 0.0);
+        assert!((ph_v.h - sample_box.h).abs() < 1e-3);
+        assert!((ph_v.d - sample_box.d).abs() < 1e-3);
+
+        // Verify \phantom emits ZERO paint operations and ZERO text tokens
+        let mut ops = Vec::new();
+        let mut pool = Vec::new();
+        render_math(&parse_math_str(r"\phantom{X}"), 10.0, FontFamily::ComputerModern, MathStyle::Text, 0.0, 0.0, &mut ops, &mut pool);
+        assert!(ops.is_empty(), "Phantom must emit zero paint operations");
+        assert!(pool.is_empty(), "Phantom must emit zero text tokens");
+
+        // 7. Smashes and Laps (\smash, \rlap, \llap)
+        let sm = measure_math(&parse_math_str(r"\smash{X}"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let x_box = measure_math(&parse_math_str("X"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert!((sm.w - x_box.w).abs() < 1e-3);
+        assert_eq!(sm.h, 0.0);
+        assert_eq!(sm.d, 0.0);
+
+        let rlap_b = measure_math(&parse_math_str(r"\rlap{X}"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert_eq!(rlap_b.w, 0.0, "rlap must have 0 width");
+        assert!((rlap_b.h - x_box.h).abs() < 1e-3);
+
+        let llap_b = measure_math(&parse_math_str(r"\llap{X}"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert_eq!(llap_b.w, 0.0, "llap must have 0 width");
+        assert!((llap_b.h - x_box.h).abs() < 1e-3);
+
+        // 8. Integration document layout with plain TeX alignment
+        let doc_src = r"\documentclass{article}
+\begin{document}
+Plain TeX pmatrix:
+\begin{equation}
+A = \pmatrix{ 1 & 2 \cr 3 & 4 \cr }
+\end{equation}
+Plain TeX cases:
+\begin{equation}
+|x| = \cases{ x & x \ge 0 \cr -x & x < 0 \cr }
+\end{equation}
+\end{document}";
+        let doc = crate::tex_parser::parse(doc_src).expect("Parsing must succeed");
+        let pages = crate::layout::layout_engine::layout(&doc);
+        assert!(!pages.is_empty(), "Document layout with plain TeX alignments must succeed");
+    }
+
+    #[test]
+    fn test_texbook_appendix_g_generating_boxes_from_formulas_certification() {
+        use crate::math::math_ast::MathStyle;
+        use crate::math::math_display::InlineMathPenaltyInserter;
+        use crate::math::math_fonts::math_font_parameters_styled;
+        use crate::math::math_fraction::FractionClearanceGovernor;
+        use crate::math::math_layout::measure_math;
+        use crate::math::math_parser::parse_math_str;
+        use crate::math::math_radical::RadicalClearanceGovernor;
+        use crate::math::math_scripts::ScriptClearanceGovernor;
+        use crate::math::math_spacing::{atom_spacing_code, MathAtomKind};
+        use crate::metrics::FontFamily;
+
+        let font_size = 10.0f32;
+        let scale = font_size * 0.001;
+        let cm_params = math_font_parameters_styled(FontFamily::ComputerModern, MathStyle::Display);
+        let axis_h = (cm_params.axis_height as f32) * scale; // sigma_22 = 2.50pt
+        let rule_t = (cm_params.rule_thickness as f32) * scale; // xi_8 = 0.40pt
+        let x_height = (cm_params.accent_base_height as f32) * scale; // sigma_5 = 4.3055pt
+
+        // 1. Rule 5 & 6: Bin -> Ord atom class transitions
+        // Unary minus at start of formula must convert to Ord (no Rel/Bin spacing)
+        let unary_minus = parse_math_str("-x");
+        let minus_only = parse_math_str("-");
+        let x_only = parse_math_str("x");
+        let b_unary = measure_math(&unary_minus, font_size, FontFamily::ComputerModern, MathStyle::Display);
+        let b_minus = measure_math(&minus_only, font_size, FontFamily::ComputerModern, MathStyle::Display);
+        let b_x = measure_math(&x_only, font_size, FontFamily::ComputerModern, MathStyle::Display);
+        assert!(
+            (b_unary.w - (b_minus.w + b_x.w)).abs() < 1e-3,
+            "Rule 5: Leading Bin must convert to Ord without binary padding"
+        );
+
+        // Binary plus between Ords retains 4mu binary spacing in display
+        let bin_plus = parse_math_str("a + b");
+        let b_bin = measure_math(&bin_plus, font_size, FontFamily::ComputerModern, MathStyle::Display);
+        let b_a = measure_math(&parse_math_str("a"), font_size, FontFamily::ComputerModern, MathStyle::Display);
+        let b_plus = measure_math(&parse_math_str("+"), font_size, FontFamily::ComputerModern, MathStyle::Display);
+        let b_b = measure_math(&parse_math_str("b"), font_size, FontFamily::ComputerModern, MathStyle::Display);
+        let bin_pad = (4.0 / 18.0) * font_size; // 4mu Bin spacing
+        assert!(
+            (b_bin.w - (b_a.w + b_plus.w + b_b.w + 2.0 * bin_pad)).abs() < 0.05,
+            "Rule 20: Bin atom must receive 4mu left and right padding"
+        );
+
+        // 2. Rule 8: Vcenter atom centering on math axis
+        let vc_node = parse_math_str(r"\vcenter{\hbox{M}}");
+        let b_vc = measure_math(&vc_node, font_size, FontFamily::ComputerModern, MathStyle::Display);
+        let vc_mid = 0.5 * (b_vc.h - b_vc.d);
+        assert!(
+            (vc_mid - axis_h).abs() < 1e-3,
+            "Rule 8: Vcenter midpoint ({}) must equal axis_height ({})",
+            vc_mid,
+            axis_h
+        );
+
+        // 3. Rules 9 & 10: Overline and Underline clearances
+        let over_node = parse_math_str(r"\overline{x}");
+        let under_node = parse_math_str(r"\underline{x}");
+        let b_over = measure_math(&over_node, font_size, FontFamily::ComputerModern, MathStyle::Display);
+        let b_under = measure_math(&under_node, font_size, FontFamily::ComputerModern, MathStyle::Display);
+        assert!(
+            (b_over.h - (b_x.h + 5.0 * rule_t)).abs() < 1e-3,
+            "Rule 9: Overline height must equal nucleus height + 5*theta"
+        );
+        assert!(
+            (b_under.d - (b_x.d + 5.0 * rule_t)).abs() < 1e-3,
+            "Rule 10: Underline depth must equal nucleus depth + 5*theta"
+        );
+
+        // 4. Rule 11: Radical clearance governor
+        let min_rad_clr_disp = RadicalClearanceGovernor::min_clearance(rule_t, rule_t, true);
+        let min_rad_clr_text = RadicalClearanceGovernor::min_clearance(rule_t, rule_t, false);
+        assert_eq!(min_rad_clr_disp, rule_t + 0.25 * rule_t);
+        assert_eq!(min_rad_clr_text, rule_t + 0.25 * rule_t);
+
+        // 5. Rules 13 & 13a: Big operator limits positioning
+        let sum_disp = parse_math_str(r"\sum_{i=1}^n i");
+        let sum_text = parse_math_str(r"\sum_{i=1}^n i");
+        let b_sum_disp = measure_math(&sum_disp, font_size, FontFamily::ComputerModern, MathStyle::Display);
+        let b_sum_text = measure_math(&sum_text, font_size, FontFamily::ComputerModern, MathStyle::Text);
+        assert!(
+            b_sum_disp.h > b_sum_text.h,
+            "Rule 13: Display style operator limits stack vertically above/below"
+        );
+
+        // 6. Rules 15a--15e: Generalized fractions and binomial clearances
+        let frac_clr_above_disp = FractionClearanceGovernor::min_clearance_above(rule_t, true);
+        let frac_clr_above_text = FractionClearanceGovernor::min_clearance_above(rule_t, false);
+        let frac_clr_below_disp = FractionClearanceGovernor::min_clearance_below(rule_t, true);
+        let frac_clr_below_text = FractionClearanceGovernor::min_clearance_below(rule_t, false);
+        let atop_clr_disp = FractionClearanceGovernor::min_clearance_atop(rule_t, true);
+        let atop_clr_text = FractionClearanceGovernor::min_clearance_atop(rule_t, false);
+        assert_eq!(frac_clr_above_disp, 3.0 * rule_t, "Rule 15d: Display clearance above = 3*theta");
+        assert_eq!(frac_clr_above_text, 1.0 * rule_t, "Rule 15d: Text clearance above = 1*theta");
+        assert_eq!(frac_clr_below_disp, 3.0 * rule_t, "Rule 15d: Display clearance below = 3*theta");
+        assert_eq!(frac_clr_below_text, 1.0 * rule_t, "Rule 15d: Text clearance below = 1*theta");
+        assert_eq!(atop_clr_disp, 7.0 * rule_t, "Rule 15c: Display atop clearance = 7*xi_8");
+        assert_eq!(atop_clr_text, 3.0 * rule_t, "Rule 15c: Text atop clearance = 3*xi_8");
+
+        // 7. Rules 18a--18f: Script clearance governor
+        let (sup_s, sub_s) = ScriptClearanceGovernor::enforce_combined_clearance(
+            4.0, 2.0, 1.0, 4.0, rule_t, 0.8 * x_height,
+        );
+        let gap = (sup_s - 1.0) - (4.0 - sub_s);
+        assert!(gap >= 4.0 * rule_t - 1e-4, "Rule 18e: Sub/sup gap must be at least 4*theta");
+
+        // 8. Rule 19: Symmetric delimiter sizing
+        let delim_expr = parse_math_str(r"\left( \sum_{i=1}^n i \right)");
+        let b_delim = measure_math(&delim_expr, font_size, FontFamily::ComputerModern, MathStyle::Display);
+        let d_top = b_delim.h - axis_h;
+        let d_bot = b_delim.d + axis_h;
+        assert!(
+            (d_top - d_bot).abs() < 1.0,
+            "Rule 19: Delimiters must be symmetrically sized about math axis (d_top={}, d_bot={})",
+            d_top,
+            d_bot
+        );
+
+        // 9. Rule 20: Atom spacing table (thin, med, thick muskips)
+        use crate::math::math_box::ScaledPoints;
+        let quad_sp = ScaledPoints::from_pt(10.0);
+        assert_eq!(atom_spacing_code(MathAtomKind::Ord, MathAtomKind::Op), 1); // 1 = thinmuskip
+        assert_eq!(atom_spacing_code(MathAtomKind::Ord, MathAtomKind::Bin), 2); // 2 = medmuskip
+        assert_eq!(atom_spacing_code(MathAtomKind::Ord, MathAtomKind::Rel), 3); // 3 = thickmuskip
+        let sp_disp = crate::math::math_spacing::atom_spacing_sp(MathAtomKind::Ord, MathAtomKind::Bin, true, quad_sp);
+        let sp_script = crate::math::math_spacing::atom_spacing_sp(MathAtomKind::Ord, MathAtomKind::Bin, false, quad_sp);
+        assert!(sp_disp > ScaledPoints::ZERO, "Rule 20: Medmuskip active in display style");
+        assert_eq!(sp_script, ScaledPoints::ZERO, "Rule 20: Medmuskip suppressed in script style");
+
+        // 10. Rule 21: Penalties
+        assert_eq!(InlineMathPenaltyInserter::break_penalty(MathAtomKind::Bin), Some(700));
+        assert_eq!(InlineMathPenaltyInserter::break_penalty(MathAtomKind::Rel), Some(500));
+        assert_eq!(InlineMathPenaltyInserter::break_penalty(MathAtomKind::Ord), None);
+    }
+
+    #[test]
+    fn test_maxwell_equations_and_standard14_symbol_metrics_parity() {
+        // 1. \varepsilon in Times font must have non-zero width (~4.39 pt) and correct height/depth
+        let varepsilon_node = parse_math_str(r"\varepsilon");
+        let eps_box = measure_math(&varepsilon_node, 10.0, FontFamily::Times, MathStyle::Display);
+        assert!(
+            eps_box.w > 4.0 && eps_box.w < 5.0,
+            "\\varepsilon width in Times font must be ~4.39 pt, got {}",
+            eps_box.w
+        );
+
+        // 2. \varepsilon_0 subscript node width must be > 7.0 pt (nucleus + subscript)
+        let eps0_node = parse_math_str(r"\varepsilon_0");
+        let eps0_box = measure_math(&eps0_node, 10.0, FontFamily::Times, MathStyle::Display);
+        assert!(
+            eps0_box.w > 7.0,
+            "\\varepsilon_0 width must encompass both \\varepsilon and subscript 0 (> 7.0 pt), got {}",
+            eps0_box.w
+        );
+
+        // 3. Fraction \frac{\rho}{\varepsilon_0} must center denominator correctly
+        let frac_node = parse_math_str(r"\frac{\rho}{\varepsilon_0}");
+        let frac_box = measure_math(&frac_node, 10.0, FontFamily::Times, MathStyle::Display);
+        assert!(
+            frac_box.w >= eps0_box.w,
+            "Fraction width must be at least denominator width ({} >= {})",
+            frac_box.w,
+            eps0_box.w
+        );
+
+        // 4. Maxwell term \mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t} must have full non-overlapping width
+        let maxwell_term = parse_math_str(r"\mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t}");
+        let maxwell_box = measure_math(&maxwell_term, 10.0, FontFamily::Times, MathStyle::Display);
+        let mu0_box = measure_math(&parse_math_str(r"\mu_0"), 10.0, FontFamily::Times, MathStyle::Display);
+        let partial_frac = measure_math(&parse_math_str(r"\frac{\partial \mathbf{E}}{\partial t}"), 10.0, FontFamily::Times, MathStyle::Display);
+        assert!(
+            maxwell_box.w >= mu0_box.w + eps0_box.w + partial_frac.w,
+            "Maxwell term width must be >= sum of parts without negative overlap ({} >= {})",
+            maxwell_box.w,
+            mu0_box.w + eps0_box.w + partial_frac.w
+        );
+
+        // 5. Greek variants in Times font must all have valid positive widths (> 4.0 pt)
+        let variants = ["varepsilon", "vartheta", "varpi", "varrho", "varsigma", "varphi"];
+        for cmd in variants {
+            let s = format!(r"\{}", cmd);
+            let n = parse_math_str(&s);
+            let b = measure_math(&n, 10.0, FontFamily::Times, MathStyle::Display);
+            assert!(
+                b.w > 4.0,
+                "Greek variant \\{} must have valid width > 4.0 pt, got {}",
+                cmd,
+                b.w
+            );
+        }
+
+        // 6. Delimiter and relation \parallel must have valid positive width and Rel atom kind
+        let parallel_node = parse_math_str(r"\parallel");
+        assert_eq!(parallel_node.atom_kind(), MathAtomKind::Rel);
+        let par_box = measure_math(&parallel_node, 10.0, FontFamily::Times, MathStyle::Display);
+        assert!(par_box.w > 4.0, "\\parallel width must be > 4.0 pt, got {}", par_box.w);
+    }
+
+    #[test]
+    fn test_mlist_c_remaining_routines_parity() {
+        use crate::math::math_ast::MathStyle;
+        use crate::math::math_delim::OverUnderDelimiterEngine;
+        use crate::math::math_fonts::{CmAccentRecord, CM_ACCENT_TABLE};
+        use crate::math::math_spacing::MathAtomKind;
+        use crate::metrics::FontFamily;
+
+        // 1. Static CM accent table invariants and lookup (18 entries: top, bottom, and overlay)
+        assert_eq!(CM_ACCENT_TABLE.len(), 18);
+        let hat = CmAccentRecord::lookup("hat").expect("hat accent exists");
+        assert_eq!(hat.code, 0x5E);
+        assert!(!hat.is_wide);
+        assert_eq!(hat.position, crate::math::math_fonts::AccentPosition::Top);
+        let widehat = CmAccentRecord::lookup("widehat").expect("widehat accent exists");
+        assert!(widehat.is_wide);
+        assert_eq!(widehat.wide_variants, [0x62, 0x63, 0x64]);
+
+        // 2. Extensible arrows (\xrightarrow, \xleftarrow, \xleftrightarrow)
+        let node_xr = parse_math_str(r"\xrightarrow[n \to \infty]{f(x)}");
+        assert_eq!(node_xr.atom_kind(), MathAtomKind::Rel);
+        let b_xr = measure_math(&node_xr, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert!(b_xr.w >= 20.0, "Extensible arrow width must accommodate labels (got {})", b_xr.w);
+        assert!(b_xr.h > 4.0, "Extensible arrow height must include superscript (got {})", b_xr.h);
+        assert!(b_xr.d > 2.0, "Extensible arrow depth must include subscript (got {})", b_xr.d);
+
+        let node_xl = parse_math_str(r"\xleftarrow{abc}");
+        let b_xl = measure_math(&node_xl, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert!(b_xl.w >= 14.0, "Left extensible arrow width must cover label (got {})", b_xl.w);
+
+        // 3. Extensible brackets (\overbracket, \underbracket)
+        let node_ob = parse_math_str(r"\overbracket{a + b + c}");
+        assert_eq!(node_ob.atom_kind(), MathAtomKind::Op);
+        let b_ob = measure_math(&node_ob, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert!(b_ob.w > 30.0, r"\overbracket width must cover content, got {}", b_ob.w);
+        assert!(b_ob.h > 6.0, r"\overbracket height must include bracket gap and rule, got {}", b_ob.h);
+
+        let node_ub = parse_math_str(r"\underbracket{a + b + c}");
+        let b_ub = measure_math(&node_ub, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert!(b_ub.w > 30.0, r"\underbracket width must cover content, got {}", b_ub.w);
+        assert!(b_ub.d > 2.0, r"\underbracket depth must include bracket gap and rule, got {}", b_ub.d);
+
+        // 4. Over/under gap table cache alignment and formulas
+        assert_eq!(std::mem::size_of::<crate::math::math_delim::OverUnderGapTable>(), 64);
+        assert_eq!(std::mem::align_of::<crate::math::math_delim::OverUnderGapTable>(), 64);
+        let over_shift = OverUnderDelimiterEngine::compute_over_shift(1.0, 1.0, 6.0, 0.01, MathStyle::Display);
+        assert!(over_shift > 0.0, "over_shift must be positive");
+
+        // 5. TeX Rule 12 script attachment on accents (mlist.c:2796-2812)
+        // \hat{x}^2 attaches superscript to the base character 'x' rather than pushing above the accent
+        let hat_x2 = parse_math_str(r"\hat{x}^2");
+        let b_hat_x2 = measure_math(&hat_x2, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        let x2 = parse_math_str(r"x^2");
+        let b_x2 = measure_math(&x2, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert!(b_hat_x2.w > 0.0);
+        assert!(b_hat_x2.h >= b_x2.h, "\\hat{{x}}^2 must bound both accent mark and superscript");
+
+        // 6. Conditional math glue \nonscript (mlist.c:4557-4581)
+        // \nonscript\, preserves space in text style, but suppresses it in script style
+        let nonscript_expr = parse_math_str(r"a \nonscript\, b");
+        let b_text = measure_math(&nonscript_expr, 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        let b_script = measure_math(&nonscript_expr, 10.0, FontFamily::ComputerModern, MathStyle::Script);
+        let b_nospace_script = measure_math(&parse_math_str("a b"), 10.0, FontFamily::ComputerModern, MathStyle::Script);
+        assert!(b_text.w > 0.0);
+        assert!((b_script.w - b_nospace_script.w).abs() < 1e-4, "\\nonscript must eliminate space in script style");
+
+        // 7. Bottom and overlay accents (mlist.c:2890-2920)
+        let utilde_node = parse_math_str(r"\utilde{x}");
+        let b_utilde = measure_math(&utilde_node, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert!(b_utilde.d > 0.5, "\\utilde depth must accommodate bottom tilde mark");
+
+        let not_node = parse_math_str(r"\not=");
+        let b_not = measure_math(&not_node, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert!(b_not.w > 0.0, "\\not= must produce non-zero width");
+
+        // 8. Skewed / slashed fractions \sfrac (mlist.c:3023-3094)
+        let sfrac_node = parse_math_str(r"\sfrac{1}{2}");
+        let b_sfrac = measure_math(&sfrac_node, 10.0, FontFamily::ComputerModern, MathStyle::Display);
+        assert!(b_sfrac.w > 10.0, "\\sfrac width must contain numerator, slash, and denominator");
+        assert!(b_sfrac.h > 0.0 && b_sfrac.d > 0.0, "\\sfrac must span above and below baseline");
+    }
+
+    #[test]
+    fn test_mlist_c_inline_math_penalty_line_breaking() {
+        use crate::layout::layout_engine::{explode_inlines_into_family, ParagraphSoA, WordKind};
+        use crate::math::math_display::InlineMathPenaltyInserter;
+
+        // 1. Verify exact penalty values from mlist.c:4694-4700 (\binoppenalty=700, \relpenalty=500)
+        assert_eq!(InlineMathPenaltyInserter::BIN_PENALTY, 700);
+        assert_eq!(InlineMathPenaltyInserter::REL_PENALTY, 500);
+
+        assert_eq!(WordKind::MathBin.math_penalty(), Some(700));
+        assert_eq!(WordKind::MathRel.math_penalty(), Some(500));
+        assert_eq!(WordKind::Math.math_penalty(), None);
+        assert_eq!(WordKind::MathSpace.math_penalty(), None);
+        assert_eq!(WordKind::Word.math_penalty(), None);
+
+        assert!(WordKind::MathBin.is_breakable_math());
+        assert!(WordKind::MathRel.is_breakable_math());
+        assert!(!WordKind::Math.is_breakable_math());
+        assert!(!WordKind::MathSpace.is_breakable_math());
+
+        assert!(WordKind::MathSpace.is_space());
+        assert!(!WordKind::MathBin.is_space());
+        assert!(WordKind::MathBin.is_math());
+        assert!(WordKind::MathRel.is_math());
+        assert!(WordKind::Math.is_math());
+
+        // 2. Explode inline math expression $a + b = c$ into ParagraphSoA
+        let math_expr = parse_math_str("a + b = c");
+        let inls = vec![crate::frontend::frontend_ast::Inline::Math(Box::new(math_expr))];
+        let mut soa = ParagraphSoA::new();
+        let mut math_collector = Vec::new();
+
+        let total_w = explode_inlines_into_family(
+            &inls,
+            Face::Roman,
+            10.0,
+            &mut soa,
+            FontFamily::ComputerModern,
+            &mut math_collector,
+        );
+
+        assert!(total_w > 0.0);
+        // Atom sequence:
+        // 'a' (Math) -> MathSpace -> '+' (MathBin) -> MathSpace -> 'b' (Math) -> MathSpace -> '=' (MathRel) -> MathSpace -> 'c' (Math)
+        assert!(soa.kinds().any(|k| k == WordKind::MathBin), "SOA must identify '+' as breakable MathBin");
+        assert!(soa.kinds().any(|k| k == WordKind::MathRel), "SOA must identify '=' as breakable MathRel");
+        assert!(soa.kinds().any(|k| k == WordKind::MathSpace), "SOA must inject discardable MathSpace");
+
+        // Verify '+' is MathBin with penalty 700
+        let bin_pos = soa.kinds().position(|k| k == WordKind::MathBin).unwrap();
+        assert_eq!(soa.kind(bin_pos).math_penalty(), Some(700));
+
+        // Verify '=' is MathRel with penalty 500
+        let rel_pos = soa.kinds().position(|k| k == WordKind::MathRel).unwrap();
+        assert_eq!(soa.kind(rel_pos).math_penalty(), Some(500));
+
+        // 3. Compile paragraph with inline math under narrow column to trigger break at '=' or '+'
+        let doc = r"\documentclass{article}
+\begin{document}
+Consider this very long introductory text that pushes the formula right up to the margin: $a + b = c$.
+\end{document}";
+        let res = compile_str(doc);
+        assert!(res.is_ok(), "Compilation of inline math breaking must succeed: {:?}", res.err());
+    }
+
+    #[test]
+    fn test_mlist_c_radical_degree_parity() {
+        let doc = r"\documentclass{article}\usepackage{lmodern}\begin{document}$\sqrt[3]{x}$, $\sqrt[n]{1+x^n}$, $\sqrt[\alpha+\beta]{e^x}$\end{document}";
+        let pages = crate::compile_source_to_pages(doc).unwrap();
+        assert_eq!(pages.len(), 1);
+        let ops = &pages[0].ops;
+        // Verify vector glyph radical exists
+        let rad_count = ops.iter().filter(|op| matches!(op, crate::layout::Paint::VectorGlyph { .. })).count();
+        assert_eq!(rad_count, 3, "All three roots must emit radical vector glyphs");
+    }
+
+    #[test]
+    fn test_mlist_c_perceptual_parity_suite_invariants() {
+        use crate::font_metrics::FontFamily;
+        use crate::math::math_parser::parse_math_str;
+        use crate::math::math_layout::measure_math;
+        use crate::math::math_ast::MathStyle;
+
+        // 1. Slashed fraction \sfrac metrics
+        let b_sfrac = measure_math(&parse_math_str(r"\sfrac{3}{4}"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert!(b_sfrac.w > 7.0 && b_sfrac.w < 15.0, "Expected sfrac width ~8-12pt, got {}", b_sfrac.w);
+        assert!(b_sfrac.h > 5.0 && b_sfrac.h < 10.0, "Expected sfrac height ~6-9pt, got {}", b_sfrac.h);
+
+        // 2. Under-accent \utilde{x}
+        let b_utilde = measure_math(&parse_math_str(r"\utilde{x}"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
+        assert!(b_utilde.d >= 1.5, "Expected utilde depth >= 1.5pt, got {}", b_utilde.d);
+
+        // 3. Negation slash \not= font face invariant (must be CMSY10 byte 0x36, not CMR10)
+        let mut ops = Vec::new();
+        let mut pool = Vec::new();
+        let parsed = parse_math_str(r"x \not= y");
+        crate::math::render_math(
+            &parsed,
+            10.0,
+            FontFamily::ComputerModern,
+            MathStyle::Text,
+            0.0,
+            0.0,
+            &mut ops,
+            &mut pool,
+        );
+        let neg_slash = ops.iter().find(|op| match op {
+            crate::layout::Paint::GlyphRun { face, part_start, .. } => {
+                *face == Face::Symbol && pool[*part_start as usize] == "6"
+            }
+            _ => false,
+        });
+        assert!(neg_slash.is_some(), "Negation slash must be emitted with Face::Symbol and byte 0x36");
+
+        // 4. Dynamic middle delimiter in set builder notation
+        let b_mid = measure_math(
+            &parse_math_str(r"\left\{ x \in \mathbb{R} \;\middle|\; \sqrt{x} > 1 \right\}"),
+            10.0,
+            FontFamily::ComputerModern,
+            MathStyle::Display,
+        );
+        assert!(b_mid.w > 50.0, "Expected set builder formula width > 50pt, got {}", b_mid.w);
+        assert!(b_mid.total_h() >= 12.0, "Expected dynamic fence total height >= 12pt, got {}", b_mid.total_h());
+
+        // 5. Extensible arrows
+        let b_arrow = measure_math(
+            &parse_math_str(r"A \xrightarrow{f} B \xleftarrow{g \circ h} C"),
+            10.0,
+            FontFamily::ComputerModern,
+            MathStyle::Display,
+        );
+        assert!(b_arrow.w > 60.0, "Expected extensible arrows width > 60pt, got {}", b_arrow.w);
+    }
+
+    #[test]
+    fn test_matrix_grid_buffer_and_soa_layout_acceleration() {
+        use crate::math::math_ast::{ColAlign, MatrixEnvKind};
+        use crate::math::math_matrix::{MatrixGridBuffer, MatrixLayoutMetricsEngine};
+
+        // 1. Structure of Arrays 64-byte alignment and 576-byte footprint verification
+        let mut buf = MatrixGridBuffer::default();
+        assert_eq!(core::mem::align_of::<MatrixGridBuffer>(), 64);
+        assert_eq!(core::mem::size_of::<MatrixGridBuffer>(), 576);
+
+        // 2. Setup 2x3 matrix metrics
+        buf.col_widths[0] = 12.0;
+        buf.col_widths[1] = 18.0;
+        buf.col_widths[2] = 24.0;
+        buf.row_heights[0] = 8.4;
+        buf.row_depths[0] = 3.6;
+        buf.row_heights[1] = 9.0;
+        buf.row_depths[1] = 4.0;
+
+        let (matrix_w, total_content_h) = buf.compute_metrics(3, 2, MatrixEnvKind::Matrix, 10.0, 0.0);
+        // Inter-column gap for MatrixEnvKind::Matrix is 10.0 pt (1em)
+        assert_eq!(buf.col_offsets[0], 0.0);
+        assert_eq!(buf.col_offsets[1], 12.0 + 10.0);
+        assert_eq!(buf.col_offsets[2], 22.0 + 18.0 + 10.0);
+        assert_eq!(matrix_w, 12.0 + 18.0 + 24.0 + 2.0 * 10.0);
+
+        // Row baselines:
+        // row 0: top - 8.4
+        // row 1: top - (8.4 + 3.6 + 0.0 + 9.0) = top - 21.0
+        // total content height: 21.0 + 4.0 = 25.0
+        assert_eq!(buf.row_baseline_offsets[0], 8.4);
+        assert_eq!(buf.row_baseline_offsets[1], 21.0);
+        assert_eq!(total_content_h, 25.0);
+
+        // 3. Test column alignment resolution and cell offset calculation
+        assert_eq!(
+            MatrixLayoutMetricsEngine::resolve_alignment(MatrixEnvKind::Aligned, &[], 0),
+            ColAlign::Right
+        );
+        assert_eq!(
+            MatrixLayoutMetricsEngine::resolve_alignment(MatrixEnvKind::Aligned, &[], 1),
+            ColAlign::Left
+        );
+        assert_eq!(
+            MatrixLayoutMetricsEngine::resolve_alignment(MatrixEnvKind::Cases, &[], 0),
+            ColAlign::Left
+        );
+        assert_eq!(
+            MatrixLayoutMetricsEngine::resolve_alignment(MatrixEnvKind::Matrix, &[], 0),
+            ColAlign::Center
+        );
+
+        let off_center = MatrixLayoutMetricsEngine::compute_cell_offset_x(
+            MatrixEnvKind::Matrix,
+            ColAlign::Center,
+            20.0,
+            12.0,
+            50.0,
+            0,
+            2,
+            10.0,
+        );
+        assert_eq!(off_center, 4.0);
+
+        let off_right = MatrixLayoutMetricsEngine::compute_cell_offset_x(
+            MatrixEnvKind::Matrix,
+            ColAlign::Right,
+            20.0,
+            12.0,
+            50.0,
+            0,
+            2,
+            10.0,
+        );
+        assert_eq!(off_right, 8.0);
+    }
 }
+
+
+
+
+
 

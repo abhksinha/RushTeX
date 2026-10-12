@@ -167,6 +167,63 @@ pub fn to_unicode_blackboard(ch: char) -> Option<char> {
     }
 }
 
+/// Maps an ASCII Latin letter ('A'..'Z', 'a'..'z') or digit ('0'..'9') to its canonical Unicode Sans-Serif (`\mathsf`) character.
+#[inline(always)]
+pub fn to_unicode_sans(ch: char) -> Option<char> {
+    match ch {
+        'A'..='Z' => {
+            let offset = (ch as u32) - ('A' as u32);
+            char::from_u32(0x1D5A0 + offset)
+        }
+        'a'..='z' => {
+            let offset = (ch as u32) - ('a' as u32);
+            char::from_u32(0x1D5BA + offset)
+        }
+        '0'..='9' => {
+            let offset = (ch as u32) - ('0' as u32);
+            char::from_u32(0x1D7E2 + offset)
+        }
+        _ => None,
+    }
+}
+
+/// Maps an ASCII Latin letter ('A'..'Z', 'a'..'z') or digit ('0'..'9') to its canonical Unicode Monospace (`\mathtt`) character.
+#[inline(always)]
+pub fn to_unicode_monospace(ch: char) -> Option<char> {
+    match ch {
+        'A'..='Z' => {
+            let offset = (ch as u32) - ('A' as u32);
+            char::from_u32(0x1D670 + offset)
+        }
+        'a'..='z' => {
+            let offset = (ch as u32) - ('a' as u32);
+            char::from_u32(0x1D68A + offset)
+        }
+        '0'..='9' => {
+            let offset = (ch as u32) - ('0' as u32);
+            char::from_u32(0x1D7F6 + offset)
+        }
+        _ => None,
+    }
+}
+
+/// Maps an ASCII Latin letter ('A'..'Z', 'a'..'z') to its canonical Unicode Math Italic (`\mathit`) character.
+#[inline(always)]
+pub fn to_unicode_math_italic(ch: char) -> Option<char> {
+    match ch {
+        'h' => Some('\u{210E}'), // Planck constant
+        'A'..='Z' => {
+            let offset = (ch as u32) - ('A' as u32);
+            char::from_u32(0x1D434 + offset)
+        }
+        'a'..='z' => {
+            let offset = (ch as u32) - ('a' as u32);
+            char::from_u32(0x1D44E + offset)
+        }
+        _ => None,
+    }
+}
+
 /// Maps an Adobe Symbol encoding byte code for Greek letters to its standard Unicode Greek scalar.
 #[inline(always)]
 pub fn symbol_to_unicode_greek(code: u8) -> Option<char> {
@@ -220,6 +277,13 @@ pub fn symbol_to_unicode_greek(code: u8) -> Option<char> {
         b'C' => Some('\u{03A7}'), // Chi
         b'Y' => Some('\u{03A8}'), // Psi
         b'W' => Some('\u{03A9}'), // Omega
+
+        0x80 => Some('\u{03B5}'), // varepsilon
+        0x81 => Some('\u{03D1}'), // vartheta
+        0x82 => Some('\u{03D6}'), // varpi
+        0x83 => Some('\u{03F1}'), // varrho
+        0x84 => Some('\u{03C2}'), // varsigma
+        0x85 => Some('\u{03C6}'), // varphi
         _ => None,
     }
 }
@@ -297,16 +361,44 @@ pub fn to_unicode_bold_italic(ch: char) -> Option<char> {
 /// Returns the advance width for a calligraphic script CID in the given font family.
 #[inline(always)]
 pub fn static_script_advance(cid: u16, family: FontFamily) -> Option<u16> {
-    let list = match family {
-        FontFamily::Times => &STIX2_SCRIPT_GLYPHS,
-        _ => &NEWCM_SCRIPT_GLYPHS,
-    };
-    for g in list {
-        if g.glyph_id == cid {
-            return Some(g.w);
+    match family {
+        FontFamily::Times => match cid {
+            1245 => Some(754),  // B
+            1248 => Some(572),  // E
+            1249 => Some(713),  // F
+            1221 => Some(951),  // H
+            1226 => Some(496),  // I
+            1228 => Some(699),  // L
+            1250 => Some(1038), // M
+            1234 => Some(789),  // R
+            3412 => Some(778),  // A
+            3413 => Some(630),  // C
+            3414 => Some(840),  // D
+            3415 => Some(615),  // G
+            3416 => Some(551),  // J
+            3417 => Some(857),  // K
+            3418 => Some(909),  // N
+            3419 => Some(737),  // O
+            3420 => Some(703),  // P
+            3421 => Some(697),  // Q
+            3422 => Some(572),  // S
+            3423 => Some(714),  // T
+            3424 => Some(764),  // U
+            3425 => Some(675),  // V
+            3426 => Some(1014), // W
+            3427 => Some(772),  // X
+            3428 => Some(642),  // Y
+            3429 => Some(693),  // Z
+            _ => None,
+        },
+        _ => {
+            if (1120..=1145).contains(&cid) {
+                Some(NEWCM_SCRIPT_GLYPHS[(cid - 1120) as usize].w)
+            } else {
+                None
+            }
         }
     }
-    None
 }
 
 /// Pre-generated static minimal CFF 1.0 font stream for STIX Two Math (uncompressed, 333 bytes).

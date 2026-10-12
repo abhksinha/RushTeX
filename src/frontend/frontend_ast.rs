@@ -274,7 +274,7 @@ pub struct QuoteData<'a> {
     pub blocks: Vec<Block<'a>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConfigChange {
     ParIndent(f32),
     ParSkip(f32),
@@ -287,6 +287,16 @@ pub enum ConfigChange {
     ItemIndent(f32),
     ItemSep(f32),
     ListParIndent(f32),
+    ParShape(Box<[(f32, f32)]>),
+    PreTolerance(i32),
+    Tolerance(i32),
+    EmergencyStretch(f32),
+    Looseness(i32),
+    ParFillSkip { width: f32, stretch: f32 },
+    PrevGraf(i32),
+    LastLineFit(i32),
+    Sloppy,
+    Fussy,
 }
 
 #[derive(Debug, Clone)]
@@ -333,6 +343,18 @@ pub enum Inline<'a> {
     Indent,
     HangIndent(f32),
     HangAfter(i32),
+    ParShape(Box<[(f32, f32)]>),
+    PreTolerance(i32),
+    Tolerance(i32),
+    EmergencyStretch(f32),
+    Looseness(i32),
+    LeftSkip(f32),
+    RightSkip(f32),
+    ParFillSkip { width: f32, stretch: f32 },
+    PrevGraf(i32),
+    LastLineFit(i32),
+    Sloppy,
+    Fussy,
     HSpace(f32),
     Math(Box<crate::math::MathNode<'a>>),
 }

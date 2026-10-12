@@ -1,0 +1,836 @@
+\beginchapter Chapter 19. Displayed Equations
+
+By now you know how to type mathematical formulas so that \TeX\ will handle
+them with supreme elegance; your knowledge of math typing is nearly complete.
+But there is one more part to the story, and the purpose of this chapter
+is to present the happy ending. We have discussed how to deal with individual
+formulas; but ^{displays} often involve a whole bunch of different formulas,
+or different pieces of a huge formula, and it's a bit of a problem to
+lay them out so that they line up properly with each other. Fortunately,
+large displays generally fall into a few simple patterns.
+
+\subsection One-line displays. Before plunging into the general question
+of display layout, let's recapitulate what we have already covered.  If
+you type `|$$|\<formula>|$$|', \TeX\ will display the formula
+^^{dollardollar} in flamboyant display style, centering it on a line by
+itself. We have also noted in Chapter~18 that it's possible to display two
+short formulas at once, by typing
+`|$$|\<formula$_1$>^|\qquad|\<formula$_2$>|$$|'; this reduces the
+two-formula problem to a one-formula problem. You get the two formulas
+separated by two quads of space, the whole being centered on a line.
+
+Displayed equations often involve ordinary text. Chapter~18 explains
+how to get roman type into formulas without leaving math mode, but the
+best way to get text into a display is to put it into an ^|\hbox|.
+There needn't even be any math at all; to typeset
+$$\hbox{Displayed Text}$$
+you can simply say `|$$\hbox{Displayed Text}$$|'. But here's a more interesting
+example:
+$$X_n=X_k \qquad\hbox{if and only if}\qquad
+    Y_n=Y_k \quad\hbox{and}\quad Z_n=Z_k.$$
+Formulas and text were combined in this case by typing
+\begintt
+$$X_n=X_k \qquad\hbox{if and only if}\qquad
+    Y_n=Y_k \quad\hbox{and}\quad Z_n=Z_k.$$
+\endtt
+Notice that |\qquad| appears around `if and only if', but a single ^|\quad|
+surrounds `and'; this helps to indicate that the $Y$ and~$Z$ parts of the
+display are related more closely to each other than to the $X$~part.
+
+Consider now the display
+$$Y_n=X_n\bmod p \quad\hbox{and}\quad Z_n=X_n\bmod q
+    \qquad\hbox{for all }n\ge0.$$
+Can you figure out how to type this? One solution is
+\begintt
+$$Y_n=X_n\bmod p \quad\hbox{and}\quad Z_n=X_n\bmod q
+    \qquad\hbox{for all }n\ge0.$$
+\endtt
+Notice that a space has been left after `|all|' in the hbox here, since spaces
+disappear when they are out in formula-land. But there's a simpler and more
+logical way to proceed, once you get used to \TeX's idea of modes: You can type
+\begintt
+... \qquad\hbox{for all $n\ge0$.}$$
+\endtt
+Wow---that's math mode inside of horizontal mode inside of display
+math mode. But in this way your manuscript mirrors what you are trying to
+accomplish, while the previous solution (with the space after `|all|')
+looks somewhat forced.
+
+\exercise Typeset the following four displays (one at a time):
+$$\openup1\jot\displaylines{
+\sum_{n=0}^\infty a_nz^n\qquad\hbox{converges if}\qquad
+  \vert z\vert<\Bigl(\limsup_{n\to\infty}
+    \root n\!\of{\vert a_n\vert}\,\Bigr)^{-1}.\cr
+{f(x+\Delta x)-f(x)\over\Delta x}\to f'(x)\qquad\hbox{as $\Delta x\to0$.}\cr
+\noalign{\vskip2pt}
+\Vert u_i\Vert=1,\qquad u_i\cdot u_j=0\quad\hbox{if $i\ne j$.}\cr
+\it\hbox{The confluent image of}\quad\left\{
+  \matrix{\hbox{an arc}\hfill\cr\hbox{a circle}\hfill\cr
+    \hbox{a fan}\hfill\cr}
+  \right\}\quad\hbox{is}\quad\left\{
+  \matrix{\hbox{an arc}\hfill\cr\hbox{an arc or a circle}\hfill\cr
+    \hbox{a fan or an arc}\hfill\cr}\right\}.\cr
+\noalign{\vskip-8pt}}$$
+^^|\Delta| ^^|\Vert|
+% the last example comes from Proc AMS 55 (1976), 410, with typos corrected
+\answer |$$\sum_{n=0}^\infty a_nz^n\qquad\hbox{converges if}\qquad|\parbreak
+|  |\||z|\||<\Bigl(\limsup_{n\to\infty}\root n\!\of{|\||a_n|\|^^|\root|
+  |}\,\Bigr)^{-1}.$$|\kern-.33pt\par
+\smallskip
+|$${f(x+\Delta x)-f(x)\over\Delta x}\to f'(x)|\parbreak
+|    \qquad\hbox{as $\Delta x\to0$.}$$|\par
+\smallskip
+|$$\|\||u_i\|\||=1,\qquad u_i\cdot u_j=0\quad\hbox{if $i\ne j$.}$$|\par
+\smallskip
+|$$\it\hbox{The confluent image of}\quad\left\{|\parbreak
+|    \matrix{\hbox{an arc}\hfill\cr\hbox{a circle}\hfill\cr|\parbreak
+|      \hbox{a fan}\hfill\cr}|\parbreak
+|    \right\}\quad\hbox{is}\quad\left\{|\parbreak
+|    \matrix{\hbox{an arc}\hfill\cr|\parbreak
+|      \hbox{an arc or a circle}\hfill\cr|\parbreak
+|      \hbox{a fan or an arc}\hfill\cr}\right\}.$$|\par
+\smallskip\noindent
+The first example includes |\!| and |\,| to give slightly refined spacing;
+but the point of the problem was to illustrate the hbox, not to fuss over
+such extra details.
+The last example can be done much more simply using the ideas of
+Chapter~22, if you don't mind descending to the level of \TeX\ primitives;
+for example, the first matrix could be replaced by ^^|\halign|
+\begintt
+\,\vcenter{\halign{#\hfil\cr an arc\cr a circle\cr a fan\cr}}\,
+\endtt
+and the second is similar.
+
+\dangerexercise Sometimes display style is too grandiose, when the formula
+being displayed is
+$$y={1\over2}x$$
+or something equally simple. One day B. L. ^{User} tried to remedy this by
+typing it as `|$$y={\scriptstyle1\over\scriptstyle2}x$$|', but the
+resulting formula
+$$y={\scriptstyle1\over\scriptstyle2}x$$
+wasn't at all what he had in mind. What's the right way to get ^^{one half}
+^^{1/2--unslashed form} simply `$y={1\over2}x$' when you don't want big
+^{fractions in displays}?
+\answer |$$\textstyle y={1\over2}x$$|. \ (Switching to text style is
+especially common in multiline formulas. For example, you will probably
+find occasions to use ^|\textstyle| on both sides of the |&|'s within
+an ^|\eqalign|.)
+
+\dangerexercise What difference, if any, is there between the result of
+typing `|$$|\<formula>|$$|' and the result of typing
+`|$$\hbox{$|\<formula>|$}$$|'\thinspace?
+\answer The latter formula will be in text style, not display style.
+And even if you do type `|$$\hbox{$\displaystyle{|\<formula>|}$}$$|', the
+results are not quite the same, as we will see later: \TeX\ will compress
+the glue in `|$$|\<formula>|$$|' if the formula is too wide to fit on
+a line at its natural width, but the glue inside |\hbox{...}| is frozen
+at its natural width. The |\hbox| version also invokes
+|\everyhbox| and |\everymath|.
+
+\dangerexercise You may have noticed that most of the displays in this
+manual are not centered; displayed material is usually aligned at the
+left with the paragraph indentation, as part of the book design, because
+this is an unusual book. Explain how you could typeset a formula like
+$$\leftline{\indent$\displaystyle
+    1-{1\over2}+{1\over3}-{1\over4}+\cdots=\ln2$}$$
+^^{displays, non-centered}
+that is off-center in this way.
+\answer One solution is to put the formula in an hbox that occupies a full line:
+\begintt
+$$\leftline{\indent$\displaystyle
+    1-{1\over2}+{1\over3}-{1\over4}+\cdots=\ln2$}$$
+\endtt
+But this takes a bit of typing. If you make the definitions
+\begintt
+\def\leftdisplay#1$${\leftline{\indent$\displaystyle{#1}$}$$}
+\everydisplay{\leftdisplay}
+\endtt
+you can type `|$$|\<formula>|$$|' as usual, and the formatting will be
+inserted automatically. \ (This doesn't work with equation numbers;
+Appendix~D illustrates how to handle them as well.)
+
+If you've had previous experience typing mathematical papers, you probably
+have been thinking, ``What about ^{equation numbers}? When is this book
+going to talk about them?'' Ah yes, now is the time to discuss those sneaky
+little labels that appear off to the side of displays. If you type
+\begindisplay
+|$$|\<formula>|\eqno|\<formula>|$$|
+\enddisplay
+\TeX\ will display the first formula and it will also put an equation number
+(the second formula) at the right-hand margin. For example,
+\begintt
+$$x^2-y^2 = (x+y)(x-y).\eqno(15)$$
+\endtt
+^^|\eqno|
+will produce this:
+$$x^2-y^2 = (x+y)(x-y).\eqno(15)$$
+You can also get equation numbers at the left-hand margin, with ^|\leqno|.
+For example,
+\begintt
+$$x^2-y^2 = (x+y)(x-y).\leqno(16)$$
+\endtt
+will produce this:
+$$x^2-y^2 = (x+y)(x-y).\leqno(16)$$
+Notice that you always give the equation number second, even when it is going
+to appear at the left. Everything from the |\eqno| or |\leqno| command to
+the |$$| that ends the display is the equation number. Thus, you're not
+allowed to have two equation numbers in the same display; but there's a
+way to get around that restriction, as we'll see later.
+
+\danger Nowadays people are using right-hand equation numbers more and more,
+because a display most often comes at the end of a sentence or clause, and
+the right-hand convention keeps the number from intruding into the clause.
+Furthermore, it's often possible to save space when a displayed equation
+follows a short text line, since less space is needed above the display;
+such savings are not possible with |\leqno|, because there's no room for
+overlap. For example, there is less space above display~(15) than there is
+above~(16) in our illustrations of\/ |\eqno| and |\leqno|, although the
+formulas and text are otherwise identical.
+
+\danger If you look closely at (15) and (16) above, you can see that the
+displayed formulas have been centered without regard to the presence of
+the equation numbers. But when a formula is large, \TeX\ makes sure that
+it does not interfere with its number; the equation number may even be
+placed on a line by itself.
+
+\exercise How would you produce the following display?
+$$\prod_{k\ge0}{1\over(1-q^kz)}=
+    \sum_{n\ge0}z^n\bigg/\!\!\prod_{1\le k\le n}(1-q^k).\eqno(16')$$
+\answer |$$\prod_{k\ge0}{1\over(1-q^kz)}=|\parbreak
+        |   \sum_{n\ge0}z^n\bigg/\!\!\prod_{1\le k\le n}(1-q^k).\eqno(16')$$|
+
+\dangerexercise Equation numbers are math formulas, typeset in text style.
+So how can you get an equation number like `\hbox{(3--1)}'
+(with an ^{en-dash})?
+\answer |\eqno\hbox{(3--1)}|.
+
+\ddangerexercise B. L. ^{User} tried typing `|\eqno(*)|' and `|\eqno(**)|',
+and he was pleased to discover that this produced the equation numbers
+`$(*)$' and `$(**)$'. \ [He had been a bit worried that they would come out
+`(*)' and `(**)' instead.] \ But then a few months later he tried
+`|\eqno(***)|' and got a surprise. What was it?
+\answer When you type an ^{asterisk} in math mode, plain \TeX\ considers
+|*| to be a binary operation. In the cases `|(*)|' and `|(**)|', the
+binary operations are converted to type~Ord, because they don't appear in
+a binary context; but the middle asterisk in `|(***)|' remains of type~Bin.
+So the result was `$(***)$'. To avoid the extra medium spaces, you can
+type `|\eqno(*{*}*)|'; or you can change ^|\mathcode||`*|, if you never use
+|*| as a binary operation.
+
+\ddanger Somewhere in this manual there ought to be a description of exactly
+how \TeX\ displays formulas; i.e., how it centers them, how it places the
+equation numbers, how it inserts extra space above and below, and so on.
+Well, now is the time for those rules to be stated. They are somewhat
+complex, because they interact with things like |\parshape|, and because
+they involve several parameters that haven't been discussed yet. The purpose
+of the rules is to explain exactly what sorts of boxes, glue, and
+penalties are placed onto the current ^{vertical list} when a display occurs.
+
+\ddanger If a display occurs after, say, four lines of a paragraph, \TeX's
+internal register called ^|\prevgraf| will be equal to~4 when the display
+starts.  The display will be assumed to take three lines, so |\prevgraf|
+will become~7 when the paragraph is resumed at the end of the display
+(unless you have changed |\prevgraf| in the meantime). \TeX\ assigns
+special values to three \<dimen> parameters immediately after the opening
+|$$| is sensed:  ^|\displaywidth| and ^|\displayindent| are set to the
+line width~$z$ and the shift amount~$s$ for line number |\prevgraf|${}+2$,
+based on the current paragraph shape or hanging indentation. \ (Usually
+|\displaywidth| is the same as ^|\hsize|, and |\displayindent| is zero,
+but the paragraph shape can vary as described in Chapter~14.) \ Furthermore,
+^|\predisplaysize| is set to the effective width~$p$ of the line preceding
+the display, as follows: If there was no previous line (e.g., if the |$$|
+was preceded by ^|\noindent| or by the closing |$$| of another display),
+$p$~is set to $-16383.99999\pt$ (i.e., to the smallest legal dimension,
+$-$^|\maxdimen|).  Otherwise \TeX\ looks inside the hbox that was formed
+by the previous line, and sets $p$ to the position of the right edge of
+the rightmost box inside that hbox, plus the indentation by which the
+enclosing hbox has been moved right, plus two ems in the current font.
+However, if this value of~$p$ depends on the fact that glue in that hbox
+was stretching or shrinking---for example, if the ^|\parfillskip| glue is
+finite, so that the material preceding it has not been set at its natural
+width---then $p$~is set to |\maxdimen|. \ (This doesn't happen
+often, but it keeps \TeX\ machine independent, since $p$~never depends on
+quantities that may be rounded differently on different computers.)  \
+Notice that |\displaywidth| and |\displayindent| are not
+affected by |\leftskip| and |\rightskip|, but
+|\predisplaysize| is. The values of\/ |\displaywidth|,
+|\displayindent|, and |\predisplaysize|
+will be used by \TeX\ after the displayed formula has been
+read, as explained below; your program can examine them and/or change
+them, if you want the typesetting to be done differently.
+
+\ddanger After a display has been read, \TeX\ converts it from a math list
+to a horizontal list~$h$ in display style, as explained in
+Appendix~G\null.  An equation number, if present, is processed in text
+style and put into an hbox~$a$ with its natural width. Now the fussy
+processing begins: Let $z$, $s$, and~$p$ be the current values of\/\
+|\displaywidth|, |\displayindent|, and
+|\predisplaysize|. Let $q$ and~$e$ be zero if there is no equation
+number; otherwise let~$e$ be the width of the equation number, and let~$q$
+be equal to $e$~plus one quad in the symbols font (i.e., in
+^|\textfont||2|). Let $w_0$ be the natural width of the displayed
+formula~$h$. If $w_0+q\le z$, list~$h$~is packaged in an hbox~$b$ having
+its natural width~$w_0$.  But if $w_0+q>z$ (i.e., if the display is too
+wide to fit at its natural width), \TeX\ performs the following ``^{squeeze
+routine}'':  If $e\ne0$ and if there is enough shrinkability in the
+displayed formula~$h$ to reduce its width to $z-q$, then list $h$ is
+packaged in an hbox~$b$ of width~$z-q$. Otherwise $e$ is set to zero, and
+list~$h$ is packaged in a (possibly overfull) hbox~$b$ of width $\min(w_0,z)$.
+
+\ddanger (Continuation.) \ \TeX\ tries now to center the display without
+regard to the equation number. But if such centering would make it too close
+to that number (where ``too close'' means that the space between them is less
+than the width~$e$), the equation is either centered in the remaining space
+or placed as far from the equation number as possible. The latter alternative
+is chosen only if the first item on list~$h$ is glue, since \TeX\ assumes that
+such glue was placed there in order to control the spacing precisely.
+But let's state the rules more formally: Let~$w$ be the width of box~$b$.
+\TeX\ computes a displacement~$d$, to be used later when positioning box~$b$,
+by first setting $d={1\over2}(z-w)$. If $e>0$ and if $d<2e$, then $d$~is
+reset to ${1\over2}(z-w-e)$ or to zero, where zero is chosen if list~$h$
+begins with a glue item.
+
+\ddanger (Continuation.) \ \TeX\ is now ready to put things onto the current
+vertical list, just after the material previously constructed for the
+paragraph-so-far. First comes a ^{penalty} item, whose cost is an integer
+parameter called ^|\predisplaypenalty|. Then comes glue. If $d+s\le p$,
+or if there was a left equation number (|\leqno|), \TeX\ sets $g_a$ and
+$g_b$ to glue items specified by the parameters ^|\abovedisplayskip|
+and ^|\belowdisplayskip|, respectively; otherwise $g_a$ and $g_b$ become
+glue items corresponding to ^|\abovedisplayshortskip| and
+^|\belowdisplayshortskip|. \ [Translation: If the predisplaysize is short
+enough so that it doesn't overlap the displayed formula, the glue above and
+below the display will be ``short'' by comparison with the glue that is
+used when there is an overlap.] \ If $e=0$ and if there is an |\leqno|,
+the equation number is appended as an hbox by itself, shifted right~$s$ and
+preceded by interline glue as usual; an infinite penalty is also appended,
+to prevent a page break between this number and the display. Otherwise
+a glue item~$g_a$ is placed on the vertical list.
+
+\ddanger (Continuation.) \ Now comes the displayed equation itself. If
+$e\ne0$, the equation number box~$a$ is combined with the formula box~$b$ as
+follows: Let~$k$ be a kern of width $z-w-e-d$. In the |\eqno| case, box~$b$
+is replaced by an hbox containing $(b,k,a)$; in the |\leqno| case, box~$b$
+is replaced by an hbox containing $(a,k,b)$, and $d$~is set to zero. In all
+cases, box~$b$ is then appended to the vertical list, shifted right by~$s+d$.
+
+\ddanger (Continuation.) \ The final task is to append the glue or the
+equation number that follows the display. If there was an |\eqno| and if
+$e=0$, an infinite penalty is placed on the vertical list, followed by the
+equation number box~$a$ shifted right by $s+z$ minus its width, followed
+by a penalty item whose cost is the value of\/ ^|\postdisplaypenalty|.
+Otherwise a penalty item for the |\postdisplaypenalty| is appended
+first, followed by a glue item for~$g_b$ as specified above. \TeX\ now
+adds~3 to |\prevgraf| and returns to horizontal mode, ready to resume the
+paragraph.
+
+\ddanger One consequence of these rules is that you can force an equation
+number to appear on a line by itself by making its width zero, i.e.,
+by saying either `|\eqno|^|\llap||{$|\<formula>|$}|' or
+`|\leqno|^|\rlap||{$|\<formula>|$}|'. This makes $e=0$, and
+the condition $e=0$ controls \TeX's positioning logic, as explained
+in the rules just given.
+
+\ddanger Plain \TeX\ sets |\predisplaypenalty=10000|, because fine
+printers traditionally shun displayed formulas at the very top of a page.
+You can change |\predisplaypenalty| and
+|\postdisplaypenalty| if you want to encourage or discourage
+page breaks just before or just after a display. For example,
+`\hbox{|$$\postdisplaypenalty=|}\allowbreak\hbox{|-10000|\<formula>|$$|}'
+will force a page break, putting the formula at the bottom line. It is better
+to force a ^{page break} this way than to say ^|\eject| right after |$$...$$|;
+such an eject (which follows the |\belowdisplayskip| glue below the
+display) causes the page to be short, because it leaves unwanted glue at
+the bottom.
+
+\ddangerexercise Read the rules carefully and deduce the final position
+of `$x=y$' in the formula
+\begintt
+$$\quad x=y \hskip10000pt minus 1fil \eqno(5)$$
+\endtt
+assuming that there is no hanging indentation. Also consider |\leqno|
+instead of\/ |\eqno|.
+\answer Assuming that |\hsize| is less than $10000\pt$, the natural width of
+this equation will be too large to fit on a line; also, |\quad| specifies
+glue at the left. Therefore `$x=y$' will appear exactly $1\em$ from
+the left, and `(5)' will appear flush right. \ (The widths will satisfy
+^^{displays, non-centered} $w=z-q$, $d=0$, $k=q-e=18\rm\,mu$.) \
+In the case of\/ |\leqno|, `(5)' will appear flush left, followed by
+one quad of space in |\textfont2|, followed by one quad of space in the
+current text font, followed by `$x=y$'.
+
+\ddanger \TeX\ also allows ``^{alignment displays},'' which are not
+processed in math mode because they contain no formulas at the outer
+level. An alignment display is created by commands of the general form
+\begindisplay
+|$$|\<assignments>|\halign{|\<alignment>|}|\<assignments>|$$|
+\enddisplay
+where the \<assignments> are optional things like parameter changes that do not
+produce any math lists. In such displays, the |\halign| is processed exactly
+as if it had appeared in vertical mode, and it will construct a vertical
+list~$v$ as usual, except that each row of the alignment will be shifted
+right by the ^|\displayindent|. After the alignment and the closing
+assignments have been processed, \TeX\ will put a ^|\predisplaypenalty|
+item and some ^|\abovedisplayskip| glue on the main vertical list, followed
+by~$v$, followed by a ^|\postdisplaypenalty| item and ^|\belowdisplayskip|
+glue. Thus, alignment displays are essentially like ordinary alignments,
+except that they can interrupt paragraphs; furthermore, they are embedded in
+glue and penalties just like other displays. The ^|\displaywidth| and
+^|\predisplaysize| do not affect the result, although you could use
+those parameters in your ^|\halign|. An entire alignment display is considered
+to be only three lines long, as far as ^|\prevgraf| is concerned.
+
+\subsection Multi-line displays. OK, the use of displayed formulas is
+very nice. But when you try typing a lot of manuscripts you will run into
+some displays that don't fit the simple pattern of a one-line formula with
+or without an equation number. Plain \TeX\ provides special control
+sequences that will cover most of the remaining cases.
+
+Multi-line displays usually consist of several equations that should be
+lined up by their `$=$'~signs, as in
+$$\eqalign{X_1+\cdots+X_p&=m,\cr
+           Y_1+\cdots+Y_q&=n.\cr}$$
+The recommended procedure for such a display is to use ^|\eqalign|,
+which works with special markers |&| ^^{ampersand} and ^|\cr| that we
+have already encountered in connection with |\cases| and |\matrix|
+in Chapter~18. Here's how to type this particular one:
+\begintt
+$$\eqalign{X_1+\cdots+X_p&=m,\cr
+           Y_1+\cdots+Y_q&=n.\cr}$$
+\endtt
+There can be any number of equations in an |\eqalign|; the general pattern is
+$$\halign{\indent#&#\hfil\cr
+|\eqalign{|&\<left-hand side$_1$>|&|\<right-hand side$_1$>|\cr|\cr
+           &\<left-hand side$_2$>|&|\<right-hand side$_2$>|\cr|\cr
+\noalign{\vskip-2pt}
+           &\qquad\vdots\cr
+           &\<left-hand side$_n$>|&|\<right-hand side$_n$>|\cr}|\cr}$$
+where each \<right-hand side> starts with the symbol on which you want
+alignment to occur. For example, every right-hand side often begins
+with an $=$~sign. The equations will be typeset in display style.
+
+\exercise In practice, the left-hand sides of aligned formulas are often
+blank, and the alignment is often done with respect to other symbols
+as well as~$=$. For example, the following display is typical; see if you
+can guess how the author typed it:
+$$\eqalign{T(n)\le T(2^{\lceil\lg n\rceil})
+    &\le c(3^{\lceil\lg n\rceil}-2^{\lceil\lg n\rceil})\cr
+    &<3c\cdot3^{\lg n}\cr
+    &=3c\,n^{\lg3}.\cr}$$ % from v2 p279
+\answer (Note in particular that the final `|.|'\ comes {\sl before\/} the
+final `|\cr|'.)
+\begintt
+$$\eqalign{T(n)\le T(2^{\lceil\lg n\rceil})
+    &\le c(3^{\lceil\lg n\rceil}-2^{\lceil\lg n\rceil})\cr
+    &<3c\cdot3^{\lg n}\cr
+    &=3c\,n^{\lg3}.\cr}$$
+\endtt
+
+The result of\/ |\eqalign| is a vertically centered box. This makes it easy to
+get a formula like
+$$\left\{
+\eqalign{\alpha&=f(z)\cr \beta&=f(z^2)\cr \gamma&=f(z^3)\cr}
+\right\}\qquad\left\{
+\eqalign{x&=\alpha^2-\beta\cr y&=2\gamma\cr}\right\}.$$ % meaningless
+You simply use |\eqalign| twice in the same line:
+\begintt
+$$\left\{
+\eqalign{\alpha&=f(z)\cr \beta&=f(z^2)\cr \gamma&=f(z^3)\cr}
+\right\}\qquad\left\{
+\eqalign{x&=\alpha^2-\beta\cr y&=2\gamma\cr}\right\}.$$
+\endtt
+
+\exercise Try your hand at the numbered two-line display % Polya/Szego V.29
+$$\eqalign{P(x)&=a_0+a_1x+a_2x^2+\cdots+a_nx^n,\cr
+   P(-x)&=a_0-a_1x+a_2x^2-\cdots+(-1)^na_nx^n.\cr}\eqno(30)$$
+[{\sl Hint:\/} Use the fact that |\eqalign| produces a vertically centered
+box; the equation number `(30)' is supposed to appear halfway between
+the two lines.]
+\answer |$$\eqalign{P(x)&=a_0+a_1x+a_2x^2+\cdots+a_nx^n,\cr|\parbreak
+        |   P(-x)&=a_0-a_1x+a_2x^2-\cdots+(-1)^na_nx^n.\cr}\eqno(30)$$|\par
+
+\exercise What happens if you forget the |&| in one equation of an |\eqalign|?
+\answer Both sides of that equation are considered to be on the left, so
+you get results that look like this:
+$$\openup-\jot
+\left\{\eqalign{\alpha&=f(z)\cr \beta&=f(z^2)\cr \gamma=f(z^3)\cr}
+  \right\}.$$
+
+\danger Multi-line formulas sometimes fit together in odd ways, and you'll
+find that every once in a~while you will want to move certain lines farther
+apart or closer together. If you type `^|\noalign||{|^|\vskip|\<glue>|}|'
+after any |\cr|, \TeX\ will insert the given amount of extra glue just
+after that particular line. For example,
+\begintt
+\noalign{\vskip3pt}
+\endtt
+will put $3\pt$ of additional space between lines. You can also change the
+amount of space before the first line, in the same way.
+
+The next level of complexity occurs when you have several aligned
+equations with several equation numbers. Or perhaps some of the
+lines are numbered and others are not:
+$$\eqalignno{(x+y)(x-y)&=x^2-xy+yx-y^2\cr
+    &=x^2-y^2;&(4)\cr
+  (x+y)^2&=x^2+2xy+y^2.&(5)\cr}$$
+For this situation plain \TeX\ provides ^|\eqalignno|; you use it like
+|\eqalign|, but on each line that you want an equation number you add
+`|&|\<equation number>' just before the |\cr|. The example above was
+generated by
+\begintt
+$$\eqalignno{(x+y)(x-y)&=x^2-xy+yx-y^2\cr
+    &=x^2-y^2;&(4)\cr
+  (x+y)^2&=x^2+2xy+y^2.&(5)\cr}$$
+\endtt
+Notice that the second |&| is omitted unless there's an equation number.
+
+And there's also ^|\leqalignno|, which puts equation numbers at the left.
+In this case it is appropriate to move the `(4)' to the beginning
+of its equation:
+$$\leqalignno{(x+y)(x-y)&=x^2-xy+yx-y^2&(4)\cr
+    &=x^2-y^2;\cr
+  (x+y)^2&=x^2+2xy+y^2.&(5)\cr}$$
+Although the equation numbers appear at the left, you are still supposed to
+input them at the right, just as you do with |\leqno|; in other words,
+you should type
+`|$$\leqalignno{(x+y)(x-y)&...&(4)\cr...}$$|' to get the previous display.
+
+Caution: |\eqalignno| and |\leqalignno| both center the set of equations
+without regard to the widths of the equation numbers. If the equations or
+their numbers get too wide, they might overlap, yet no error message will
+be given.
+
+\exercise Typeset the following display: ^^|\gcd|
+$$\leqalignno{\gcd(u,v)&=\gcd(v,u);&(9)\cr
+    \gcd(u,v)&=\gcd(-u,v).&(10)\cr}$$ % v2 p316
+\answer |$$\leqalignno{\gcd(u,v)&=\gcd(v,u);&(9)\cr|\parbreak
+        |    \gcd(u,v)&=\gcd(-u,v).&(10)\cr}$$|
+
+\exercise And here's another one to try, just to keep in practice: ^^|\int|
+$$\vbox{
+\eqalignno{\biggl(\int_{-\infty}^\infty e^{-x^2}\,dx\biggr)^2
+  &=\int_{-\infty}^\infty\int_{-\infty}^\infty
+    e^{-(x^2+y^2)}\,dx\,dy\cr
+  &=\int_0^{2\pi}\int_0^\infty e^{-r^2}r\,dr\,d\theta\cr
+  &=\int_0^{2\pi}\biggl(-{e^{-r^2}\over2}
+    \bigg\vert_{r=0}^{r=\infty}\,\biggr)\,d\theta\cr
+  &=\pi.&(11)\cr}
+}$$ % cf Joy of TeX
+\answer %
+|$$\eqalignno{\biggl(\int_{-\infty}^\infty e^{-x^2}\,dx\biggr)^2|\parbreak
+        |  &=\int_{-\infty}^\infty\int_{-\infty}^\infty|\parbreak
+        |    e^{-(x^2+y^2)}\,dx\,dy\cr|\parbreak
+        |  &=\int_0^{2\pi}\int_0^\infty e^{-r^2}r\,dr\,d\theta\cr|\parbreak
+        |  &=\int_0^{2\pi}\biggl(-{e^{-r^2}\over2}|\parbreak
+        |    \bigg|\||_{r=0}^{r=\infty}\,\biggr)\,d\theta\cr|\parbreak
+        |  &=\pi.&(11)\cr}$$| ^^|\bigg|
+
+\danger Although |\eqalign| and |\eqalignno| look nearly the same, there's
+really a fundamental distinction between them: |\eqalign| makes a single,
+vertically centered box, which is no wider than it needs to be; but
+|\eqalignno| generates a set of lines that have the full display width
+(reaching all the way to both margins). Thus, for example, you can use
+|\eqalign| several times in a display, but |\eqalignno| can appear only
+once. If you try to use ^|\eqno| in conjunction with |\eqalign|,
+you get a decent result, but if you try to use |\eqno| in connection
+with |\eqalignno| you'll get some sort of weird error message(s).
+
+\ddanger The definitions in Appendix~B reveal why |\eqalign| and |\eqalignno|
+behave differently: |\eqalign| is an
+abbreviation for ^|\vcenter||{|^|\halign||{...}}|, while
+|\eqalignno| is an abbreviation for |\halign to\displaywidth{...}|;
+thus the |\eqalignno| macro generates an ``^{alignment display}.''
+
+\ddanger This difference between |\eqalign| and |\eqalignno| has two
+interesting consequences. \ (1)~It's impossible to break an |\eqalign|
+between pages, but an |\eqalignno| can be broken. In fact, you can
+{\sl force\/} a ^{page break} after a particular line if you insert
+`^|\noalign||{|^|\break||}|'
+after the |\cr| for that line. You can prohibit {\sl all\/} breaks
+in an |\eqalignno| if you set ^|\interdisplaylinepenalty||=10000|; or you
+can enclose the whole works in a ^|\vbox|:
+\begintt
+$$\vbox{\eqalignno{...}}$$
+\endtt
+(2) You can also insert a line of text between two equations, without
+losing the alignment. For example, consider the two displays
+$$\eqalignno{x&=y+z\cr
+  \noalign{\hbox{and}}
+  x^2&=y^2+z^2.\cr}$$
+These were actually generated as a single display by typing
+\begintt
+$$\eqalignno{x&=y+z\cr
+  \noalign{\hbox{and}}
+  x^2&=y^2+z^2.\cr}$$
+\endtt
+Therefore the fact that their $=$ signs line up is not just a lucky
+coincidence. Sometimes you will want to adjust the spacing above or below
+such a line of inserted text, by putting a |\vskip| or two inside of the
+|\noalign{...}|.  Incidentally, this example also shows that it is
+possible to use |\eqalignno| without giving any equation numbers.
+
+\ddangerexercise What happens if\/ |\eqalign| is substituted for
+|\eqalignno| in this last example?
+\answer You get the displayed box
+$$\eqalign{x&=y+z\cr
+  \noalign{\hbox{and}}
+  x^2&=y^2+z^2.\cr}$$
+Reason: The `and' occurs at the left of the |\eqalign| box, not at the
+left of the whole display, and the |\eqalign| box is centered as usual.
+
+\ddangerexercise Our friend Ben ^{User} got into trouble again when he tried to
+move an equation number up higher than its usual position, by typing this:
+^^|\raise|
+\begintt
+$$\eqalignno{...&\raise6pt\hbox{(5)}\cr}$$
+\endtt
+What was his oversight, and what could he have done instead?
+\answer By raising the equation number, he increased the line height,
+so \TeX\ put extra space between that line and the previous line
+when it calculated the interline glue. If he had said
+`^|\smash||{\raise...}|', he wouldn't have had that problem.
+
+\danger For other types of displays, plain \TeX\ provides ^|\displaylines|,
+which lets you display any number of formulas in any way you want,
+without any alignment. The general form is
+$$\halign{\indent\hfil#&#\hfil\cr
+|$$\displaylines{|&\<displayed formula$_1$>|\cr|\cr
+    &\<displayed formula$_2$>|\cr|\cr
+\noalign{\vskip-2pt}
+    &\qquad\vdots\cr
+    &\<displayed formula$_n$>|\cr}$$|\cr}$$
+Each formula will be centered, because |\displaylines| puts ^|\hfil| at
+the left and the right of each line; you can override this centering to
+get things flush left or flush right by inserting ^|\hfill|, which takes
+precedence over |\hfil|.
+
+\dangerexercise Use |\displaylines| to typeset the three-line display
+$$\displaylines{\hfill x\equiv x;\hfill\llap{(1)}\cr
+   \hfill\hbox{if}\quad x\equiv y\quad\hbox{then}\quad
+      y\equiv x;\hfill\llap{(2)}\cr
+   \hfill\hbox{if}\quad x\equiv y\quad\hbox{and}\quad
+      y\equiv z\quad\hbox{then}\quad
+      x\equiv z.\hfill\llap{(3)}\cr}$$
+\answer |$$\displaylines{\hfill x\equiv x;\hfill\llap{(1)}\cr|\parbreak
+        |   \hfill\hbox{if}\quad x\equiv y\quad\hbox{then}\quad|\parbreak
+        |      y\equiv x;\hfill\llap{(2)}\cr|\parbreak
+        |   \hfill\hbox{if}\quad x\equiv y\quad\hbox{and}\quad|\parbreak
+        |      y\equiv z\quad\hbox{then}\quad|\parbreak
+        |      x\equiv z.\hfill\llap{(3)}\cr}$$|\par\medskip\noindent
+There's also a trickier solution, which begins with
+\begintt
+$$\displaylines{x\equiv x;\hfil\llap{(1)}\hfilneg\cr
+\endtt
+
+\danger If you look closely at the multi-line displays in this chapter,
+you'll see that the baselines are farther apart than they are in normal
+text; mathematics publishers generally do this in order to make the
+displays easier to read. In accordance with this tradition, |\eqalign| and
+its relatives automatically increase the ^|\baselineskip|. If~you are
+making a multi-line display with \TeX's primitive ^|\halign| command,
+instead of using one of the plain \TeX\ macros, you might want to make
+this same baseline adjustment, and you can do it easily by saying
+`|$$\openup1\jot \halign{...}$$|'. The ^|\openup| macro increases
+^|\lineskip| and ^|\lineskiplimit| as well as |\baselineskip|. If
+you say `|\openup2\jot|', the lines are spread apart 2 extra units, where
+plain \TeX\ opens things up in units of $3\pt$. Since |$$...$$| acts as a
+^{group}, the effect of\/ |\openup| will disappear when the display is
+finished. Any \<dimen> can follow |\openup|, but it's customary to express the
+amount symbolically in terms of a ^|\jot| instead of using absolute units;
+^^{generic coding}
+then your manuscript can be used with a variety of different formats.
+
+\ddanger Plain \TeX's ^|\displaylines|, ^|\eqalignno|, and ^|\leqalignno|
+macros begin with `|\openup1\jot|'. If you don't want the lines to be
+opened up, you can cancel this by saying, e.g.,
+`|$$\openup-1\jot \eqalignno{...}$$|', because |\openup| has a cumulative
+effect.
+
+\ddanger Suppose that you have decided to make a homegrown display having
+the general form `|$$\openup1\jot \halign{...}$$|'; and for convenience,
+let's suppose that the normal conventions of plain \TeX\ are in force, so
+that |\jot=3pt| and |\baselineskip=12pt|. Then the |\openup| macro
+changes the baselineskip distance to $15\pt$. It follows that the baseline
+of the text line that immediately precedes the display will be $15\pt$
+above the topmost baseline of the display, plus the ^|\abovedisplayskip|.
+But when the paragraph resumes, its next baseline will be only $12\pt$
+below the bottom baseline of the display, plus the ^|\belowdisplayskip|,
+because the |\baselineskip| parameter will have reverted to its normal
+value. The |\eqalignno| and |\displaylines| macros say
+`|\noalign{\vskip|$-d$|}|' before their first lines, where $d$ is
+the net amount of opening-up, in order to compensate for this difference.
+
+\subsection Long formulas. Our discussion of mathematics typing is almost
+complete; we need to deal with just one more problem: What should be
+done when a formula is so long that it doesn't fit on a single line?
+
+For example, suppose that you encounter the equation
+$$\hfuzz=20pt % overfull box tolerated here
+\sigma(2^{34}-1,2^{35},1)=
+  -3+(2^{34}-1)/2^{35}+2^{35}\!/(2^{34}-1)+7/2^{35}(2^{34}-1)
+  -\sigma(2^{35},2^{34}-1,1).$$ % from v2, 1st ed, p76
+You'll have to break it up somehow; \TeX\ has done its best to squeeze
+everything together by shrinking the spaces next to the $+$ and~$-$ signs
+to zero, but still the line has come out overfull.
+
+Let's try to break that equation just before the `$+7$'. One common way to
+do this is to type
+\begintt
+$$\eqalign{\sigma(2^{34}-1,2^{35},1)
+&=-3+(2^{34}-1)/2^{35}+2^{35}\!/(2^{34}-1)\cr
+&\qquad+7/2^{35}(2^{34}-1)-\sigma(2^{35},2^{34}-1,1).\cr}$$
+\endtt
+which yields
+$$\eqalign{\sigma(2^{34}-1,2^{35},1)
+  &=-3+(2^{34}-1)/2^{35}+2^{35}\!/(2^{34}-1)\cr
+  &\qquad+7/2^{35}(2^{34}-1)-\sigma(2^{35},2^{34}-1,1).\cr}$$
+The idea is to treat a long one-line formula as a two-line formula,
+using |\qquad| on the second line so that the second part of the formula
+appears well to the right of the $=$~sign on the first line.
+
+\exercise Explain how to deal with the following display. % v2 p107
+$$\eqalignno{x_nu_1+\cdots+x_{n+t-1}u_t
+   &=x_nu_1+(ax_n+c)u_2+\cdots\cr
+   &\qquad+\bigl(a^{t-1}x_n+c(a^{t-2}+\cdots+1)\bigr)u_t\cr
+   &=(u_1+au_2+\cdots+a^{t-1}u_t)x_n+h(u_1,\ldots,u_t).
+     \quad&(47)\cr}$$
+\answer |$$\eqalignno{x_nu_1+\cdots+x_{n+t-1}u_t|\parbreak
+        |   &=x_nu_1+(ax_n+c)u_2+\cdots\cr|\parbreak
+        |   &\qquad+\bigl(a^{t-1}x_n+c(a^{t-2}+\cdots+1)\bigr)u_t\cr|\parbreak
+        |   &=(u_1+au_2+\cdots+a^{t-1}u_t)x_n+h(u_1,\ldots,u_t).|\parbreak
+        |     \quad&(47)\cr}$$|\par\noindent
+You weren't expected to insert the `|\quad|' on the last line; such
+refinements usually can't be anticipated until you see the first proofs.
+But without that |\quad| the `(47)' would occur half a quad closer to the
+formula.
+
+\danger It's quite an art to decide how to ^{break long displayed formulas}
+into several lines; \TeX\ never attempts to break them, because no set of
+rules is really adequate. The author of a mathematical manuscript is
+generally the best judge of what to do, since break positions depend on
+subtle factors of mathematical exposition. For example, it is often
+desirable to emphasize some of the symmetry or other structure that
+underlies a formula, and such things require a solid understanding of
+exactly what is going on in that formula.
+
+\begingroup\ninepoint
+\danger Nevertheless, it is possible to state a few rules of thumb about
+how to deal with long formulas in displays, since there are some
+principles that the best mathematical typesetters tend to follow:\enddanger
+
+\smallskip
+\textindent{a)}Although formulas within a paragraph always break {\sl after\/}
+binary operations and relations, displayed formulas always break {\sl before\/}
+binary operations and relations. Thus, we didn't end the first line of
+our $\sigma(\,\ldots\,)$ example with `|(2^{34}-1)+|'; we ended it with
+`|(2^{34}-1)|' and began the second line with `|+|'.
+
+\smallskip
+\textindent{b)}When an equation is broken before a binary operation, the second
+line should start at least two quads to the right of where the innermost
+subformula containing that binary operation begins on the first line.
+For example, if you wish to break
+\begindisplay
+|$$\sum_{0<k<n}\left(|\<formula$_1$>|+|\<formula$_2$>|\right)$$|
+\enddisplay
+at the plus sign between \<formula$_1$> and \<formula$_2$>, it is almost
+mandatory to have the plus sign on the second line appear somewhat to the
+right of the large left parenthesis that corresponds to `|\left(|'.
+
+\endgroup
+
+\danger In the example just considered, special care is needed to break the
+formula into two lines, because ^|\left| and ^|\right| delimiters cannot be
+used in isolation; you can't have only |\left| in one line of a formula
+and only |\right| in the second. Furthermore, you'll want the two delimiters
+to be of the same size, even though they occur in different lines. The best
+solution is usually to choose the delimiter size yourself; for example,
+you could type
+\begindisplay
+|$$\eqalign{\sum_{0<k<n}\biggl(&|\<formula$_1$>|\cr|\cr
+|             &\qquad{}+|\<formula$_2$>|\biggr)\cr}$$|\cr
+\enddisplay
+if\/ ^|\bigg| delimiters are best. Notice that the |&|~markers don't occur
+at $=$~signs in this example, they just mark a point of alignment.
+
+\danger There's another way to break long formulas, sometimes called the
+{\sl^{two-line}\/} form. The idea is to put the first part of the formula
+almost ^{flush left}, and to put the second part almost ^{flush right},
+where ``almost flush'' means ``one quad away.'' Thus, the two-line form of
+the long $\sigma(\,\ldots\,)$ equation considered earlier is
+$$\displaylines{\quad\sigma(2^{34}-1,2^{35},1)
+  =-3+(2^{34}-1)/2^{35}+2^{35}\!/(2^{34}-1)\hfill\cr
+\hfill{}+7/2^{35}(2^{34}-1)-\sigma(2^{35},2^{34}-1,1).\quad\cr}$$
+It isn't difficult to get this two-line effect with ^|\displaylines|:
+\begintt
+$$\displaylines{\quad\sigma(2^{34}-1,2^{35},1)
+  =-3+(2^{34}-1)/2^{35}+2^{35}\!/(2^{34}-1)\hfill\cr
+\hfill{}+7/2^{35}(2^{34}-1)-\sigma(2^{35},2^{34}-1,1).\quad\cr}$$
+\endtt
+An extra `|{}|' was typed on the second line here so that \TeX\ would know
+that the `|+|' is a binary operation.  The two-line form is especially
+recommended for equations that have a long left-hand side; in that case the
+break generally comes just before the~$=$~sign.
+
+\dangerexercise Typeset the following display:
+$$\displaylines{\quad\sum_{1\le j\le n}{1\over
+    (x_j-x_1)\ldots(x_j-x_{j-1})(x-x_j)(x_j-x_{j+1})
+    \ldots(x_j-x_n)}\hfill\cr
+  \hfill={1\over(x-x_1)\ldots(x-x_n)}.\quad(27)\cr}$$ % v2 p80
+\answer |$$\displaylines{\quad\sum_{1\le j\le n}{1\over|\parbreak
+        |    (x_j-x_1)\ldots(x_j-x_{j-1})(x-x_j)(x_j-x_{j+1})|\parbreak
+        |    \ldots(x_j-x_n)}\hfill\cr|\parbreak
+        |  \hfill={1\over(x-x_1)\ldots(x-x_n)}.\quad(27)\cr}$$|
+
+\ddangerexercise If it is necessary to typeset a huge fraction like
+^^{fraction, huge}
+$$\def\\#1;{(#1;q^2)_\infty}
+q^{{1\over2}n(n+1)}\\ea;\\eq/a;\\caq/e;\\cq^2\!/ae;
+\over(e;q)_\infty(cq/e;q)_\infty$$
+in a single narrow column, you might have to break up the numerator and
+resort to
+\begindisplay
+$\displaystyle{\def\\#1;{(#1;q^2)_\infty}
+\displaystyle{q^{{1\over2}n(n+1)}\\ea;\\eq/a;\qquad\atop
+  \hfill\\caq/e;\\cq^2\!/ae;}
+\over(e;q)_\infty(cq/e;q)_\infty}$
+\enddisplay
+How would you specify the latter fraction to \TeX?
+% cf SIAM J Math Anal 7 (1976) p333; even longer ones appear on p334
+\answer |$$\def\\#1;{(#1;q^2)_\infty} % to save typing|\parbreak
+        |\displaystyle{q^{{1\over2}n(n+1)}\\ea;\\eq/a;\qquad\atop|\parbreak
+        |  \hfill\\caq/e;\\cq^2\!/ae;}|\parbreak
+        |\over(e;q)_\infty(cq/e;q)_\infty$$|
+
+\endchapter
+
+When a formula is too long for the page-width
+and has to be broken into successive lines
+(and we are now, of course, speaking of displayed formulae),
+it should be broken, if possible, at the end of a natural `phrase';
+if, for example, it is a much-bracketed formula,
+it should be broken at the end of one of the major brackets
+and not at an inner symbol.
+This natural phrasing (as in music or speech)
+makes for intelligibility between writer and reader
+and should not be left to the compositor.
+An author, when he finds himself writing a longish formula,
+should indicate a convenient point of fracture in case of need.
+\author ^{CHAUNDY}, ^{BARRETT}, and ^{BATEY}, %
+ {\sl The Printing of Mathematics\/} (1954) % p38
+
+\bigskip
+
+Some authors use display with discretion,
+some run even extremely long, complicated equations into the text,
+while others tend to display every equation in the paper.
+The tendency to overdisplay is probably more predominant
+than the tendency to underdisplay;
+for this reason it is possible for the copy editor to shorten
+(and even improve) papers by running displayed material into text. $\ldots$
+On the other hand, there are occasions when the copy editor needs
+to suggest the display of complicated expressions that have been run into text,
+particularly when it would involve a bad break at the end of a text line.
+\author ELLEN ^{SWANSON}, {\sl Mathematics into Type\/} (1971) % p41
+
+\eject

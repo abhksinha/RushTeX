@@ -34,7 +34,18 @@ pub enum MathAtomKind {
 /// - `1`: Thin space (3 mu = 3/18 em)
 /// - `2`: Medium space (4 mu = 4/18 em)
 /// - `3`: Thick space (5 mu = 5/18 em)
-pub static MATH_SPACING_TABLE: [u8; 64] = [
+#[repr(C, align(64))]
+pub struct MathSpacingTable(pub [u8; 64]);
+
+impl core::ops::Deref for MathSpacingTable {
+    type Target = [u8; 64];
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub static MATH_SPACING_TABLE: MathSpacingTable = MathSpacingTable([
     // Ord (0) -> Ord, Op, Bin, Rel, Open, Close, Punct, Inner
     0, 1, 2, 3, 0, 0, 0, 1, // Op (1)  -> Ord, Op, Bin, Rel, Open, Close, Punct, Inner
     1, 1, 0, 3, 0, 0, 0, 1, // Bin (2) -> Ord, Op, Bin, Rel, Open, Close, Punct, Inner
@@ -44,9 +55,38 @@ pub static MATH_SPACING_TABLE: [u8; 64] = [
     0, 1, 2, 3, 0, 0, 0, 1, // Punct (6)->Ord, Op, Bin, Rel, Open, Close, Punct, Inner
     1, 1, 0, 1, 1, 1, 1, 1, // Inner (7)->Ord, Op, Bin, Rel, Open, Close, Punct, Inner
     1, 1, 2, 3, 1, 0, 1, 1,
-];
+]);
 
 const _: () = assert!(core::mem::size_of_val(&MATH_SPACING_TABLE) == 64);
+const _: () = assert!(core::mem::align_of_val(&MATH_SPACING_TABLE) == 64);
+
+/// Precomputed 64-byte L1 cache-aligned lookup table encoding mu spacing multipliers:
+/// - High nibble (bits 4..7): Display/Text style mu count (0, 3, 4, 5)
+/// - Low nibble (bits 0..3): Script/ScriptScript style mu count (0, 3)
+#[repr(C, align(64))]
+pub struct MathSpacingMuTable(pub [u8; 64]);
+
+impl core::ops::Deref for MathSpacingMuTable {
+    type Target = [u8; 64];
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub static MATH_SPACING_MU_TABLE: MathSpacingMuTable = MathSpacingMuTable([
+    0x00, 0x33, 0x40, 0x50, 0x00, 0x00, 0x00, 0x33,
+    0x33, 0x33, 0x00, 0x50, 0x00, 0x00, 0x00, 0x33,
+    0x40, 0x40, 0x00, 0x00, 0x40, 0x00, 0x00, 0x40,
+    0x50, 0x50, 0x00, 0x00, 0x50, 0x00, 0x00, 0x50,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x33, 0x40, 0x50, 0x00, 0x00, 0x00, 0x33,
+    0x33, 0x33, 0x00, 0x33, 0x33, 0x33, 0x33, 0x33,
+    0x33, 0x33, 0x40, 0x50, 0x33, 0x00, 0x33, 0x33,
+]);
+
+const _: () = assert!(core::mem::size_of_val(&MATH_SPACING_MU_TABLE) == 64);
+const _: () = assert!(core::mem::align_of_val(&MATH_SPACING_MU_TABLE) == 64);
 
 /// Returns the raw atom spacing code (0..3) from the 64-byte L1 table.
 #[inline(always)]
@@ -55,8 +95,18 @@ pub fn atom_spacing_code(prev: MathAtomKind, curr: MathAtomKind) -> u8 {
     MATH_SPACING_TABLE[idx]
 }
 
+/// Returns the mathematical spacing in exact integer `mu` units (0, 3, 4, 5)
+/// between two adjacent atom kinds via a branchless 64-byte L1 cacheline lookup.
+#[inline(always)]
+pub fn atom_spacing_mu(prev: MathAtomKind, curr: MathAtomKind, is_display_or_text: bool) -> i32 {
+    let idx = ((prev as usize & 7) << 3) | (curr as usize & 7);
+    let packed = MATH_SPACING_MU_TABLE[idx];
+    let shift = (is_display_or_text as usize) << 2;
+    ((packed >> shift) & 0x0F) as i32
+}
+
 /// Returns the typographic spacing between two adjacent atoms in exact scaled points (`sp`),
-/// using TeX's integer `cur_mu = quad / 18` model.
+/// using TeX's integer `cur_mu = quad / 18` model in a branchless lookup.
 #[inline(always)]
 pub fn atom_spacing_sp(
     prev: MathAtomKind,
@@ -64,27 +114,8 @@ pub fn atom_spacing_sp(
     is_display_or_text: bool,
     quad: crate::math::math_box::ScaledPoints,
 ) -> crate::math::math_box::ScaledPoints {
-    use crate::math::math_box::ScaledPoints;
-    let code = atom_spacing_code(prev, curr);
-    let mu_1 = quad / 18;
-    match code {
-        1 => mu_1 * 3, // thinmuskip = 3 mu
-        2 => {
-            if is_display_or_text {
-                mu_1 * 4 // medmuskip = 4 mu (suppressed in script styles)
-            } else {
-                ScaledPoints::ZERO
-            }
-        }
-        3 => {
-            if is_display_or_text {
-                mu_1 * 5 // thickmuskip = 5 mu (suppressed in script styles)
-            } else {
-                ScaledPoints::ZERO
-            }
-        }
-        _ => ScaledPoints::ZERO,
-    }
+    let mu = atom_spacing_mu(prev, curr, is_display_or_text);
+    (quad / 18) * mu
 }
 
 /// Precomputed branchless L1-resident mathematical spacing lookup table in em units.
@@ -155,13 +186,7 @@ pub fn atom_spacing(
     is_display: bool,
     is_display_or_text: bool,
 ) -> f32 {
-    let mode = if is_display {
-        0
-    } else if is_display_or_text {
-        1
-    } else {
-        2
-    };
+    let mode = (2 - (is_display as usize) - (is_display_or_text as usize)) & 3;
     let idx = ((prev as usize & 7) << 3) | (curr as usize & 7);
     ATOM_SPACING_LUT.0[mode][idx]
 }
@@ -169,7 +194,9 @@ pub fn atom_spacing(
 /// Standard canonical inter-atom spacing without display glue expansion.
 #[inline(always)]
 pub fn inter_atom_spacing(prev: MathAtomKind, curr: MathAtomKind, is_display_or_text: bool) -> f32 {
-    atom_spacing(prev, curr, false, is_display_or_text)
+    let mode = 2 - (is_display_or_text as usize);
+    let idx = ((prev as usize & 7) << 3) | (curr as usize & 7);
+    ATOM_SPACING_LUT.0[mode][idx]
 }
 
 /// Normalizes a sequence of raw math atom kinds into their context-effective classifications
@@ -186,22 +213,26 @@ pub fn normalize_atom_kinds(kinds: &mut [MathAtomKind]) {
     }
 
     // Step 1: Forward pass — check left operand validity via AtomBoundaryClassifier
-    for i in 0..len {
-        if kinds[i] == MathAtomKind::Bin {
-            let left_ok = i > 0 && AtomBoundaryClassifier::is_valid_left(kinds[i - 1]);
-            if !left_ok {
-                kinds[i] = MathAtomKind::Ord;
-            }
+    if kinds[0] == MathAtomKind::Bin {
+        kinds[0] = MathAtomKind::Ord;
+    }
+    for i in 1..len {
+        let is_bin = kinds[i] == MathAtomKind::Bin;
+        let invalid_left = !AtomBoundaryClassifier::is_valid_left(kinds[i - 1]);
+        if is_bin & invalid_left {
+            kinds[i] = MathAtomKind::Ord;
         }
     }
 
     // Step 2: Backward pass — check right operand validity via AtomBoundaryClassifier
-    for i in (0..len).rev() {
-        if kinds[i] == MathAtomKind::Bin {
-            let right_ok = i + 1 < len && AtomBoundaryClassifier::is_valid_right(kinds[i + 1]);
-            if !right_ok {
-                kinds[i] = MathAtomKind::Ord;
-            }
+    if kinds[len - 1] == MathAtomKind::Bin {
+        kinds[len - 1] = MathAtomKind::Ord;
+    }
+    for i in (0..len.saturating_sub(1)).rev() {
+        let is_bin = kinds[i] == MathAtomKind::Bin;
+        let invalid_right = !AtomBoundaryClassifier::is_valid_right(kinds[i + 1]);
+        if is_bin & invalid_right {
+            kinds[i] = MathAtomKind::Ord;
         }
     }
 }
@@ -248,27 +279,29 @@ impl PackedAtomMetadata {
     /// Extracts the mathematical atom kind.
     #[inline(always)]
     pub const fn kind(self) -> MathAtomKind {
-        match self.0 & 0x07 {
-            0 => MathAtomKind::Ord,
-            1 => MathAtomKind::Op,
-            2 => MathAtomKind::Bin,
-            3 => MathAtomKind::Rel,
-            4 => MathAtomKind::Open,
-            5 => MathAtomKind::Close,
-            6 => MathAtomKind::Punct,
-            _ => MathAtomKind::Inner,
-        }
+        const KINDS: [MathAtomKind; 8] = [
+            MathAtomKind::Ord,
+            MathAtomKind::Op,
+            MathAtomKind::Bin,
+            MathAtomKind::Rel,
+            MathAtomKind::Open,
+            MathAtomKind::Close,
+            MathAtomKind::Punct,
+            MathAtomKind::Inner,
+        ];
+        KINDS[(self.0 & 0x07) as usize]
     }
 
     /// Extracts the operator limits preference.
     #[inline(always)]
     pub const fn limits(self) -> AtomLimits {
-        match (self.0 >> 3) & 0x03 {
-            1 => AtomLimits::NoLimits,
-            2 => AtomLimits::Limits,
-            3 => AtomLimits::DisplayLimits,
-            _ => AtomLimits::Default,
-        }
+        const LIMITS: [AtomLimits; 4] = [
+            AtomLimits::Default,
+            AtomLimits::NoLimits,
+            AtomLimits::Limits,
+            AtomLimits::DisplayLimits,
+        ];
+        LIMITS[((self.0 >> 3) & 0x03) as usize]
     }
 
     /// Whether this atom has a mathematical accent attached.
@@ -341,15 +374,13 @@ impl AtomBoundaryClassifier {
         prev: Option<MathAtomKind>,
         next: Option<MathAtomKind>,
     ) -> MathAtomKind {
-        if kind != MathAtomKind::Bin {
-            return kind;
-        }
+        let is_bin = kind == MathAtomKind::Bin;
         let left_ok = prev.is_some_and(Self::is_valid_left);
         let right_ok = next.is_some_and(Self::is_valid_right);
-        if left_ok && right_ok {
-            MathAtomKind::Bin
-        } else {
+        if is_bin & !(left_ok & right_ok) {
             MathAtomKind::Ord
+        } else {
+            kind
         }
     }
 }
@@ -646,29 +677,31 @@ impl AsciiMathFastPath {
     /// Resolves the atom kind, font face, and validity for an ASCII character.
     #[inline(always)]
     pub fn lookup(&self, byte: u8) -> (MathAtomKind, Face, bool) {
-        if byte < 128 {
-            let entry = self.entries[byte as usize];
-            let is_valid = (entry & 0x40) != 0;
-            let kind = match entry & 0x07 {
-                0 => MathAtomKind::Ord,
-                1 => MathAtomKind::Op,
-                2 => MathAtomKind::Bin,
-                3 => MathAtomKind::Rel,
-                4 => MathAtomKind::Open,
-                5 => MathAtomKind::Close,
-                6 => MathAtomKind::Punct,
-                _ => MathAtomKind::Inner,
-            };
-            let face = match (entry >> 3) & 0x07 {
-                1 => Face::Italic,
-                2 => Face::Bold,
-                3 => Face::BoldItalic,
-                4 => Face::Symbol,
-                _ => Face::Roman,
-            };
-            (kind, face, is_valid)
-        } else {
-            (MathAtomKind::Ord, Face::Roman, false)
-        }
+        const KINDS: [MathAtomKind; 8] = [
+            MathAtomKind::Ord,
+            MathAtomKind::Op,
+            MathAtomKind::Bin,
+            MathAtomKind::Rel,
+            MathAtomKind::Open,
+            MathAtomKind::Close,
+            MathAtomKind::Punct,
+            MathAtomKind::Inner,
+        ];
+        const FACES: [Face; 8] = [
+            Face::Roman,
+            Face::Italic,
+            Face::Bold,
+            Face::BoldItalic,
+            Face::Symbol,
+            Face::Roman,
+            Face::Roman,
+            Face::Roman,
+        ];
+        let in_range = byte < 128;
+        let entry = self.entries[(byte & 0x7F) as usize];
+        let is_valid = in_range & ((entry & 0x40) != 0);
+        let kind = KINDS[(entry & 0x07) as usize];
+        let face = FACES[((entry >> 3) & 0x07) as usize];
+        (kind, face, is_valid)
     }
 }

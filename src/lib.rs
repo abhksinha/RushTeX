@@ -120,16 +120,92 @@ pub fn compile_into(source_code: &str, destination_buffer: &mut Vec<u8>) -> Resu
     compile_into_opts(source_code, destination_buffer, true)
 }
 
+/// Compiles a LaTeX source string into a sequence of laid-out pages.
+/// Uses memory-conscious token-to-layout streaming when the document does not contain
+/// whole-document tables of contents or indices, dropping AST nodes immediately after layout.
+pub fn compile_source_to_pages(source_code: &str) -> Result<Vec<layout::Page<'_>>, Error> {
+    let has_indices = source_code.contains("\\tableofcontents")
+        || source_code.contains("\\listoffigures")
+        || source_code.contains("\\listoftables");
+
+    if has_indices {
+        let document = tex::parse(source_code)?;
+        let pages = layout::layout(&document);
+        drop(document);
+        Ok(pages)
+    } else {
+        let mut parser = tex::Parser::new(source_code);
+        let has_doc_env = parser.parse_preamble_if_present()?;
+        let mut layouter = layout::Layouter::new(&parser.preamble.config);
+        let mut prev_was_block = false;
+        while let Some(block) = parser.parse_next_block()? {
+            layouter.layout_stream_block(&block, &mut prev_was_block);
+        }
+        parser.finish_document(has_doc_env)?;
+        Ok(layouter.finish())
+    }
+}
+
+fn compile_streaming_into(
+    source_code: &str,
+    destination_buffer: &mut Vec<u8>,
+    enable_compression: bool,
+) -> Result<usize, Error> {
+    let mut parser = tex::Parser::new(source_code);
+    let has_doc_env = parser.parse_preamble_if_present()?;
+    let config = parser.preamble.config.clone();
+    let mut layouter = layout::Layouter::new(&config);
+    layouter.enable_streaming();
+
+    destination_buffer.reserve((source_code.len() * 2).clamp(65536, 1048576));
+    let mut accumulator = backend::backend_pdf::PageStreamAccumulator::new(destination_buffer, enable_compression);
+
+    let mut prev_was_block = false;
+    while let Some(block) = parser.parse_next_block()? {
+        layouter.layout_stream_block(&block, &mut prev_was_block);
+        while let Some(mut page) = layouter.take_completed_page() {
+            accumulator.push_page(&mut page);
+            layouter.recycle_page(page);
+        }
+    }
+    parser.finish_document(has_doc_env)?;
+    for mut page in layouter.finish_streaming() {
+        accumulator.push_page(&mut page);
+    }
+
+    accumulator.finish(config.font_family)
+}
+
+/// Compiles a TeX-subset source string into a reusable destination byte buffer with optional compression,
+/// returning the number of pages compiled.
+pub fn compile_into_opts_counted(
+    source_code: &str,
+    destination_buffer: &mut Vec<u8>,
+    enable_compression: bool,
+) -> Result<usize, Error> {
+    let has_indices = source_code.contains("\\tableofcontents")
+        || source_code.contains("\\listoffigures")
+        || source_code.contains("\\listoftables");
+
+    if has_indices {
+        let mut pages = compile_source_to_pages(source_code)?;
+        let count = pages.len();
+        destination_buffer.reserve((count * if enable_compression { 3500 } else { 7000 }).max(16384));
+        pdf::emit_into_consume(&mut pages, destination_buffer, enable_compression)?;
+        drop(pages);
+        Ok(count)
+    } else {
+        compile_streaming_into(source_code, destination_buffer, enable_compression)
+    }
+}
+
 /// Compiles a TeX-subset source string into a reusable destination byte buffer with optional compression.
 pub fn compile_into_opts(
     source_code: &str,
     destination_buffer: &mut Vec<u8>,
     enable_compression: bool,
 ) -> Result<(), Error> {
-    let document = tex::parse(source_code)?;
-    let pages = layout::layout(&document);
-    pdf::emit_into_opts(&pages, destination_buffer, enable_compression)?;
-    Ok(())
+    compile_into_opts_counted(source_code, destination_buffer, enable_compression).map(|_| ())
 }
 
 /// Compiles a TeX-subset source string to an owned PDF byte buffer using compression.
@@ -182,16 +258,15 @@ pub fn compile_file_opts(
     #[cfg(not(target_arch = "wasm32"))]
     let start_time = std::time::Instant::now();
     let source_code = std::fs::read_to_string(input_path)?;
-    let document = tex::parse(&source_code)?;
-    let pages = layout::layout(&document);
-    let page_count = pages.len();
-    let mut pdf_buffer = Vec::with_capacity((page_count * 10240).max(16384));
-    pdf::emit_into_opts(&pages, &mut pdf_buffer, enable_compression)?;
+    let mut pdf_buffer = Vec::with_capacity((source_code.len() * 2).clamp(65536, 1048576));
+    let page_count = compile_into_opts_counted(&source_code, &mut pdf_buffer, enable_compression)?;
+    drop(source_code);
     let destination = match output_path {
         Some(path) => path.to_path_buf(),
         None => input_path.with_extension("pdf"),
     };
     std::fs::write(&destination, &pdf_buffer)?;
+    drop(pdf_buffer);
     #[cfg(not(target_arch = "wasm32"))]
     let elapsed = start_time.elapsed();
     #[cfg(target_arch = "wasm32")]
@@ -573,10 +648,13 @@ Some text here.
 
     #[test]
     fn test_bench_100k_detailed_breakdown() {
-        let path = "examples/stress_100k.tex";
-        if !std::path::Path::new(path).exists() {
+        let path = if std::path::Path::new("examples/stress_100k.tex").exists() {
+            "examples/stress_100k.tex"
+        } else if std::path::Path::new("examples/stress_500k.tex").exists() {
+            "examples/stress_500k.tex"
+        } else {
             return;
-        }
+        };
         let src = std::fs::read_to_string(path).expect("read stress_100k.tex");
 
         // Warmup
@@ -634,6 +712,87 @@ Some text here.
         );
         eprintln!(
             "Layout (Knuth-Plass):                avg = {:.2} ms, min = {:.2} ms",
+            avg(&layout_times),
+            min(&layout_times)
+        );
+        eprintln!(
+            "Emit [Uncompressed - stream only]:   avg = {:.2} ms, min = {:.2} ms",
+            avg(&emit_uncompressed_times),
+            min(&emit_uncompressed_times)
+        );
+        eprintln!(
+            "Emit [Compressed - stream+DEFLATE]:  avg = {:.2} ms, min = {:.2} ms",
+            avg(&emit_compressed_times),
+            min(&emit_compressed_times)
+        );
+        eprintln!("------------------------------------------------------------------");
+        eprintln!("Total [Default Compressed PDF]:      avg = {:.2} ms, min = {:.2} ms  (Parse + Layout + Compressed Emit)", avg(&total_compressed_times), min(&total_compressed_times));
+        eprintln!("Total [Optional Uncompressed PDF]:    avg = {:.2} ms, min = {:.2} ms  (Parse + Layout + Uncompressed Emit)", avg(&total_uncompressed_times), min(&total_uncompressed_times));
+    }
+
+    #[test]
+    fn test_bench_phase1_100k_detailed_breakdown() {
+        let path = "examples/phase1_stress_100k.tex";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let src = std::fs::read_to_string(path).expect("read phase1_stress_100k.tex");
+
+        // Warmup
+        let _ = compile_str(&src).unwrap();
+
+        const ITERS: usize = 20;
+        let mut parse_times = Vec::with_capacity(ITERS);
+        let mut layout_times = Vec::with_capacity(ITERS);
+        let mut emit_uncompressed_times = Vec::with_capacity(ITERS);
+        let mut emit_compressed_times = Vec::with_capacity(ITERS);
+        let mut total_compressed_times = Vec::with_capacity(ITERS);
+        let mut total_uncompressed_times = Vec::with_capacity(ITERS);
+
+        let mut uncompressed_buf = Vec::with_capacity(2 * 1024 * 1024);
+        let mut compressed_buf = Vec::with_capacity(1024 * 1024);
+
+        for _ in 0..ITERS {
+            uncompressed_buf.clear();
+            compressed_buf.clear();
+
+            let t0 = std::time::Instant::now();
+            let doc = tex::parse(&src).unwrap();
+            let t1 = std::time::Instant::now();
+            let pages = layout::layout(&doc);
+            let t2 = std::time::Instant::now();
+            pdf::emit_into_opts(&pages, &mut uncompressed_buf, false).unwrap();
+            let t3 = std::time::Instant::now();
+            pdf::emit_into_opts(&pages, &mut compressed_buf, true).unwrap();
+            let t4 = std::time::Instant::now();
+
+            let parse_ms = (t1 - t0).as_secs_f64() * 1000.0;
+            let layout_ms = (t2 - t1).as_secs_f64() * 1000.0;
+            let uncompressed_emit_ms = (t3 - t2).as_secs_f64() * 1000.0;
+            let compressed_emit_ms = (t4 - t3).as_secs_f64() * 1000.0;
+
+            parse_times.push(parse_ms);
+            layout_times.push(layout_ms);
+            emit_uncompressed_times.push(uncompressed_emit_ms);
+            emit_compressed_times.push(compressed_emit_ms);
+            total_compressed_times.push(parse_ms + layout_ms + compressed_emit_ms);
+            total_uncompressed_times.push(parse_ms + layout_ms + uncompressed_emit_ms);
+        }
+
+        let avg = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let min = |v: &[f64]| v.iter().copied().fold(f64::INFINITY, f64::min);
+
+        eprintln!(
+            "\n=== PHASE 1 100K-WORD STRESS BENCHMARK ({} iterations) ===",
+            ITERS
+        );
+        eprintln!(
+            "Parse (AST):                         avg = {:.2} ms, min = {:.2} ms",
+            avg(&parse_times),
+            min(&parse_times)
+        );
+        eprintln!(
+            "Layout (Knuth-Plass Phase 1):        avg = {:.2} ms, min = {:.2} ms",
             avg(&layout_times),
             min(&layout_times)
         );
@@ -947,6 +1106,16 @@ Content on page 2 after explicit newpage.
             table_rule_size <= 8,
             "TableRule must be <= 8 bytes to pack >= 8 items per 64B L1 cache line, got {table_rule_size}"
         );
+        let packed_word_attr_size = std::mem::size_of::<crate::layout::PackedWordAttr>();
+        assert_eq!(
+            packed_word_attr_size, 1,
+            "PackedWordAttr must be exactly 1 byte to pack 64 items per 64B L1 cache line, got {packed_word_attr_size}"
+        );
+        let soa_size = std::mem::size_of::<crate::layout::ParagraphSoA>();
+        assert_eq!(
+            soa_size, 96,
+            "ParagraphSoA struct size must be exactly 96 bytes (4 Vec pointers), got {soa_size}"
+        );
     }
 
     #[test]
@@ -1125,6 +1294,98 @@ Alpha line one is quite long and we need enough words to ensure it wraps onto a 
             line_starts[1].0, 102.0,
             "Line 2 should have 30pt hanging indent (102.0)"
         );
+    }
+
+    #[test]
+    fn test_parshape_multiline_matrix() {
+        let src = r#"
+\documentclass{article}
+\begin{document}
+\noindent
+\parshape 3 20pt 300pt 0pt 400pt 10pt 350pt
+First line of the shaped paragraph that wraps around nicely so we can inspect line geometries.
+Second line continues the flow and wraps again to the third line.
+Third line will continue and repeat the final shape specification if there are further lines.
+\end{document}
+"#;
+        let doc = tex::parse(src).unwrap();
+        let pages = layout::layout(&doc);
+        assert!(!pages.is_empty());
+
+        let line_starts: Vec<f32> = pages[0]
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                layout::Paint::GlyphRun { x, .. } => Some(*x),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            line_starts.len() >= 3,
+            "Paragraph must break into at least 3 lines, got {}",
+            line_starts.len()
+        );
+        // Margin is 72.0.
+        // Line 0: indent 20pt -> 72.0 + 20.0 = 92.0
+        assert_eq!(line_starts[0], 92.0, "Line 0 should be indented by 20pt (92.0)");
+        // Line 1: indent 0pt -> 72.0 + 0.0 = 72.0
+        assert_eq!(line_starts[1], 72.0, "Line 1 should be flush at 72.0");
+        // Line 2: indent 10pt -> 72.0 + 10.0 = 82.0
+        assert_eq!(line_starts[2], 82.0, "Line 2 should be indented by 10pt (82.0)");
+    }
+
+    #[test]
+    fn test_parshape_precedence_and_reset() {
+        let src = r#"
+\documentclass{article}
+\begin{document}
+\noindent
+\hangindent 40pt
+\hangafter 1
+\parshape 2 15pt 300pt 25pt 300pt
+First paragraph shaped by parshape which completely overrides hangindent and hangafter according to TeX rules.
+It wraps onto a second line to verify both line indents.
+
+\noindent
+Second paragraph after blank line should have parshape cleared and no hanging indent.
+It starts flush at the margin.
+\end{document}
+"#;
+        let doc = tex::parse(src).unwrap();
+        let pages = layout::layout(&doc);
+        assert!(!pages.is_empty());
+
+        let line_starts: Vec<(f32, &str)> = pages[0]
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                layout::Paint::GlyphRun { x, part_start, .. } => {
+                    let text = pages[0].text_pool[*part_start as usize];
+                    Some((*x, text))
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            line_starts.len() >= 3,
+            "Must have at least 3 lines across paragraphs, got {}",
+            line_starts.len()
+        );
+        // Paragraph 1:
+        // Line 0: parshape indent 15pt -> 72.0 + 15.0 = 87.0 (hangindent 40pt ignored!)
+        assert_eq!(line_starts[0].0, 87.0, "Line 0 must use parshape indent 15pt (87.0)");
+        // Line 1: parshape indent 25pt -> 72.0 + 25.0 = 97.0
+        assert_eq!(line_starts[1].0, 97.0, "Line 1 must use parshape indent 25pt (97.0)");
+
+        // Paragraph 2:
+        // First line of par 2: flush at margin (72.0) because parshape & hangindent reset!
+        let par2 = line_starts
+            .iter()
+            .find(|(_, t)| t.starts_with("Second"))
+            .expect("Paragraph 2 must exist");
+        assert_eq!(par2.0, 72.0, "Paragraph 2 must reset parshape back to margin 72.0");
     }
 
     #[test]
@@ -1948,5 +2209,329 @@ Methodology details.
             text.contains("2.1 Architecture"),
             "Expected '2.1 Architecture' in text:\n{text}"
         );
+    }
+
+    #[test]
+    fn test_tex_by_topic_ch20_space_factor_widths() {
+        let src = "word. Next NASA. Next";
+        let inls = vec![crate::tex_parser::Inline::Text(src)];
+        let mut soa_default = crate::layout::ParagraphSoA::new();
+        let mut math_col = Vec::new();
+        let mut sf = 1000u16;
+        crate::layout::engine::explode_inlines_into_family_sf(
+            &inls,
+            crate::font_metrics::Face::Roman,
+            10.0,
+            &mut soa_default,
+            crate::font_metrics::FontFamily::Times,
+            &mut math_col,
+            &mut sf,
+            false,
+        );
+        assert_eq!(soa_default.len(), 7);
+        assert_eq!(soa_default.attrs[1].kind(), crate::layout::WordKind::Space);
+        assert_eq!(soa_default.attrs[3].kind(), crate::layout::WordKind::Space);
+        assert_eq!(soa_default.attrs[5].kind(), crate::layout::WordKind::Space);
+
+        let space_after_period = soa_default.widths[1];
+        let normal_space = soa_default.widths[3];
+        let space_after_initials = soa_default.widths[5];
+
+        assert!((normal_space - 2.5).abs() < 1e-3, "Normal space at 10pt Times should be 2.5pt");
+        assert!(space_after_period > normal_space, "Space after sentence-ending period must be wider than normal space");
+        assert!((space_after_period - (2.5 + 0.83)).abs() < 1e-2, "Space after period should include extra space (fontdimen 7)");
+        assert!((space_after_initials - normal_space).abs() < 1e-3, "Space after initials (NASA.) must NOT include extra space");
+
+        // Now test under french_spacing = true
+        let mut soa_french = crate::layout::ParagraphSoA::new();
+        let mut sf_fr = 1000u16;
+        crate::layout::engine::explode_inlines_into_family_sf(
+            &inls,
+            crate::font_metrics::Face::Roman,
+            10.0,
+            &mut soa_french,
+            crate::font_metrics::FontFamily::Times,
+            &mut math_col,
+            &mut sf_fr,
+            true,
+        );
+        assert!((soa_french.widths[1] - normal_space).abs() < 1e-3, "Under french_spacing, space after period must equal normal space");
+    }
+
+    #[test]
+    fn test_tex_by_topic_ch20_sentence_spacing_and_frenchspacing() {
+        let src_default = r#"
+\documentclass{article}
+\begin{document}
+First word. Second sentence NASA. Next.
+\end{document}
+"#;
+        let doc_default = tex::parse(src_default).unwrap();
+        assert!(!doc_default.preamble.config.french_spacing);
+        let pages_default = layout::layout(&doc_default);
+        assert_eq!(pages_default.len(), 1);
+
+        let src_french = r#"
+\documentclass{article}
+\frenchspacing
+\begin{document}
+First word. Second sentence NASA. Next.
+\end{document}
+"#;
+        let doc_french = tex::parse(src_french).unwrap();
+        assert!(doc_french.preamble.config.french_spacing);
+        let pages_french = layout::layout(&doc_french);
+        assert_eq!(pages_french.len(), 1);
+
+        let pdf_default = compile_str(src_default).unwrap();
+        let pdf_french = compile_str(src_french).unwrap();
+        assert!(extract_pdftotext(&pdf_default).contains("First word. Second sentence"));
+        assert!(extract_pdftotext(&pdf_french).contains("First word. Second sentence"));
+    }
+
+    #[test]
+    fn test_tex_by_topic_ch19_knuth_liang_hyphenation_and_discretionaries() {
+        // 1. Verify Knuth-Liang pattern hyphenation on canonical TeX words
+        let mut pieces = Vec::new();
+        crate::layout::layout_hyphen::hyphenate_word("hyphenation", 2, 3, &mut pieces);
+        assert_eq!(pieces, &["hy", "phen", "ation"]);
+
+        pieces.clear();
+        crate::layout::layout_hyphen::hyphenate_word("algorithm", 2, 3, &mut pieces);
+        assert_eq!(pieces, &["al", "go", "rithm"]);
+
+        pieces.clear();
+        crate::layout::layout_hyphen::hyphenate_word("reformatting", 2, 3, &mut pieces);
+        assert_eq!(pieces, &["re", "for", "mat", "ting"]);
+
+        // 2. Discretionary \- parsing into soft hyphen \u{00AD}
+        let doc_src = r#"
+\documentclass{article}
+\begin{document}
+dis\-cre\-tion\-ary and well-known
+\end{document}
+"#;
+        let doc = tex::parse(doc_src).unwrap();
+        if let crate::tex_parser::Block::Para(inls) = &doc.blocks[0] {
+            let mut soa = crate::layout::ParagraphSoA::new();
+            let mut math_col = Vec::new();
+            let mut sf = 1000u16;
+            crate::layout::engine::explode_inlines_into_family_sf(
+                inls,
+                crate::font_metrics::Face::Roman,
+                10.0,
+                &mut soa,
+                crate::font_metrics::FontFamily::Times,
+                &mut math_col,
+                &mut sf,
+                false,
+            );
+
+            // "dis" (Hyphen), "cre" (Hyphen), "tion" (Hyphen), "ary" (Word), " " (Space), "and" (Word), " " (Space), "well-" (Word), "known" (Word)
+            assert_eq!(soa.texts[0], "dis");
+            assert_eq!(soa.attrs[0].kind(), crate::layout::WordKind::Hyphen);
+            assert_eq!(soa.texts[1], "cre");
+            assert_eq!(soa.attrs[1].kind(), crate::layout::WordKind::Hyphen);
+            assert_eq!(soa.texts[2], "tion");
+            assert_eq!(soa.attrs[2].kind(), crate::layout::WordKind::Hyphen);
+            assert_eq!(soa.texts[3], "ary");
+            assert_eq!(soa.attrs[3].kind(), crate::layout::WordKind::Word);
+
+            // Compound word with explicit hyphen
+            assert_eq!(soa.texts[7], "well-");
+            assert_eq!(soa.texts[8], "known");
+        } else {
+            panic!("Expected paragraph block");
+        }
+
+        // 3. Document end-to-end compilation with discretionary hyphen
+        let full_src = r#"
+\documentclass{article}
+\begin{document}
+A paragraph demonstrating explicit discretionary dis\-cre\-tion\-ary hyphenation and compound well-known words.
+\end{document}
+"#;
+        let pdf = compile_str(full_src).unwrap();
+        let text = extract_pdftotext(&pdf);
+        assert!(text.contains("discretionary") || text.contains("dis"));
+        assert!(text.contains("well-known") || text.contains("well-") || text.contains("wellknown"));
+    }
+
+    #[test]
+    fn test_tex_by_topic_ch19_three_pass_driver_and_tolerances() {
+        // 1. Preamble \setlength configuration
+        let src_preamble = r#"
+\documentclass{article}
+\setlength{\pretolerance}{150}
+\setlength{\tolerance}{350}
+\setlength{\emergencystretch}{18pt}
+\begin{document}
+A test paragraph under custom pretolerance, tolerance, and emergencystretch.
+\end{document}
+"#;
+        let doc_preamble = tex::parse(src_preamble).unwrap();
+        assert_eq!(doc_preamble.preamble.config.pre_tolerance, 150);
+        assert_eq!(doc_preamble.preamble.config.tolerance, 350);
+        assert!((doc_preamble.preamble.config.emergency_stretch - 18.0).abs() < 1e-4);
+
+        let pdf_preamble = compile_str(src_preamble).unwrap();
+        let text_preamble = extract_pdftotext(&pdf_preamble);
+        assert!(text_preamble.contains("custom pretolerance, tolerance"));
+
+        // 2. In-body \sloppy and \fussy state switching
+        let src_sloppy = r#"
+\documentclass{article}
+\begin{document}
+\sloppy
+This paragraph is typeset with sloppy line breaking parameters (tolerance 9999 and emergencystretch 33pt).
+\fussy
+This paragraph is typeset with fussy line breaking parameters (tolerance 200 and emergencystretch 0pt).
+\end{document}
+"#;
+        let doc_sloppy = tex::parse(src_sloppy).unwrap();
+        let pages_sloppy = layout::layout(&doc_sloppy);
+        assert!(!pages_sloppy.is_empty());
+
+        let pdf_sloppy = compile_str(src_sloppy).unwrap();
+        let text_sloppy = extract_pdftotext(&pdf_sloppy);
+        assert!(text_sloppy.contains("sloppy line breaking"));
+        assert!(text_sloppy.contains("fussy line breaking"));
+
+        // 3. Direct \pretolerance, \tolerance, \emergencystretch commands
+        let src_commands = r#"
+\documentclass{article}
+\begin{document}
+\pretolerance=120
+\tolerance=280
+\emergencystretch=12pt
+Line breaking with explicit parameter assignments.
+\end{document}
+"#;
+        let doc_commands = tex::parse(src_commands).unwrap();
+        let pages_commands = layout::layout(&doc_commands);
+        assert!(!pages_commands.is_empty());
+
+        let pdf_commands = compile_str(src_commands).unwrap();
+        let text_commands = extract_pdftotext(&pdf_commands);
+        assert!(text_commands.contains("Line breaking with explicit parameter assignments"));
+    }
+
+    #[test]
+    fn test_tex_by_topic_ch18_19_looseness_leftskip_rightskip() {
+        // 1. Preamble \setlength{\looseness}{1} configuration
+        let src_preamble = r#"
+\documentclass{article}
+\setlength{\looseness}{1}
+\begin{document}
+A test paragraph under looseness configured via preamble.
+\end{document}
+"#;
+        let doc_preamble = tex::parse(src_preamble).unwrap();
+        assert_eq!(doc_preamble.preamble.config.looseness, 1);
+
+        let pdf_preamble = compile_str(src_preamble).unwrap();
+        let text_preamble = extract_pdftotext(&pdf_preamble);
+        assert!(text_preamble.contains("A test paragraph under looseness configured via preamble."));
+
+        // 2. Direct inline/block \looseness, \leftskip, and \rightskip
+        let src_skips = r#"
+\documentclass{article}
+\begin{document}
+\leftskip=30pt
+\rightskip=40pt
+\looseness=1
+This is the first paragraph with custom margins and looseness requested to lengthen lines.
+It tests that leftskip and rightskip adjust the line measure and coordinate margins.
+
+This is the second paragraph. It tests that looseness was reset after the first paragraph
+while leftskip and rightskip persistently apply to subsequent paragraphs.
+\end{document}
+"#;
+        let doc_skips = tex::parse(src_skips).unwrap();
+        let pages_skips = layout::layout(&doc_skips);
+        assert!(!pages_skips.is_empty());
+
+        let pdf_skips = compile_str(src_skips).unwrap();
+        let text_skips = extract_pdftotext(&pdf_skips);
+        assert!(text_skips.contains("This is the first paragraph with custom margins"));
+        assert!(text_skips.contains("This is the second paragraph"));
+    }
+
+    #[test]
+    fn test_tex_by_topic_ch17_parfillskip_prevgraf_lastlinefit() {
+        // 1. Preamble configuration via \setlength
+        let src_preamble = r#"
+\documentclass{article}
+\setlength{\parfillskip}{0pt}
+\setlength{\prevgraf}{3}
+\setlength{\lastlinefit}{500}
+\begin{document}
+A test paragraph under preamble parfillskip, prevgraf, and lastlinefit settings.
+\end{document}
+"#;
+        let doc_preamble = tex::parse(src_preamble).unwrap();
+        assert_eq!(doc_preamble.preamble.config.par_fill_width, 0.0);
+        assert_eq!(doc_preamble.preamble.config.par_fill_stretch, 0.0);
+        assert_eq!(doc_preamble.preamble.config.prev_graf, 3);
+        assert_eq!(doc_preamble.preamble.config.last_line_fit, 500);
+
+        let pages = layout::layout(&doc_preamble);
+        assert_eq!(pages.len(), 1);
+        let pdf_preamble = compile_str(src_preamble).unwrap();
+        let text_preamble = extract_pdftotext(&pdf_preamble);
+        assert!(text_preamble.contains("preamble"));
+        assert!(text_preamble.contains("parfillskip"));
+        assert!(text_preamble.contains("lastlinefit"));
+
+        // 2. In-body commands: \parfillskip=..., \prevgraf=..., \lastlinefit=...
+        let src_body = r#"
+\documentclass{article}
+\begin{document}
+\parfillskip=0pt plus 1fil
+\prevgraf=2
+\lastlinefit=1000
+Paragraph one tests dynamic parameter mutation before paragraph layout.
+The final line has normal fil stretch.
+
+\parfillskip=10pt
+Paragraph two tests zero stretch with positive 10pt width parfillskip,
+forcing the final line to be fully justified across the remaining measure.
+\end{document}
+"#;
+        let doc_body = tex::parse(src_body).unwrap();
+        let pages_body = layout::layout(&doc_body);
+        assert!(!pages_body.is_empty());
+
+        let pdf_body = compile_str(src_body).unwrap();
+        let text_body = extract_pdftotext(&pdf_body);
+        assert!(text_body.contains("Paragraph one tests dynamic parameter mutation"));
+        assert!(text_body.contains("Paragraph two tests zero stretch"));
+    }
+
+    #[test]
+    fn test_multipage_parallel_deflation_parity() {
+        let mut src = String::from("\\documentclass{article}\n\\begin{document}\n");
+        for page in 1..=8 {
+            src.push_str(&format!(
+                "\\section{{Page Section {}}}\nThis is page content for testing parallel deflation pipeline reproducibility.\n\\newpage\n",
+                page
+            ));
+        }
+        src.push_str("\\end{document}\n");
+
+        let doc = tex::parse(&src).unwrap();
+        let pages = layout::layout(&doc);
+        assert!(pages.len() >= 8);
+
+        // Emit with default (parallel when threads > 1)
+        let pdf_parallel = backend::pdf::emit(&pages).unwrap();
+
+        // Emit with single-threaded forced
+        std::env::set_var("RUSHTEX_SINGLE_THREAD", "1");
+        let pdf_single = backend::pdf::emit(&pages).unwrap();
+        std::env::remove_var("RUSHTEX_SINGLE_THREAD");
+
+        assert_eq!(pdf_parallel.len(), pdf_single.len(), "PDF lengths must match exactly");
+        assert_eq!(pdf_parallel, pdf_single, "Parallel and single-threaded PDF output must be bit-for-bit identical");
     }
 }

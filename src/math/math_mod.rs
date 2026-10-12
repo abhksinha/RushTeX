@@ -22,7 +22,10 @@ pub mod math_parser;
 pub mod math_radical;
 pub mod math_scripts;
 pub mod math_spacing;
+pub mod math_symbols;
 pub mod math_tfm;
+
+pub use math_symbols::{lookup_symbol, MathSymbolRecord, MATH_SYMBOLS_TABLE};
 
 #[path = "fonts/mod.rs"]
 pub mod fonts;
@@ -39,10 +42,11 @@ pub use fonts::{
 pub use math_display::{
     AccentFixedModifierHandler, AccentFractionAdjustment, DelimiterAxisAlignmentToggle,
     DelimiterExactSizing, DelimiterSearchChain, DelimiterSearchTier, DisplayEquationCentering,
-    DisplayHalignAdapter, DisplayMathParagraphBreaker, DisplayResumeStateRestorer,
-    DisplayShapeGeometryResolver, DisplaySkipMode, DisplaySkipModeSelector, DoubleAccentPositions,
-    DoubleMathAccentComposer, EmptyParagraphDisplayFilter, EquationTagCollisionDisplacement,
-    EquationTagPageBreakGuard, EquationTagSideSelector, EveryDisplayHookTrigger,
+    DisplayGeometryEngine, DisplayHalignAdapter, DisplayMathParagraphBreaker,
+    DisplayResumeStateRestorer, DisplayShapeGeometryResolver, DisplaySkipMode,
+    DisplaySkipModeSelector, DoubleAccentPositions, DoubleMathAccentComposer,
+    EmptyParagraphDisplayFilter, EquationTagCollisionDisplacement, EquationTagPageBreakGuard,
+    EquationTagSideSelector, EveryDisplayHookTrigger, PackedDisplayGeometry,
     InlineMathPenaltyInserter, InlineMathSurroundInjector, MathDirection,
     MathDirectionalityManager, MathSpaceFactorNormalizer, MathSurroundSpec,
     MissingDelimiterFallback, OverDelimiterBuilder, OverlayAccentApplier,
@@ -59,13 +63,16 @@ pub use math_ast::{
     STYLE_SCALE_LUT, STYLE_TRANSITION_LUT,
 };
 pub use math_bigop::{
-    BigOpVariantTier, IntegralOverhangCorrector, LimitClearanceGovernor, OperatorCenteringEngine,
-    OperatorLimitSwitch, PackedBigOpMetrics, BIG_OP_VARIANT_TIER,
+    BigOpShiftResolver, BigOpVariantTier, IntegralOverhangCorrector, LimitClearanceGovernor,
+    OperatorCenteringEngine, OperatorLimitSwitch, PackedBigOpMetrics, Rule13OperatorAxis,
+    BIG_OP_VARIANT_TIER,
 };
 pub use math_box::{MathBox, ScaledPoints, SpMathBox};
 pub use math_delim::{
-    DelimiterPairMatch, DelimiterSizingGovernor, DelimiterVariantResolver,
-    ExtensibleAssemblyEngine, NullDelimiterEliminator, DELIMITER_VARIANT_RESOLVER,
+    DelimiterBarRenderer, DelimiterPairMatch, DelimiterSizingGovernor, DelimiterVariantResolver,
+    ExtensibleArrowEngine, ExtensibleArrowMetrics, ExtensibleAssemblyEngine,
+    ExtensibleAssemblyMetrics, HorizontalBraceEngine, HorizontalBraceMetrics,
+    NullDelimiterEliminator, OverUnderDelimiterEngine, DELIMITER_VARIANT_RESOLVER,
 };
 pub use math_diff::{
     compare_geometry, trace_math_geometry, GeometryDiff, GeometryTolerance, GlyphPlacement,
@@ -84,13 +91,13 @@ pub use math_fonts::{
 };
 pub use math_fraction::{
     BinomialDelimiterCache, ContinuedFractionPipeline, FractionClearanceGovernor,
-    GeneralizedFractionEngine, NumeratorDenominatorAligner, PackedFractionMetrics,
-    BINOMIAL_DELIMITER_CACHE,
+    FractionShiftResolver, GeneralizedFractionEngine, NumeratorDenominatorAligner,
+    PackedFractionMetrics, BINOMIAL_DELIMITER_CACHE,
 };
 pub use math_layout::{layout_node, measure_math, render_math, MathLayoutContext};
 pub use math_matrix::{
-    MatrixColumnSoA, MatrixDelimBinder, RowBaselineAligner, SparseGridCompressor,
-    VcenterGeometryEngine,
+    MatrixColumnSoA, MatrixDelimBinder, MatrixGridBuffer, MatrixLayoutMetricsEngine,
+    RowBaselineAligner, SparseGridCompressor, VcenterGeometryEngine,
 };
 pub use math_parser::{parse_math_str, parse_math_str as parse_math, MathParser};
 pub use math_radical::{
@@ -100,13 +107,15 @@ pub use math_radical::{
 };
 pub use math_scripts::{
     KernBeforeScriptLut, PackedScriptMetrics, ScriptClearanceGovernor, ScriptNestingLimiter,
-    SubSupShiftOptimizer, TransientScriptPair, KERN_BEFORE_SCRIPT_LUT,
+    ScriptShiftResolver, SubSupShiftOptimizer, TransientScriptPair, KERN_BEFORE_SCRIPT_LUT,
+    SCRIPT_STYLE_TO_SUP_IDX,
 };
 pub use math_spacing::{
-    atom_spacing, inter_atom_spacing, normalize_atom_kinds, AsciiMathFastPath,
-    AtomBoundaryClassifier, AtomLimits, KernPairLut, MathAtomKind, MathHorizontalListSoA,
-    PackedAtomMetadata, SpacingLut, TransientAtomView, ASCII_MATH_FAST_PATH, ATOM_SPACING_LUT,
-    KERN_PAIR_LUT, MATH_SPACING_TABLE,
+    atom_spacing, atom_spacing_mu, atom_spacing_sp, inter_atom_spacing, normalize_atom_kinds,
+    AsciiMathFastPath, AtomBoundaryClassifier, AtomLimits, KernPairLut, MathAtomKind,
+    MathHorizontalListSoA, MathSpacingMuTable, PackedAtomMetadata, SpacingLut, TransientAtomView,
+    ASCII_MATH_FAST_PATH, ATOM_SPACING_LUT, KERN_PAIR_LUT, MATH_SPACING_MU_TABLE,
+    MATH_SPACING_TABLE,
 };
 pub use math_tfm::{cmex10_metric, cmmi10_metric, cmsy10_metric, DelimiterRecipe, GlyphMetric};
 

@@ -1,0 +1,663 @@
+\beginchapter Chapter 16. Typing\\Math Formulas
+
+\TeX\ is designed to handle complex ^{mathematical expressions} in such a way
+that most of them are easy to input. The basic idea is that a complicated
+formula is composed of less complicated ^{formulas} put together in a
+simple way; the less complicated formulas are, in turn, made up of simple
+combinations of formulas that are even less complicated; and so on. Stating
+this another way, if you know how to type simple formulas and how to combine
+formulas into larger ones, you will be able to handle virtually any formula
+at all. So let's start with simple ones and work our way up.
+
+The simplest formula is a single letter, like `$x$', or a single number,
+like `2'. In order to put these into a \TeX\ text, you type `|$x$|' and
+`|$2$|', respectively. Notice that all mathematical formulas are enclosed
+in special math brackets; we are using |$| as the math bracket in this
+manual, in accord with the plain \TeX\ format defined in Appendix~B\null,
+because mathematics is supposedly expensive.
+
+When you type `|$x$|' the `$x$' comes out in italics, but when you
+type `|$2$|' the `$2$' comes out in roman type.  In general, all
+characters on your keyboard have a special interpretation in math
+formulas, according to the normal conventions of mathematics printing:
+Letters now denote ^{italic} letters, while digits and punctuation
+denote ^{roman} digits and punctuation; a hyphen ({\tt-}) now denotes a ^{minus
+sign} ($-$), which is almost the same as an em-dash but not quite (see
+Chapter~2). The first |$| that you type puts you into ``^{math mode}'' and the
+second takes you out (see Chapter~13).  So if you forget one |$| or type
+one |$| too many, \TeX\ will probably become thoroughly confused and you
+will probably get some sort of error message. ^^{dollarsign}
+
+Formulas that have been typeset by a printer who is unaccustomed to
+mathematics usually look quite strange to a mathematician, because a
+novice printer usually gets the spacing all wrong. In order to alleviate
+this problem, \TeX\ does most of its own spacing in math formulas; and it
+{\sl ignores\/} any ^{spaces} that you yourself put between |$|'s. For
+example, if you type `|$ x$|' and `|$ 2 $|', they will mean the same thing
+as `|$x$|' and `|$2$|'. You can type `\hbox{|$(x + y)/(x - y)$|}' or
+`|$(x+y) / (x-y)$|', but both will result in `$(x+y)/(x-y)$', a formula in
+which there is a bit of extra space surrounding the $+$ and~$-$ signs but
+none around the~/~sign.  Thus, you do not have to memorize the complicated
+rules of math spacing, and you are free to use blank spaces in any way you
+like.  Of course, spaces are still used in the normal way to mark the end
+of control sequences, as explained in Chapter~3.  In most circumstances
+\TeX's spacing will be what a mathematician is accustomed to; but we will
+see in Chapter~18 that there are control sequences by which you can
+override \TeX's spacing rules if you want to.
+
+One of the things mathematicians like to do is make their formulas look
+like ^{Greek} to the uninitiated. In plain \TeX\ language you can type
+`|$$\alpha, \beta, \gamma, \delta;$$|' and you will get the first four
+Greek letters ^^|\alpha|^^|\beta|^^|\gamma|^^|\delta|
+$$\alpha,\beta,\gamma,\delta;$$ furthermore there are uppercase Greek
+letters like `$\Gamma$', which you can get by typing `|$\Gamma$|'.
+^^|\Gamma| Don't feel intimidated if you aren't already familiar with Greek
+letters; they will be easy to learn if you need them. The only difficulty
+is that some symbols that look nearly the same must be carefully
+distinguished. For example, the Greek letters ^|\nu|~($\nu$) and
+^|\kappa|~($\kappa$) should not be confused with the italic letters $v$
+and~$x$; the Greek ^|\phi|~($\phi$) is different from the slashed zero
+called ^|\emptyset|~($\emptyset$).  A~lowercase epsilon ($\epsilon$) is
+quite different from the symbol used to denote membership in a set
+($\in$); type `|$\epsilon$|' for $\epsilon$ and `|$\in$|' for $\in$.
+^^|\epsilon| ^^|\in| Some of the lowercase Greek letters have variant
+forms in plain \TeX's math italic fonts:
+`|$(\phi,\theta,\epsilon,\rho)$|' yields
+`$(\phi,\theta,\epsilon,\rho)$' while
+`|$(\varphi,\vartheta,\varepsilon,\varrho)$|' yields
+`$(\varphi,\vartheta,\varepsilon,\varrho)$'.
+^^|\phi|^^|\theta|^^|\rho|^^|\varphi|^^|\vartheta|^^|\varrho|^^|\varepsilon|
+
+Besides Greek letters, there are a lot of ^{funny symbols} like `$\approx$'
+(which you get by typing `|$\approx$|') ^^|\approx|^^{special symbols for math}
+and `$\mapsto$' (which you ^^|\mapsto|^^{math symbols}
+get by typing `|$\mapsto$|').
+ A complete list of these control sequences
+and the characters they correspond to appears in Appendix~F\null.
+Such control sequences are allowed only in math mode, i.e., between
+|$|'s, because the corresponding symbols appear in the math fonts.
+
+\exercise What should you type to get the formula
+`$\gamma+\nu\in\Gamma$'\thinspace?
+\answer |$\gamma+\nu\in\Gamma$|.
+
+\exercise Look at Appendix F to discover the control sequences for
+`$\le$', `$\ge$', and~`$\ne$'. \ (These are probably the three most
+commonly used math symbols that are not present on your keyboard.)
+\ What does plain \TeX\ call them?
+\answer ^|\le|, ^|\ge|, and ^|\ne|. \ (These are short for ``less-or-equal,''
+``greater-or-equal,'' and ``not-equal.'') \ You can also use the names
+^|\leq|, ^|\geq|, and ^|\neq|. \ (The fourth most common symbol is, perhaps,
+`$\infty$', which stands for ``^{infinity}'' and is called `^|\infty|'.)
+
+Now let's see how the more complex formulas get built up from simple ones.
+In the first place, you can get ^{superscripts} $\rm^{(up\,high)}$ and
+^{subscripts} $\rm_{(down\,low)}$
+^^{indices, see subscripts}
+^^{superiors, see superscripts} ^^{inferiors, see subscripts}
+by using `|^|' and `|_|', as shown in the following examples:
+\beginmathdemo
+\it Input&\it Output\cr
+\noalign{\vskip2pt}
+|$x^2$|&x^2\cr
+|$x_2$|&x_2\cr
+|$2^x$|&2^x\cr
+|$x^2y^2$|&x^2y^2\cr
+|$x ^ 2y ^ 2$|&x ^ 2y ^ 2\cr
+|$x_2y_2$|&x_2y_2\cr
+|$_2F_3$|&_2F_3\cr
+\endmathdemo
+Notice that |^| and |_| apply only to the next single character.
+If you want several things to be superscripted or subscripted, just enclose
+them in braces:
+\beginmathdemo
+|$x^{2y}$|&x^{2y}\cr
+|$2^{2^x}$|&2^{2^x}\cr
+|$2^{2^{2^x}}$|&2^{2^{2^x}}\cr
+|$y_{x_2}$|&y_{x_2}\cr
+|$y_{x^2}$|&y_{x^2}\cr
+\endmathdemo
+The braces in these examples have been used to specify ``^{subformulas},''
+i.e., simpler parts of a larger formula.  \TeX\ makes a box for each
+subformula, and treats that box as if it were a single symbol.  Braces
+also serve their usual purpose of grouping, as discussed in Chapter~5.
+
+It is illegal to type `|x^y^z|' or `|x_y_z|'; \TeX\ will
+complain of a ``double superscript'' or ``double subscript.'' You must type
+`|x^{y^z}|' or `|x^{yz}|' or
+`|x_{y_z}|' or `|x_{yz}|' in order to make your intention clear.
+
+A superscript or subscript following a character applies to that character
+only; but when following a subformula it applies to that whole subformula,
+and it will be raised or lowered accordingly. For example,
+\beginmathdemo
+|$((x^2)^3)^4$|&((x^2)^3)^4\cr
+|${({(x^2)}^3)}^4$|&{({(x^2)}^3)}^4\cr
+\endmathdemo
+In the first formula the `|^3|' and `|^4|' are superscripts on the ^{right
+parentheses}, i.e., on the `|)|' characters that immediately precede them,
+but in the second formula they are superscripts on the subformulas that
+are enclosed in braces. The first alternative is preferable, because it is
+much easier to type and it is just as easy to read.
+
+\danger A subscript or superscript following nothing (as in the `|_2F_3|'
+example on the preceding page, where the `|_2|' follows nothing) is taken
+to mean a subscript or superscript of an empty subformula. Such notations
+are (fortunately) rare in mathematics; but if you do encounter them it is
+better to make your intention clear by showing the empty subformula
+explicitly with braces.  In other words, the best way to get `${}_2F_3$'
+in a formula is to type `|{}_2F_3|' or `|{_2}F_3|' or `|{_2F_3}|'.
+
+\dangerexercise What difference, if any, is there between the output of
+`|$x + _2F_3$|' and the output of `|$x + {}_2F_3$|'\thinspace?
+\answer In the former, the `|_2|' applies to the plus sign ($x + _2F_3$);
+but in the latter, it applies to an empty subformula ($x + {}_2F_3$).
+
+\dangerexercise Describe the differences between the outputs of `|${x^y}^z$|'
+and `|$x^{y^z}$|'.
+\answer The results are `${x^y}^z$' and `$x^{y^z}$'; the $z$ in the first
+alternative is the same size as the $y$, but in the second it is smaller.
+Furthermore, the $y$ and $z$ in the first case aren't quite at the same height.
+\ (Good typists never even think of the first construction, because
+mathematicians never want it.)
+
+You can have simultaneous subscripts and superscripts, and you can specify them
+in any order:
+\beginmathdemo
+|$x^2_3$|&x^2_3\cr
+|$x_3^2$|&x_3^2\cr
+|$x^{31415}_{92}+\pi$|&x^{31415}_{92}+\pi\cr
+\noalign{\smallskip}
+|$x_{y^a_b}^{z_c^d}$|&x_{y^a_b}^{z_c^d}\cr
+\endmathdemo
+Notice that simultaneous su$\rm_b^{per\kern-1pt}$scripts are positioned
+over each other.  However, a subscript will be ``tucked in'' slightly when it
+follows certain letters; for example, `|$P_2^2$|' produces `$P_2^2$'.
+If for some reason you want the left edges of both subscript and superscript
+to be aligned, you can fool \TeX\ by inserting a null subformula:
+`|$P{}_2^2$|' produces `$P{}_2^2$'.
+
+The control sequence ^|\prime| stands for the symbol `$\prime$', which
+is used mostly in superscripts. In fact, `$\prime$' is so big as it stands
+that you would never want to use it except in a subscript or superscript,
+where it occurs in a smaller size. Here are some typical examples:
+\beginmathdemo
+\it Input&\it Output\cr
+\noalign{\vskip2pt}
+|$y_1^\prime$|&y_1^\prime\cr
+|$y_2^{\prime\prime}$|&y_2^{\prime\prime}\cr
+|$y_3^{\prime\prime\prime}$|&y_3^{\prime\prime\prime}\cr
+\endmathdemo
+Since single and double primes occur rather frequently, plain \TeX\
+provides a convenient abbreviation: You can simply type |'| instead
+of |^\prime|, and |''| instead of |^{\prime\prime}|, and so on.
+\beginmathdemo
+|$f'[g(x)]g'(x)$|&f'[g(x)]g'(x)\cr
+|$y_1'+y_2''$|&y_1'+y_2''\cr
+|$y'_1+y''_2$|&y'_1+y''_2\cr
+|$y'''_3+g'^2$|&y'''_3+g'{}^2\cr
+\endmathdemo
+
+\dangerexercise Why do you think \TeX\ treats |\prime| as a large symbol
+that appears only in superscripts, instead of making it a smaller
+symbol that has already been shifted up into the superscript position?
+\answer The second alternative doesn't work properly when there's a
+subscript at the same time as a prime. Furthermore, some mathematicians
+use |\prime| also in the subscript position; they write, for example,
+$F'(w,z)=\partial F(w,z)/\partial z$ and $F_\prime(w,z)=\partial F(w,z)/
+\partial w$.
+
+\dangerexercise Mathematicians sometimes use ``^{tensor notation}''
+in which subscripts and superscripts are staggered, as in `$R_i{}^{jk}{}_l$'.
+Explain how to achieve such an effect.
+\answer |$R_i{}^{jk}{}_l$|.
+
+Another way to get complex formulas from simple ones is to use the control
+sequences ^|\sqrt|, ^|\underline|, or ^|\overline|.
+^^{surds, see sqrt} ^^{vinculum, see overline}
+Like |^| and |_|, these operations apply to the character or subformula
+that follows them:
+\beginmathdemo
+|$\sqrt2$|&\sqrt2\cr
+|$\sqrt{x+2}$|&\sqrt{x+2}\cr
+|$\underline4$|&\underline4\cr
+|$\overline{x+y}$|&\overline{x+y}\cr
+|$\overline x+\overline y$|&\overline x+\overline y\cr
+|$x^{\underline n}$|&x^{\underline n}\cr
+|$x^{\overline{m+n}}$|&x^{\overline{m+n}}\cr
+|$\sqrt{x^3+\sqrt\alpha}$|&\sqrt{x^3+\sqrt\alpha}\cr
+\endmathdemo
+You can also get cube roots `$\root3\of{\phantom{h}}$' and similar things
+by using ^|\root|:
+\beginmathdemo
+|$\root 3 \of 2$|&\root 3 \of 2\cr
+|$\root n \of {x^n+y^n}$|&\root n \of {x^n+y^n}\cr
+|$\root n+1 \of a$|&\root n+1 \of a\cr
+\endmathdemo
+
+\danger The |\sqrt| and |\underline| and |\overline| operations are able to
+place lines above or below subformulas of any size or shape; the bar lines
+change their size and position, so that they are long enough to cover the
+subformula, and high enough or low enough not to bump into it. For example,
+consider `|\overline|~|l|' ($\,\overline l\,$) versus `|\overline|~|m|'
+($\,\overline m\,$):  The first has a shorter bar line, and this line has
+been raised higher than the bar in the second. Similarly, the bar in
+`|\underline|~|y|' ($\,\underline y\,$) is lower than the bar in
+`|\underline|~|x|' ($\,\underline x\,$); and square root signs appear in a
+variety of positions based on the height and depth of what is being
+|\sqrt|'d: $\sqrt a + \sqrt d + \sqrt y$. \TeX\ knows the height, depth, and
+width of every letter and every subformula, because it considers them to be
+boxes, as explained in Chapter~11. If you have a formula in which there is
+only one |\sqrt|, or only one |\overline| or |\underline|, the normal
+positioning rules work fine; but sometimes you want to have uniformity
+between different members of a complex formula. For example, you might want to
+typeset `$\mskip-1mu\sqrt{\mathstrut a}+
+ \sqrt{\mathstrut d}+\sqrt{\mathstrut y}\mskip+2mu$',
+putting all square roots in the same vertical position. There's an easy way
+to do this, using the control sequence ^|\mathstrut| as follows:
+\begintt
+$\sqrt{\mathstrut a}+\sqrt{\mathstrut d}+\sqrt{\mathstrut y}$.
+\endtt
+A |\mathstrut| is an invisible box whose width is zero; its height and depth
+are the height and depth of a parenthesis `('. Therefore subformulas
+that contain |\mathstrut| will always have the same height and depth,
+unless they involve more complicated constructions like subscripts and
+superscripts. Chapter~18 discusses more powerful operations called ^|\smash|
+and ^|\phantom| by which you can obtain complete control over the positioning
+of roots and similar signs.
+
+\exercise Test your understanding of what you have read so far in this chapter
+by explaining what should be typed to get the following formulas. \ (Be
+sure to check your answer with Appendix~A to confirm that you're right.)
+$$\hbox to\hsize{\indent
+  $\displaystyle
+  10^{10}\hfil 2^{n+1}\hfil (n+1)^2\hfil \sqrt{1-x^2}\hfil
+  \overline{w+\overline z}\hfil p_1^{e_1}\hfil a_{b_{c_{d_e}}}\hfil
+  \root3\of{h''_n(\alpha x)}\hfil$}$$
+\answer |10^{10}|; \stretch|2^{n+1}|; \stretch|(n+1)^2|; \stretch|\sqrt{1-x^2}|;
+\stretch|\overline{w+\overline z}|; \stretch|p_1^{e_1}|; \stretch
+|a_{b_{c_{d_e}}}|; \stretch|\root3\of{h''_n(\alpha x)}|.
+\ (Of course, you should enclose these formulas in dollar signs so that
+\TeX\ will process them in math mode.  Superscripts and subscripts can be
+given in either order; for example, |h''_n| and |h_n''| both work the
+same.  You should not leave out any of the braces shown here; for example,
+`|$10^10$|' would yield `$10^10$'. But it doesn't hurt to insert
+additional braces around letters or numbers, as in `|({n}+{1})^{2}|'. The
+indicated blank spaces are necessary unless you use extra braces;
+otherwise \TeX\ will complain about undefined control sequences
+|\overlinez| and |\alphax|.)
+
+\exercise What mistake did B. C. ^{Dull} discover after he typed the
+following?
+\begintt
+If$ x = y$, then $x$ is equal to $y.$
+\endtt
+\answer He got `If$ x = y\ldots$' because he forgot to leave a space
+after `|If|'; ^{spaces} disappear between dollar signs. He should
+also have ended the sentence with `|$y$.|'; punctuation that belongs
+to a sentence should not be included in a formula, as we will see
+in Chapter~18. \ (But you aren't expected to know that yet.)
+
+\exercise Explain how to type the following sentence:
+\begindisplay
+Deleting an element from an $n$-tuple leaves an $(n-1)$-tuple.
+\enddisplay
+\answer |Deleting an element from an $n$-tuple leaves an $(n-1)$-tuple.|
+
+\exercise List all the italic letters that descend below the baseline.
+\ (These are the letters for which |\underline| will lower its bar line.)
+\answer $Q,f,g,j,p,q,y$. \ (The analogous ^{Greek} letters are
+^^{italic letters with descenders} ^^{descenders}
+$\beta,\gamma,\zeta,\eta,\mu,\xi,\rho,\phi,\varphi,\chi,\psi$.)
+
+We have discussed the fact that the characters you type have special meanings
+in math mode, but the examples so far are incomplete; they don't reveal all
+the power that is at your fingertips just after you press the `|$|' key.
+It's time now to go back to basics: Let us make a systematic survey of
+what each character does, when it is used in a formula.
+
+The 52 ^{letters} (|A| to |Z| and |a| to |z|) denote italic symbols
+($A$~to~$Z$ and $a$~to~$z$), which a mathematician would call ``^{variables}.''
+\TeX\ just calls them ``^{ordinary symbols},'' because they make up the
+bulk of math formulas. There are two variants of lowercase L in plain \TeX,
+namely `$l$' (which you get by simply typing `|l|') and `$\ell$'
+(which you get by typing `^|\ell|'). Although mathematicians commonly
+write something that looks like `$\ell$' in their manuscripts, they
+do so only to distinguish it from the numeral~`1'.  This
+distinguishability problem is not present in printed mathematics, since an
+italic `$l$' is quite different from a~`1'; therefore it is traditional to
+use `$l$' unless `$\ell$' has been specifically requested.
+
+Plain \TeX\ also treats the 18 characters
+\begintt
+0 1 2 3 4 5 6 7 8 9 ! ? . || / ` @ "
+\endtt
+^^{digits}^^{numerals}
+as ordinary symbols; i.e., it doesn't insert any extra space when these
+symbols occur next to each other or next to letters. Unlike the letters,
+these 18 characters remain in roman type when they appear in formulas.
+There's nothing special for you to remember about them, except that the
+^{vertical line} `\|' has special uses that we shall discuss later.
+Furthermore, you should be careful to distinguish between `oh' and `zero':
+The italic letter~$O$ is almost never used in formulas unless it appears
+just before a left parenthesis, as in `$O(n)$'; ^^{big-$O$ notation}
+and the numeral~$0$ is almost never used just before a left parenthesis
+unless it is preceded by another digit, as in `$10(n-1)$'. Watch for
+left parentheses and you'll be $0K$. \ (Lowercase o's also tend to
+appear only before left parentheses; type `|x_0|' instead of `|x_o|',
+since the formula `$x_0$' is generally more correct than `$x_o$'.)
+
+The three characters |+|, |-|, and |*|
+are called ``^{binary operations},'' because they operate on two parts of
+a formula. For example, |+|~is a ^{plus sign}, which is used for the sum
+of two numbers; |-|~is a ^{minus sign}. The ^{asterisk}~(|*|) is rarer
+^^{star, see asterisk}
+in mathematics, but it also behaves as a binary operation. Here are
+some examples of how \TeX\ typesets binary operations when they appear
+next to ordinary symbols:
+\beginmathdemo
+\it Input&\it Output\cr
+\noalign{\vskip2pt}
+|$x+y-z$|&x+y-z\cr
+|$x+y*z$|&x+y*z\cr
+|$x*y/z$|&x*y/z\cr
+\endmathdemo
+Notice that |-| and |*| produce quite different math symbols from what you
+get in normal text: The ^{hyphen}~(-) becomes a minus sign~($-$), and
+the raised asterisk~(*) drops down to a lower level~($*$).
+
+\danger \TeX\ does not treat |/| as a binary operation, even though a
+^{slash} stands for division (which qualifies as a binary operation on
+mathematical grounds). The reason is that printers traditionally put extra
+space around the symbols $+$, $-$, and~$*$, but not around~$/$. If \TeX\ were to
+typeset |/| as a binary operation, the formula `|$1/2$|' would come out
+`$1\mathbin/2$', which is wrong; so \TeX\ considers |/| to be an ordinary
+symbol.
+
+\danger Appendix F lists many more binary operations, for which you type
+control sequences instead of single characters. Here are some examples:
+\beginmathdemo
+|$x\times y\cdot z$|&x\times y\cdot z\cr
+|$x\circ y\bullet z$|&x\circ y\bullet z\cr
+|$x\cup y\cap z$|&x\cup y\cap z\cr
+|$x\sqcup y\sqcap z$|&x\sqcup y\sqcap z\cr
+|$x\vee y\wedge z$|&x\vee y\wedge z\cr
+|$x\pm y\mp z$|&x\pm y\mp z\cr
+\endmathdemo
+It is important to distinguish $\times$ (^|\times|) from $X$ (|X|)
+and from $x$ (|x|); to distinguish $\cup$ (^|\cup|) from $U$ (|U|)
+and from $u$ (|u|); to distinguish $\vee$ (^|\vee|) from $V$ (|V|)
+and from $v$ (|v|); to distinguish $\circ$ (^|\circ|) from $O$ (|O|)
+and from $o$ (|o|). ^^|\cdot|^^|\bullet|^^|\cap|^^|\sqcup|^^|\sqcap|^^|\wedge|
+^^{cross, see dagger, times}
+^^|\pm|^^|\mp| The symbols `$\lor$' and `$\land$' can also be called
+^|\lor| and ^|\land|, since they frequently stand for binary operations
+that are called ``^{logical~or}'' and ``^{logical~and}.''
+
+\danger Incidentally, binary operations are treated as ordinary symbols
+if they don't occur between two quantities that they can operate on.
+For example, no extra space is inserted next to the $+$, $-$, and~$*$
+in cases like the following:
+\beginmathdemo
+|$x=+1$|&x=+1\cr
+|$3.142-$|&3.142-\cr
+|$(D*)$|&(D*)\cr
+\endmathdemo
+Consider also the following examples, which show that binary
+operations can be used as ordinary symbols in superscripts and subscripts:
+\beginmathdemo
+|$K_n^+,K_n^-$|&K_n^+,K_n^-\cr
+|$z^*_{ij}$|&z^*_{ij}\cr
+|$g^\circ \mapsto g^\bullet$|&g^\circ \mapsto g^\bullet\cr
+|$f^*(x) \cap f_*(y)$|&f^*(x) \cap f_*(y)\cr
+\endmathdemo
+
+\dangerexercise How would you obtain the formulas `$z^{*2}$'
+and `$h_*'(z)$'\thinspace?
+\answer |$z^{*2}$| and |$h_*'(z)$|.
+
+Plain \TeX\ treats the four characters |=|, |<|, |>|, and |:|\ as
+``^{relations}'' because they express a relationship between two
+quantities. For example, `${x<y}$' means that $x$~is less than~$y$.
+Such relationships have a rather different meaning from binary
+operations like $+$, and the symbols are typeset somewhat differently:
+\beginmathdemo
+|$x=y>z$|&x=y>z\cr
+|$x:=y$|&x:=y\cr
+|$x\le y\ne z$|&x\le y\ne z\cr
+|$x\sim y\simeq z$|&x\sim y\simeq z\cr
+|$x\equiv y\not\equiv z$|&x\equiv y\not\equiv z\cr
+|$x\subset y\subseteq z$|&x\subset y\subseteq z\cr
+\endmathdemo
+^^|\le|^^|\ne|^^|\simeq|^^{colon}^^{equals}^^{lessthan}^^{greaterthan}
+^^{colonequals}^^|\equiv|^^|\not|^^|\subset|^^|\subseteq|^^|\sim|
+^^{hooks, see subset, supset} ^^{wiggle, see sim}
+(The last several examples show some of the many other
+relational symbols that plain \TeX\ makes available via control sequences;
+see Appendix~F.)
+
+The two characters `|,|' (^{comma}) and `|;|' (^{semicolon}) are treated
+as ^{punctuation marks in formulas}; this means that \TeX\ puts a little
+extra space after them, but not before them.
+\beginmathdemo
+|$f(x,y;z)$|&f(x,y;z)\cr
+\endmathdemo
+It isn't customary to put extra space after a `|.|'\ (^{period}) in
+math formulas, so \TeX\ treats a period as an ordinary symbol.
+If you want the `|:|'\ character to be treated as a punctuation mark
+instead of as a relation, just call it ^|\colon|:
+\beginmathdemo
+|$f:A\to B$|&f:A\to B\cr
+|$f\colon A\to B$|&f\colon A\to B\cr
+\endmathdemo
+^^|\to|
+If you want to use a comma as an ordinary symbol (e.g., when it
+appears in a large number), just put it in braces; \TeX\ treats
+anything in braces as an ordinary symbol. For instance,
+\beginmathdemo
+|$12,345x$|&12,345x\qquad\rm(wrong)\cr
+|$12{,}345x$|&12{,}345x\qquad\,\rm(right)\cr
+\endmathdemo
+
+\dangerexercise What's an easy way to get a raised dot in a decimal
+constant (e.g., `$3{\cdot}1416$')?
+\answer |$3{\cdot}1416$|. \ (One of the earlier examples in this
+chapter showed that ^|\cdot| is a binary operation; putting it in braces
+makes it act like an ordinary symbol.)\par
+If you have lots of constants like this, for example in a table, there's a way
+to make ordinary periods act like |\cdot| symbols: Just define
+^|\mathcode||`.| to be |"0201|, assuming that the fonts of plain \TeX\ are
+being used.  However, this could be dangerous, since ordinary
+periods are used frequently in displayed equations; the |\mathcode| change
+should be confined to places where every period is to be a |\cdot|.
+
+So far we have considered letters, other ordinary symbols, binary operations,
+relations, and punctuation marks; hence we have covered almost every key on
+the typewriter. There are just a few more: The characters `|(|' ^^{lparen}
+and `|[|' ^^{lbracket} are called ``^{openings},'' while `|)|' ^^{rparen} and
+^^{fences, see opening, closing, delimiters}
+`|]|' ^^{rbracket} are called ``^{closings}''; these act pretty much like
+ordinary symbols, but they help \TeX\ to decide when a binary operation is
+not really being used in a binary way.  Then there is the character~|'|,
+which we know is used as an abbreviation for |\prime| superscripts.
+Finally, we know that plain \TeX\ reserves the other ten characters:
+\begintt
+\ $ % # & ~ { } _ ^
+\endtt
+These are not usable for symbols in math mode unless their ^|\catcode|
+values are changed (see Chapter~7). Although |{| and |}| specify
+grouping, the control sequences `|\{|' and `|\}|' ^^|\lbrace|^^|\rbrace| can
+be used to get `$\{$' as an opening and `$\}$' as a closing.
+
+\ddanger All of these math mode interpretations are easily changeable, since
+each character has a ^|\mathcode|, as explained in Chapter~17; none of
+the conventions are permanently built into \TeX\null. However, most of them are
+so standard that it is usually unwise to make many changes, except perhaps
+in the interpretations of |`|, |"|, and |@|. ^^{at sign} ^^{leftquote}
+^^{doublequote}
+
+The special characters |^| and |_| that designate superscripts
+^^{circumflex}^^{underbar}
+and subscripts should not be used except in formulas. Similarly,
+the names of math symbols like |\alpha| and |\approx|, and the
+control sequences for math operations like |\overline|, must not
+invade ordinary text. \TeX\ uses these facts to detect ^{missing dollar
+signs} in your input, before such mistakes cause too much trouble. For
+example, suppose you were to type
+\begintt
+The smallest $n such that $2^n>1000$ is~10.
+\endtt
+\TeX\ doesn't know that you forgot a `|$|' after the first `|n|', because
+it doesn't understand English; so it finds a ``formula'' between the
+first two |$| signs:
+\begindisplay
+The smallest $n such that $
+\enddisplay
+after which it thinks that `|2|' is part of the text. But then the |^|
+reveals an inconsistency; \TeX\ will automatically insert a~|$| before
+the~|^|, and you will get an error message. In this way the computer has
+gotten back into synch, and the rest of the document can be typeset as if
+nothing had happened.
+
+\danger Conversely, a blank line or ^|\par| is not permitted in math mode.
+This gives \TeX\ another way to recover from a missing~|$|; such
+errors will be confined to the paragraph in which they occur.
+
+\danger If for some reason you cannot use |^| and |_| for superscripts
+and subscripts, because you have an unusual keyboard or because you need
+|^| for French accents or something, plain \TeX\ lets you type ^|\sp|
+and ^|\sb| instead. For example, `|$x\sp2$|' is another way to get `$x\sp2$'.
+On the other hand, some people are lucky enough to have keyboards that
+contain additional symbols besides those of standard ASCII.
+^^{character set}
+When such symbols are available, \TeX\ can be set up to make math
+typing a bit more pleasant. For example, at the author's installation there
+are keys labeled \up\ and~\dn\ that produce visible symbols
+(these make superscripts and subscripts look much nicer
+on the screen); there are keys for the relations {\tentex\char'34},
+{\tentex\char'35}, and {\tentex\char'32} (these save time); and there are
+about two dozen more keys that occasionally come in handy. \ (See Appendix~C.)
+^^{uparrow}^^{downarrow}^^{leq}^^{geq}^^{neq}
+
+\danger Mathematicians are fond of using ^{accents} over letters, because
+this is often an effective way to indicate relationships between
+mathematical objects, and because it greatly extends the number of available
+symbols without increasing the number of necessary fonts.
+Chapter~9 discusses the use of accents in ordinary text, but mathematical
+accents are somewhat different, because spacing is not the same; \TeX\ uses
+special conventions for accents in formulas, so that the two sorts of
+accents will not be confused with each other. The following math accents
+are provided by plain~\TeX:
+\beginmathdemo
+|$\hat a$|&\hat a\cr
+|$\check a$|&\check a\cr
+|$\tilde a$|&\tilde a\cr
+|$\acute a$|&\acute a\cr
+|$\grave a$|&\grave a\cr
+|$\dot a$|&\dot a\cr
+|$\ddot a$|&\ddot a\cr
+|$\breve a$|&\breve a\cr
+|$\bar a$|&\bar a\cr
+|$\vec a$|&\vec a\cr
+\endmathdemo
+^^|\hat|^^|\check|^^|\tilde|^^|\acute|^^|\grave|
+^^|\dot|^^|\ddot|^^|\breve|^^|\bar|^^|\vec|
+The first nine of these are called |\^|, |\v|, |\~|, |\'|, |\`|, |\.|,
+|\"|, |\u|, and |\=|, respectively, when they appear in text; |\vec| is an
+accent that appears only in formulas. \TeX\ will complain if you try to
+use |\^| or |\v|, etc., in formulas, or if you try to use |\hat| or
+|\check|, etc., in ordinary text.
+
+\danger It's usually a good idea to define special control sequences for
+accented letters that you need frequently. For example, you can put
+^^|\def|
+\begintt
+\def\Ahat{{\hat A}}
+\def\chat{{\hat c}}
+\def\scheck{{\check s}}
+\def\xtilde{{\tilde x}}
+\def\zbar{{\bar z}}
+\endtt
+at the beginning of a manuscript that uses the symbols $\hat A$, $\hat c$,
+$\check s$, $\tilde x$, and $\bar z$ more than, say, five times.  This
+saves you a lot of keystrokes, and it makes the manuscript easier to
+read.  Chapter~20 explains how to define control sequences.
+
+\danger When the letters $i$ and $j$ are accented in math formulas, ^{dotless}
+symbols $\imath$ and $\jmath$ should be used under the accents. These
+symbols are called ^|\imath| and ^|\jmath| in plain \TeX. Thus, for example,
+a paper that uses `$\hat\imath$' and `$\hat\jmath$' ought to begin with
+the following definitions:
+\begintt
+\def\ihat{{\hat\imath}}
+\def\jhat{{\hat\jmath}}
+\endtt
+
+\def\Ahat{{\hat A}}
+\danger You can put ^{accents on top of accents}, making symbols like
+$\skew6\hat\Ahat$ that might cause a mathematician to
+squeal with ecstasy. However, it takes a bit of finesse to get the
+upper accent into a position that looks right, because the designer of a
+font for mathematics usually tells \TeX\ to position math accents in
+special ways for special letters. Plain \TeX\ provides a control sequence
+called ^|\skew| that makes it fairly easy to shift superaccents into their
+proper place. For example, `|\skew6\hat\Ahat|' was used to produce the
+symbol above. The number `|6|' in this example was chosen by trial and
+error; `|5|'~seems to put the upper accent a bit too far left, while
+`|7|'~makes it a bit too far right, at least in the author's opinion.
+The idea is to fiddle with the amount of skew until you find what
+pleases you best.
+
+\danger It's possible, in fact, to put math accents on any subformula, not
+just on single characters or accented characters. But there's usually not
+much point in doing so, because \TeX\ just centers the accent over the
+whole subformula. For example, `|$\hat{I+M}$|' yields `$\hat{I+M}$'. In
+particular, a |\bar| accent always stays the same size; it's not like
+^|\overline|, which grows with the formula under it. Some people prefer
+the longer line from |\overline| even when it applies to only a single
+letter; for example, `|$\bar z+\overline z$|' produces `$\bar z+\overline
+z$', and you can take your pick when you define |\zbar|.  However, plain
+\TeX\ does provide two accents that grow; they are called ^|\widehat| and
+^|\widetilde|:
+\beginmathdemo
+|$\widehat x,\widetilde x$|&\tenmath\widehat x,\widetilde x\cr
+|$\widehat{xy},\widetilde{xy}$|&\tenmath\widehat{xy},\widetilde{xy}\cr
+|$\widehat{xyz},\widetilde{xyz}$|&\tenmath\widehat{xyz},\widetilde{xyz}\cr
+\endmathdemo
+The third example here shows the maximum size available.
+
+\def\ghat{{\hat g}}
+\exercise This has been another long chapter; but cheer up, you have learned
+a lot! Prove it by explaining what to type in order to get the formulas
+$e^{-x^2}$, $D\sim p^\alpha M+l$, and $\ghat\in(H^{\pi_1^{-1}})'$. \ (In
+the last example, assume that a control sequence |\ghat| has already been
+defined, so that |\ghat| produces the accented letter $\ghat$.)
+\answer |$e^{-x^2}$|, |$D\sim p^\alpha M+l$|, and |$\ghat\in(H^{\pi_1^{-1}})'$|.
+\ (If you are reading the dangerous bend sections, you know that the
+recommended way to define |\ghat| is `|\def\ghat{{\hat g}}|'.)
+
+\endchapter
+
+Producing ^{Greek} letters is as easy as $\pi$.
+You just type |... as easy as $\pi$.|
+\author LESLIE ^{LAMPORT}, {\sl The ^{L\kern-.2em\raise.6ex\hbox{a}%
+  \kern-.1em\TeX} Document Preparation System\/} (1983)
+        % Note: the final manual has a slightly different wording on p43.
+        % It's now called "LaTeX: A Document Preparation System" (1986)
+        % But I decided to cite the original, partly because I have
+        % no smallcaps sans-serif `A' to match the new LaTeX logo!
+
+\bigskip
+
+\TeX\ has no regard for the glories of the Greek tongue---\/
+as far as it is concerned, Greek letters are just additional weird symbols,
+and they are allowed\/ {\rm only} in math mode.
+In a pinch you can get the output $\tau\epsilon\chi$ by typing %
+  |$\tau\epsilon\chi$|,
+but if you're actually setting Greek text, you will be using
+a different version of \TeX, designed for a keyboard with Greek letters on it,
+and you shouldn't even be reading this manual,
+which is undoubtedly all English to you.
+\author MICHAEL ^{SPIVAK}, {\sl The Joy of \TeX\/} (1982)
+
+\eject

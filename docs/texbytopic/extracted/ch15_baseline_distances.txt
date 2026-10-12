@@ -1,0 +1,168 @@
+Chapter 15
+
+Baseline Distances
+
+
+
+
+Lines of text are in most cases not of equal height or depth. Therefore TEX adds inter-
+line glue to keep baselines at a uniform distance from one another. This chapter treats the
+computation of such interline glue.
+\baselineskip The ‘ideal’ baseline distance between neighbouring boxes on a vertical
+         list. Plain TEX default: 12pt.
+\lineskiplimit Distance to be maintained between the bottom and top of neighbouring
+         boxes on a vertical list. Plain TEX default: 0pt.
+\lineskip Glue added if the distance between bottom and top of neighbouring boxes is
+         less than \lineskiplimit. Plain TEX default: 1pt.
+\prevdepth Depth of the last box added to a vertical list as it is perceived by TEX.
+\nointerlineskip Macro to prevent interline glue insertion once.
+\offinterlineskip Macro to prevent interline glue globally henceforth.
+\openup Increase \baselineskip, \lineskip, and \lineskiplimit by specified amount.
+
+
+
+
+15.1     Interline glue
+TEX tries to keep a certain distance between the reference points of boxes that are added
+to a vertical list; in particular it tries to keep the baselines of ordinary text at a constant
+distance, the \baselineskip. Actually, the \baselineskip is a hgluei, so line distances
+can stretch or shrink. However, the natural sizes, as well as the stretch and the shrink, are
+the same between all lines.
+When boxes, whether they are lines of a paragraph or explicit boxes, are appended to a
+vertical list, glue is added usually so that the depth of the preceding box and the height of
+the current one add up to the \baselineskip. This has the effect of keeping the reference
+points of subsequent lines at regular intervals.
+
+
+                                                                                           157
+Chapter 15. Baseline Distances
+
+
+However, this process can bring the bottom and top of two subsequent boxes to be less than
+\lineskiplimit apart:
+In that case, \lineskip glue is added: Note that this will usually increase the distance
+between the baselines of the boxes to more than the \baselineskip.
+The exact process is this:
+•         if \prevdepth is -1000pt or less, no glue is added, otherwise
+•         TEX calculates the distance between the bottom of the previous box and the top of
+          the current one as the natural width of the \baselineskip minus \prevdepth
+          (the depth of the last box) and minus the height of the current box;
+•         if this distance is at least \lineskiplimit, glue is added with the calculated
+          distance as natural size, and with the stretch and shrink of the \baselineskip,
+•         otherwise \lineskip glue is added.
+•         \prevdepth is set to the depth of the current item.
+There are two exceptional situations: no interline glue is added before and after a rule,
+and the \prevdepth is not updated by an \unvbox or \unvcopy command. After a rule
+interline glue is prevented by a value of -1000pt of the \prevdepth.
+The above process is carried out, irrespective of what extra glue may have been inserted
+in between the boxes. Thus a skip in between boxes in vertical mode will not affect the
+distance calculated from the baseline distances, and therefore also not the amount of base-
+lineskip glue. The same holds for glue added with \vadjust inside a paragraph.
+         \baselineskip=10pt \lineskiplimit=2pt \lineskip=2pt
+         \setbox0=\vbox{\hbox{\vrule depth4pt}
+                            \hbox{\vrule height 3pt}}
+         \showbox0
+         gives
+         \box0=
+         \vbox(10.0+0.0)x0.4
+         .\hbox(0.0+4.0)x0.4
+         ..\rule(*+4.0)x0.4
+         .\glue(\baselineskip) 3.0
+         .\hbox(3.0+0.0)x0.4
+         ..\rule(3.0+*)x0
+         Bringing the boxes to within \lineskiplimit of each other, that is
+         \setbox0\vbox{\hbox{\vrule depth4pt}
+                           \hbox{\vrule height 5pt}}
+         \showbox0
+         gives
+         \box0=
+         \vbox(11.0+0.0)x0.4
+         .\hbox(0.0+4.0)x0.4
+         ..\rule(*+4.0)x0.4
+         .\glue(\lineskip) 2.0
+         .\hbox(5.0+0.0)x0.4
+         ..\rule(5.0+*)x0.4
+
+
+158                                                            Victor Eijkhout – TEX by Topic
+                                                        15.2. The perceived depth of boxes
+
+
+        where \lineskip glue has been inserted instead of the usual \baselineskip
+        glue.
+The plain TEX default values are
+\lineskiplimit=0pt lineskip=1pt
+so, when boxes start to touch each other, they are moved one point apart.
+
+
+
+15.2     The perceived depth of boxes
+The decision process for interline glue uses \prevdepth as the perceived depth of the
+preceding box on the vertical list. The \prevdepth parameter can be used only in vertical
+mode.
+The \prevdepth is set to the depth of boxes added to the vertical list, but it is not affected
+by \unvbox or \unvcopy. After an \hrule it is set to -1000pt to prevent interline glue
+before the next box.
+At the beginning of a vertical list \prevdepth is set to -1000pt, except in an \halign
+and \noalign code contained therein, where it is carried over from the surrounding list. At
+the end of the alignment the value of \prevdepth set by the last alignment row is carried
+to the outer list.
+In order to prevent interline glue just once, all that is needed is to alter the \prevdepth.
+\def\nointerlineskip{\prevdepth=-1000pt}
+The \offinterlineskip macro is much more drastic: it prevents all interline glue from
+the moment of its call onwards, or, if it is used inside a paragraph, from the start of that
+paragraph. Its definition is
+\baselineskip=-1000pt \lineskip=0pt
+\lineskiplimit\maxdimen
+where the second line is the essential one: it causes TEX to add \lineskip glue (which is
+zero) always. Settings for \baselineskip do not matter any more then.
+The \offinterlineskip macro has an important application in alignments (see Chap-
+ter 25).
+By setting
+\lineskiplimit=-\maxdimen
+you can force TEX to apply the \baselineskip always, regardless of whether this would
+bring boxes too close together or, indeed, if this would make them overlap.
+
+
+
+15.3     Terminology
+In hot metal typesetting, all letters of a particular font were on a ‘body’ of the same size.
+Thus every line of type had the same height and depth, and the resulting distance between
+the baselines would be some suitable value for that type. If for some reason this distance
+
+
+Victor Eijkhout – TEX by Topic                                                            159
+Chapter 15. Baseline Distances
+
+
+should be larger (see [52] for a discussion of this), strips of lead would be inserted. The
+extra distance was called the ‘leading’ (pronounced ‘ledding’).
+With phototypesetting, when the baseline distance was sometimes called the ‘film trans-
+port’, this terminology blurred, and the term ‘leading’ was also used for the baseline di-
+stance. Some of this confusion is also present in TEX: the parameter \baselineskip speci-
+fies the baseline distance, but in the trace output (see the examples above) the glue inserted
+to make the baseline distance equal to \baselineskip is called \baselineskip.
+
+
+
+15.4     Additional remarks
+In general, for documents longer than one page it is desirable to have the same baseline
+distance throughout. However, for one-page documents you may add stretchability to the
+baselineskip, for instance if the text has to be flush bottom.
+Increasing the distance between just one pair of lines can be done with \vadjust. The
+argument of this command is vertical material that will be inserted in the vertical list right
+after the line where this command was given. The second line of this paragraph, for in-
+stance, contains the command \vadjust{\kern2pt}.
+The amount of leading cannot be changed in the middle of a paragraph, because the va-
+lue for \baselineskip that is used is the one that is current when the paragraph is fi-
+nally broken and added to the main vertical list. The same holds for the \lineskip and
+\lineskiplimit.
+The plain TEX macro \openup increases the \baselineskip, \lineskip, and \lineskiplimit
+by the amount of the argument to the macro. In effect, this increases line distances by this
+amount regardless of whether they are governed by \baselineskip or \lineskip.
+
+
+
+
+160                                                              Victor Eijkhout – TEX by Topic
+

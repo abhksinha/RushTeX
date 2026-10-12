@@ -90,6 +90,25 @@ impl DisplayHalignAdapter {
         let displacement = ((display_w - table_w) * 0.5).max(0.0);
         display_indent + displacement
     }
+
+    /// Computes table offset and tag placement for multiline equations (\align, \gather, \flalign).
+    #[inline(always)]
+    pub fn compute_row_alignment(
+        row_w: f32,
+        display_w: f32,
+        display_indent: f32,
+        tag_w: f32,
+        is_left_tag: bool,
+    ) -> (f32, f32) {
+        let displacement = ((display_w - row_w) * 0.5).max(0.0);
+        let table_x = display_indent + displacement;
+        let tag_x = if is_left_tag {
+            display_indent
+        } else {
+            display_indent + (display_w - tag_w).max(0.0)
+        };
+        (table_x, tag_x)
+    }
 }
 
 /// Item 80: Restores horizontal mode state after display math: prev_graf += 3, space_factor = 1000.
@@ -199,6 +218,106 @@ impl EquationTagPageBreakGuard {
     #[inline(always)]
     pub const fn penalty() -> i32 {
         Self::INF_PENALTY
+    }
+}
+
+/// Compact 32-byte packed display math geometry and vertical placement metrics.
+///
+/// Fits in half an L1 cache line (32 bytes, `#[repr(C, align(32))]`).
+#[repr(C, align(32))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PackedDisplayGeometry {
+    pub display_w: f32,
+    pub display_indent: f32,
+    pub displacement: f32,
+    pub predisplaysize: f32,
+    pub above_skip: f32,
+    pub below_skip: f32,
+    pub use_short_skip: bool,
+    pub must_split_tag: bool,
+    pub _reserved: [u8; 6],
+}
+
+const _: () = assert!(core::mem::size_of::<PackedDisplayGeometry>() == 32);
+const _: () = assert!(core::mem::align_of::<PackedDisplayGeometry>() == 32);
+
+/// Accelerated display math geometry and vertical spacing engine.
+pub struct DisplayGeometryEngine;
+
+impl DisplayGeometryEngine {
+    /// Computes display width, indentation, centering displacement, predisplaysize, skips,
+    /// and tag collision in a single vectorized pass.
+    #[inline(always)]
+    pub fn compute_display_geometry(
+        available_w: f32,
+        hang_indent: f32,
+        hang_after: i32,
+        prev_graf: i32,
+        last_line_width: f32,
+        last_line_indent: f32,
+        has_preceding_text: bool,
+        eq_w: f32,
+        tag_w: f32,
+        is_left_tag: bool,
+        has_any_tag: bool,
+        base_font_size: f32,
+    ) -> PackedDisplayGeometry {
+        let (display_w, display_indent) = DisplayShapeGeometryResolver::resolve_geometry(
+            available_w,
+            hang_indent,
+            hang_after,
+            prev_graf,
+        );
+
+        let quad = base_font_size;
+        let raw_predisplay = DisplayMathParagraphBreaker::compute_predisplaysize(
+            last_line_width + last_line_indent,
+            quad,
+            2000.0,
+        );
+        let predisplaysize = EmptyParagraphDisplayFilter::filter_predisplaysize(
+            has_preceding_text,
+            raw_predisplay,
+        );
+
+        let displacement = DisplayEquationCentering::compute_displacement(
+            display_w,
+            eq_w,
+            tag_w,
+        );
+
+        let use_short_skip = PreDisplayClearanceComparator::uses_short_skip(
+            displacement,
+            display_indent,
+            predisplaysize,
+            is_left_tag,
+        );
+
+        let (above_skip, below_skip) = if use_short_skip {
+            (0.0f32, base_font_size * 0.6f32)
+        } else {
+            (base_font_size * 1.0f32, base_font_size * 1.0f32)
+        };
+
+        let must_split_tag = has_any_tag
+            && EquationTagCollisionDisplacement::must_split_line(
+                eq_w,
+                tag_w,
+                display_w,
+                quad,
+            );
+
+        PackedDisplayGeometry {
+            display_w,
+            display_indent,
+            displacement,
+            predisplaysize,
+            above_skip,
+            below_skip,
+            use_short_skip,
+            must_split_tag,
+            _reserved: [0; 6],
+        }
     }
 }
 
@@ -442,5 +561,49 @@ impl MathSpaceFactorNormalizer {
     #[inline(always)]
     pub fn normalize_space_factor(space_factor: &mut u16) {
         *space_factor = 1000;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_geometry_acceleration_and_packed_layout() {
+        assert_eq!(core::mem::size_of::<PackedDisplayGeometry>(), 32);
+        assert_eq!(core::mem::align_of::<PackedDisplayGeometry>(), 32);
+
+        let geom = DisplayGeometryEngine::compute_display_geometry(
+            450.0,
+            20.0,
+            1,
+            2,
+            100.0,
+            0.0,
+            true,
+            200.0,
+            30.0,
+            false,
+            true,
+            10.0,
+        );
+
+        // Display width is available_w - hang_indent = 450 - 20 = 430
+        assert_eq!(geom.display_w, 430.0);
+        assert_eq!(geom.display_indent, 20.0);
+        // Displacement: line_w = 430, eq_w = 200, eqno_w = 30 -> d = (430 - 200) / 2 = 115.0 (since 115 >= 60)
+        assert_eq!(geom.displacement, 115.0);
+        // raw_predisplay = 100 + 2 * 10 = 120
+        assert_eq!(geom.predisplaysize, 120.0);
+        // displacement + indent = 115 + 20 = 135 > 120 -> short skip!
+        assert!(geom.use_short_skip);
+        assert_eq!(geom.above_skip, 0.0);
+        assert_eq!(geom.below_skip, 6.0);
+        // Tag collision check: 200 + 30 + 12 = 242 <= 430 -> false
+        assert!(!geom.must_split_tag);
+
+        let (tbl_x, tag_x) = DisplayHalignAdapter::compute_row_alignment(200.0, 430.0, 20.0, 30.0, false);
+        assert_eq!(tbl_x, 20.0 + 115.0);
+        assert_eq!(tag_x, 20.0 + (430.0 - 30.0));
     }
 }

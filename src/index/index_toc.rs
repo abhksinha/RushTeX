@@ -7,7 +7,10 @@ use crate::layout::engine::{count_digits, Layouter, Paint};
 
 /// Lays out the complete Table of Contents with section numbers, hierarchical indentation,
 /// dotted leaders, and right-aligned page numbers.
-pub(crate) fn layout_toc<'a>(layouter: &mut Layouter<'a>, registry: &IndexRegistry<'a>) {
+pub(crate) fn layout_toc<'a>(
+    layouter: &mut Layouter<'a>,
+    registry: &IndexRegistry<'a>,
+) {
     let avail_w = (layouter.right - layouter.right_skip) - (layouter.left + layouter.left_skip);
     if avail_w <= 0.0 {
         return;
@@ -69,7 +72,7 @@ pub(crate) fn layout_toc<'a>(layouter: &mut Layouter<'a>, registry: &IndexRegist
             // B. Draw Title Inlines
             let title_x = left_margin + indent + num_box_w;
             layouter.paint_inlines_at_size(
-                entry.title,
+                &entry.title,
                 face,
                 layouter.base_font_size,
                 title_x,
@@ -91,7 +94,7 @@ pub(crate) fn layout_toc<'a>(layouter: &mut Layouter<'a>, registry: &IndexRegist
 
             // D. Draw Dotted Leader (. . . . . . .)
             let title_w =
-                layouter.measure_inlines_face_size(entry.title, face, layouter.base_font_size);
+                layouter.measure_inlines_face_size(&entry.title, face, layouter.base_font_size);
             let leader_start = title_x + title_w + 10.0;
             let leader_end = page_x - 10.0;
 

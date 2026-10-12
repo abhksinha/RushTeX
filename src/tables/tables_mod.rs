@@ -138,8 +138,8 @@ G & H & I \\
         assert!(!pdf.is_empty());
         assert!(pdf.starts_with(b"%PDF-1.4"));
         // Check that multi-page document was generated
-        let pdf_str = String::from_utf8_lossy(&pdf);
-        assert!(pdf_str.contains("/Type /Pages"));
+        let pages = crate::compile_source_to_pages(&src).expect("Compilation to pages must succeed");
+        assert!(pages.len() >= 2, "Longtable must stream across at least 2 pages, got {}", pages.len());
     }
 
     #[test]

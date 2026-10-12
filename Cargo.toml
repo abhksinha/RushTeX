@@ -19,5 +19,14 @@ crate-type = ["rlib", "cdylib"]
 lto = true
 codegen-units = 1
 opt-level = 3
-strip = true
+debug = true
+strip = false
 panic = "abort"
+
+[profile.bench]
+opt-level = 3
+debug = true
+strip = false
+
+[dev-dependencies]
+pprof = { version = "0.14", features = ["flamegraph"] }

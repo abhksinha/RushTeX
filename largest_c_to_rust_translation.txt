@@ -1,0 +1,27 @@
+  A mechanical line-by-line port of C code would replicate TeX’s pointer-chasing linked lists (vlink), global mutable arrays (mem[]), and cache-destroying memory indirections. Instead,
+  our goal is to extract TeX’s exact mathematical invariants, penalty formulas, and boundary rules, translating them into idiomatic Rust that rigorously follows
+  Resource_Conscious_Software_Engineering.md and god_instruction.md.
+  ──────
+  ### The 5 Target Files and Their Resource-Conscious Rust Translation
+
+  1. **linebreak.c & postlinebreak.c → layout_hz.rs**
+      • TeX Invariant: The 4 fitness classes, cubic badness b = 100 × (|t|/s)³, penalty demerits d = (1 + b + p)² + α, and baseline skip transitions.
+      • Resource-Conscious Translation (Principles 2, 4, 7): Replace TeX’s allocated active-node linked lists with contiguous, preallocated Structure-of-Arrays buffers (cell_words_soa,
+      index-based active node tables) that reside entirely in L1/L2 cache and reuse scratch memory between paragraphs.
+  2. **mlist.c → math_layout.rs**
+      • TeX Invariant: Appendix G’s 22 rules (Rules 11, 15, 18), exact script shift parameters (sub1/sup1), fraction bar clearance thresholds, and the 8×8 spacing matrix.
+      • Resource-Conscious Translation (Principles 1, 9, 25): Evaluate spacing and sub/superscript shifts in single-pass traversals over flat math atom slices; eliminate dynamic dispatch
+      (dyn Trait) on math measurement hot paths; eliminate intermediate allocation by assembling boxes directly into output paint buffers.
+  3. **buildpage.c → layout_engine.rs**
+      • TeX Invariant: Legal page-break decision points, vertical stretch/shrink cost calculations, heading orphan protection (\penalty 10000), widow/orphan penalties (\widowpenalty,
+      \clubpenalty), and first-paragraph unindentation.
+      • Resource-Conscious Translation (Principles 3, 5, 10): Instead of storing full vertical list trees in memory until the whole document ends, stream completed pages directly to the
+      PDF emitter. Pack heading state and break penalties into compact integer descriptors.
+  4. **packaging.c → layout_engine.rs**
+      • TeX Invariant: hpack and vpack natural dimension accumulation, glue set order calculation (fil/fill/filll), and box shift offsets.
+      • Resource-Conscious Translation (Principles 6, 8, 19): Perform packaging in a single pass over contiguous word arrays. Keep hot geometric dimensions (width, height, depth) separate
+      from cold font or glyph metadata.
+  5. **texmath.c → math_fonts.rs**
+      • TeX Invariant: The complete 16 math font metric parameters per style (display, text, script, scriptscript) for classic fonts, plus OpenType MATH table parameters.
+      • Resource-Conscious Translation (Principles 12, 16, 22): Use static, contiguous lookup tables for standard font parameters so that lookups take zero allocations and 1–2 CPU cycles
+      from L1 cache.

@@ -77,24 +77,20 @@ fn main() -> ExitCode {
             eprintln!("{}", rushtex::Error::Io(err));
             return ExitCode::from(1);
         }
-        let document = match rushtex::tex::parse(&source_content) {
-            Ok(doc) => doc,
+        let mut pdf_bytes = Vec::new();
+        let page_count = match rushtex::compile_into_opts_counted(&source_content, &mut pdf_bytes, enable_compression) {
+            Ok(count) => count,
             Err(err) => {
                 eprintln!("{err}");
                 return ExitCode::from(1);
             }
         };
-        let pages = rushtex::layout::layout(&document);
-        let page_count = pages.len();
-        let mut pdf_bytes = Vec::with_capacity(4096);
-        if let Err(err) = rushtex::pdf::emit_into_opts(&pages, &mut pdf_bytes, enable_compression) {
-            eprintln!("{err}");
-            return ExitCode::from(1);
-        }
+        drop(source_content);
         if let Err(err) = std::io::Write::write_all(&mut std::io::stdout(), &pdf_bytes) {
             eprintln!("{}", rushtex::Error::Io(err));
             return ExitCode::from(1);
         }
+        drop(pdf_bytes);
         let page_unit = if page_count == 1 { "page" } else { "pages" };
         #[cfg(not(target_arch = "wasm32"))]
         let elapsed_secs = start_time.elapsed().as_secs_f64();

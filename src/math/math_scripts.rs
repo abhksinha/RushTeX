@@ -70,6 +70,91 @@ impl ScriptClearanceGovernor {
     }
 }
 
+/// Precomputed 8-byte table mapping MathStyle discriminant (0..8) to index into [sup2, sup1, sup3].
+/// - 0 (Display) -> 1 (sup1)
+/// - 1 (CrampedDisplay) -> 2 (sup3)
+/// - 2 (Text) -> 0 (sup2)
+/// - 3 (CrampedText) -> 2 (sup3)
+/// - 4 (Script) -> 0 (sup2)
+/// - 5 (CrampedScript) -> 2 (sup3)
+/// - 6 (ScriptScript) -> 0 (sup2)
+/// - 7 (CrampedScriptScript) -> 2 (sup3)
+pub const SCRIPT_STYLE_TO_SUP_IDX: [u8; 8] = [1, 2, 0, 2, 0, 2, 0, 2];
+
+/// High-performance unified resolver for TeX Appendix G Rule 18 subscript and superscript vertical shifts.
+pub struct ScriptShiftResolver;
+
+impl ScriptShiftResolver {
+    /// Computes candidate shifts and enforces Rules 18a-18e constraints in a unified pass.
+    #[inline(always)]
+    pub fn resolve(
+        has_sup: bool,
+        has_sub: bool,
+        style: MathStyle,
+        is_char: bool,
+        effective_h: f32,
+        effective_d: f32,
+        sup_d: f32,
+        sub_h: f32,
+        x_height: f32,
+        scale: f32,
+        params: &crate::math::math_fonts::MathFontParameters,
+    ) -> PackedScriptMetrics {
+        // Rule 18a: Candidate superscript shift
+        let sup_idx = SCRIPT_STYLE_TO_SUP_IDX[(style as usize) & 7] as usize;
+        let sup_param = [params.sup2, params.sup1, params.sup3][sup_idx];
+        let sup_shift_std = (sup_param as f32) * scale;
+        let sup_drop = (params.sup_drop as f32) * scale;
+        let mut sup_shift = if is_char {
+            sup_shift_std
+        } else {
+            sup_shift_std.max(effective_h - sup_drop)
+        };
+
+        // Rule 18b: Candidate subscript shift
+        let sub_param = [params.sub1, params.sub2][has_sup as usize];
+        let sub_shift_std = (sub_param as f32) * scale;
+        let sub_drop = (params.sub_drop as f32) * scale;
+        let mut sub_shift = if is_char {
+            sub_shift_std
+        } else {
+            sub_shift_std.max(effective_d + sub_drop)
+        };
+
+        // Rule 18c: Superscript elevation constraint (bottom at least 1/4 x-height above baseline)
+        if has_sup {
+            let min_sup_elevation = 0.25 * x_height + sup_d;
+            sup_shift = sup_shift.max(min_sup_elevation);
+        }
+
+        // Rule 18d: Subscript drop constraint (top cannot exceed 4/5 x-height below baseline)
+        if has_sub {
+            let min_sub_drop = sub_h - 0.8 * x_height;
+            if min_sub_drop > 0.0 {
+                sub_shift = sub_shift.max(min_sub_drop);
+            }
+        }
+
+        // Rule 18e: Clearance constraint between superscript bottom and subscript top
+        if has_sup && has_sub {
+            let gap = (sup_shift - sup_d) - (-sub_shift + sub_h);
+            let min_clearance = (params.sub_sup_gap as f32) * scale;
+            if gap < min_clearance {
+                let shortfall = min_clearance - gap;
+                sub_shift += shortfall;
+                let min_sup_h = 0.8 * x_height + sup_d;
+                if sup_shift < min_sup_h {
+                    let push = min_sup_h - sup_shift;
+                    sup_shift += push;
+                    sub_shift -= push;
+                }
+            }
+        }
+
+        PackedScriptMetrics::new(sup_shift, sub_shift, sup_drop, sub_drop)
+    }
+}
+
 /// Single-pass shift optimizer for subscripts and superscripts.
 pub struct SubSupShiftOptimizer;
 
@@ -84,28 +169,18 @@ impl SubSupShiftOptimizer {
         s14: f32,
         s15: f32,
     ) -> f32 {
-        let mut u = match style {
-            MathStyle::Display => s13,
-            s if s.is_cramped() => s15,
-            _ => s14,
-        };
-        // Ensure u - sup_d >= 1/4 of num_h
+        let sup_idx = SCRIPT_STYLE_TO_SUP_IDX[(style as usize) & 7] as usize;
+        let u = [s14, s13, s15][sup_idx];
         let min_u = sup_d + 0.25 * num_h;
-        if u < min_u {
-            u = min_u;
-        }
-        u
+        u.max(min_u)
     }
 
     /// Computes initial subscript shift $v$ according to Rule 18b.
     #[inline(always)]
     pub fn initial_sub_shift(num_d: f32, sub_h: f32, s16: f32, s17: f32) -> f32 {
-        let mut v = s16.max(s17);
+        let v = s16.max(s17);
         let min_v = sub_h - 0.8 * (num_d + s16);
-        if v < min_v {
-            v = min_v;
-        }
-        v
+        v.max(min_v)
     }
 }
 
@@ -196,5 +271,50 @@ impl TransientScriptPair {
     #[inline(always)]
     pub const fn new(sup_box: MathBox, sub_box: MathBox) -> Self {
         Self { sup_box, sub_box }
+    }
+
+    /// Computes the horizontal right boundary of the nucleus with attached scripts.
+    #[inline(always)]
+    pub fn right_bound(
+        &self,
+        has_sup: bool,
+        has_sub: bool,
+        origin_x: f32,
+        nuc_w: f32,
+        sup_x: f32,
+        sub_x: f32,
+        script_space: f32,
+    ) -> f32 {
+        let sup_r = if has_sup {
+            sup_x + self.sup_box.w + script_space
+        } else {
+            0.0
+        };
+        let sub_r = if has_sub {
+            sub_x + self.sub_box.w + script_space
+        } else {
+            0.0
+        };
+        (origin_x + nuc_w).max(sup_r).max(sub_r)
+    }
+
+    /// Computes total formula height incorporating superscript shift.
+    #[inline(always)]
+    pub fn total_height(&self, has_sup: bool, nuc_h: f32, sup_shift: f32) -> f32 {
+        if has_sup {
+            nuc_h.max(sup_shift + self.sup_box.h)
+        } else {
+            nuc_h
+        }
+    }
+
+    /// Computes total formula depth incorporating subscript shift.
+    #[inline(always)]
+    pub fn total_depth(&self, has_sub: bool, nuc_d: f32, sub_shift: f32) -> f32 {
+        if has_sub {
+            nuc_d.max(sub_shift + self.sub_box.d)
+        } else {
+            nuc_d
+        }
     }
 }

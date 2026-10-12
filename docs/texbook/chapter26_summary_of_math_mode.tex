@@ -1,0 +1,396 @@
+\beginchapter Chapter 26. Summary of\\Math Mode
+
+^^{math mode}
+To conclude the survey that was begun in Chapter 24, let us investigate
+exactly what \TeX's digestive processes can do when \TeX\ is building
+lists in math mode or in display math mode.
+
+\ninepoint
+\def\\{\smallbreak\textindent{$\bull$}}
+\medbreak
+\centerline{$*\qquad*\qquad*$}
+\medskip\noindent
+Three asterisks, just like those that appear here, can be found near the
+end of Chapter~24.
+Everything preceding the three asterisks in that chapter applies to
+math mode as well as to vertical mode, so we need not repeat
+all those rules. In particular, Chapter~24 explains assignment commands,
+and it tells how kerns, penalties, marks, insertions, adjustments,
+and ``whatsits'' are put into math lists. Our present goal
+is to consider the commands that have an intrinsically mathematical
+flavor, in the sense that they behave differently in math
+mode than they do in vertical or horizontal modes.
+
+Math lists are somewhat different from \TeX's other lists because they
+contain three-pronged ``^{atoms}'' (see Chapter~17). Atoms come in thirteen
+flavors: Ord, Op, Bin, Rel, Open, Close, Punct, Inner, Over, Under, Acc,
+Rad, and Vcent. Each atom contains three ``^{fields}'' called its ^{nucleus},
+^{superscript}, and ^{subscript}; and each field is either empty or is filled
+with a math symbol, a box, or a subsidiary math list. Math symbols, in turn,
+have two components: a family number and a position number.
+
+It's convenient to introduce a few more rules of syntax, in order to specify
+what goes into a math list:
+\beginsyntax
+<character>\is<letter>\alt<otherchar>\alt^|\char|<8-bit number>\alt%
+    <chardef token>
+<math character>\is^|\mathchar|<15-bit number>\alt<mathchardef token>
+  \alt|\delimiter|<27-bit number>
+<math symbol>\is<character>\alt<math character>
+<math field>\is<filler><math symbol>\alt<filler>|{|<math mode material>|}|
+<delim>\is<filler>^|\delimiter|<27-bit number>
+  \alt<filler><letter>\alt<filler><otherchar>
+\endsyntax
+We have already seen the concept of \<character> in Chapter~25.
+Indeed, characters are \TeX's staple food: The vast majority of all
+commands that reach \TeX's digestive processes in horizontal mode are instances
+of the \<character> command, which specifies a number between 0 and~255 that
+causes \TeX\ to typeset the corresponding character in the current font.
+When \TeX\ is in math mode or display math mode, a \<character> command
+takes on added significance: It specifies a number between 0 and~$32767=
+2^{15}-1$. This is done by replacing the character number by its
+^|\mathcode| value. If the
+|\mathcode| value turns out to be $32768=\null$\hex{8000}, however,
+the \<character>
+is replaced by an ^{active character} token having the original character
+code (0 to~255); \TeX\ forgets the original \<character> and expands this
+active character according to the rules of Chapter~20.
+
+A \<math character> defines a 15-bit number either by specifying it
+directly with ^|\mathchar| or in a previous ^|\mathchardef|, or by
+specifying a 27-bit |\delimiter| value; in the latter case, the least
+significant 12~bits are discarded.
+
+It follows that every \<math symbol>, as defined by the syntax above,
+specifies a 15-bit number, i.e., a number between 0 and~32767.
+Such a number can be represented in the form $4096c+256f+a$, where
+$0\le c<8$, $0\le f<16$, and $0\le a<256$. If $c=7$, \TeX\ changes $c$~to~0;
+and in this case if the current
+value of\/ ^|\fam| is between 0 and~15, \TeX\ also replaces $f$~by~|\fam|.
+This procedure yields, in all cases, a class number~$c$ between 0~and~6,
+a family number~$f$ between 0~and~15, and a position number~$a$ between
+0 and~255. \ (\TeX\ initializes the value of\/ |\fam| by implicitly
+putting the assignment `|\fam=-1|' at the very beginning of\/ |\everymath|
+and |\everydisplay|. Thus, the substitution of\/ |\fam| for~$f$ will occur
+only if the user has explicitly changed~|\fam| within the formula.)
+
+A \<math field> is used to specify the nucleus, superscript, or subscript
+of an atom. When a \<math field> is a \<math symbol>, the $f$ and~$a$
+numbers of that symbol go into the atomic field. Otherwise the \<math field>
+begins with a~`|{|', which causes \TeX\ to enter a new level
+of grouping and to begin a new math list; the ensuing \<math mode material>
+is terminated by a~`|}|', at which point the group ends and the resulting
+math list goes into the atomic field. If the math list turns out to be
+simply a single Ord atom without subscripts or superscripts,
+or an Acc whose nucleus is an Ord, the
+enclosing braces are effectively removed.
+
+A \<delim> is used to define both a ``small character'' $a$ in family~$f$
+and a ``large character''~$b$ in family~$g$, where $0\le a,b\le255$
+and $0\le f,g\le15$; these character codes are used to construct variable-size
+^{delimiters}, as explained in Appendix~G\null. If the \<delim> is given
+explicitly in terms of a 27-bit number, the desired codes are obtained
+by interpreting that number as
+$c\cdot2^{24}+f\cdot2^{20}+a\cdot2^{12}+g\cdot2^8+b$, ignoring the value
+of~$c$. Otherwise the delimiter is specified as a \<letter> or
+\<otherchar> token, and the 24-bit ^|\delcode| value of that character is
+interpreted as $f\cdot2^{20}+a\cdot2^{12}+g\cdot2^8+b$.
+
+\smallskip
+Now let's study the individual commands as \TeX\ obeys them in math mode,
+considering first the ones that have analogs in vertical and/or horizontal
+mode:
+
+\\^|\hskip|\<glue>, ^|\hfil|, ^|\hfill|, ^|\hss|, ^|\hfilneg|,
+^|\mskip|\<muglue>.\enskip
+A glue item is appended to the current math list.
+
+\\\<leaders>\<box or rule>\<horizontal skip>.\enskip
+Here ^\<horizontal skip> refers to one of the first five glue-appending
+commands just mentioned; the formal syntax for \<leaders> and
+for \<box or rule> is given in Chapter~24. A glue item that produces
+^{leaders} is appended to the current list.
+
+\\^|\nonscript|. A special glue item of width zero is appended; it will
+have the effect of cancelling the following item on the list, if that item
+is glue and if the |\nonscript| is eventually typeset in ``script style''
+or in ``scriptscript style.''
+
+\\^|\noboundary|. This command is redundant and therefore has no
+effect; boundary ligatures are automatically disabled in math modes.
+
+\\^\<space token>.\enskip
+Spaces have no effect in math modes.
+
+\\|\|\].\enskip ^^{control space}
+A control-space command appends glue to the current list, using the same amount
+that a \<space token> inserts in horizontal mode when the space factor is 1000.
+
+\\^\<box>.\enskip
+The box is constructed, and if the result is void nothing happens.
+Otherwise a new Ord atom is appended to the current math list, and the
+box becomes its nucleus.
+
+\\^|\raise|\<dimen>\<box>, ^|\lower|\<dimen>\<box>.\enskip
+This acts just like an unadorned \<box> command, except that the new box
+being put into the nucleus is also shifted up or down by the specified amount.
+
+\\^|\vcenter|\stretch\<box specification>\stretch
+|{|\<vertical mode material>|}|.\enskip
+A vbox is formed as if `|\vcenter|' had been `|\vbox|'. Then a new
+^{Vcent} atom is appended to the current math list, and the box becomes
+its nucleus.
+
+\\\<vertical rule>.\enskip
+A ^{rule} is appended to the current list (not as an atom).
+
+\\^|\halign|\<box specification>|{|\<alignment material>|}|.\enskip
+This command is allowed only in display math mode, and only when the current
+math list is empty. The alignment is carried out exactly as if it were done in
+the enclosing vertical mode (see Chapter~24), except that the lines are shifted
+right by the ^|\displayindent|. The closing `|}|' may be followed by
+optional \<assignment> commands other than ^|\setbox|,
+after which `|$$|'~must conclude
+the display. \TeX\ will insert the ^|\abovedisplayskip| and
+^|\belowdisplayskip| glue before and after the result of the alignment.
+
+\\^|\indent|.\enskip
+An empty box of width ^|\parindent| is appended to the current list, as the
+nucleus of a new Ord atom.
+
+\\^|\noindent|.\enskip
+This command has no effect in math modes.
+
+\\|{|\<math mode material>|}|.\enskip
+A character token of category 1, or a control sequence like~|\bgroup|
+that has been |\let| equal to such a character token, causes \TeX\ to
+start a new level of ^{grouping} and also to begin work on a new
+math list. When such a group ends---with `|}|'---\TeX\
+uses the resulting math list as the nucleus of a new Ord atom that
+is appended to the current list. If the resulting math list is a
+single Acc atom, however (i.e., an accented quantity),
+that atom itself is appended.
+
+\\\<math symbol>.\enskip
+(This is the most common command in math mode; see the syntax near the
+beginning of this chapter.) \ A math symbol determines three values,
+$c$,~$f$, and~$a$, as explained earlier. \TeX\ appends an atom to the current
+list, where the atom is of type Ord, Op, Bin, Rel, Open, Close, or Punct,
+according as the value of~$c$ is 0,~1, 2, 3, 4, 5, or~6. The nucleus of
+this atom is the math symbol defined by $f$ and~$a$.
+
+\\^\<math atom>\<math field>.\enskip
+A \<math atom> command is any of the following:
+\begindisplay
+|\mathord|\alt|\mathop|\alt|\mathbin|\alt|\mathrel|\alt|\mathopen|\cr
+\qquad\alt|\mathclose|\alt|\mathpunct|\alt|\mathinner|%
+  \alt|\underline|\alt|\overline|\cr
+\enddisplay
+\TeX\ processes the \<math field>, then appends a new atom of the
+specified type to the current list; the nucleus of this atom contains
+the specified field.
+
+\\^|\mathaccent|\<15-bit number>\<math field>.\enskip
+\TeX\ converts the \<15-bit number> into $c$, $f$, and~$a$ as it does
+with any |\mathchar|. Then it processes the \<math field> and appends a
+new Acc atom to the current list. The nucleus of this atom contains
+the specified field; the accent character in this atom contains $(a,f)$.
+
+\\^|\radical|\<27-bit number>\<math field>.\enskip
+\TeX\ converts the \<27-bit number> into $a$, $f$, $b$, and~$g$ as it does
+with any |\delimiter|. Then it processes the \<math field> and appends a
+new Rad atom to the current list. The nucleus of this atom contains
+the specified field; the delimiter field in this atom contains
+$(a,f)$ and $(b,g)$.
+
+\\^\<superscript>\<math field>.\enskip
+A \<superscript> command is an explicit or implicit character token of
+category~7.  If the current list does not end with an atom, a new Ord atom
+with all fields empty is appended; thus the current list will end with an
+atom, in~all cases.  The superscript field of this atom should be empty; it
+is made nonempty by changing it to the result of the specified \<math field>.
+
+\\^\<subscript>\<math field>.\enskip
+A \<subscript> command is an explicit or implicit character token of
+category~8.  It acts just like a \<superscript> command, except, of course,
+that it affects the subscript field instead of the superscript field.
+
+\\^|\displaylimits|, ^|\limits|, ^|\nolimits|.\enskip These commands are
+allowed only if the current list ends with an Op atom. They modify a
+special field in that Op atom, specifying what conventions should be used
+with respect to limits.  The normal value of that field is |\displaylimits|.
+
+\\^|\/|.\enskip
+A kern of width zero is appended to the current list. \ (This will have the
+effect of adding the italic correction to the previous character, if the
+italic correction wouldn't normally have been added.)
+
+\\^|\discretionary|\<disc text>\<disc text>\<disc text>.
+This command has the same effect as in horizontal mode (see Chapter~25), but the
+third ^{\<disc text>} must produce an empty list.
+
+\\^|\-|.\enskip
+This command is usually equivalent to `|\discretionary{-}{}{}|';
+the `|-|' is therefore interpreted as a ^{hyphen}, not as a minus sign.
+\ (See Appendix~H.)
+
+\def\s{\hskip0pt plus1pt}
+\\^|\mathchoice|\s
+$\langle$filler$\rangle$\s|{|\s$\langle$math mode material$\rangle$\s|}|\s
+$\langle$filler$\rangle$\s|{|\s$\langle$math mode material$\rangle$\s|}|\break
+$\langle$filler$\rangle$|{|$\langle$math mode material$\rangle$|}|
+$\langle$filler$\rangle$|{|$\langle$math mode material$\rangle$|}|.
+Four math lists, which are defined as in the
+second alternative of a \<math field>, are
+recorded in a ``choice item'' that is appended to the current list.
+
+\\^|\displaystyle|, ^|\textstyle|, ^|\scriptstyle|,
+^|\scriptscriptstyle|.\enskip A style-change item that corresponds to the
+specified style is appended to the current list.
+
+\\^|\left|\<delim>\<math mode material>^|\right|\<delim>.\enskip
+\TeX\ begins a new group, and processes the \<math mode material>
+by starting out with a new math list that begins with a left boundary
+item containing the first delimiter. This group must be terminated by
+`|\right|', at which time the internal math list is completed with a
+right boundary item containing the second delimiter. Then \TeX\
+appends an Inner atom to the current list; the nucleus of this atom
+contains the internal math list.
+
+\\\<generalized fraction command>.\enskip
+This command takes one of six forms:
+\begindisplay
+^|\over|\alt^|\atop|\alt^|\above|\<dimen>\cr
+\qquad\alt^|\overwithdelims|\<delim>\<delim>\cr
+\qquad\alt^|\atopwithdelims|\<delim>\<delim>\cr
+\qquad\alt^|\abovewithdelims|\<delim>\<delim>\<dimen>\cr
+\enddisplay
+(See Chapter 17.) \ When \TeX\ sees a \<generalized fraction command> it
+takes the entire current list and puts it into the numerator field of a
+generalized fraction item. The denominator field of this new item is
+temporarily empty; the left and right delimiter fields are set equal
+to the specified delimiter codes. \TeX\ saves this generalized fraction
+item in a special place associated with the current level of math mode
+processing. \ (There should be no other generalized fraction item in
+that special place, because constructions like `|a\over b\over c|' are
+illegal.) \ Then \TeX\ makes the current list empty and continues to
+process commands in math mode. Later on, when the current level of math
+mode is completed (either by coming to a~`|$|' or a~`|}|' or a~|\right|,
+depending on the nature of the current group), the current list will be
+moved into the denominator field of the generalized fraction item that
+was saved; then that item, all by itself, will take the place of the
+entire list. However, in the special case that the current list began
+with |\left| and will end with |\right|, the boundary items will be
+extracted from the numerator and denominator of the generalized fraction,
+and the final list will consist of three items: left boundary,
+generalized fraction, right boundary. \ (If you want to watch the process
+by which math lists are built, you might find it helpful to type `^|\showlists|'
+while \TeX\ is processing the denominator of a generalized fraction.)
+
+\\^\<eqno>\<math mode material>|$|.\enskip
+Here \<eqno> stands for either ^|\eqno| or ^|\leqno|; these commands
+are allowed only in display math mode. Upon reading \<eqno>, \TeX\
+enters a new level of grouping, inserts the ^|\everymath| tokens,
+and enters non-display math mode to put the \<math mode material>
+into a math list. When that math list is completed, \TeX\ converts it
+to a horizontal list and puts the result into a box that will be used
+as the equation number of the current display. The closing |$|~token
+will be put back into the input, where it will terminate the display.
+
+\\|$|.\enskip
+If \TeX\ is in display math mode, it reads one more token, which must
+also be~|$|. In either case, the math-shift command terminates the current
+level of math mode processing and ends the current group, which should
+have begun with either~|$| or~\<eqno>.  Once the math list is finished, it
+is converted into a horizontal list as explained in Appendix~G\null. \TeX\
+scans \<one optional space> after completing a displayed formula; this is
+usually the implicit space at the end of a line in the input file.
+
+\\^|\unhbox|\<8-bit number>, ^|\unhcopy|\<8-bit number>.\enskip
+The specified box register must be void. Nothing happens.
+
+\\None of the above: If any other primitive command of \TeX\ occurs in
+math mode, an error message will be given, and \TeX\ will try to recover
+in a reasonable way. For example, if a |\par| command appears, or if any
+other inherently non-mathematical command is given, \TeX\ will try to
+insert a `|$|' just before the offending token; this will lead out of math
+mode. On the other hand if a totally misplaced token like |\endcsname| or
+|\omit| or |#| appears in math mode, \TeX\ will simply ignore it, after
+reporting the error. You might enjoy trying to type some really stupid
+input, just to see what happens. \ (Say `|\tracingall|' first, as
+explained in Chapter~27, in order to get maximum information.)
+
+\ddangerexercise ^{Powers of ten}: The whole \TeX\ language has now been
+summarized completely. To~demonstrate how much you know, name all of the ways
+you can think of in which the numbers 10, ^^{Derek, Bo} 100, 1000, 10000,
+and 100000 have special significance to \TeX.
+\answer Radix 10 notation is used for numeric constants and for the output
+of numeric data. The first 10 |\count| registers are displayed at each
+|\shipout|, and their values are recorded on the |dvi| file at such times.
+% Also, TeX was first implemented on a DEC-10.
+% The \catcode for <space> is 10.
+% My birthday is January 10.
+% Can this all be just a coincidence?
+A box whose glue has stretched or shrunk to its stated stretchability
+or shrinkability has badness 100; this badness value separates ``loose''
+boxes from ``very loose'' or ``underfull'' ones. \TeX\ will scroll up
+to 100 errors in a single paragraph before giving up (see Chapter~27).
+The normal values of\/ |\spacefactor| and |\mag| are 1000. A~|\prevdepth|
+value of $-1000\pt$ suppresses interline glue. The badness rating of a
+box is at most 10000, except that the |\badness| of
+an overfull box is 1000000.  |INITEX| initializes |\tolerance| to
+10000, thereby making all line breaks feasible. Penalties of 10000 or more
+prohibit breaks; penalties of $-10000$ or less make breaks mandatory. The
+cost of a page break is 100000, if the badness is 10000 and if the
+associated penalties are less than 10000 in magnitude (see Chapter~15).
+
+\ddangerexercise ^{Powers of two}: Name all of the ways
+you can think of in which the numbers 8, 16, 32, 64, 128, 256, \dots\
+have special significance to \TeX.
+\answer \TeX\ allows constants to be expressed in radix 8 (octal)
+or radix~16 (hexadecimal) notation, and it uses hexadecimal notation to
+display |\char| and |\mathchar| codes. There are 16 families for math
+fonts, 16 input streams for |\read|, 16 output streams for |\write|.
+A |\catcode| value must be less than~16. The notation |^^?|, |^^@|,
+|^^A| specifies characters whose codes differ by~64
+from the codes of |?|, |@|, |A|; this convention applies only to
+characters with ASCII codes less than~128. There are 256 possible characters,
+hence 256 entries in each of the |\catcode|, |\mathcode|,
+|\lccode|, |\uccode|, |\sfcode|, and |\delcode| tables. All
+|\lccode|, |\uccode|, and |\char| values
+must be less than~256. A font has at most 256 characters. There are
+256~|\box| registers, 256~|\count| registers, 256~|\dimen| registers,
+256~|\skip| registers, 256~|\muskip| registers, 256~|\toks| registers,
+256~hyphenation tables.
+The ``at size'' of a font must be less than~$2048\pt$, i.e.,~$2^{11}\pt$.
+Math delimiters are encoded by multiplying the math~code of the ``small
+character'' by~$2^{12}$. The magnitude of
+a~\<dimen> value must be less than~$16384\pt$, i.e.,~$2^{14}\pt$;
+similarly, the \<factor> in a~\<fil dimen> must be less than~$2^{14}$.
+A~|\mathchar| or |\spacefactor| or |\sfcode| value must be less than~$2^{15}$;
+a~|\mathcode| or |\mag| value must be less than or equal to~$2^{15}$,
+and $2^{15}$ denotes an ``active'' math character. There
+are $2^{16}\rm\,sp$ per~pt. A~|\delcode| value
+must be less than~$2^{24}$; a~|\delimiter|, less than $2^{27}$.
+The |\end| command sometimes contributes
+a penalty of $-2^{30}$ to the current page. A~\<dimen> must be less than
+$2^{30}\rm\,sp$ in absolute value; a~\<number> must be
+less than $2^{31}$ in absolute value.
+
+\endchapter
+
+Mathematics is known in the trade as {\rm difficult,} or {\rm penalty, copy}
+because it is slower, more difficult, and more expensive to set in type
+than any other kind of copy normally occurring in books and journals.
+\author UNIVERSITY OF ^{CHICAGO} PRESS, {\sl A Manual of Style\/} %
+  (1969) % 12th edition, page 295
+
+\bigskip
+
+The tale of Math is a complex one,
+and it resists both a simple plot summary
+and a concise statement of its meaning.
+\author PATRICK K. ^{FORD}, {\sl The Mabinogi\/} (1977) % p89
+   % from his introduction to "Math Son of Mathonwy"
+
+\eject

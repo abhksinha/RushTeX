@@ -1,0 +1,439 @@
+Chapter 19
+
+Line Breaking
+
+
+
+This chapter treats line breaking and the concept of ‘badness’ that TEX uses to decide how
+to break a paragraph into lines, or where to break a page. The various penalties contributing
+to the cost of line breaking are treated here, as is hyphenation. Page breaking is treated in
+Chapter 27.
+\penalty Specify desirability of not breaking at this point.
+\linepenalty Penalty value associated with each line break. Plain TEX default: 10.
+\hyphenpenalty Penalty associated with break at a discretionary item in the general
+       case. Plain TEX default: 50.
+\exhyphenpenalty Penalty for breaking a horizontal line at a discretionary item in the
+       special case where the prebreak text is empty. Plain TEX default: 50.
+\adjdemerits Penalty for adjacent visually incompatible lines. Plain TEX default: 10 000.
+\doublehyphendemerits Penalty for consecutive lines ending with a hyphen. Plain TEX
+       default: 10 000.
+\finalhyphendemerits Penalty added when the penultimate line of a paragraph ends
+       with a hyphen. Plain TEX default: 5000.
+\allowbreak Macro for creating a breakpoint by inserting a \penalty0.
+\pretolerance Tolerance value for a paragraph without hyphenation. Plain TEX default: 100.
+\tolerance Tolerance value for lines in a paragraph with hyphenation. Plain TEX default: 200.
+\emergencystretch (TEX3 only) Assumed extra stretchability in lines of a paragraph.
+\looseness Number of lines by which this paragraph has to be made longer than it would
+       be ideally.
+\prevgraf The number of lines in the paragraph last added to the vertical list.
+\discretionary Specify the way a character sequence is split up at a line break.
+\- Discretionary hyphen; this is equivalent to \discretionary{-}{}{}.
+\hyphenchar Number of the hyphen character of a font.
+\defaulthyphenchar Value of \hyphenchar when a font is loaded. Plain TEX default: ‘\-.
+\uchyph Positive to allow hyphenation of words starting with a capital letter. Plain TEX
+       default: 1.
+\lefthyphenmin (TEX3 only) Minimal number of characters before a hyphenation. Plain
+       TEX default: 2.
+\righthyphenmin (TEX3 only) Minimum number of characters after a hyphenation. Plain
+       TEX default: 3.
+
+
+                                                                                         175
+Chapter 19. Line Breaking
+
+
+\patterns Define a list of hyphenation patterns for the current value of \language; al-
+       lowed only in IniTEX.
+\hyphenation Define hyphenation exceptions for the current value of \language.
+\language Choose a set of hyphenation patterns and exceptions.
+\setlanguage Reset the current language.
+
+
+
+19.1     Paragraph break cost calculation
+A paragraph is broken such that the amount d of demerits associated with breaking it
+is minimized. The total amount of demerits for a paragraph is the sum of those for the
+individual lines, plus possibly some extra penalties. Considering a paragraph as a whole
+instead of breaking it on a line-by-line basis can lead to better line breaking: TEX can
+choose to take a slightly less beautiful line in the beginning of the paragraph in order to
+avoid bigger trouble later on.
+For each line demerits are calculated from the badness b of stretching or shrinking the line
+to the break, and the penalty p associated with the break. The badness is not allowed to
+exceed a certain prescribed tolerance.
+In addition to the demerits for breaking individual lines, TEX assigns demerits for the way
+lines combine; see below.
+The implementation of TEX’s paragraphbreaking algorithm is explained in [27].
+
+
+19.1.1   Badness
+From the ratio between the stretch or shrink present in a line, and the actual stretch or shrink
+taken, the ‘badness’ of breaking a line at a certain point is calculated. This badness is an
+important factor in the process of line breaking. See page 95 for the formula for badness.
+In this chapter badness will only be discussed in the context of line breaking. Badness is
+also computed when a vertical list is stretched or shrunk (see Chapter 27).
+The following terminology is used to describe badness:
+tight (3) is any line that has shrunk with a badness b ≥ 13, that is, by using at least one-half
+         of its amount of shrink (see page 95 for the computation).
+decent (2) is any line with a badness b ≤ 12.
+loose (1) is any line that has stretched with a badness b ≥ 13, that is, by using at least
+         one-half of its amount of stretch.
+very loose (0) is any line that has stretched with a badness b ≥ 100, that is, by using its
+         full amount of stretch or more. Recall that glue can stretch, but not shrink more
+         than its allowed amount.
+The numbering is used in trace output (Chapter 34), and it is also used in the following
+definition: if the classifications of two adjacent lines differ by more than 1, the lines are
+said to be visually incompatible. See below for the \adjdemerits parameter associated
+with this.
+
+
+176                                                               Victor Eijkhout – TEX by Topic
+                                                     19.1. Paragraph break cost calculation
+
+
+Overfull horizontal and vertical boxes are passed unnoticed if their excess width or height
+is less than \hfuzz or \vfuzz respectively; they are not reported if the badness is less than
+\hbadness or \vbadness (see Chapter 5).
+
+
+19.1.2   Penalties and other break locations
+Line breaks can occur at the following places in horizontal lists:
+1.       At a penalty. The penalty value is the ‘aesthetic cost’ of breaking the line at that
+         place. Negative penalties are considered as bonuses. A penalty of 10 000 or more
+         inhibits, and a penalty of −10 000 or less forces, a break.
+         Putting more than one penalty in a row is equivalent to putting just the one with
+         the minimal value, because that one is the best candidate for line breaking.
+         Penalties in horizontal mode are inserted by the user (or a user macro). The only
+         exception is the \nobreak inserted before the \parfillskip glue.
+2.       At a glue, if it is not part of a math formula, and if it is preceded by a non-
+         discardable item (see Chapter 6). There is no penalty associated with breaking
+         at glue.
+         The condition about the non-discardable precursor is necessary, because otherwise
+         breaking in between two pieces of glue would be possible, which would cause
+         ragged edges to the paragraph.
+3.       At a kern, if it is not part of a math formula and if it is followed by glue. There is
+         no penalty associated with breaking at a kern.
+4.       At a math-off, if that is followed by glue. Since math-off (and math-on) act as
+         kerns (see Chapter 23), this is very much like the previous case. There is no penalty
+         associated with breaking at a math-off.
+5.       At a discretionary break. The penalty is the \hyphenpenalty or the \exhyphenpenalty.
+         This is treated below.
+Any discardable material following the break – glue, kerns, math-on/off and penalties – is
+discarded. If one considers a line break at glue (kern, math-on/off) to occur at the front end
+of the glue item, this implies that that piece of glue disappears in the break.
+
+
+19.1.3   Demerits
+From the badness of a line and the penalty, if any, the demerits of the line are calculated.
+Let l be the value of \linepenalty, b the badness of the line, p the penalty at the break;
+then the demerits d are given by
+              
+               (l + b)2 + p2 if 0 ≤ p < 10 000
+         d = (l + b)2 − p2 if −10 000 < p < 0
+                 (l + b)2       if p ≤ −10 000
+              
+
+Both this formula and the one for the badness are described in [27] as ‘quite arbitrary’, but
+they have been shown to lead to good results in practice.
+The demerits for a paragraph are the sum of the demerits for the lines, plus
+•        the \adjdemerits for any two adjacent lines that are not visually compatible (see
+         above),
+
+
+Victor Eijkhout – TEX by Topic                                                            177
+Chapter 19. Line Breaking
+
+
+•        \doublehyphendemerits for any two consecutive lines ending with a hyphen,
+         and the
+•        \finalhyphendemerits if the penultimate line of a paragraph ends with a hy-
+         phen.
+At the start of a paragraph TEX acts as if there was a preceding line which was ‘decent’.
+Therefore \adjdemerits will be added if the first line is ‘very loose’. Also, the last line
+of a paragraph is ordinarily also ‘decent’ – all spaces are set at natural width owing to the
+infinite stretch in the \parfillskip – so \adjdemerits are added if the preceding line
+is ‘very loose’.
+Note that the penalties at which a line break is chosen weigh about as heavily as the badness
+of the line, so they can be relatively small. However, the three extra demerit parameters have
+to be of the order of the square of penalties and badnesses to weigh equally heavily.
+
+
+19.1.4   The number of lines of a paragraph
+After a paragraph has been completed (or partially completed prior to a display), the varia-
+ble \prevgraf records the number of lines in the paragraph. By assigning to this variable
+– and because this is a hspecial integeri such an assignment is automatically global – TEX’s
+decision processes can be influenced. This may be useful in combination with hanging
+indentation or \parshape specifications (see Chapter 18).
+Some direct influence of the linebreaking process on the resulting number of lines exists.
+One factor is the \linepenalty which is included in the demerits of each line. By incre-
+asing the line penalty TEX can be made to minimize the number of lines in a paragraph.
+Deviations from the optimal number of lines, that is, the number of lines stemming from
+the optimal way of breaking a paragraph into lines, can be forced by the user by means of
+the \looseness parameter. This parameter, which is reset every time the shape parameters
+are cleared (see Chapter 18), indicates by how many lines the current paragraph should be
+made longer than is optimal. A negative value of \looseness will attempt to make the
+paragraph shorter by a number of lines that is the absolute value of the parameter.
+TEX will still observe the values of \pretolerance and \tolerance (see below) when
+lengthening or shortening a paragraph under influence of \looseness. Therefore, TEX
+will only lengthen or shorten a paragraph for as far as is possible without exceeding these
+parameters.
+
+
+19.1.5   Between the lines
+TEX’s paragraph mechanism packages lines into horizontal boxes that are appended to the
+surrounding vertical list. The resulting sequence of vertical items is then a repeating se-
+quence of
+•        a box containing a line of text,
+•        possibly migrated vertical material (see page 76),
+•        a penalty item reflecting the cost of a page break at that point, which is normally
+         the \interlinepenalty (see Chapter 27), and
+
+
+178                                                              Victor Eijkhout – TEX by Topic
+                                                                 19.2. The process of breaking
+
+
+•        interline glue, which is calculated automatically on basis of the \prevdepth (see
+         Chapter 15).
+
+
+
+
+19.2     The process of breaking
+TEX tries to break paragraphs in such a way that the badness of each line does not exceed
+a certain tolerance. If there exists more than one solution to this, the one with the fewest
+demerits is taken.
+By setting \tracingparagraphs to a positive value, TEX can be made to report the cal-
+culations of the paragraph mechanism in the log file. Some implementations of TEX may
+have this option disabled to make TEX run faster.
+
+
+19.2.1   Three passes
+First an attempt is made to split the paragraph into lines without hyphenating, that is, wi-
+thout inserting discretionary hyphens. This attempt succeeds if none of the lines has a
+badness exceeding \pretolerance.
+Otherwise, a second pass is made, inserting discretionaries and using \tolerance. If
+\pretolerance is negative, the first pass is omitted.
+TEX can be made to make a third pass if the first and second pass fail. If \emergencystretch
+is a positive dimension, TEX will assume this much extra stretchability in each line when
+badness and demerits are calculated. Thus solutions that only slightly exceeded the given
+tolerances will now become feasible. However, no glue of size \emergencystretch is
+actually present, so underfull box messages may still occur.
+
+
+19.2.2   Tolerance values
+How much trouble TEX will have typesetting a piece of text depends partly on the tolerance
+value. Therefore it is sensible to have some idea of what badness values mean in visual
+terms.
+For lines that are stretched, the badness is 100 times the cube of the stretch ratio. A badness
+of 800 thus means that the stretch ratio is 2. If the space is, as in the ten-point Computer
+Modern Font,
+3.33pt plus 1.67pt minus 1.11pt
+a badness of 800 means that spaces have been stretched to
+         3.33pt + 2 × 1.67pt = 6.66pt
+that is, to exactly double their natural size. It is up to you to decide whether this is too large.
+
+
+Victor Eijkhout – TEX by Topic                                                                179
+Chapter 19. Line Breaking
+
+
+19.3     Discretionaries
+A discretionary item \discretionary{..}{..}{..} marks a place where a word can
+be broken. Each of the three arguments is a hgeneral texti (see Chapter 36): they are, in
+sequence,
+•        the pre-break text, which is appended to the part of the word before the break,
+•        the post-break text, which is prepended to the part of the word after the break, and
+•        the no-break text, which is used if the word is not broken at the discretionary item.
+For example: ab\discretionary{g}{h}{cd}ef is the word abcdef, but it can be hy-
+phenated with abg before the break and hef after. Note that there is no automatic hyphen
+character.
+All three texts may contain any sorts of tokens, but any primitive commands and macros
+should expand to boxes, kerns, and characters.
+
+
+19.3.1   Hyphens and discretionaries
+Internally, TEX inserts the equivalent of
+\discretionary{\char\hyphenchar\font}{}{}
+at every place where a word can be broken. No such discretionary is inserted if \hyphenchar\font
+is not in the range 0–255, or if its position in the font is not filled. When a font is loaded,
+its \hyphenchar value is set to \defaulthyphenchar. The \hyphenchar value can be
+changed after this.
+In plain TEX the \defaulthyphenchar has the value ‘\-, so for all fonts character 45
+(the ASCII hyphen character) is the hyphen sign, unless it is specified otherwise.
+The primitive command \- (called a ‘discretionary hyphen’) \-is equivalent to the above
+\discretionary{\char\hyphenchar\font}{}{}. Breaking at such a discretionary, whe-
+ther inserted implicitly by TEX or explicitly by the user, has a cost of \hyphenpenalty.
+In unrestricted horizontal mode an empty discretionary \discretionary{}{}{} is au-
+tomatically inserted after characters whose character code is the \hyphenchar value of
+the font, thus enabling hyphenation at that point. The penalty for breaking a line at such
+a discretionary with an empty pre-break text is \exhyphenpenalty, that is, the ‘explicit
+hyphen’ penalty.
+If a word contains discretionary breaks, for instance because of explicit hyphen characters,
+TEX will not consider it for further hyphenation. People have solved the ensuing problems
+by tricks such as
+\def\={\penalty10000 \hskip0pt -\penalty0 \hskip0pt\relax}
+... integro\=differential equations...
+The skips before and after the hyphen lead TEX into treating the first and second half of the
+compound expression as separate words; the penalty before the first skip inhibits breaking
+before the hyphen.
+
+
+180                                                              Victor Eijkhout – TEX by Topic
+                                                                             19.4. Hyphenation
+
+
+19.3.2   Examples of discretionaries
+Languages such as German or Dutch have words that change spelling when hyphenated
+(German: ‘backen’ becomes ‘bak-ken’; Dutch: ‘autootje’ becomes ‘auto-tje’). This pro-
+blem can be solved with TEX’s discretionaries.
+For instance, for German (this is inspired by [36]):
+\catcode‘\"=\active
+\def"#1{\ifx#1k\discretionary{k-}{k}{ck}\fi}
+which enables the user to write ba"ken.
+In Dutch there is a further problem which allows a nice systematic solution. Umlaut cha-
+racters (‘trema’ is the Dutch term) should often disappear in a break, for instance ‘na”apen’
+hyphenates as ‘na-apen’, and ‘onbe”invloedbaar’ hyphenates as ‘onbe-invloedbaar’. A so-
+lution (inspired by [5]) is
+\catcode‘\"=\active
+\def"#1{\ifx#1i\discretionary{-}{i}{\"\i}%
+            \else \discretionary{-}{#1}{\"#1}\fi}
+which enables the user to type na"apen and onbe"invloedbaar.
+
+
+
+19.4     Hyphenation
+TEX’s hyphenation algorithm uses a list of patterns to determine at what places a word that
+is a candidate for hyphenation can be broken. Those aspects of hyphenation connected with
+these patterns are treated in appendix H of the TEX book; the method of generating hyphe-
+nation patterns automatically is described in [30]. People have been known to generate lists
+of patterns by hand; see for instance [28]. Such hand-generated lists may be superior to
+automatically generated lists.
+Here it will mainly be described how TEX declares a word to be a candidate for hyphena-
+tion. The problem here is how to cope with punctuation and things such as quotation marks
+that can be attached to a word. Also, implicit kerns, that is, kerns inserted because of font
+information, must be handled properly.
+
+19.4.1   Start of a word
+TEX starts at glue items (if they are not in math mode) looking for a starting letter of
+a word: a character with non-zero \lccode, or a ligature starting with such a character
+(upper/lowercase codes are explained on page 48). Looking for this starting letter, TEX
+bypasses any implicit kerns, and characters with zero \lccode (this includes, for instance,
+punctuation and quotation marks), or ligatures starting with such a character.
+If no suitable starting letter turns up, that is, if something is found that is not a character or
+ligature, TEX skips to the next glue, and starts this algorithm anew. Otherwise a trial word is
+collected consisting of all following characters with non-zero \lccode from the same font
+as the starting letter, or ligatures consisting completely of such characters. Implicit kerns
+are allowed between the characters and ligatures.
+
+
+Victor Eijkhout – TEX by Topic                                                               181
+Chapter 19. Line Breaking
+
+
+If the starting letter is from a font for which the value of \hyphenchar is invalid, or for
+which this character does not exist, hyphenation is abandoned for this word. If the starting
+letter is an uppercase letter (that is, it is not equal to its own \lccode), TEX will abandon
+hyphenation unless \uchyph is positive. The default value for this parameter is 1 in plain
+TEX, implying that capitalized words are subject to hyphenation.
+
+
+19.4.2   End of a word
+Following the trial word can be characters (from another font, or with zero \lccode),
+ligatures or implicit kerns. After these items, if any, must follow
+•        glue or an explicit kern,
+•        a penalty,
+•        a whatsit, or
+•        a \mark, \insert, or \vadjust item.
+In particular, the word will not be hyphenated if it is followed by a
+•        box,
+•        rule,
+•        math formula, or
+•        discretionary item.
+Since discretionaries are inserted after the \hyphenchar of the font, occurrence of this
+character inhibits further hyphenation. Also, placement of accents is implemented using
+explicit kerns (see Chapter 3), so any \accent command is considered to be the end of a
+word, and inhibits hyphenation of the word.
+
+
+19.4.3   TEX2 versus TEX3
+There is a noticeable difference in the treatment of hyphenated fragments between TEX2
+and TEX3. TEX2 insists that the part before the break should be at least two characters, and
+the part after the break three characters, long. Typographically this is a sound decision: this
+way there are no two-character pieces of a word stranded at the end or beginning of the
+line. Both before and after the break there are at least three characters.
+In TEX3 two integer parameters have been introduced to control the length of these frag-
+ments: \lefthyphenmin and \righthyphenmin. These are set to 2 and 3 respectively
+in the plain format for TEX3. If the sum of these two is 63 or more, all hyphenation is
+suppressed.
+Another addition in TEX3, the possibility to have several sets of hyphenation patterns, is
+treated below.
+
+
+19.4.4   Patterns and exceptions
+The statements
+         \patternshgeneral texti
+         \hyphenationhgeneral texti
+
+
+182                                                               Victor Eijkhout – TEX by Topic
+                                                        19.5. Switching hyphenation patterns
+
+
+are hhyphenation assignmentis, which are hglobal assignmentis. The \patterns com-
+mand, which specifies a list of hyphenation patterns, is allowed only in IniTEX (see Chap-
+ter 33), and all patterns must be specified before the first paragraph is typeset.
+Hyphenation exceptions can be specified at any time with statements such as
+\hyphenation{oxy-mo-ron gar-goyle}
+which specify locations where a word may be hyphenated. Subsequent \hyphenation
+statements are cumulative.
+In TEX3 these statements are taken to hold for the language that is the current value of the
+\language parameter.
+
+
+
+19.5     Switching hyphenation patterns
+When typesetting paragraphs, TEX (version 3) can use several sets of patterns and hyphe-
+nation exceptions, for at most 256 languages.
+If a \patterns or \hyphenation command is given (see above), TEX stores the patterns
+or exceptions under the current value of the \language parameter. The \patterns com-
+mand is only allowed in IniTEX, and patterns must be specified before any typesetting is
+done. Hyphenation exceptions, however, can be specified cumulatively, and not only in
+IniTEX.
+In addition to the \language parameter, which can be set by the user, TEX has internally a
+‘current language’. This is set to zero at the start of every paragraph. For every character that
+is added to a paragraph the current language is compared with the value of \language, and
+if they differ a whatsit element is added to the horizontal list, resetting the current language
+to the value of \language.
+At the start of a paragraph, this whatsit is inserted after the \everypar tokens, but \lastbox
+can still access the indentation box.
+As an example, suppose that a format has been created such that language 0 is English, and
+language 1 is Dutch. English hyphenations will then be used if the user does not specify
+otherwise; if a job starts with
+\language=1
+the whole document will be set using Dutch hyphenations, because TEX will insert a com-
+mand changing the current language at the start of every paragraph. For example:
+\language=1
+T...
+gives
+.\hbox(0.0+0.0)x20.0                     % indentation
+.\setlanguage1 (hyphenmin 2,3) % language whatsit
+.\tenrm T                                % start of text
+The whatsit can be inserted explicitly, without changing the value of \language, by spe-
+cifying
+
+
+Victor Eijkhout – TEX by Topic                                                              183
+Chapter 19. Line Breaking
+
+
+         \setlanguagehnumberi
+However, this will hardly ever be needed. One case where it may be necessary is when the
+contents of a horizontal box are unboxed to a paragraph: inside the box no whatsits are
+added automatically, since inside such a box no hyphenation can take place. See page 68
+for another problem with text in horizontal boxes.
+
+
+
+
+184                                                          Victor Eijkhout – TEX by Topic
+

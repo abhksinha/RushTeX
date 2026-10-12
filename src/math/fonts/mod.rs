@@ -27,10 +27,11 @@ pub mod vector_paths;
 pub use asana::ASANA_MATH_CONSTANTS;
 pub use calligraphy::{
     script_glyph, symbol_to_unicode_greek, to_unicode_blackboard, to_unicode_bold, to_unicode_bold_italic,
-    to_unicode_fraktur, to_unicode_script, NEWCM_SCRIPT_GLYPHS, STIX2_SCRIPT_GLYPHS, OpenTypeScriptGlyph,
+    to_unicode_fraktur, to_unicode_script, to_unicode_monospace, to_unicode_math_italic, to_unicode_sans,
+    NEWCM_SCRIPT_GLYPHS, STIX2_SCRIPT_GLYPHS, OpenTypeScriptGlyph,
     static_cff_compressed, static_cff_raw, static_script_advance,
 };
-pub use vector_paths::{get_vector_glyph_path, vector_glyph_for_unicode};
+pub use vector_paths::{get_vector_glyph_path, vector_glyph_for_unicode, vector_radical_hook_y};
 pub use delimiters::{
     OpenTypeAssemblyRecipe, OpenTypeDelimKind, OpenTypeHorizAssemblyRecipe, OpenTypeHorizKind,
     ResolvedDelimiter, ResolvedHorizontal, NEWCM_BAR_VARIANTS, NEWCM_BRACE_VARIANTS,

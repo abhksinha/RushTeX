@@ -38,28 +38,86 @@ impl PackedFractionMetrics {
     }
 }
 
-/// Branchless governor evaluating TeX Appendix G Rule 10 vertical clearances.
+/// High-performance unified resolver for TeX Appendix G Rule 10 fraction and atop vertical shifts.
+pub struct FractionShiftResolver;
+
+impl FractionShiftResolver {
+    /// Resolves actual numerator and denominator shifts obeying Appendix G Rule 10 in a single pass.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub fn resolve(
+        style: MathStyle,
+        has_rule: bool,
+        axis_h: f32,
+        rule_t: f32,
+        num_d: f32,
+        den_h: f32,
+        scale: f32,
+        params: &crate::math::math_fonts::MathFontParameters,
+    ) -> PackedFractionMetrics {
+        let disp_idx = style.is_display() as usize;
+
+        if has_rule {
+            let num_param = [params.num2, params.num1][disp_idx];
+            let den_param = [params.denom2, params.denom1][disp_idx];
+            let clr_param = [params.frac_clearance_text, params.frac_clearance_display][disp_idx];
+
+            let num_shift = (num_param as f32) * scale;
+            let den_shift = (den_param as f32) * scale;
+            let min_clr = (clr_param as f32) * scale;
+
+            let half_t = 0.5 * rule_t;
+            let actual_num_shift = num_shift.max(axis_h + half_t + min_clr + num_d);
+            let actual_den_shift = den_shift.max(half_t + min_clr + den_h - axis_h);
+
+            PackedFractionMetrics::new(actual_num_shift, actual_den_shift, rule_t, min_clr)
+        } else {
+            let num_param = [params.num3, params.num1][disp_idx];
+            let den_param = [params.denom2, params.denom1][disp_idx];
+            let mult = [3.0, 7.0][disp_idx];
+            let min_gap = (params.rule_thickness as f32 * mult) * scale;
+
+            let num_shift = (num_param as f32) * scale;
+            let den_shift = (den_param as f32) * scale;
+
+            let mut actual_num_shift = num_shift.max(axis_h + num_d);
+            let mut actual_den_shift = den_shift.max(den_h - axis_h);
+
+            let gap = (actual_num_shift - num_d) - (-actual_den_shift + den_h);
+            if gap < min_gap {
+                let shortfall = min_gap - gap;
+                actual_num_shift += shortfall * 0.5;
+                actual_den_shift += shortfall * 0.5;
+            }
+
+            PackedFractionMetrics::new(actual_num_shift, actual_den_shift, 0.0, min_gap)
+        }
+    }
+}
+
+/// Branchless governor evaluating TeX Appendix G Rule 15 vertical clearances.
 pub struct FractionClearanceGovernor;
 
 impl FractionClearanceGovernor {
     /// Minimum clearance above the fraction bar: $3\theta$ in display style, $\theta$ otherwise.
     #[inline(always)]
     pub fn min_clearance_above(rule_thickness: f32, is_display: bool) -> f32 {
-        let mult = if is_display { 3.0 } else { 1.0 };
+        let mult = [1.0, 3.0][is_display as usize];
         mult * rule_thickness
     }
 
-    /// Minimum clearance below the fraction bar: $\theta$ in all styles.
+    /// Minimum clearance below the fraction bar: $3\theta$ in display style, $\theta$ otherwise.
     #[inline(always)]
-    pub fn min_clearance_below(rule_thickness: f32, _is_display: bool) -> f32 {
-        rule_thickness
+    pub fn min_clearance_below(rule_thickness: f32, is_display: bool) -> f32 {
+        let mult = [1.0, 3.0][is_display as usize];
+        mult * rule_thickness
     }
 
     /// Minimum clearance for atop/binomial constructions (no rule):
     /// $7\theta$ in display style, $3\theta$ in non-display styles.
     #[inline(always)]
     pub fn min_clearance_atop(rule_thickness: f32, is_display: bool) -> f32 {
-        let mult = if is_display { 7.0 } else { 3.0 };
+        let mult = [3.0, 7.0][is_display as usize];
         mult * rule_thickness
     }
 
@@ -83,19 +141,8 @@ impl FractionClearanceGovernor {
             let min_num_clearance = Self::min_clearance_above(rule_t, is_display);
             let min_den_clearance = Self::min_clearance_below(rule_t, is_display);
 
-            // Numerator shift: ensure (num_shift - num_d) - (axis_h + half_t) >= min_num_clearance
-            let mut num_shift = num_shift_param;
-            let actual_num_clearance = (num_shift - num_d) - (axis_h + half_t);
-            if actual_num_clearance < min_num_clearance {
-                num_shift += min_num_clearance - actual_num_clearance;
-            }
-
-            // Denominator shift: ensure (axis_h - half_t) - (den_h - den_shift) >= min_den_clearance
-            let mut den_shift = den_shift_param;
-            let actual_den_clearance = (axis_h - half_t) - (den_h - den_shift);
-            if actual_den_clearance < min_den_clearance {
-                den_shift += min_den_clearance - actual_den_clearance;
-            }
+            let num_shift = num_shift_param.max(axis_h + half_t + min_num_clearance + num_d);
+            let den_shift = den_shift_param.max(half_t + min_den_clearance + den_h - axis_h);
 
             (num_shift, den_shift)
         } else {
@@ -123,6 +170,15 @@ impl NumeratorDenominatorAligner {
     #[inline(always)]
     pub fn align_centered(num_w: f32, den_w: f32) -> (f32, f32, f32) {
         let total_w = num_w.max(den_w);
+        let num_x = 0.5 * (total_w - num_w);
+        let den_x = 0.5 * (total_w - den_w);
+        (total_w, num_x, den_x)
+    }
+
+    /// Computes total width with padding, numerator offset, and denominator offset for centering.
+    #[inline(always)]
+    pub fn align_centered_padded(num_w: f32, den_w: f32, pad: f32) -> (f32, f32, f32) {
+        let total_w = num_w.max(den_w) + 2.0 * pad;
         let num_x = 0.5 * (total_w - num_w);
         let den_x = 0.5 * (total_w - den_w);
         (total_w, num_x, den_x)
@@ -158,14 +214,17 @@ const _: () = assert!(core::mem::size_of::<BinomialDelimiterCache>() == 64);
 const _: () = assert!(core::mem::align_of::<BinomialDelimiterCache>() == 64);
 
 impl BinomialDelimiterCache {
-    /// Resolves the delimiter glyph code for a given binomial content height.
+    /// Resolves the delimiter glyph code for a given binomial content height via branchless threshold counts.
     #[inline(always)]
     pub fn resolve_glyph(&self, content_h: f32) -> u8 {
-        let mut idx = 0usize;
-        while idx < 7 && content_h > self.height_tiers[idx] {
-            idx += 1;
-        }
-        self.glyph_codes[idx]
+        let count = (content_h > self.height_tiers[0]) as usize
+            + (content_h > self.height_tiers[1]) as usize
+            + (content_h > self.height_tiers[2]) as usize
+            + (content_h > self.height_tiers[3]) as usize
+            + (content_h > self.height_tiers[4]) as usize
+            + (content_h > self.height_tiers[5]) as usize
+            + (content_h > self.height_tiers[6]) as usize;
+        self.glyph_codes[count]
     }
 }
 
@@ -207,3 +266,51 @@ impl ContinuedFractionPipeline {
         MathStyle::Display
     }
 }
+
+/// 64-byte aligned static metric table for skewed/slashed fractions (\Uskewed, \sfrac).
+/// Matches TeX Live mlist.c lines 3023-3094 with canonical negative slash kerning.
+#[repr(C, align(64))]
+pub struct PackedSfracMetrics {
+    pub num_raise: f32,
+    pub den_drop: f32,
+    pub slash_kern_before: f32,
+    pub slash_kern_after: f32,
+    pub _pad: [f32; 12],
+}
+
+pub static PACKED_SFRAC_METRICS: PackedSfracMetrics = PackedSfracMetrics {
+    num_raise: 0.36,
+    den_drop: 0.02,
+    slash_kern_before: -0.12,
+    slash_kern_after: -0.10,
+    _pad: [0.0; 12],
+};
+
+const _: () = assert!(core::mem::size_of::<PackedSfracMetrics>() == 64);
+const _: () = assert!(core::mem::align_of::<PackedSfracMetrics>() == 64);
+
+/// Layout governor for skewed / slashed fractions (\Uskewed, \sfrac).
+/// Matches TeX Live mlist.c lines 3023-3094.
+pub struct SkewedFractionGovernor;
+
+impl SkewedFractionGovernor {
+    /// Computes horizontal and vertical displacements for skewed fractions.
+    /// Returns (shift_up, shift_down, slash_x, den_x, total_w).
+    #[inline(always)]
+    pub fn compute_skewed_geometry(
+        num_w: f32,
+        den_w: f32,
+        slash_w: f32,
+        _axis_h: f32,
+        font_size: f32,
+    ) -> (f32, f32, f32, f32, f32) {
+        let shift_up = PACKED_SFRAC_METRICS.num_raise * font_size;
+        let shift_down = PACKED_SFRAC_METRICS.den_drop * font_size;
+        let slash_x = (num_w + PACKED_SFRAC_METRICS.slash_kern_before * font_size).max(0.0);
+        let den_x = (slash_x + slash_w + PACKED_SFRAC_METRICS.slash_kern_after * font_size).max(0.0);
+        let total_w = den_x + den_w;
+        (shift_up, shift_down, slash_x, den_x, total_w)
+    }
+}
+
+

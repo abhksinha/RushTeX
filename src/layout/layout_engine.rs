@@ -24,7 +24,14 @@
 use crate::doc_config::DocumentConfig;
 use crate::font_metrics::{self as metrics, Face};
 use crate::index::{pre_scan_entries, IndexRegistry};
+use crate::layout::layout_hz::{
+    build_breakpoints, hash_paragraph, hz_break_paragraph_breakpoints_pass,
+    hz_break_paragraph_fast_shape, try_layout_single_line_paragraph, Breakpoint, HzConfig, ParCacheEntry, PAR_CACHE_MAX_LINES,
+};
 use crate::tex_parser::{Block, Document, Graphic, Inline, TableData};
+
+pub const PAR_CACHE_CAP: usize = 256;
+pub const PAR_CACHE_MASK: usize = PAR_CACHE_CAP - 1;
 
 pub const PAGE_W: f32 = 595.0;
 pub const PAGE_H: f32 = 842.0;
@@ -194,7 +201,7 @@ pub enum Paint {
     },
 }
 
-pub fn layout<'a>(document: &'a Document<'a>) -> Vec<Page<'a>> {
+pub fn layout<'a>(document: &Document<'a>) -> Vec<Page<'a>> {
     let has_indices = document.blocks.iter().any(|b| {
         matches!(
             b,
@@ -248,13 +255,34 @@ pub(crate) struct Layouter<'a> {
     pub(crate) list_item_indent: f32,
     pub(crate) list_item_sep: f32,
     pub(crate) list_par_indent: f32,
+    pub(crate) french_spacing: bool,
     pub(crate) after_heading: bool,
     pub(crate) has_preceding_text: bool,
     pub(crate) last_line_width: f32,
     pub(crate) last_line_indent: f32,
     pub(crate) prev_graf: i32,
-    scratch_runs: Vec<FlatRun<'a>>,
+    pub(crate) par_shape: Vec<(f32, f32)>,
+    pub(crate) pre_tolerance: i32,
+    pub(crate) tolerance: i32,
+    pub(crate) emergency_stretch: f32,
+    pub(crate) looseness: i32,
+    pub(crate) par_fill_width: f32,
+    pub(crate) par_fill_stretch: f32,
+    pub(crate) last_line_fit: i32,
     pub(crate) words_soa: ParagraphSoA<'a>,
+    pub(crate) breakpoints: Vec<Breakpoint>,
+    pub(crate) hyphen_scratch: Vec<&'a str>,
+    pub(crate) hyphen_cache: Box<[crate::layout::layout_hyphen::HyphenCacheEntry; crate::layout::layout_hyphen::HYPHEN_CACHE_SIZE]>,
+    pub(crate) par_cache: Box<[ParCacheEntry; PAR_CACHE_CAP]>,
+    pub(crate) dp_nodes: Vec<crate::layout::layout_hz::DpNode>,
+    pub(crate) dp_prefix: Vec<crate::layout::layout_hz::PrefixSum>,
+    pub(crate) pass_stats: [u32; 4],
+    pub(crate) debug_timings: bool,
+    pub(crate) time_explode_ns: u64,
+    pub(crate) time_pass1_ns: u64,
+    pub(crate) time_hyph_ns: u64,
+    pub(crate) time_pass2_ns: u64,
+    pub(crate) time_flush_ns: u64,
     pub(crate) line_descriptors: Vec<LineDescriptor>,
     pub(crate) cell_words_soa: ParagraphSoA<'a>,
     pub(crate) cell_lines: Vec<CellLineRange>,
@@ -265,11 +293,16 @@ pub(crate) struct Layouter<'a> {
     pub(crate) current_fig_idx: usize,
     pub(crate) current_tbl_idx: usize,
     pub(crate) section_counters: [u16; 4],
+    pub(crate) streaming_mode: bool,
+    pub(crate) pending_page: Option<Page<'a>>,
+    pub(crate) completed_pages: std::collections::VecDeque<Page<'a>>,
+    pub(crate) completed_pages_count: usize,
+    pub(crate) recycled_pages: Vec<Page<'a>>,
 }
 
 impl<'a> Layouter<'a> {
     pub(crate) fn new(config: &DocumentConfig) -> Self {
-        Self::new_with_caps(config, 256, 1024, false)
+        Self::new_with_caps(config, 64, 600, false)
     }
 
     pub(crate) fn new_dry_run(config: &DocumentConfig) -> Self {
@@ -328,15 +361,42 @@ impl<'a> Layouter<'a> {
             list_item_indent: config.list_item_indent,
             list_item_sep: config.list_item_sep,
             list_par_indent: config.list_par_indent,
+            french_spacing: config.french_spacing,
             after_heading: true,
             has_preceding_text: false,
             last_line_width: 0.0,
             last_line_indent: 0.0,
             prev_graf: 0,
-            scratch_runs: Vec::with_capacity(64),
-            words_soa: ParagraphSoA::with_capacity(256),
-            line_descriptors: Vec::with_capacity(32),
-            cell_words_soa: ParagraphSoA::with_capacity(128),
+            par_shape: Vec::with_capacity(8),
+            pre_tolerance: config.pre_tolerance,
+            tolerance: config.tolerance,
+            emergency_stretch: config.emergency_stretch,
+            looseness: config.looseness,
+            par_fill_width: config.par_fill_width,
+            par_fill_stretch: config.par_fill_stretch,
+            last_line_fit: config.last_line_fit,
+            words_soa: ParagraphSoA::with_capacity(1024),
+            breakpoints: Vec::with_capacity(512),
+            hyphen_scratch: Vec::with_capacity(16),
+            hyphen_cache: vec![crate::layout::layout_hyphen::HyphenCacheEntry::empty(); crate::layout::layout_hyphen::HYPHEN_CACHE_SIZE]
+                .into_boxed_slice()
+                .try_into()
+                .unwrap(),
+            par_cache: vec![ParCacheEntry::default(); PAR_CACHE_CAP]
+                .into_boxed_slice()
+                .try_into()
+                .unwrap(),
+            dp_nodes: Vec::with_capacity(1024 * 4),
+            dp_prefix: Vec::with_capacity(1024),
+            pass_stats: [0; 4],
+            debug_timings: std::env::var_os("RUSHTEX_DEBUG_PASSES").is_some(),
+            time_explode_ns: 0,
+            time_pass1_ns: 0,
+            time_hyph_ns: 0,
+            time_pass2_ns: 0,
+            time_flush_ns: 0,
+            line_descriptors: Vec::with_capacity(64),
+            cell_words_soa: ParagraphSoA::with_capacity(256),
             cell_lines: Vec::with_capacity(32),
             cell_line_spans: Vec::with_capacity(32),
             registry: IndexRegistry::new(),
@@ -345,6 +405,11 @@ impl<'a> Layouter<'a> {
             current_fig_idx: 0,
             current_tbl_idx: 0,
             section_counters: [0; 4],
+            streaming_mode: false,
+            pending_page: None,
+            completed_pages: std::collections::VecDeque::with_capacity(2),
+            completed_pages_count: 0,
+            recycled_pages: Vec::with_capacity(4),
         }
     }
 
@@ -363,27 +428,151 @@ impl<'a> Layouter<'a> {
         marker_width_family(marker, face, size, self.font_family)
     }
 
-    fn finish(mut self) -> Vec<Page<'a>> {
+    pub(crate) fn enable_streaming(&mut self) {
+        self.streaming_mode = true;
+    }
+
+    pub(crate) fn take_completed_page(&mut self) -> Option<Page<'a>> {
+        self.completed_pages.pop_front()
+    }
+
+    #[inline(always)]
+    pub(crate) fn current_page_number(&self) -> u32 {
+        if self.streaming_mode {
+            (self.completed_pages_count
+                + if self.pending_page.is_some() { 1 } else { 0 }
+                + 1) as u32
+        } else {
+            (self.pages.len() + 1) as u32
+        }
+    }
+
+    pub(crate) fn add_page_number_to_page(
+        page: &mut Page<'_>,
+        page_number: u32,
+        page_numbering: bool,
+        font_family: metrics::FontFamily,
+        margin_bottom: f32,
+    ) {
+        if !page_numbering {
+            return;
+        }
+        let digit_count = count_digits(page_number);
+        let page_num_size = 10.0f32;
+        let digit_units = metrics::resolve_digit_units(font_family, Face::Roman);
+        let num_width = (digit_count * digit_units) as f32 * (page_num_size * 0.001);
+        let x = (page.width - num_width) * 0.5;
+        let y = margin_bottom * 0.45;
+        page.push_op(Paint::PageNumber {
+            x,
+            y,
+            face: Face::Roman,
+            size: page_num_size,
+            page_number,
+        });
+    }
+
+    #[inline(always)]
+    pub(crate) fn add_page_number_to(&self, page: &mut Page<'a>, page_number: u32) {
+        Self::add_page_number_to_page(
+            page,
+            page_number,
+            self.page_numbering,
+            self.font_family,
+            self.margin_bottom,
+        );
+    }
+
+    pub(crate) fn finish_streaming(&mut self) -> Vec<Page<'a>> {
+        let mut last_pages = Vec::with_capacity(2);
+        let page_numbering = self.page_numbering;
+        let font_family = self.font_family;
+        let margin_bottom = self.margin_bottom;
+        if let Some(mut old_pending) = self.pending_page.take() {
+            self.completed_pages_count += 1;
+            Self::add_page_number_to_page(
+                &mut old_pending,
+                self.completed_pages_count as u32,
+                page_numbering,
+                font_family,
+                margin_bottom,
+            );
+            last_pages.push(old_pending);
+        }
+        if std::env::var("RUSHTEX_DEBUG_PASSES").is_ok() {
+            eprintln!(
+                "Pass stats: P1={}, P2={}, P3={}, Fallback={}",
+                self.pass_stats[1], self.pass_stats[2], self.pass_stats[3], self.pass_stats[0]
+            );
+            eprintln!(
+                "Timings: Explode={:.2}ms, Pass1={:.2}ms, HyphSoa={:.2}ms, Pass2={:.2}ms, Flush={:.2}ms",
+                self.time_explode_ns as f64 / 1_000_000.0,
+                self.time_pass1_ns as f64 / 1_000_000.0,
+                self.time_hyph_ns as f64 / 1_000_000.0,
+                self.time_pass2_ns as f64 / 1_000_000.0,
+                self.time_flush_ns as f64 / 1_000_000.0,
+            );
+        }
+        if !self.current_page.ops.is_empty() || self.completed_pages_count == 0 {
+            self.completed_pages_count += 1;
+            Self::add_page_number_to_page(
+                &mut self.current_page,
+                self.completed_pages_count as u32,
+                page_numbering,
+                font_family,
+                margin_bottom,
+            );
+            let page = std::mem::replace(
+                &mut self.current_page,
+                Page {
+                    width: self.page_width,
+                    height: self.page_height,
+                    font_family: self.font_family,
+                    used_faces: 0,
+                    ops: Vec::new(),
+                    text_pool: Vec::new(),
+                },
+            );
+            last_pages.push(page);
+        }
+        last_pages
+    }
+
+    pub(crate) fn finish(mut self) -> Vec<Page<'a>> {
+        if self.streaming_mode {
+            let mut remaining = self.finish_streaming();
+            let mut all = Vec::new();
+            while let Some(p) = self.take_completed_page() {
+                all.push(p);
+            }
+            all.append(&mut remaining);
+            return all;
+        }
+
+        let page_numbering = self.page_numbering;
+        let font_family = self.font_family;
+        let margin_bottom = self.margin_bottom;
+
         if !self.current_page.ops.is_empty() || self.pages.is_empty() {
             self.pages.push(self.current_page);
         }
-        if self.page_numbering {
+        if page_numbering {
             for (page_idx, page) in self.pages.iter_mut().enumerate() {
                 let page_number = (page_idx + 1) as u32;
-                let digit_count = count_digits(page_number);
-                let page_num_size = 10.0f32;
-                let digit_units = metrics::resolve_digit_units(self.font_family, Face::Roman);
-                let num_width = (digit_count * digit_units) as f32 * (page_num_size * 0.001);
-                let x = (page.width - num_width) * 0.5;
-                let y = self.margin_bottom * 0.45;
-                page.push_op(Paint::PageNumber {
-                    x,
-                    y,
-                    face: Face::Roman,
-                    size: page_num_size,
+                Self::add_page_number_to_page(
+                    page,
                     page_number,
-                });
+                    page_numbering,
+                    font_family,
+                    margin_bottom,
+                );
             }
+        }
+        if std::env::var("RUSHTEX_DEBUG_PASSES").is_ok() {
+            eprintln!(
+                "Pass stats: P1={}, P2={}, P3={}, Fallback={}",
+                self.pass_stats[1], self.pass_stats[2], self.pass_stats[3], self.pass_stats[0]
+            );
         }
         self.pages
     }
@@ -393,24 +582,55 @@ impl<'a> Layouter<'a> {
         self.current_page.push_op(op);
     }
 
+    #[inline(always)]
+    pub(crate) fn recycle_page(&mut self, mut page: Page<'a>) {
+        if self.recycled_pages.len() < 4 {
+            page.ops.clear();
+            page.text_pool.clear();
+            page.used_faces = 0;
+            self.recycled_pages.push(page);
+        }
+    }
+
     pub(crate) fn new_page(&mut self) {
-        let (ops, text_pool) = if self.is_dry_run {
-            (Vec::new(), Vec::new())
+        let previous_page = if let Some(mut recycled) = self.recycled_pages.pop() {
+            recycled.width = self.page_width;
+            recycled.height = self.page_height;
+            recycled.font_family = self.font_family;
+            recycled.used_faces = 0;
+            recycled.ops.clear();
+            recycled.text_pool.clear();
+            std::mem::replace(&mut self.current_page, recycled)
         } else {
-            (Vec::with_capacity(256), Vec::with_capacity(1024))
+            let (ops, text_pool) = if self.is_dry_run {
+                (Vec::new(), Vec::new())
+            } else {
+                (Vec::with_capacity(64), Vec::with_capacity(600))
+            };
+            std::mem::replace(
+                &mut self.current_page,
+                Page {
+                    width: self.page_width,
+                    height: self.page_height,
+                    font_family: self.font_family,
+                    used_faces: 0,
+                    ops,
+                    text_pool,
+                },
+            )
         };
-        let previous_page = std::mem::replace(
-            &mut self.current_page,
-            Page {
-                width: self.page_width,
-                height: self.page_height,
-                font_family: self.font_family,
-                used_faces: 0,
-                ops,
-                text_pool,
-            },
-        );
-        self.pages.push(previous_page);
+
+        if self.streaming_mode {
+            if let Some(mut old_pending) = self.pending_page.take() {
+                self.completed_pages_count += 1;
+                self.add_page_number_to(&mut old_pending, self.completed_pages_count as u32);
+                self.completed_pages.push_back(old_pending);
+            }
+            self.pending_page = Some(previous_page);
+        } else {
+            self.pages.push(previous_page);
+        }
+
         self.y = self.page_height - self.margin_top;
         self.has_preceding_text = false;
         self.last_line_width = 0.0;
@@ -427,7 +647,7 @@ impl<'a> Layouter<'a> {
         }
     }
 
-    fn layout_blocks(&mut self, blocks: &'a [Block<'a>], depth: usize) {
+    pub(crate) fn layout_blocks<'doc>(&mut self, blocks: &'doc [Block<'a>], depth: usize) {
         let mut prev_was_block = false;
         for b in blocks {
             if let Block::ConfigChange(cfg) = b {
@@ -442,23 +662,57 @@ impl<'a> Layouter<'a> {
         }
     }
 
+    pub(crate) fn layout_stream_block<'doc>(&mut self, b: &'doc Block<'a>, prev_was_block: &mut bool) {
+        if let Block::ConfigChange(cfg) = b {
+            self.apply_config_change(cfg);
+            return;
+        }
+        if *prev_was_block {
+            self.y -= self.par_skip;
+        }
+        *prev_was_block = true;
+        self.layout_single_block(b, 0);
+    }
+
     fn apply_config_change(&mut self, change: &crate::tex_parser::ConfigChange) {
-        match *change {
-            crate::tex_parser::ConfigChange::ParIndent(v) => self.par_indent = v,
-            crate::tex_parser::ConfigChange::ParSkip(v) => self.par_skip = v,
-            crate::tex_parser::ConfigChange::HangIndent(v) => self.hang_indent = v,
-            crate::tex_parser::ConfigChange::HangAfter(v) => self.hang_after = v,
-            crate::tex_parser::ConfigChange::LeftSkip(v) => self.left_skip = v,
-            crate::tex_parser::ConfigChange::RightSkip(v) => self.right_skip = v,
-            crate::tex_parser::ConfigChange::LabelSep(v) => self.list_label_sep = v,
-            crate::tex_parser::ConfigChange::LeftMargin(v) => self.list_left_margin = v,
-            crate::tex_parser::ConfigChange::ItemIndent(v) => self.list_item_indent = v,
-            crate::tex_parser::ConfigChange::ItemSep(v) => self.list_item_sep = v,
-            crate::tex_parser::ConfigChange::ListParIndent(v) => self.list_par_indent = v,
+        match change {
+            crate::tex_parser::ConfigChange::ParIndent(v) => self.par_indent = *v,
+            crate::tex_parser::ConfigChange::ParSkip(v) => self.par_skip = *v,
+            crate::tex_parser::ConfigChange::HangIndent(v) => self.hang_indent = *v,
+            crate::tex_parser::ConfigChange::HangAfter(v) => self.hang_after = *v,
+            crate::tex_parser::ConfigChange::LeftSkip(v) => self.left_skip = *v,
+            crate::tex_parser::ConfigChange::RightSkip(v) => self.right_skip = *v,
+            crate::tex_parser::ConfigChange::LabelSep(v) => self.list_label_sep = *v,
+            crate::tex_parser::ConfigChange::LeftMargin(v) => self.list_left_margin = *v,
+            crate::tex_parser::ConfigChange::ItemIndent(v) => self.list_item_indent = *v,
+            crate::tex_parser::ConfigChange::ItemSep(v) => self.list_item_sep = *v,
+            crate::tex_parser::ConfigChange::ListParIndent(v) => self.list_par_indent = *v,
+            crate::tex_parser::ConfigChange::ParShape(shape) => {
+                self.par_shape.clear();
+                self.par_shape.extend_from_slice(shape);
+            }
+            crate::tex_parser::ConfigChange::PreTolerance(v) => self.pre_tolerance = *v,
+            crate::tex_parser::ConfigChange::Tolerance(v) => self.tolerance = *v,
+            crate::tex_parser::ConfigChange::EmergencyStretch(v) => self.emergency_stretch = *v,
+            crate::tex_parser::ConfigChange::Looseness(v) => self.looseness = *v,
+            crate::tex_parser::ConfigChange::ParFillSkip { width, stretch } => {
+                self.par_fill_width = *width;
+                self.par_fill_stretch = *stretch;
+            }
+            crate::tex_parser::ConfigChange::PrevGraf(v) => self.prev_graf = *v,
+            crate::tex_parser::ConfigChange::LastLineFit(v) => self.last_line_fit = *v,
+            crate::tex_parser::ConfigChange::Sloppy => {
+                self.tolerance = 9999;
+                self.emergency_stretch = 33.0;
+            }
+            crate::tex_parser::ConfigChange::Fussy => {
+                self.tolerance = 200;
+                self.emergency_stretch = 0.0;
+            }
         }
     }
 
-    fn layout_single_block(&mut self, b: &'a Block<'a>, depth: usize) {
+    pub(crate) fn layout_single_block<'doc>(&mut self, b: &'doc Block<'a>, depth: usize) {
         match b {
             Block::ConfigChange(cfg) => self.apply_config_change(cfg),
             Block::Para(inls) => self.layout_para(inls),
@@ -531,11 +785,11 @@ impl<'a> Layouter<'a> {
         }
     }
 
-    fn layout_list(
+    fn layout_list<'doc>(
         &mut self,
         kind: crate::frontend::ast::ListKind,
         options: &crate::tex_parser::ListOptions,
-        items: &'a [crate::frontend::ast::ListItem<'a>],
+        items: &'doc [crate::frontend::ast::ListItem<'a>],
         depth: usize,
     ) {
         if items.is_empty() {
@@ -646,7 +900,12 @@ impl<'a> Layouter<'a> {
                 );
             } else if kind != crate::frontend::ast::ListKind::Description {
                 let marker = make_marker(idx);
-                let marker_w = self.marker_width(marker, Face::Roman, self.base_font_size);
+                let marker_face = if marker == Marker::Bullet && self.font_family == metrics::FontFamily::ComputerModern {
+                    Face::Symbol
+                } else {
+                    Face::Roman
+                };
+                let marker_w = self.marker_width(marker, marker_face, self.base_font_size);
 
                 let first_line_x = self.left + left_margin + item_indent;
                 let mut marker_x = first_line_x - label_sep - marker_w;
@@ -658,7 +917,7 @@ impl<'a> Layouter<'a> {
                     self.push_op(Paint::Marker {
                         x: marker_x,
                         y: self.y,
-                        face: Face::Roman,
+                        face: marker_face,
                         size: self.base_font_size,
                         marker,
                     });
@@ -731,20 +990,22 @@ impl<'a> Layouter<'a> {
         self.y -= top_sep;
     }
 
-    fn layout_title_block(
+    fn layout_title_block<'doc>(
         &mut self,
-        title: &'a [Inline<'a>],
-        author: Option<&'a [Inline<'a>]>,
-        date: Option<&'a [Inline<'a>]>,
+        title: &'doc [Inline<'a>],
+        author: Option<&'doc [Inline<'a>]>,
+        date: Option<&'doc [Inline<'a>]>,
     ) {
         let max_w = (self.right - self.right_skip) - (self.left + self.left_skip);
         self.cell_words_soa.clear();
+        let mut title_math = Vec::new();
         let title_w = explode_inlines_into_family(
             title,
             Face::Bold,
             18.0,
             &mut self.cell_words_soa,
             self.font_family,
+            &mut title_math,
         );
         let title_lines = if title_w <= max_w && !inlines_have_break(title) {
             1
@@ -776,6 +1037,7 @@ impl<'a> Layouter<'a> {
                     self.y,
                     Face::Bold,
                     18.0,
+                    &title_math,
                 );
                 self.y -= title_leading;
             }
@@ -806,7 +1068,7 @@ impl<'a> Layouter<'a> {
         self.prev_graf = 0;
     }
 
-    fn layout_section(&mut self, level: u8, starred: bool, title: &'a [Inline<'a>]) {
+    fn layout_section<'doc>(&mut self, level: u8, starred: bool, title: &'doc [Inline<'a>]) {
         let (skip_before, font_size, skip_after) = match level {
             1 => (18.0, 14.0, 6.0),
             2 => (14.0, 12.0, 4.0),
@@ -826,12 +1088,14 @@ impl<'a> Layouter<'a> {
 
         let max_w = (self.right - self.right_skip) - (self.left + self.left_skip);
         self.cell_words_soa.clear();
+        let mut section_math = Vec::new();
         let title_w = explode_inlines_into_family(
             title,
             Face::Bold,
             font_size,
             &mut self.cell_words_soa,
             self.font_family,
+            &mut section_math,
         );
         let heading_leading = font_size * 1.25;
 
@@ -856,7 +1120,7 @@ impl<'a> Layouter<'a> {
         }
 
         if !starred && self.current_sec_idx < self.registry.toc_entries.len() {
-            self.registry.toc_entries[self.current_sec_idx].page = (self.pages.len() + 1) as u32;
+            self.registry.toc_entries[self.current_sec_idx].page = self.current_page_number();
             self.current_sec_idx += 1;
         }
 
@@ -894,6 +1158,7 @@ impl<'a> Layouter<'a> {
                     self.y,
                     Face::Bold,
                     font_size,
+                    &section_math,
                 );
                 self.y -= heading_leading;
             }
@@ -906,18 +1171,18 @@ impl<'a> Layouter<'a> {
         self.prev_graf = 0;
     }
 
-    fn layout_table(&mut self, table_data: &'a TableData<'a>) {
+    fn layout_table<'doc>(&mut self, table_data: &'doc TableData<'a>) {
         crate::tables::layout_table(self, table_data);
     }
 
-    fn layout_figure(&mut self, graphic: Option<Graphic<'a>>, caption: &'a [Inline<'a>]) {
+    fn layout_figure<'doc>(&mut self, graphic: Option<Graphic<'a>>, caption: &'doc [Inline<'a>]) {
         self.figure_counter += 1;
         let figure_width = (self.right - self.left).min(360.0);
         let figure_height = FIG_H;
         self.ensure_room(figure_height + self.base_leading * 2.0 + PARA_SKIP);
 
         if self.current_fig_idx < self.registry.figure_entries.len() {
-            self.registry.figure_entries[self.current_fig_idx].page = (self.pages.len() + 1) as u32;
+            self.registry.figure_entries[self.current_fig_idx].page = self.current_page_number();
             self.current_fig_idx += 1;
         }
 
@@ -958,12 +1223,14 @@ impl<'a> Layouter<'a> {
             let tag_width = 56.0;
             let cap_max_w = (figure_width - tag_width).max(10.0);
             self.cell_words_soa.clear();
+            let mut cap_math = Vec::new();
             let cap_w = explode_inlines_into_family(
                 caption,
                 Face::Roman,
                 self.base_font_size,
                 &mut self.cell_words_soa,
                 self.font_family,
+                &mut cap_math,
             );
             if !self.is_dry_run {
                 self.push_op(Paint::CaptionTag {
@@ -988,6 +1255,7 @@ impl<'a> Layouter<'a> {
                         (line_desc.start_word + line_desc.word_count) as usize,
                         cap_x,
                         cur_y,
+                        &cap_math,
                     );
                     if idx + 1 < line_count {
                         self.y -= self.base_leading;
@@ -999,72 +1267,66 @@ impl<'a> Layouter<'a> {
         self.after_heading = false;
     }
 
-    fn layout_equation(&mut self, starred: bool, math: &'a crate::math::MathNode<'a>) {
+    fn layout_equation<'doc>(&mut self, starred: bool, math: &'doc crate::math::MathNode<'a>) {
+        let (actual_math, custom_tag, is_left_tag, tag_starred) = match math {
+            crate::math::MathNode::Tagged { formula, tag, is_left, starred: t_star } => {
+                (&**formula, Some(&**tag), *is_left, *t_star)
+            }
+            other => (other, None, false, false),
+        };
+
         let m_box = crate::math::measure_math(
-            math,
+            actual_math,
             self.base_font_size,
             self.font_family,
             crate::math::MathStyle::Display,
         );
 
-        let eq_num = if !starred {
+        let tag_w = if let Some(tag_node) = custom_tag {
+            let t_box = crate::math::measure_math(
+                tag_node,
+                self.base_font_size,
+                self.font_family,
+                crate::math::MathStyle::Text,
+            );
+            let pw = if !tag_starred {
+                metrics::width_family('(', Face::Roman, self.base_font_size, self.font_family)
+                    + metrics::width_family(')', Face::Roman, self.base_font_size, self.font_family)
+            } else {
+                0.0
+            };
+            t_box.w + pw
+        } else if !starred {
             self.equation_counter += 1;
-            Some(self.equation_counter)
-        } else {
-            None
-        };
-
-        let num_w = if let Some(n) = eq_num {
-            equation_number_width(n, Face::Roman, self.base_font_size, self.font_family)
+            equation_number_width(self.equation_counter, Face::Roman, self.base_font_size, self.font_family)
         } else {
             0.0
         };
 
-        let quad = self.base_font_size;
         let available_w = (self.right - self.right_skip) - (self.left + self.left_skip);
-        let (display_w, display_indent) = crate::math::DisplayShapeGeometryResolver::resolve_geometry(
+        let has_any_tag = custom_tag.is_some() || (!starred && tag_w > 0.0);
+        let disp_geom = crate::math::DisplayGeometryEngine::compute_display_geometry(
             available_w,
             self.hang_indent,
             self.hang_after,
             self.prev_graf,
-        );
-
-        let raw_predisplay = crate::math::DisplayMathParagraphBreaker::compute_predisplaysize(
-            self.last_line_width + self.last_line_indent,
-            quad,
-            2000.0,
-        );
-        let predisplaysize = crate::math::EmptyParagraphDisplayFilter::filter_predisplaysize(
+            self.last_line_width,
+            self.last_line_indent,
             self.has_preceding_text,
-            raw_predisplay,
-        );
-
-        let displacement = crate::math::DisplayEquationCentering::compute_displacement(
-            display_w,
             m_box.w,
-            num_w,
-        );
-        let is_left_tag = false;
-        let use_short_skip = crate::math::PreDisplayClearanceComparator::uses_short_skip(
-            displacement,
-            display_indent,
-            predisplaysize,
+            tag_w,
             is_left_tag,
+            has_any_tag,
+            self.base_font_size,
         );
-
-        let (above_skip, below_skip) = if use_short_skip {
-            (0.0f32, self.base_font_size * 0.6f32)
-        } else {
-            (self.base_font_size * 1.0f32, self.base_font_size * 1.0f32)
-        };
-
-        let must_split_tag = eq_num.is_some()
-            && crate::math::EquationTagCollisionDisplacement::must_split_line(
-                m_box.w,
-                num_w,
-                display_w,
-                quad,
-            );
+        let crate::math::PackedDisplayGeometry {
+            display_indent,
+            displacement,
+            above_skip,
+            below_skip,
+            must_split_tag,
+            ..
+        } = disp_geom;
 
         let tag_line_h = if must_split_tag { self.base_leading } else { 0.0 };
         let total_h = above_skip + m_box.h + m_box.d + below_skip + tag_line_h;
@@ -1078,11 +1340,15 @@ impl<'a> Layouter<'a> {
 
         let eq_x = self.left + self.left_skip + display_indent + displacement;
         let right_margin = self.right - self.right_skip;
-        let num_x = right_margin - num_w;
+        let tag_x = if is_left_tag {
+            self.left + self.left_skip + display_indent
+        } else {
+            right_margin - tag_w
+        };
 
         if !self.is_dry_run {
             crate::math::render_math(
-                math,
+                actual_math,
                 self.base_font_size,
                 self.font_family,
                 crate::math::MathStyle::Display,
@@ -1095,18 +1361,62 @@ impl<'a> Layouter<'a> {
                 | (1 << (Face::Roman as u8))
                 | (1 << (Face::Italic as u8));
 
-            if let Some(n) = eq_num {
-                let tag_y = if must_split_tag {
-                    baseline_y - m_box.d - self.base_leading * 0.8
+            let tag_y = if must_split_tag {
+                baseline_y - m_box.d - self.base_leading * 0.8
+            } else {
+                baseline_y
+            };
+
+            if let Some(tag_node) = custom_tag {
+                let render_tag_x = if !tag_starred {
+                    let open_paren_w = metrics::width_family('(', Face::Roman, self.base_font_size, self.font_family);
+                    let start_p = self.current_page.text_pool.len() as u32;
+                    self.current_page.text_pool.push("(");
+                    self.push_op(Paint::GlyphRun {
+                        x: tag_x,
+                        y: tag_y,
+                        face: Face::Roman,
+                        size: self.base_font_size,
+                        part_start: start_p,
+                        part_count: 1,
+                        word_spacing: 0.0,
+                    });
+                    tag_x + open_paren_w
                 } else {
-                    baseline_y
+                    tag_x
                 };
+
+                let t_box = crate::math::render_math(
+                    tag_node,
+                    self.base_font_size,
+                    self.font_family,
+                    crate::math::MathStyle::Text,
+                    render_tag_x,
+                    tag_y,
+                    &mut self.current_page.ops,
+                    &mut self.current_page.text_pool,
+                );
+
+                if !tag_starred {
+                    let close_p = self.current_page.text_pool.len() as u32;
+                    self.current_page.text_pool.push(")");
+                    self.push_op(Paint::GlyphRun {
+                        x: render_tag_x + t_box.w,
+                        y: tag_y,
+                        face: Face::Roman,
+                        size: self.base_font_size,
+                        part_start: close_p,
+                        part_count: 1,
+                        word_spacing: 0.0,
+                    });
+                }
+            } else if !starred {
                 self.push_op(Paint::EquationNumber {
-                    x: num_x,
+                    x: tag_x,
                     y: tag_y,
                     face: Face::Roman,
                     size: self.base_font_size,
-                    n,
+                    n: self.equation_counter,
                 });
             }
         }
@@ -1123,7 +1433,7 @@ impl<'a> Layouter<'a> {
         self.after_heading = false;
     }
 
-    fn layout_code_listing(&mut self, listing: &'a crate::code_listing::CodeListingData<'a>) {
+    fn layout_code_listing<'doc>(&mut self, listing: &'doc crate::code_listing::CodeListingData<'a>) {
         let font_size = listing.options.font_size;
         let line_leading = font_size * 1.30;
         let lines: Vec<&'a str> = listing.lines().collect();
@@ -1170,7 +1480,7 @@ impl<'a> Layouter<'a> {
                     let block_bottom = y_before - pad_y;
                     let block_h = block_page_start_y - block_bottom;
                     let w = self.right - self.left;
-                    if let Some(p) = self.pages.last_mut() {
+                    if let Some(p) = self.pending_page.as_mut().or_else(|| self.pages.last_mut()) {
                         if listing.options.left_accent_bar {
                             p.push_op(Paint::Rule {
                                 x: self.left,
@@ -1273,25 +1583,17 @@ impl<'a> Layouter<'a> {
         self.y = block_bottom - skip_after;
     }
 
-    fn layout_para(&mut self, inls: &'a [Inline<'a>]) {
+    fn layout_para<'doc>(&mut self, inls: &'doc [Inline<'a>]) {
         self.layout_para_full(inls, None, None);
     }
 
-    fn layout_para_full(
+    fn layout_para_full<'doc>(
         &mut self,
-        inls: &'a [Inline<'a>],
+        inls: &'doc [Inline<'a>],
         custom_first_line_indent: Option<f32>,
         custom_hanging_indent: Option<f32>,
     ) {
-        self.words_soa.clear();
-        explode_inlines_into_family(
-            inls,
-            Face::Roman,
-            self.base_font_size,
-            &mut self.words_soa,
-            self.font_family,
-        );
-        if self.words_soa.is_empty() {
+        if inls.is_empty() {
             return;
         }
 
@@ -1303,8 +1605,58 @@ impl<'a> Layouter<'a> {
                 Inline::Indent => is_indent = true,
                 Inline::HangIndent(dim) => self.hang_indent = *dim,
                 Inline::HangAfter(n) => self.hang_after = *n,
+                Inline::ParShape(shape) => {
+                    self.par_shape.clear();
+                    self.par_shape.extend_from_slice(shape);
+                }
+                Inline::PreTolerance(v) => self.pre_tolerance = *v,
+                Inline::Tolerance(v) => self.tolerance = *v,
+                Inline::EmergencyStretch(v) => self.emergency_stretch = *v,
+                Inline::Sloppy => {
+                    self.tolerance = 9999;
+                    self.emergency_stretch = 33.0;
+                }
+                Inline::Fussy => {
+                    self.tolerance = 200;
+                    self.emergency_stretch = 0.0;
+                }
+                Inline::Looseness(v) => self.looseness = *v,
+                Inline::LeftSkip(v) => self.left_skip = *v,
+                Inline::RightSkip(v) => self.right_skip = *v,
+                Inline::ParFillSkip { width, stretch } => {
+                    self.par_fill_width = *width;
+                    self.par_fill_stretch = *stretch;
+                }
+                Inline::PrevGraf(v) => self.prev_graf = *v,
+                Inline::LastLineFit(v) => self.last_line_fit = *v,
                 _ => {}
             }
+        }
+
+        self.words_soa.clear();
+        let est_words: usize = inls.iter().map(|inl| match inl {
+            Inline::Text(s) => s.len() / 5,
+            _ => 2,
+        }).sum();
+        self.words_soa.reserve(est_words);
+        let mut math_collector = Vec::new();
+        let mut space_factor = 1000u16;
+        let t_exp_start = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
+        explode_inlines_into_family_sf(
+            inls,
+            Face::Roman,
+            self.base_font_size,
+            &mut self.words_soa,
+            self.font_family,
+            &mut math_collector,
+            &mut space_factor,
+            self.french_spacing,
+        );
+        if let Some(t) = t_exp_start {
+            self.time_explode_ns += t.elapsed().as_nanos() as u64;
+        }
+        if self.words_soa.is_empty() {
+            return;
         }
 
         let has_first_line_indent = if is_indent {
@@ -1323,105 +1675,236 @@ impl<'a> Layouter<'a> {
             0.0
         };
         let first_line_indent = custom_first_line_indent.unwrap_or(base_first_indent);
-        let custom_hang = custom_hanging_indent.unwrap_or(0.0);
+        let custom_hang = custom_hanging_indent.unwrap_or(self.hang_indent);
 
         let measure = (self.right - self.right_skip) - (self.left + self.left_skip);
         self.line_descriptors.clear();
 
-        let num_words = self.words_soa.len();
-        let mut line_index: usize = 0;
-        let mut line_start: u32 = 0;
-        let mut line_w: f32 = 0.0;
-        let mut num_spaces: u32 = 0;
-        let mut line_indent = self.calculate_line_indent(0, first_line_indent, custom_hang);
-        let mut available = measure - line_indent;
+        let par_hash = hash_paragraph(
+            &self.words_soa,
+            measure,
+            first_line_indent,
+            custom_hang,
+            self.hang_after,
+            &self.par_shape,
+            self.tolerance,
+            self.pre_tolerance,
+            self.emergency_stretch,
+            self.looseness,
+            self.par_fill_width,
+            self.par_fill_stretch,
+            self.base_font_size,
+            self.font_family,
+            math_collector.len(),
+        );
 
-        let mut word_idx = 0;
-        while word_idx < num_words {
-            let k = self.words_soa.kinds[word_idx];
-            let w = self.words_soa.widths[word_idx];
+        let cache_slot = (par_hash as usize) & PAR_CACHE_MASK;
+        let cached_entry = self.par_cache[cache_slot];
+        let is_cached = cached_entry.hash == par_hash && par_hash != 0;
 
-            if k == WordKind::Break {
-                let (trimmed_end, trimmed_w, trimmed_sp) =
-                    self.trim_line_trailing_space(line_start, word_idx as u32, line_w, num_spaces);
-                self.line_descriptors.push(LineDescriptor {
-                    start_word: line_start as u16,
-                    word_count: (trimmed_end - line_start) as u16,
-                    line_w: trimmed_w,
-                    num_spaces: trimmed_sp as u16,
-                    line_indent,
-                    justify: false,
-                });
-                line_index += 1;
-                line_indent =
-                    self.calculate_line_indent(line_index, first_line_indent, custom_hang);
-                available = measure - line_indent;
-                word_idx += 1;
-                line_start = word_idx as u32;
-                line_w = 0.0;
-                num_spaces = 0;
-                continue;
+        let mut pass = 0;
+
+        if is_cached {
+            self.line_descriptors.extend_from_slice(&cached_entry.descriptors[..cached_entry.line_count as usize]);
+        } else if try_layout_single_line_paragraph(
+            &self.words_soa,
+            measure,
+            first_line_indent,
+            self.par_fill_width,
+            self.par_fill_stretch,
+            &self.par_shape,
+            self.looseness,
+            &mut self.line_descriptors,
+        ) {
+            pass = 1;
+            if par_hash != 0 && !self.line_descriptors.is_empty() {
+                let entry = &mut self.par_cache[cache_slot];
+                entry.hash = par_hash;
+                entry.line_count = 1;
+                entry.descriptors[0] = self.line_descriptors[self.line_descriptors.len() - 1];
+            }
+        } else {
+            let hz_config = HzConfig::default();
+
+            // Build candidate breakpoints and prefix sums once per paragraph
+            let t_hy = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
+            build_breakpoints(
+                &self.words_soa,
+                self.font_family,
+                self.base_font_size,
+                measure,
+                custom_hang,
+                &self.par_shape,
+                &mut self.hyphen_cache,
+                &mut self.hyphen_scratch,
+                &hz_config,
+                &mut self.breakpoints,
+                &mut self.dp_prefix,
+            );
+            if let Some(t) = t_hy {
+                self.time_hyph_ns += t.elapsed().as_nanos() as u64;
             }
 
-            if line_start < word_idx as u32 && line_w + w > available && k != WordKind::Space {
-                let (trimmed_end, trimmed_w, trimmed_sp) =
-                    self.trim_line_trailing_space(line_start, word_idx as u32, line_w, num_spaces);
-                self.line_descriptors.push(LineDescriptor {
-                    start_word: line_start as u16,
-                    word_count: (trimmed_end - line_start) as u16,
-                    line_w: trimmed_w,
-                    num_spaces: trimmed_sp as u16,
-                    line_indent,
-                    justify: true,
-                });
-                line_index += 1;
-                line_indent =
-                    self.calculate_line_indent(line_index, first_line_indent, custom_hang);
-                available = measure - line_indent;
-                if k == WordKind::Space {
-                    word_idx += 1;
+            // Pass 1: Try without hyphenation under pre_tolerance and tolerance
+            if self.pre_tolerance >= 0 {
+                let t_p1 = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
+                let max_unhyph = (self.tolerance as f32).max(self.pre_tolerance as f32);
+                if hz_break_paragraph_breakpoints_pass(
+                    &mut self.words_soa,
+                    &self.breakpoints,
+                    &self.dp_prefix,
+                    self.hyphen_cache.as_ref(),
+                    self.base_font_size * 0.001,
+                    self.font_family,
+                    measure,
+                    first_line_indent,
+                    custom_hang,
+                    self.hang_after,
+                    &self.par_shape,
+                    &hz_config,
+                    false, // allow_hyphenation = false
+                    self.pre_tolerance as f32,
+                    max_unhyph,
+                    0.0,
+                    self.looseness,
+                    self.par_fill_width,
+                    self.par_fill_stretch,
+                    &mut self.dp_nodes,
+                    &mut self.line_descriptors,
+                ) {
+                    pass = 1;
                 }
-                line_start = word_idx as u32;
-                line_w = 0.0;
-                num_spaces = 0;
-                continue;
+                if let Some(t) = t_p1 {
+                    self.time_pass1_ns += t.elapsed().as_nanos() as u64;
+                }
             }
 
-            if line_start == word_idx as u32 && k == WordKind::Space {
-                word_idx += 1;
-                line_start = word_idx as u32;
-                continue;
+            // Pass 2: Retry with hyphenation enabled under tolerance
+            if pass == 0 {
+                self.line_descriptors.clear();
+                let t_p2 = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
+                if hz_break_paragraph_breakpoints_pass(
+                    &mut self.words_soa,
+                    &self.breakpoints,
+                    &self.dp_prefix,
+                    self.hyphen_cache.as_ref(),
+                    self.base_font_size * 0.001,
+                    self.font_family,
+                    measure,
+                    first_line_indent,
+                    custom_hang,
+                    self.hang_after,
+                    &self.par_shape,
+                    &hz_config,
+                    true, // allow_hyphenation = true
+                    -1.0,
+                    self.tolerance as f32,
+                    0.0,
+                    self.looseness,
+                    self.par_fill_width,
+                    self.par_fill_stretch,
+                    &mut self.dp_nodes,
+                    &mut self.line_descriptors,
+                ) {
+                    pass = 2;
+                }
+                if let Some(t) = t_p2 {
+                    self.time_pass2_ns += t.elapsed().as_nanos() as u64;
+                }
             }
 
-            line_w += w;
-            if k == WordKind::Space {
-                num_spaces += 1;
+            // Pass 3: If emergency_stretch > 0, retry with emergency stretch added to elasticity
+            if pass == 0 && self.emergency_stretch > 0.0 {
+                self.line_descriptors.clear();
+                if hz_break_paragraph_breakpoints_pass(
+                    &mut self.words_soa,
+                    &self.breakpoints,
+                    &self.dp_prefix,
+                    self.hyphen_cache.as_ref(),
+                    self.base_font_size * 0.001,
+                    self.font_family,
+                    measure,
+                    first_line_indent,
+                    custom_hang,
+                    self.hang_after,
+                    &self.par_shape,
+                    &hz_config,
+                    true, // allow_hyphenation = true
+                    -1.0,
+                    self.tolerance as f32,
+                    self.emergency_stretch,
+                    self.looseness,
+                    self.par_fill_width,
+                    self.par_fill_stretch,
+                    &mut self.dp_nodes,
+                    &mut self.line_descriptors,
+                ) {
+                    pass = 3;
+                }
             }
-            word_idx += 1;
+
+            // Fallback: If all passes failed, typeset with relaxed badness (10000.0)
+            if pass == 0 {
+                self.line_descriptors.clear();
+                if !hz_break_paragraph_breakpoints_pass(
+                    &mut self.words_soa,
+                    &self.breakpoints,
+                    &self.dp_prefix,
+                    self.hyphen_cache.as_ref(),
+                    self.base_font_size * 0.001,
+                    self.font_family,
+                    measure,
+                    first_line_indent,
+                    custom_hang,
+                    self.hang_after,
+                    &self.par_shape,
+                    &hz_config,
+                    true, // allow_hyphenation = true
+                    -1.0,
+                    10000.0,
+                    self.emergency_stretch,
+                    self.looseness,
+                    self.par_fill_width,
+                    self.par_fill_stretch,
+                    &mut self.dp_nodes,
+                    &mut self.line_descriptors,
+                ) {
+                    hz_break_paragraph_fast_shape(
+                        &self.words_soa,
+                        measure,
+                        first_line_indent,
+                        custom_hang,
+                        self.hang_after,
+                        &self.par_shape,
+                        &hz_config,
+                        &mut self.line_descriptors,
+                    );
+                }
+            }
+
+            if !self.line_descriptors.is_empty() && self.line_descriptors.len() <= PAR_CACHE_MAX_LINES {
+                let entry = &mut self.par_cache[cache_slot];
+                entry.hash = par_hash;
+                entry.line_count = self.line_descriptors.len() as u16;
+                entry.descriptors[..self.line_descriptors.len()].copy_from_slice(&self.line_descriptors);
+            }
         }
 
-        if line_start < num_words as u32 {
-            let (trimmed_end, trimmed_w, trimmed_sp) =
-                self.trim_line_trailing_space(line_start, num_words as u32, line_w, num_spaces);
-            if trimmed_end > line_start {
-                self.line_descriptors.push(LineDescriptor {
-                    start_word: line_start as u16,
-                    word_count: (trimmed_end - line_start) as u16,
-                    line_w: trimmed_w,
-                    num_spaces: trimmed_sp as u16,
-                    line_indent,
-                    justify: false,
-                });
-            }
-        }
+        self.pass_stats[pass.min(3)] += 1;
 
-        // Reset one-shot hanging indent
+        // Reset one-shot hanging indent, parshape, and looseness (TeX by Topic Ch 18.2.2 & 19.1.4)
         self.hang_indent = 0.0;
         self.hang_after = 1;
+        self.par_shape.clear();
+        self.looseness = 0;
 
+        let t_fl = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
         for d in 0..self.line_descriptors.len() {
             let desc = self.line_descriptors[d];
-            self.flush_line_descriptor(&desc);
+            self.flush_line_descriptor(&desc, &math_collector);
+        }
+        if let Some(t) = t_fl {
+            self.time_flush_ns += t.elapsed().as_nanos() as u64;
         }
 
         let line_count = self.line_descriptors.len();
@@ -1437,55 +1920,33 @@ impl<'a> Layouter<'a> {
             self.last_line_indent = 0.0;
             self.prev_graf = 0;
         }
+
+        self.y -= self.par_skip;
     }
 
-    fn calculate_line_indent(
-        &self,
-        line_index: usize,
-        first_line_indent: f32,
-        custom_hang: f32,
-    ) -> f32 {
-        let mut indent = if line_index == 0 {
-            first_line_indent
-        } else {
-            custom_hang
-        };
-
-        if self.hang_indent != 0.0 {
-            let line_num = (line_index + 1) as i32;
-            if self.hang_after >= 0 {
-                if line_num > self.hang_after {
-                    indent += self.hang_indent;
-                }
-            } else if line_num <= self.hang_after.abs() {
-                indent += self.hang_indent;
+    #[inline]
+    pub(crate) fn push_batched_slices<'b>(
+        pool: &mut Vec<&'b str>,
+        slices: &[&'b str],
+    ) -> u32 {
+        if slices.is_empty() {
+            return 0;
+        }
+        let count_before = pool.len();
+        pool.reserve(slices.len());
+        for &s in slices {
+            if !s.is_empty() {
+                pool.push(s);
             }
         }
-        indent
+        (pool.len() - count_before) as u32
     }
 
-    fn trim_line_trailing_space(
-        &self,
-        start: u32,
-        end: u32,
-        mut line_w: f32,
-        mut num_spaces: u32,
-    ) -> (u32, f32, u32) {
-        let mut trimmed_end = end;
-        while trimmed_end > start {
-            let prev = (trimmed_end - 1) as usize;
-            if self.words_soa.kinds[prev] == WordKind::Space {
-                line_w -= self.words_soa.widths[prev];
-                num_spaces = num_spaces.saturating_sub(1);
-                trimmed_end -= 1;
-            } else {
-                break;
-            }
-        }
-        (trimmed_end, line_w.max(0.0), num_spaces)
-    }
-
-    fn flush_line_descriptor(&mut self, desc: &LineDescriptor) {
+    fn flush_line_descriptor(
+        &mut self,
+        desc: &LineDescriptor,
+        math_collector: &[&crate::math::MathNode<'a>],
+    ) {
         if desc.word_count == 0 {
             return;
         }
@@ -1498,9 +1959,25 @@ impl<'a> Layouter<'a> {
         let measure = (self.right - self.right_skip) - (self.left + self.left_skip);
         let available = measure - desc.line_indent;
 
-        let word_spacing = if desc.justify && desc.num_spaces > 0 && desc.line_w < available {
-            let slack = available - desc.line_w;
+        let is_last_line = (desc.start_word + desc.word_count) as usize >= self.words_soa.len();
+        let target_available = if is_last_line && self.par_fill_width > 0.0 {
+            (available - self.par_fill_width).max(0.0)
+        } else {
+            available
+        };
+
+        let word_spacing = if desc.justify() && desc.num_spaces > 0 && desc.line_w < target_available {
+            let slack = target_available - desc.line_w;
             let extra = slack / (desc.num_spaces as f32);
+            if extra <= 18.0 {
+                extra
+            } else {
+                0.0
+            }
+        } else if is_last_line && self.last_line_fit > 0 && desc.num_spaces > 0 && desc.line_w < target_available {
+            let slack = target_available - desc.line_w;
+            let max_fit = (self.last_line_fit as f32 / 1000.0).clamp(0.0, 1.0);
+            let extra = (slack / (desc.num_spaces as f32)) * max_fit * 0.25;
             if extra <= 18.0 {
                 extra
             } else {
@@ -1513,81 +1990,130 @@ impl<'a> Layouter<'a> {
         let mut x = self.left + self.left_skip + desc.line_indent;
         let start = desc.start_word as usize;
         let end = (desc.start_word + desc.word_count) as usize;
+        let count = end.saturating_sub(start);
+        if self.current_page.text_pool.len() + count > self.current_page.text_pool.capacity() {
+            self.current_page.text_pool.reserve(count + 64);
+        }
+        if self.current_page.ops.len() + 2 > self.current_page.ops.capacity() {
+            self.current_page.ops.reserve(16);
+        }
 
         let mut i = start;
+        // Skip leading whitespace / discarded math glue at start of line (TeX discardable item rule)
+        while i < end && self.words_soa.attrs[i].is_space() {
+            i += 1;
+        }
+
         while i < end {
-            let k = self.words_soa.kinds[i];
+            let attr = self.words_soa.attrs[i];
             let w = self.words_soa.widths[i];
-            if k == WordKind::Space {
-                x += w + word_spacing;
+            if attr.is_space() {
+                let extra = if attr.kind() == WordKind::Space { word_spacing } else { 0.0 };
+                x += w + extra;
                 i += 1;
                 continue;
             }
-            if k == WordKind::Math {
-                if let Some(node) = self.words_soa.get_math(i) {
-                    let m_box = crate::math::render_math(
-                        node,
-                        self.base_font_size,
-                        self.font_family,
-                        crate::math::MathStyle::Text,
-                        x,
-                        self.y,
-                        &mut self.current_page.ops,
-                        &mut self.current_page.text_pool,
-                    );
-                    x += m_box.w;
+            if attr.is_math() {
+                if let Some(m_idx) = self.words_soa.get_math_idx(i) {
+                    if let Some(&node) = math_collector.get(m_idx) {
+                        let m_box = crate::math::render_math(
+                            node,
+                            self.base_font_size,
+                            self.font_family,
+                            crate::math::MathStyle::Text,
+                            x,
+                            self.y,
+                            &mut self.current_page.ops,
+                            &mut self.current_page.text_pool,
+                        );
+                        x += m_box.w;
+                    }
                 }
                 i += 1;
                 continue;
             }
-            let face = self.words_soa.faces[i];
+            let face = attr.face();
             let x0 = x;
-            let pool_start = self.current_page.text_pool.len() as u32;
+            let run_start = i;
+            let is_cm = self.font_family == metrics::FontFamily::ComputerModern;
+
+            let mut run_w = 0.0f32;
+            let mut run_extra = 0.0f32;
+
             while i < end {
-                let cur_k = self.words_soa.kinds[i];
-                let cur_face = self.words_soa.faces[i];
-                if cur_k != WordKind::Word && cur_k != WordKind::Space {
+                let cur_attr = self.words_soa.attrs[i];
+                let cur_face = cur_attr.face();
+                if !cur_attr.is_word_like() && !cur_attr.is_space() {
                     break;
                 }
-                if cur_k == WordKind::Word && cur_face != face {
+                if cur_attr.is_word_like() && cur_face != face {
                     break;
                 }
-                if cur_k == WordKind::Space
-                    && self.font_family == metrics::FontFamily::ComputerModern
-                    && (face == Face::Italic || face == Face::BoldItalic)
-                {
+                if cur_attr.is_space() && is_cm {
                     break;
                 }
-                self.current_page.text_pool.push(self.words_soa.texts[i]);
-                let extra_sp = if cur_k == WordKind::Space {
-                    word_spacing
-                } else {
-                    0.0
-                };
-                x += self.words_soa.widths[i] + extra_sp;
+                run_w += self.words_soa.widths[i];
+                if cur_attr.kind() == WordKind::Space {
+                    run_extra += word_spacing;
+                }
                 i += 1;
             }
-            let pool_len = (self.current_page.text_pool.len() as u32) - pool_start;
+
+            let run_end = i;
+            if run_start == run_end {
+                i += 1;
+                continue;
+            }
+            let pool_start = self.current_page.text_pool.len() as u32;
+            let part_count = Self::push_batched_slices(
+                &mut self.current_page.text_pool,
+                &self.words_soa.texts[run_start..run_end],
+            );
+
+            if part_count > 0 {
+                self.push_op(Paint::GlyphRun {
+                    x: x0,
+                    y: self.y,
+                    face,
+                    size: self.base_font_size,
+                    part_start: pool_start,
+                    part_count,
+                    word_spacing,
+                });
+            }
+
+            x += run_w + run_extra;
+        }
+
+        if end > start
+            && self.words_soa.attrs[end - 1].kind() == WordKind::Hyphen
+            && !self.words_soa.texts[end - 1].ends_with('-')
+        {
+            let hyph_face = self.words_soa.attrs[end - 1].face();
+            let pool_start = self.current_page.text_pool.len() as u32;
+            self.current_page.text_pool.push("-");
+            let hyph_x = x;
             self.push_op(Paint::GlyphRun {
-                x: x0,
+                x: hyph_x,
                 y: self.y,
-                face,
+                face: hyph_face,
                 size: self.base_font_size,
                 part_start: pool_start,
-                part_count: pool_len,
-                word_spacing,
+                part_count: 1,
+                word_spacing: 0.0,
             });
         }
+
         self.y -= self.base_leading;
     }
 
-    fn paint_inlines_at(&mut self, inlines: &'a [Inline<'a>], x: f32, y: f32) {
+    fn paint_inlines_at<'doc>(&mut self, inlines: &'doc [Inline<'a>], x: f32, y: f32) {
         self.paint_inlines_at_size(inlines, Face::Roman, self.base_font_size, x, y);
     }
 
-    pub(crate) fn paint_inlines_at_size(
+    pub(crate) fn paint_inlines_at_size<'doc>(
         &mut self,
-        inlines: &'a [Inline<'a>],
+        inlines: &'doc [Inline<'a>],
         default_face: Face,
         font_size: f32,
         mut x: f32,
@@ -1596,11 +2122,12 @@ impl<'a> Layouter<'a> {
         if self.is_dry_run {
             return;
         }
-        self.scratch_runs.clear();
-        flatten_into(inlines, default_face, &mut self.scratch_runs);
+        let mut scratch_runs = Vec::with_capacity(32);
+        flatten_into(inlines, default_face, &mut scratch_runs);
+        let mut scratch_slices = Vec::with_capacity(32);
         let scale = font_size * 0.001;
-        for r_idx in 0..self.scratch_runs.len() {
-            let run = self.scratch_runs[r_idx];
+        for run in &scratch_runs {
+            let run = *run;
             if let Some(m) = run.math {
                 let m_box = crate::math::render_math(
                     m,
@@ -1621,21 +2148,30 @@ impl<'a> Layouter<'a> {
             let s = run.text;
             let bytes = s.as_bytes();
             let mut i = 0;
-            let pool_start = self.current_page.text_pool.len() as u32;
             let x0 = x;
             let space_units = metrics::resolve_space_units(self.font_family, run.face);
             let space_w = space_units as f32 * scale;
             let table = metrics::resolve_width_table(self.font_family, run.face);
 
+            let is_cm = self.font_family == metrics::FontFamily::ComputerModern;
+            scratch_slices.clear();
             while i < bytes.len() {
                 let b = bytes[i];
                 if is_tex_space_byte(b) {
-                    self.current_page.text_pool.push(" ");
-                    x += space_w;
+                    let space_start = i;
                     i += 1;
                     while i < bytes.len() && is_tex_space_byte(bytes[i]) {
                         i += 1;
                     }
+                    if !is_cm {
+                        let space_slice = if b == b' ' && i == space_start + 1 {
+                            &s[space_start..space_start + 1]
+                        } else {
+                            " "
+                        };
+                        scratch_slices.push(space_slice);
+                    }
+                    x += space_w;
                 } else {
                     let start = i;
                     i += 1;
@@ -1643,21 +2179,41 @@ impl<'a> Layouter<'a> {
                         i += 1;
                     }
                     let word = &s[start..i];
-                    self.current_page.text_pool.push(word);
+                    if is_cm {
+                        let pool_idx = self.current_page.text_pool.len() as u32;
+                        self.current_page.text_pool.push(word);
+                        self.push_op(Paint::GlyphRun {
+                            x,
+                            y,
+                            face: run.face,
+                            size: font_size,
+                            part_start: pool_idx,
+                            part_count: 1,
+                            word_spacing: 0.0,
+                        });
+                    } else {
+                        scratch_slices.push(word);
+                    }
                     x += metrics::string_units_table(word, table) as f32 * scale;
                 }
             }
-            let pool_len = (self.current_page.text_pool.len() as u32) - pool_start;
-            if pool_len > 0 {
-                self.push_op(Paint::GlyphRun {
-                    x: x0,
-                    y,
-                    face: run.face,
-                    size: font_size,
-                    part_start: pool_start,
-                    part_count: pool_len,
-                    word_spacing: 0.0,
-                });
+            if !is_cm && !scratch_slices.is_empty() {
+                let pool_start = self.current_page.text_pool.len() as u32;
+                let pool_len = Self::push_batched_slices(
+                    &mut self.current_page.text_pool,
+                    &scratch_slices,
+                );
+                if pool_len > 0 {
+                    self.push_op(Paint::GlyphRun {
+                        x: x0,
+                        y,
+                        face: run.face,
+                        size: font_size,
+                        part_start: pool_start,
+                        part_count: pool_len,
+                        word_spacing: 0.0,
+                    });
+                }
             }
         }
     }
@@ -1668,7 +2224,8 @@ impl<'a> Layouter<'a> {
         let mut i = start;
 
         while i < end {
-            let k = self.cell_words_soa.kinds[i];
+            let attr = self.cell_words_soa.attrs[i];
+            let k = attr.kind();
             let w = self.cell_words_soa.widths[i];
 
             if k == WordKind::Break {
@@ -1684,14 +2241,14 @@ impl<'a> Layouter<'a> {
                 continue;
             }
 
-            if line_start < i && line_w + w > inner_w && k != WordKind::Space {
+            if line_start < i && line_w + w > inner_w && !attr.is_space() {
                 let (trimmed_end, trimmed_w) = self.trim_cell_line(line_start, i, line_w);
                 self.cell_lines.push(CellLineRange {
                     start_word: line_start as u16,
                     word_count: (trimmed_end - line_start) as u16,
                     line_w: trimmed_w,
                 });
-                if k == WordKind::Space {
+                if attr.is_space() {
                     i += 1;
                 }
                 line_start = i;
@@ -1699,7 +2256,7 @@ impl<'a> Layouter<'a> {
                 continue;
             }
 
-            if line_start == i && k == WordKind::Space {
+            if line_start == i && attr.is_space() {
                 i += 1;
                 line_start = i;
                 continue;
@@ -1721,18 +2278,34 @@ impl<'a> Layouter<'a> {
         }
     }
 
-    fn trim_cell_line(&self, start: usize, mut end: usize, mut line_w: f32) -> (usize, f32) {
-        while end > start && self.cell_words_soa.kinds[end - 1] == WordKind::Space {
+    pub(crate) fn trim_cell_line(&self, start: usize, mut end: usize, mut line_w: f32) -> (usize, f32) {
+        while end > start && self.cell_words_soa.attrs[end - 1].is_space() {
             end -= 1;
             line_w -= self.cell_words_soa.widths[end];
         }
         (end, line_w.max(0.0))
     }
 
-    pub(crate) fn paint_cell_line(&mut self, start: usize, end: usize, x: f32, y: f32) {
-        self.paint_cell_line_at(start, end, x, y, Face::Roman, self.base_font_size);
+    pub(crate) fn paint_cell_line(
+        &mut self,
+        start: usize,
+        end: usize,
+        x: f32,
+        y: f32,
+        math_collector: &[&crate::math::MathNode<'a>],
+    ) {
+        self.paint_cell_line_at(
+            start,
+            end,
+            x,
+            y,
+            Face::Roman,
+            self.base_font_size,
+            math_collector,
+        );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paint_cell_line_at(
         &mut self,
         start: usize,
@@ -1741,71 +2314,87 @@ impl<'a> Layouter<'a> {
         y: f32,
         _default_face: Face,
         font_size: f32,
+        math_collector: &[&crate::math::MathNode<'a>],
     ) {
         if self.is_dry_run {
             return;
         }
         let mut i = start;
+        while i < end && self.cell_words_soa.attrs[i].is_space() {
+            i += 1;
+        }
+
         while i < end {
-            let k = self.cell_words_soa.kinds[i];
+            let attr = self.cell_words_soa.attrs[i];
             let w = self.cell_words_soa.widths[i];
-            if k == WordKind::Space {
+            if attr.is_space() {
                 x += w;
                 i += 1;
                 continue;
             }
-            if k == WordKind::Math {
-                if let Some(node) = self.cell_words_soa.get_math(i) {
-                    let m_box = crate::math::render_math(
-                        node,
-                        font_size,
-                        self.font_family,
-                        crate::math::MathStyle::Text,
-                        x,
-                        y,
-                        &mut self.current_page.ops,
-                        &mut self.current_page.text_pool,
-                    );
-                    x += m_box.w;
+            if attr.is_math() {
+                if let Some(m_idx) = self.cell_words_soa.get_math_idx(i) {
+                    if let Some(&node) = math_collector.get(m_idx) {
+                        let m_box = crate::math::render_math(
+                            node,
+                            font_size,
+                            self.font_family,
+                            crate::math::MathStyle::Text,
+                            x,
+                            y,
+                            &mut self.current_page.ops,
+                            &mut self.current_page.text_pool,
+                        );
+                        x += m_box.w;
+                    }
                 }
                 i += 1;
                 continue;
             }
-            let face = self.cell_words_soa.faces[i];
+            let face = attr.face();
             let x0 = x;
-            let pool_start = self.current_page.text_pool.len() as u32;
+            let run_start = i;
+            let is_cm = self.font_family == metrics::FontFamily::ComputerModern;
+
             while i < end {
-                let cur_k = self.cell_words_soa.kinds[i];
-                let cur_face = self.cell_words_soa.faces[i];
-                if cur_k != WordKind::Word && cur_k != WordKind::Space {
+                let cur_attr = self.cell_words_soa.attrs[i];
+                let cur_face = cur_attr.face();
+                if !cur_attr.is_word_like() && !cur_attr.is_space() {
                     break;
                 }
-                if cur_k == WordKind::Word && cur_face != face {
+                if cur_attr.is_word_like() && cur_face != face {
                     break;
                 }
-                if cur_k == WordKind::Space
-                    && self.font_family == metrics::FontFamily::ComputerModern
-                    && (face == Face::Italic || face == Face::BoldItalic)
-                {
+                if cur_attr.is_space() && is_cm {
                     break;
                 }
-                self.current_page
-                    .text_pool
-                    .push(self.cell_words_soa.texts[i]);
-                x += self.cell_words_soa.widths[i];
                 i += 1;
             }
-            let pool_len = (self.current_page.text_pool.len() as u32) - pool_start;
-            if pool_len > 0 {
+
+            let run_end = i;
+            if run_start == run_end {
+                i += 1;
+                continue;
+            }
+            let pool_start = self.current_page.text_pool.len() as u32;
+            let part_count = Self::push_batched_slices(
+                &mut self.current_page.text_pool,
+                &self.cell_words_soa.texts[run_start..run_end],
+            );
+            if part_count > 0 {
                 self.push_op(Paint::GlyphRun {
                     x: x0,
                     y,
                     face,
                     size: font_size,
                     part_start: pool_start,
-                    part_count: pool_len,
+                    part_count,
                     word_spacing: 0.0,
                 });
+            }
+
+            for idx in run_start..run_end {
+                x += self.cell_words_soa.widths[idx];
             }
         }
     }
@@ -1946,26 +2535,148 @@ pub(crate) fn equation_number_width(
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum WordKind {
-    Word,
-    Space,
-    Break,
-    Math,
+    Word = 0,
+    Space = 1,
+    Break = 2,
+    Math = 3,
+    MathBin = 4,
+    MathRel = 5,
+    MathSpace = 6,
+    Hyphen = 7,
+}
+
+impl WordKind {
+    #[inline(always)]
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => WordKind::Word,
+            1 => WordKind::Space,
+            2 => WordKind::Break,
+            3 => WordKind::Math,
+            4 => WordKind::MathBin,
+            5 => WordKind::MathRel,
+            6 => WordKind::MathSpace,
+            7 => WordKind::Hyphen,
+            _ => WordKind::Word,
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_word_like(self) -> bool {
+        matches!(self, WordKind::Word | WordKind::Hyphen)
+    }
+
+    #[inline(always)]
+    pub fn is_hyphen(self) -> bool {
+        self == WordKind::Hyphen
+    }
+
+    #[inline(always)]
+    pub fn is_math(self) -> bool {
+        matches!(self, WordKind::Math | WordKind::MathBin | WordKind::MathRel)
+    }
+
+    #[inline(always)]
+    pub fn is_space(self) -> bool {
+        matches!(self, WordKind::Space | WordKind::MathSpace)
+    }
+
+    #[inline(always)]
+    pub fn is_breakable_math(self) -> bool {
+        matches!(self, WordKind::MathBin | WordKind::MathRel)
+    }
+
+    #[inline(always)]
+    pub fn math_penalty(self) -> Option<i32> {
+        match self {
+            WordKind::MathBin => Some(crate::math::InlineMathPenaltyInserter::BIN_PENALTY),
+            WordKind::MathRel => Some(crate::math::InlineMathPenaltyInserter::REL_PENALTY),
+            _ => None,
+        }
+    }
+}
+
+/// Compact 1-byte bit-packed word attribute storing both `WordKind` (low 3 bits)
+/// and `Face` (high 5 bits).
+/// Exactly 64 word attributes fit into a single 64-byte L1 CPU cache line with
+/// 100% packing density and zero line splits.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[repr(transparent)]
+pub struct PackedWordAttr(pub u8);
+
+const _: () = assert!(core::mem::size_of::<PackedWordAttr>() == 1);
+
+impl PackedWordAttr {
+    #[inline(always)]
+    pub const fn new(kind: WordKind, face: Face) -> Self {
+        Self((kind as u8) | ((face as u8) << 3))
+    }
+
+    #[inline(always)]
+    pub fn kind(self) -> WordKind {
+        WordKind::from_u8(self.0 & 0x07)
+    }
+
+    #[inline(always)]
+    pub fn face(self) -> Face {
+        Face::from_u8(self.0 >> 3)
+    }
+
+    #[inline(always)]
+    pub fn is_word_like(self) -> bool {
+        let k = self.0 & 0x07;
+        k == 0 || k == 7
+    }
+
+    #[inline(always)]
+    pub fn is_hyphen(self) -> bool {
+        (self.0 & 0x07) == 7
+    }
+
+    #[inline(always)]
+    pub fn is_space(self) -> bool {
+        let k = self.0 & 0x07;
+        k == 1 || k == 6
+    }
+
+    #[inline(always)]
+    pub fn is_math(self) -> bool {
+        let k = self.0 & 0x07;
+        (3..=5).contains(&k)
+    }
+
+    #[inline(always)]
+    pub fn is_breakable_math(self) -> bool {
+        let k = self.0 & 0x07;
+        k == 4 || k == 5
+    }
+
+    #[inline(always)]
+    pub fn math_penalty(self) -> Option<i32> {
+        match self.0 & 0x07 {
+            4 => Some(crate::math::InlineMathPenaltyInserter::BIN_PENALTY),
+            5 => Some(crate::math::InlineMathPenaltyInserter::REL_PENALTY),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct SparseMathNode<'a> {
+pub struct SparseMathIdx {
     pub word_idx: u32,
-    pub node: &'a crate::math::MathNode<'a>,
+    pub math_idx: u32,
 }
 
 #[derive(Default)]
 pub struct ParagraphSoA<'a> {
     pub widths: Vec<f32>,
-    pub kinds: Vec<WordKind>,
+    pub attrs: Vec<PackedWordAttr>,
     pub texts: Vec<&'a str>,
-    pub faces: Vec<Face>,
-    pub math_nodes: Vec<SparseMathNode<'a>>,
+    pub math_indices: Vec<SparseMathIdx>,
 }
+
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(core::mem::size_of::<ParagraphSoA>() == 96);
 
 impl<'a> ParagraphSoA<'a> {
     pub fn new() -> Self {
@@ -1975,46 +2686,72 @@ impl<'a> ParagraphSoA<'a> {
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             widths: Vec::with_capacity(cap),
-            kinds: Vec::with_capacity(cap),
+            attrs: Vec::with_capacity(cap),
             texts: Vec::with_capacity(cap),
-            faces: Vec::with_capacity(cap),
-            math_nodes: Vec::with_capacity(4),
+            math_indices: Vec::with_capacity(4),
         }
     }
 
     #[inline]
     pub fn clear(&mut self) {
         self.widths.clear();
-        self.kinds.clear();
+        self.attrs.clear();
         self.texts.clear();
-        self.faces.clear();
-        self.math_nodes.clear();
+        self.math_indices.clear();
+    }
+
+    #[inline]
+    pub fn reserve(&mut self, additional: usize) {
+        self.widths.reserve(additional);
+        self.attrs.reserve(additional);
+        self.texts.reserve(additional);
     }
 
     #[inline]
     pub fn push(&mut self, text: &'a str, face: Face, width: f32, kind: WordKind) {
         self.widths.push(width);
-        self.kinds.push(kind);
+        self.attrs.push(PackedWordAttr::new(kind, face));
         self.texts.push(text);
-        self.faces.push(face);
     }
 
     #[inline]
-    pub fn push_math(&mut self, width: f32, node: &'a crate::math::MathNode<'a>) {
+    pub fn push_math(&mut self, width: f32, math_idx: u32) {
+        self.push_math_atom(width, math_idx, WordKind::Math);
+    }
+
+    #[inline]
+    pub fn push_math_atom(&mut self, width: f32, math_idx: u32, kind: WordKind) {
         let idx = self.widths.len() as u32;
         self.widths.push(width);
-        self.kinds.push(WordKind::Math);
+        self.attrs.push(PackedWordAttr::new(kind, Face::Roman));
         self.texts.push("");
-        self.faces.push(Face::Roman);
-        self.math_nodes.push(SparseMathNode { word_idx: idx, node });
+        self.math_indices.push(SparseMathIdx {
+            word_idx: idx,
+            math_idx,
+        });
+    }
+
+    #[inline(always)]
+    pub fn kind(&self, idx: usize) -> WordKind {
+        self.attrs[idx].kind()
+    }
+
+    #[inline(always)]
+    pub fn face(&self, idx: usize) -> Face {
+        self.attrs[idx].face()
     }
 
     #[inline]
-    pub fn get_math(&self, word_idx: usize) -> Option<&'a crate::math::MathNode<'a>> {
-        self.math_nodes
+    pub fn kinds(&self) -> impl Iterator<Item = WordKind> + '_ {
+        self.attrs.iter().map(|a| a.kind())
+    }
+
+    #[inline]
+    pub fn get_math_idx(&self, word_idx: usize) -> Option<usize> {
+        self.math_indices
             .binary_search_by_key(&(word_idx as u32), |m| m.word_idx)
             .ok()
-            .map(|idx| self.math_nodes[idx].node)
+            .map(|idx| self.math_indices[idx].math_idx as usize)
     }
 
     #[inline]
@@ -2028,17 +2765,10 @@ impl<'a> ParagraphSoA<'a> {
     }
 }
 
-/// Compact 16-byte formatted line descriptor aligned to power-of-two.
+/// Bit-packed 16-byte formatted line descriptor from hz line breaking.
 /// Exactly 4 descriptors fit into a single 64-byte L1 CPU cache line (64 / 16 = 4).
-#[derive(Clone, Copy, Debug)]
-pub struct LineDescriptor {
-    pub start_word: u16,
-    pub word_count: u16,
-    pub num_spaces: u16,
-    pub justify: bool,
-    pub line_w: f32,
-    pub line_indent: f32,
-}
+pub use crate::layout::layout_hz::FlatAsciiWidthTable;
+pub use crate::layout::layout_hz::HzLineDescriptor as LineDescriptor;
 
 #[derive(Clone, Copy, Debug)]
 pub struct CellLineRange {
@@ -2053,7 +2783,7 @@ pub struct CellSpan {
     pub count: u16,
 }
 
-fn inlines_have_break(inls: &[Inline<'_>]) -> bool {
+pub(crate) fn inlines_have_break(inls: &[Inline<'_>]) -> bool {
     inls.iter().any(|inl| match inl {
         Inline::Break => true,
         Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x) => {
@@ -2064,14 +2794,14 @@ fn inlines_have_break(inls: &[Inline<'_>]) -> bool {
 }
 
 #[derive(Clone, Copy)]
-struct FlatRun<'a> {
+struct FlatRun<'a, 'doc> {
     text: &'a str,
     face: Face,
     is_break: bool,
-    math: Option<&'a crate::math::MathNode<'a>>,
+    math: Option<&'doc crate::math::MathNode<'a>>,
 }
 
-fn flatten_into<'a>(inls: &'a [Inline<'a>], face: Face, out: &mut Vec<FlatRun<'a>>) {
+fn flatten_into<'a, 'doc>(inls: &'doc [Inline<'a>], face: Face, out: &mut Vec<FlatRun<'a, 'doc>>) {
     for i in inls {
         match i {
             Inline::Text(s) => {
@@ -2104,73 +2834,256 @@ fn flatten_into<'a>(inls: &'a [Inline<'a>], face: Face, out: &mut Vec<FlatRun<'a
             | Inline::Indent
             | Inline::HangIndent(_)
             | Inline::HangAfter(_)
+            | Inline::ParShape(_)
+            | Inline::PreTolerance(_)
+            | Inline::Tolerance(_)
+            | Inline::EmergencyStretch(_)
+            | Inline::Looseness(_)
+            | Inline::LeftSkip(_)
+            | Inline::RightSkip(_)
+            | Inline::ParFillSkip { .. }
+            | Inline::PrevGraf(_)
+            | Inline::LastLineFit(_)
+            | Inline::Sloppy
+            | Inline::Fussy
             | Inline::HSpace(_) => {}
         }
     }
 }
 
 #[allow(dead_code)]
-fn explode_inlines_into<'a>(
-    inls: &'a [Inline<'a>],
+fn explode_inlines_into<'a, 'doc>(
+    inls: &'doc [Inline<'a>],
     face: Face,
     size: f32,
     soa: &mut ParagraphSoA<'a>,
+    math_collector: &mut Vec<&'doc crate::math::MathNode<'a>>,
 ) -> f32 {
-    explode_inlines_into_family(inls, face, size, soa, metrics::FontFamily::Times)
+    explode_inlines_into_family(inls, face, size, soa, metrics::FontFamily::Times, math_collector)
 }
 
-pub(crate) fn explode_inlines_into_family<'a>(
-    inls: &'a [Inline<'a>],
+pub(crate) fn explode_inlines_into_family<'a, 'doc>(
+    inls: &'doc [Inline<'a>],
     face: Face,
     size: f32,
     soa: &mut ParagraphSoA<'a>,
     family: metrics::FontFamily,
+    math_collector: &mut Vec<&'doc crate::math::MathNode<'a>>,
+) -> f32 {
+    let mut space_factor = 1000u16;
+    explode_inlines_into_family_sf(
+        inls,
+        face,
+        size,
+        soa,
+        family,
+        math_collector,
+        &mut space_factor,
+        false,
+    )
+}
+
+pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
+    inls: &'doc [Inline<'a>],
+    face: Face,
+    size: f32,
+    soa: &mut ParagraphSoA<'a>,
+    family: metrics::FontFamily,
+    math_collector: &mut Vec<&'doc crate::math::MathNode<'a>>,
+    space_factor: &mut u16,
+    french_spacing: bool,
 ) -> f32 {
     let scale = size * 0.001;
     let space_units = metrics::resolve_space_units(family, face);
+    let extra_space_units = metrics::resolve_extra_space_units(family, face);
     let space_w = space_units as f32 * scale;
+    let extra_space_w = extra_space_units as f32 * scale;
     let table = metrics::resolve_width_table(family, face);
+    let flat_table = FlatAsciiWidthTable::from_table(table);
     let mut total_w = 0.0;
 
     for inl in inls {
         match inl {
             Inline::Text(s) => {
                 let bytes = s.as_bytes();
+                let len = bytes.len();
                 let mut i = 0;
-                while i < bytes.len() {
+                while i < len {
                     let b = bytes[i];
                     if is_tex_space_byte(b) {
                         let text = if b == b' ' { &s[i..i + 1] } else { " " };
-                        soa.push(text, face, space_w, WordKind::Space);
-                        total_w += space_w;
+                        let current_space_w = if *space_factor >= 2000 {
+                            space_w + extra_space_w
+                        } else {
+                            space_w
+                        };
+                        soa.push(text, face, current_space_w, WordKind::Space);
+                        total_w += current_space_w;
                         i += 1;
-                        while i < bytes.len() && is_tex_space_byte(bytes[i]) {
+                        while i < len && is_tex_space_byte(bytes[i]) {
                             i += 1;
                         }
                     } else {
                         let start = i;
-                        i += 1;
-                        while i < bytes.len() && !is_tex_space_byte(bytes[i]) {
+                        let mut w_sf = *space_factor;
+                        let mut word_units = 0u32;
+                        let mut is_simple_ascii = true;
+
+                        while i < len {
+                            if is_simple_ascii && i + 16 <= len && crate::layout::layout_hz::is_all_ascii_lowercase_16(&bytes[i..i + 16]) {
+                                let chunk = &bytes[i..i + 16];
+                                word_units += flat_table.get_advance_units(chunk[0]) as u32
+                                    + flat_table.get_advance_units(chunk[1]) as u32
+                                    + flat_table.get_advance_units(chunk[2]) as u32
+                                    + flat_table.get_advance_units(chunk[3]) as u32
+                                    + flat_table.get_advance_units(chunk[4]) as u32
+                                    + flat_table.get_advance_units(chunk[5]) as u32
+                                    + flat_table.get_advance_units(chunk[6]) as u32
+                                    + flat_table.get_advance_units(chunk[7]) as u32
+                                    + flat_table.get_advance_units(chunk[8]) as u32
+                                    + flat_table.get_advance_units(chunk[9]) as u32
+                                    + flat_table.get_advance_units(chunk[10]) as u32
+                                    + flat_table.get_advance_units(chunk[11]) as u32
+                                    + flat_table.get_advance_units(chunk[12]) as u32
+                                    + flat_table.get_advance_units(chunk[13]) as u32
+                                    + flat_table.get_advance_units(chunk[14]) as u32
+                                    + flat_table.get_advance_units(chunk[15]) as u32;
+                                w_sf = 1000;
+                                i += 16;
+                                continue;
+                            }
+                            if is_simple_ascii && i + 8 <= len && crate::layout::layout_hz::is_all_ascii_lowercase_8(&bytes[i..i + 8]) {
+                                let chunk = &bytes[i..i + 8];
+                                word_units += flat_table.get_advance_units(chunk[0]) as u32
+                                    + flat_table.get_advance_units(chunk[1]) as u32
+                                    + flat_table.get_advance_units(chunk[2]) as u32
+                                    + flat_table.get_advance_units(chunk[3]) as u32
+                                    + flat_table.get_advance_units(chunk[4]) as u32
+                                    + flat_table.get_advance_units(chunk[5]) as u32
+                                    + flat_table.get_advance_units(chunk[6]) as u32
+                                    + flat_table.get_advance_units(chunk[7]) as u32;
+                                w_sf = 1000;
+                                i += 8;
+                                continue;
+                            }
+
+                            let cb = bytes[i];
+                            if is_tex_space_byte(cb) {
+                                break;
+                            }
+                            if is_simple_ascii {
+                                if cb < 128 && cb != b'-' {
+                                    word_units += flat_table.get_advance_units(cb) as u32;
+                                    if !french_spacing && (!cb.is_ascii_lowercase() || w_sf != 1000) {
+                                        w_sf = crate::layout::layout_hz::update_space_factor(w_sf, cb, false);
+                                    }
+                                } else {
+                                    is_simple_ascii = false;
+                                }
+                            }
                             i += 1;
                         }
+
                         let word = &s[start..i];
-                        let width = metrics::string_units_table(word, table) as f32 * scale;
-                        soa.push(word, face, width, WordKind::Word);
-                        total_w += width;
+                        if is_simple_ascii {
+                            if !french_spacing {
+                                *space_factor = w_sf;
+                            }
+                            let width = word_units as f32 * scale;
+                            soa.push(word, face, width, WordKind::Word);
+                            total_w += width;
+                        } else {
+                            let mut fb_sf = *space_factor;
+                            let mut has_hyphen = false;
+                            let mut has_soft_hyphen = false;
+                            let w_bytes = word.as_bytes();
+                            let w_len = w_bytes.len();
+                            for idx in 0..w_len {
+                                let cb = w_bytes[idx];
+                                if cb == b'-' {
+                                    has_hyphen = true;
+                                } else if cb == 0xC2 && idx + 1 < w_len && w_bytes[idx + 1] == 0xAD {
+                                    has_soft_hyphen = true;
+                                }
+                                if !french_spacing {
+                                    if !cb.is_ascii_lowercase() || fb_sf != 1000 {
+                                        fb_sf = crate::layout::layout_hz::update_space_factor(fb_sf, cb, false);
+                                    }
+                                }
+                            }
+                            if !french_spacing {
+                                *space_factor = fb_sf;
+                            }
+
+                            if !has_hyphen && !has_soft_hyphen {
+                                let width = metrics::string_units_table(word, table) as f32 * scale;
+                                soa.push(word, face, width, WordKind::Word);
+                                total_w += width;
+                            } else if word == "\u{00AD}" {
+                                if !soa.is_empty() {
+                                    let last_idx = soa.len() - 1;
+                                    if soa.attrs[last_idx].kind() == WordKind::Word {
+                                        soa.attrs[last_idx] = PackedWordAttr::new(WordKind::Hyphen, soa.attrs[last_idx].face());
+                                    }
+                                }
+                            } else if has_soft_hyphen {
+                                let mut last = 0;
+                                for (shy_pos, _) in word.match_indices('\u{00AD}') {
+                                    if shy_pos > last {
+                                        let piece = &word[last..shy_pos];
+                                        let p_w = metrics::string_units_table(piece, table) as f32 * scale;
+                                        soa.push(piece, face, p_w, WordKind::Hyphen);
+                                        total_w += p_w;
+                                    }
+                                    last = shy_pos + '\u{00AD}'.len_utf8();
+                                }
+                                if last < word.len() {
+                                    let piece = &word[last..];
+                                    let p_w = metrics::string_units_table(piece, table) as f32 * scale;
+                                    soa.push(piece, face, p_w, WordKind::Word);
+                                    total_w += p_w;
+                                }
+                            } else if has_hyphen && word.len() > 1 && !word.starts_with('-') && !word.ends_with('-') {
+                                let mut last = 0;
+                                for (hyphen_pos, _) in word.match_indices('-') {
+                                    let piece = &word[last..=hyphen_pos];
+                                    let p_w = metrics::string_units_table(piece, table) as f32 * scale;
+                                    soa.push(piece, face, p_w, WordKind::Hyphen);
+                                    total_w += p_w;
+                                    last = hyphen_pos + 1;
+                                }
+                                if last < word.len() {
+                                    let piece = &word[last..];
+                                    let p_w = metrics::string_units_table(piece, table) as f32 * scale;
+                                    soa.push(piece, face, p_w, WordKind::Word);
+                                    total_w += p_w;
+                                }
+                            } else {
+                                let width = metrics::string_units_table(word, table) as f32 * scale;
+                                let kind = if word.ends_with('-') || word.ends_with('\u{00AD}') || word.ends_with('\u{2010}') {
+                                    WordKind::Hyphen
+                                } else {
+                                    WordKind::Word
+                                };
+                                soa.push(word, face, width, kind);
+                                total_w += width;
+                            }
+                        }
                     }
                 }
             }
             Inline::Bold(x) => {
-                total_w += explode_inlines_into_family(x, face.with_bold(true), size, soa, family)
+                total_w += explode_inlines_into_family_sf(x, face.with_bold(true), size, soa, family, math_collector, space_factor, french_spacing)
             }
             Inline::Italic(x) => {
-                total_w += explode_inlines_into_family(x, face.with_italic(true), size, soa, family)
+                total_w += explode_inlines_into_family_sf(x, face.with_italic(true), size, soa, family, math_collector, space_factor, french_spacing)
             }
             Inline::Mono(x) => {
-                total_w += explode_inlines_into_family(x, face.with_mono(true), size, soa, family)
+                total_w += explode_inlines_into_family_sf(x, face.with_mono(true), size, soa, family, math_collector, space_factor, french_spacing)
             }
-            Inline::Group(x) => total_w += explode_inlines_into_family(x, face, size, soa, family),
+            Inline::Group(x) => total_w += explode_inlines_into_family_sf(x, face, size, soa, family, math_collector, space_factor, french_spacing),
             Inline::Break => {
+                *space_factor = 1000;
                 soa.push("", face, 0.0, WordKind::Break);
             }
             Inline::HSpace(dim) => {
@@ -2180,18 +3093,112 @@ pub(crate) fn explode_inlines_into_family<'a>(
                 }
             }
             Inline::Math(node) => {
-                let mb =
-                    crate::math::measure_math(node, size, family, crate::math::MathStyle::Text);
-                soa.push_math(mb.w, node);
-                total_w += mb.w;
+                *space_factor = 1000;
+                let has_breakable_atoms = if let crate::math::MathNode::Row(children) = &**node {
+                    if children.len() > 1 {
+                        let mut kinds = [crate::math::MathAtomKind::Ord; 64];
+                        let count = children.len().min(64);
+                        for (i, c) in children[..count].iter().enumerate() {
+                            kinds[i] = c.atom_kind_in_style(crate::math::MathStyle::Text);
+                        }
+                        crate::math::math_spacing::normalize_atom_kinds(&mut kinds[..count]);
+                        (0..count.saturating_sub(1)).any(|i| {
+                            (kinds[i] == crate::math::MathAtomKind::Bin || kinds[i] == crate::math::MathAtomKind::Rel)
+                                && kinds[i + 1] != crate::math::MathAtomKind::Rel
+                        })
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if has_breakable_atoms {
+                    if let crate::math::MathNode::Row(children) = &**node {
+                        let count = children.len();
+                        // Stack buffer for atom kinds to ensure zero allocations on hot path
+                        let mut stack_kinds = [crate::math::MathAtomKind::Ord; 64];
+                        let mut heap_kinds;
+                        let kinds: &mut [crate::math::MathAtomKind] = if count <= 64 {
+                            &mut stack_kinds[..count]
+                        } else {
+                            heap_kinds = vec![crate::math::MathAtomKind::Ord; count];
+                            &mut heap_kinds[..]
+                        };
+                        for (i, c) in children.iter().enumerate() {
+                            kinds[i] = c.atom_kind_in_style(crate::math::MathStyle::Text);
+                        }
+                        crate::math::math_spacing::normalize_atom_kinds(&mut kinds[..count]);
+
+                        for (i, child) in children.iter().enumerate() {
+                            let mb = crate::math::measure_math(child, size, family, crate::math::MathStyle::Text);
+                            let math_idx = math_collector.len() as u32;
+                            math_collector.push(child);
+
+                            let atom_kind = kinds[i];
+                            let is_not_last = i + 1 < count;
+                            let next_not_rel = is_not_last && kinds[i + 1] != crate::math::MathAtomKind::Rel;
+
+                            let word_kind = if atom_kind == crate::math::MathAtomKind::Bin && is_not_last && next_not_rel {
+                                WordKind::MathBin
+                            } else if atom_kind == crate::math::MathAtomKind::Rel && is_not_last && next_not_rel {
+                                WordKind::MathRel
+                            } else {
+                                WordKind::Math
+                            };
+
+                            soa.push_math_atom(mb.w, math_idx, word_kind);
+                            total_w += mb.w;
+
+                            if is_not_last {
+                                let space = if family == metrics::FontFamily::ComputerModern {
+                                    let params = crate::math::math_fonts::math_font_parameters(family);
+                                    let scale = size * 0.001;
+                                    let quad_sp = crate::math::math_box::ScaledPoints::from_pt(
+                                        (params.quad as f32) * scale,
+                                    );
+                                    crate::math::math_spacing::atom_spacing_sp(
+                                        atom_kind,
+                                        kinds[i + 1],
+                                        true,
+                                        quad_sp,
+                                    )
+                                    .to_pt()
+                                } else {
+                                    crate::math::math_spacing::atom_spacing(
+                                        atom_kind,
+                                        kinds[i + 1],
+                                        false,
+                                        true,
+                                    ) * size
+                                };
+                                if space > 0.0 {
+                                    soa.push("", Face::Roman, space, WordKind::MathSpace);
+                                    total_w += space;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let mb =
+                        crate::math::measure_math(node, size, family, crate::math::MathStyle::Text);
+                    let math_idx = math_collector.len() as u32;
+                    math_collector.push(node);
+                    soa.push_math(mb.w, math_idx);
+                    total_w += mb.w;
+                }
             }
-            Inline::NoIndent | Inline::Indent | Inline::HangIndent(_) | Inline::HangAfter(_) => {}
+            Inline::NoIndent | Inline::Indent | Inline::HangIndent(_) | Inline::HangAfter(_) | Inline::ParShape(_)
+            | Inline::PreTolerance(_) | Inline::Tolerance(_) | Inline::EmergencyStretch(_)
+            | Inline::Looseness(_) | Inline::LeftSkip(_) | Inline::RightSkip(_)
+            | Inline::ParFillSkip { .. } | Inline::PrevGraf(_) | Inline::LastLineFit(_)
+            | Inline::Sloppy | Inline::Fussy => {}
         }
     }
     total_w
 }
 
-#[inline]
+#[inline(always)]
 fn is_tex_space_byte(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n')
 }
@@ -2277,6 +3284,18 @@ fn measure_inlines_units_family(
             | Inline::Indent
             | Inline::HangIndent(_)
             | Inline::HangAfter(_)
+            | Inline::ParShape(_)
+            | Inline::PreTolerance(_)
+            | Inline::Tolerance(_)
+            | Inline::EmergencyStretch(_)
+            | Inline::Looseness(_)
+            | Inline::LeftSkip(_)
+            | Inline::RightSkip(_)
+            | Inline::ParFillSkip { .. }
+            | Inline::PrevGraf(_)
+            | Inline::LastLineFit(_)
+            | Inline::Sloppy
+            | Inline::Fussy
             | Inline::HSpace(_) => {}
         }
     }
@@ -2331,4 +3350,47 @@ pub(crate) fn count_digits(mut n: u32) -> u32 {
         n /= 10;
     }
     count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tex_parser::Inline;
+
+    #[test]
+    fn test_paragraph_content_hash_cache() {
+        let config = DocumentConfig::default();
+        let mut layouter = Layouter::new(&config);
+
+        let para1 = vec![
+            Inline::Text("The quick brown fox jumps over the lazy dog. "),
+            Inline::Text("This is a test of the paragraph content-hash cache in RushTeX. "),
+            Inline::Text("Repeated paragraphs should bypass Knuth-Plass dynamic programming entirely."),
+        ];
+
+        layouter.layout_para(&para1);
+        assert!(!layouter.line_descriptors.is_empty());
+        let desc1 = layouter.line_descriptors.clone();
+
+        // Second identical paragraph: hits content-hash cache
+        layouter.layout_para(&para1);
+        let desc2 = layouter.line_descriptors.clone();
+
+        // Must match 100% identically
+        assert_eq!(desc1.len(), desc2.len());
+        for (d1, d2) in desc1.iter().zip(desc2.iter()) {
+            assert_eq!(d1.start_word, d2.start_word);
+            assert_eq!(d1.word_count, d2.word_count);
+            assert_eq!(d1.line_w, d2.line_w);
+            assert_eq!(d1.num_spaces, d2.num_spaces);
+        }
+
+        // Third modified paragraph: produces different layout
+        let para2 = vec![
+            Inline::Text("A completely different short sentence."),
+        ];
+        layouter.layout_para(&para2);
+        let desc3 = layouter.line_descriptors.clone();
+        assert_ne!(desc1.len(), desc3.len());
+    }
 }

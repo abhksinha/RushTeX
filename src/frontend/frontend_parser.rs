@@ -7,24 +7,7 @@ pub fn parse(source_code: &str) -> Result<Document<'_>, ParseError> {
     let mut parser = Parser::new(source_code);
     let has_document_environment = parser.parse_preamble_if_present()?;
     let blocks = parser.parse_blocks()?;
-    if has_document_environment {
-        if !parser.eat_end_env("document") {
-            let doc_start = parser.doc_env_start.unwrap_or(0);
-            return Err(parser.err_span(
-                doc_start,
-                "\\begin{document}".len(),
-                "unclosed \\begin{document}",
-                Some("this '\\begin{document}' was never closed"),
-                Some("reached end of file without finding matching '\\end{document}'"),
-                Some("add '\\end{document}' at the end of your file"),
-            ));
-        }
-    } else {
-        parser.skip_ws();
-        if parser.peek().is_some() && !parser.starts_with("\\end") {
-            return Err(parser.err("trailing unparsed input"));
-        }
-    }
+    parser.finish_document(has_document_environment)?;
     Ok(Document {
         preamble: parser.preamble,
         blocks,
@@ -39,7 +22,7 @@ pub(crate) struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(source_code: &'a str) -> Self {
+    pub(crate) fn new(source_code: &'a str) -> Self {
         Self {
             source_code,
             byte_offset: 0,
@@ -124,7 +107,16 @@ impl<'a> Parser<'a> {
     pub(crate) fn skip_ws(&mut self) {
         let bytes = self.rest().as_bytes();
         let mut idx = 0;
-        while idx < bytes.len() {
+        let len = bytes.len();
+        while idx + 8 <= len {
+            let chunk = u64::from_le_bytes(bytes[idx..idx + 8].try_into().unwrap());
+            if chunk == 0x2020_2020_2020_2020 {
+                idx += 8;
+            } else {
+                break;
+            }
+        }
+        while idx < len {
             match bytes[idx] {
                 b' ' | b'\t' | b'\r' | b'\n' => idx += 1,
                 b'%' => {
@@ -141,7 +133,16 @@ impl<'a> Parser<'a> {
     pub(crate) fn skip_hws(&mut self) {
         let bytes = self.rest().as_bytes();
         let mut idx = 0;
-        while idx < bytes.len() {
+        let len = bytes.len();
+        while idx + 8 <= len {
+            let chunk = u64::from_le_bytes(bytes[idx..idx + 8].try_into().unwrap());
+            if chunk == 0x2020_2020_2020_2020 {
+                idx += 8;
+            } else {
+                break;
+            }
+        }
+        while idx < len {
             match bytes[idx] {
                 b' ' | b'\t' | b'\r' => idx += 1,
                 _ => break,
@@ -163,14 +164,33 @@ impl<'a> Parser<'a> {
         r.starts_with("\n\n") || r.starts_with("\r\n\r\n") || r.starts_with("\n\r\n")
     }
 
+    #[inline(always)]
+    pub(crate) fn peek_control_word(&self) -> Option<&'a str> {
+        let bytes = self.rest().as_bytes();
+        if bytes.len() < 2 || bytes[0] != b'\\' {
+            return None;
+        }
+        if !bytes[1].is_ascii_alphabetic() {
+            return None;
+        }
+        let mut end = 2;
+        while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+            end += 1;
+        }
+        Some(&self.rest()[1..end])
+    }
+
     pub(crate) fn cmd_ends_at(&self, cmd: &str) -> bool {
         if !self.starts_with(cmd) {
             return false;
         }
-        !matches!(
-            self.source_code[self.byte_offset + cmd.len()..].chars().next(),
-            Some(c) if c.is_ascii_alphabetic()
-        )
+        let after_idx = self.byte_offset + cmd.len();
+        let bytes = self.source_code.as_bytes();
+        if after_idx < bytes.len() {
+            !bytes[after_idx].is_ascii_alphabetic()
+        } else {
+            true
+        }
     }
 
     fn at_item(&self) -> bool {
@@ -251,12 +271,13 @@ impl<'a> Parser<'a> {
                 self.bump();
             }
             self.skip_hws();
-            if self.starts_with("[") {
-                let _ = self.parse_optional_brackets();
-            }
-            self.skip_hws();
-            if self.starts_with("{") {
-                let _ = self.require_group();
+            while self.starts_with("[") || self.starts_with("{") {
+                if self.starts_with("[") {
+                    let _ = self.parse_optional_brackets();
+                } else if self.starts_with("{") {
+                    let _ = self.require_group();
+                }
+                self.skip_hws();
             }
         } else {
             self.bump();
@@ -264,7 +285,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn parse_preamble_if_present(&mut self) -> Result<bool, ParseError> {
+    pub(crate) fn parse_preamble_if_present(&mut self) -> Result<bool, ParseError> {
         let registry = crate::doc_config::PackageRegistry::default();
         let mut in_preamble = false;
 
@@ -327,13 +348,30 @@ impl<'a> Parser<'a> {
                 }
                 continue;
             }
+            if self.cmd_ends_at("\\frenchspacing") {
+                in_preamble = true;
+                self.eat("\\frenchspacing");
+                self.preamble.config.french_spacing = true;
+                continue;
+            }
+            if self.cmd_ends_at("\\nonfrenchspacing") {
+                in_preamble = true;
+                self.eat("\\nonfrenchspacing");
+                self.preamble.config.french_spacing = false;
+                continue;
+            }
             if self.cmd_ends_at("\\setlength") {
                 in_preamble = true;
                 self.eat("\\setlength");
                 let param = self.brace_arg()?;
                 let val_str = self.brace_arg()?;
-                if let Some(dim) = crate::doc_config::parse_dimension_pt(val_str) {
-                    let key = param.trim().trim_start_matches('\\');
+                let key = param.trim().trim_start_matches('\\');
+                if key == "parfillskip" {
+                    if let Some((w, s)) = crate::doc_config::parse_glue_pt(val_str) {
+                        self.preamble.config.par_fill_width = w;
+                        self.preamble.config.par_fill_stretch = s;
+                    }
+                } else if let Some(dim) = crate::doc_config::parse_dimension_pt(val_str) {
                     match key {
                         "parindent" => self.preamble.config.par_indent = dim,
                         "parskip" => self.preamble.config.par_skip = dim,
@@ -346,6 +384,12 @@ impl<'a> Parser<'a> {
                         "itemindent" => self.preamble.config.list_item_indent = dim,
                         "itemsep" => self.preamble.config.list_item_sep = dim,
                         "listparindent" => self.preamble.config.list_par_indent = dim,
+                        "pretolerance" => self.preamble.config.pre_tolerance = dim as i32,
+                        "tolerance" => self.preamble.config.tolerance = dim as i32,
+                        "emergencystretch" => self.preamble.config.emergency_stretch = dim,
+                        "looseness" => self.preamble.config.looseness = dim as i32,
+                        "prevgraf" => self.preamble.config.prev_graf = dim as i32,
+                        "lastlinefit" => self.preamble.config.last_line_fit = dim as i32,
                         _ => {}
                     }
                 }
@@ -398,253 +442,90 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_blocks(&mut self) -> Result<Vec<Block<'a>>, ParseError> {
-        let mut blocks = Vec::with_capacity(32);
+    pub(crate) fn finish_document(
+        &mut self,
+        has_document_environment: bool,
+    ) -> Result<(), ParseError> {
+        if has_document_environment {
+            if !self.eat_end_env("document") {
+                let doc_start = self.doc_env_start.unwrap_or(0);
+                return Err(self.err_span(
+                    doc_start,
+                    "\\begin{document}".len(),
+                    "unclosed \\begin{document}",
+                    Some("this '\\begin{document}' was never closed"),
+                    Some("reached end of file without finding matching '\\end{document}'"),
+                    Some("add '\\end{document}' at the end of your file"),
+                ));
+            }
+        } else {
+            self.skip_ws();
+            if self.peek().is_some() && !self.starts_with("\\end") {
+                return Err(self.err("trailing unparsed input"));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn parse_next_block(&mut self) -> Result<Option<Block<'a>>, ParseError> {
+        macro_rules! parse_para_or_continue {
+            () => {{
+                let inls = self.parse_para_inlines()?;
+                if !is_empty_inlines(&inls) {
+                    return Ok(Some(Block::Para(inls)));
+                } else if self.peek().is_some()
+                    && !self.starts_with("\\begin")
+                    && !self.starts_with("\\end")
+                    && !self.at_item()
+                    && !self.starts_with("$$")
+                    && !self.starts_with("\\[")
+                {
+                    return Ok(None);
+                }
+                continue;
+            }};
+        }
+
         loop {
             self.skip_ws();
-            if self.peek().is_none() {
-                break;
-            }
-            if self.at_item() || self.starts_with("\\end") {
-                break;
-            }
-            if self.starts_with("\\includegraphics") || self.cmd_ends_at("\\caption") {
-                break;
-            }
-            if self.cmd_ends_at("\\maketitle") {
-                self.eat("\\maketitle");
-                if let Some(title) = &self.preamble.title {
-                    blocks.push(Block::TitleBlock(Box::new(TitleBlockData {
-                        title: title.clone(),
-                        author: self.preamble.author.clone(),
-                        date: self.preamble.date.clone(),
-                    })));
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\pagestyle") {
-                self.eat("\\pagestyle");
-                let style = self.brace_ident()?;
-                if style == "empty" {
-                    self.preamble.config.page_numbering = false;
-                } else if style == "plain" {
-                    self.preamble.config.page_numbering = true;
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\thispagestyle") {
-                self.eat("\\thispagestyle");
-                let _ = self.brace_ident()?;
-                continue;
-            }
-            if self.cmd_ends_at("\\setlength") {
-                self.eat("\\setlength");
-                let param = self.brace_arg()?;
-                let val_str = self.brace_arg()?;
-                if let Some(dim) = crate::doc_config::parse_dimension_pt(val_str) {
-                    let key = param.trim().trim_start_matches('\\');
-                    match key {
-                        "parindent" => {
-                            blocks.push(Block::ConfigChange(ConfigChange::ParIndent(dim)))
-                        }
-                        "parskip" => blocks.push(Block::ConfigChange(ConfigChange::ParSkip(dim))),
-                        "hangindent" => {
-                            blocks.push(Block::ConfigChange(ConfigChange::HangIndent(dim)))
-                        }
-                        "hangafter" => {
-                            blocks.push(Block::ConfigChange(ConfigChange::HangAfter(dim as i32)))
-                        }
-                        "leftskip" => blocks.push(Block::ConfigChange(ConfigChange::LeftSkip(dim))),
-                        "rightskip" => {
-                            blocks.push(Block::ConfigChange(ConfigChange::RightSkip(dim)))
-                        }
-                        "labelsep" => blocks.push(Block::ConfigChange(ConfigChange::LabelSep(dim))),
-                        "leftmargin" => {
-                            blocks.push(Block::ConfigChange(ConfigChange::LeftMargin(dim)))
-                        }
-                        "itemindent" => {
-                            blocks.push(Block::ConfigChange(ConfigChange::ItemIndent(dim)))
-                        }
-                        "itemsep" => blocks.push(Block::ConfigChange(ConfigChange::ItemSep(dim))),
-                        "listparindent" => {
-                            blocks.push(Block::ConfigChange(ConfigChange::ListParIndent(dim)))
-                        }
-                        _ => {}
+            let next_b = match self.rest().as_bytes().first() {
+                Some(&b) => b,
+                None => return Ok(None),
+            };
+
+            if next_b == b'$' {
+                if self.starts_with("$$") {
+                    let open_offset = self.byte_offset;
+                    self.eat("$$");
+                    let start = self.byte_offset;
+                    let rest = self.rest();
+                    if let Some(pos) = rest.find("$$") {
+                        let math_slice = &self.source_code[start..start + pos];
+                        self.byte_offset = start + pos + 2;
+                        let math = crate::math::parse_math(math_slice);
+                        return Ok(Some(Block::Equation {
+                            starred: true,
+                            math: Box::new(math),
+                        }));
+                    } else {
+                        return Err(self.err_span(
+                            open_offset,
+                            2,
+                            "unclosed $$",
+                            Some("display math started here"),
+                            None,
+                            Some("did you forget a closing '$$'?"),
+                        ));
                     }
                 }
-                continue;
+                parse_para_or_continue!();
             }
-            if self.cmd_ends_at("\\hangindent") {
-                if let Some(dim) = self.parse_raw_dimen_command("\\hangindent")? {
-                    blocks.push(Block::ConfigChange(ConfigChange::HangIndent(dim)));
-                }
-                continue;
+
+            if next_b != b'\\' {
+                parse_para_or_continue!();
             }
-            if self.cmd_ends_at("\\hangafter") {
-                if let Some(dim) = self.parse_raw_dimen_command("\\hangafter")? {
-                    blocks.push(Block::ConfigChange(ConfigChange::HangAfter(dim as i32)));
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\parindent") {
-                if let Some(dim) = self.parse_raw_dimen_command("\\parindent")? {
-                    blocks.push(Block::ConfigChange(ConfigChange::ParIndent(dim)));
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\parskip") {
-                if let Some(dim) = self.parse_raw_dimen_command("\\parskip")? {
-                    blocks.push(Block::ConfigChange(ConfigChange::ParSkip(dim)));
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\leftskip") {
-                if let Some(dim) = self.parse_raw_dimen_command("\\leftskip")? {
-                    blocks.push(Block::ConfigChange(ConfigChange::LeftSkip(dim)));
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\rightskip") {
-                if let Some(dim) = self.parse_raw_dimen_command("\\rightskip")? {
-                    blocks.push(Block::ConfigChange(ConfigChange::RightSkip(dim)));
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\labelsep") {
-                if let Some(dim) = self.parse_raw_dimen_command("\\labelsep")? {
-                    blocks.push(Block::ConfigChange(ConfigChange::LabelSep(dim)));
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\leftmargin") {
-                if let Some(dim) = self.parse_raw_dimen_command("\\leftmargin")? {
-                    blocks.push(Block::ConfigChange(ConfigChange::LeftMargin(dim)));
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\itemindent") {
-                if let Some(dim) = self.parse_raw_dimen_command("\\itemindent")? {
-                    blocks.push(Block::ConfigChange(ConfigChange::ItemIndent(dim)));
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\itemsep") {
-                if let Some(dim) = self.parse_raw_dimen_command("\\itemsep")? {
-                    blocks.push(Block::ConfigChange(ConfigChange::ItemSep(dim)));
-                }
-                continue;
-            }
-            if self.cmd_ends_at("\\newpage") {
-                self.eat("\\newpage");
-                blocks.push(Block::PageBreak);
-                continue;
-            }
-            if self.cmd_ends_at("\\clearpage") {
-                self.eat("\\clearpage");
-                blocks.push(Block::PageBreak);
-                continue;
-            }
-            if self.cmd_ends_at("\\bigskip") {
-                self.eat("\\bigskip");
-                blocks.push(Block::VSpace(12.0));
-                continue;
-            }
-            if self.cmd_ends_at("\\medskip") {
-                self.eat("\\medskip");
-                blocks.push(Block::VSpace(6.0));
-                continue;
-            }
-            if self.cmd_ends_at("\\smallskip") {
-                self.eat("\\smallskip");
-                blocks.push(Block::VSpace(3.0));
-                continue;
-            }
-            if self.cmd_ends_at("\\hrule") {
-                self.eat("\\hrule");
-                blocks.push(Block::HRule);
-                continue;
-            }
-            if self.cmd_ends_at("\\vspace") {
-                self.eat("\\vspace");
-                let _ = self.eat("*");
-                let val_str = self.brace_arg()?;
-                let dim = crate::doc_config::parse_dimension_pt(val_str).unwrap_or(12.0);
-                blocks.push(Block::VSpace(dim));
-                continue;
-            }
-            if self.cmd_ends_at("\\section") {
-                self.eat("\\section");
-                let starred = self.eat("*");
-                let title = self.require_group()?;
-                blocks.push(Block::Section {
-                    level: 1,
-                    starred,
-                    title,
-                });
-                continue;
-            }
-            if self.cmd_ends_at("\\subsection") {
-                self.eat("\\subsection");
-                let starred = self.eat("*");
-                let title = self.require_group()?;
-                blocks.push(Block::Section {
-                    level: 2,
-                    starred,
-                    title,
-                });
-                continue;
-            }
-            if self.cmd_ends_at("\\subsubsection") {
-                self.eat("\\subsubsection");
-                let starred = self.eat("*");
-                let title = self.require_group()?;
-                blocks.push(Block::Section {
-                    level: 3,
-                    starred,
-                    title,
-                });
-                continue;
-            }
-            if self.cmd_ends_at("\\tableofcontents") {
-                self.eat("\\tableofcontents");
-                blocks.push(Block::TableOfContents);
-                continue;
-            }
-            if self.cmd_ends_at("\\listoffigures") {
-                self.eat("\\listoffigures");
-                blocks.push(Block::ListOfFigures);
-                continue;
-            }
-            if self.cmd_ends_at("\\listoftables") {
-                self.eat("\\listoftables");
-                blocks.push(Block::ListOfTables);
-                continue;
-            }
-            if self.starts_with("$$") {
-                let open_offset = self.byte_offset;
-                self.eat("$$");
-                let start = self.byte_offset;
-                let rest = self.rest();
-                if let Some(pos) = rest.find("$$") {
-                    let math_slice = &self.source_code[start..start + pos];
-                    self.byte_offset = start + pos + 2;
-                    let math = crate::math::parse_math(math_slice);
-                    blocks.push(Block::Equation {
-                        starred: true,
-                        math: Box::new(math),
-                    });
-                    continue;
-                } else {
-                    return Err(self.err_span(
-                        open_offset,
-                        2,
-                        "unclosed $$",
-                        Some("display math started here"),
-                        None,
-                        Some("did you forget a closing '$$'?"),
-                    ));
-                }
-            }
+
+            // Command or delimiter starting with '\\'
             if self.starts_with("\\[") {
                 let open_offset = self.byte_offset;
                 self.eat("\\[");
@@ -654,11 +535,10 @@ impl<'a> Parser<'a> {
                     let math_slice = &self.source_code[start..start + pos];
                     self.byte_offset = start + pos + 2;
                     let math = crate::math::parse_math(math_slice);
-                    blocks.push(Block::Equation {
+                    return Ok(Some(Block::Equation {
                         starred: true,
                         math: Box::new(math),
-                    });
-                    continue;
+                    }));
                 } else {
                     return Err(self.err_span(
                         open_offset,
@@ -670,23 +550,273 @@ impl<'a> Parser<'a> {
                     ));
                 }
             }
-            if self.starts_with("\\begin") {
-                blocks.push(self.parse_env()?);
-            } else {
-                let inls = self.parse_para_inlines()?;
-                if !is_empty_inlines(&inls) {
-                    blocks.push(Block::Para(inls));
-                } else if self.peek().is_some()
-                    && !self.starts_with("\\begin")
-                    && !self.starts_with("\\end")
-                    && !self.at_item()
-                    && !self.starts_with("$$")
-                    && !self.starts_with("\\[")
-                {
-                    break;
+
+            if let Some(cmd) = self.peek_control_word() {
+                match cmd {
+                    "item" | "end" | "includegraphics" | "caption" => return Ok(None),
+                    "begin" => return Ok(Some(self.parse_env()?)),
+                    "maketitle" => {
+                        self.byte_offset += 1 + cmd.len();
+                        if let Some(title) = &self.preamble.title {
+                            return Ok(Some(Block::TitleBlock(Box::new(TitleBlockData {
+                                title: title.clone(),
+                                author: self.preamble.author.clone(),
+                                date: self.preamble.date.clone(),
+                            }))));
+                        }
+                        continue;
+                    }
+                    "pagestyle" => {
+                        self.byte_offset += 1 + cmd.len();
+                        let style = self.brace_ident()?;
+                        if style == "empty" {
+                            self.preamble.config.page_numbering = false;
+                        } else if style == "plain" {
+                            self.preamble.config.page_numbering = true;
+                        }
+                        continue;
+                    }
+                    "thispagestyle" => {
+                        self.byte_offset += 1 + cmd.len();
+                        let _ = self.brace_ident()?;
+                        continue;
+                    }
+                    "setlength" => {
+                        self.byte_offset += 1 + cmd.len();
+                        let param = self.brace_arg()?;
+                        let val_str = self.brace_arg()?;
+                        let key = param.trim().trim_start_matches('\\');
+                        if key == "parfillskip" {
+                            if let Some((w, s)) = crate::doc_config::parse_glue_pt(val_str) {
+                                return Ok(Some(Block::ConfigChange(ConfigChange::ParFillSkip { width: w, stretch: s })));
+                            }
+                        } else if let Some(dim) = crate::doc_config::parse_dimension_pt(val_str) {
+                            let block = match key {
+                                "parindent" => Some(Block::ConfigChange(ConfigChange::ParIndent(dim))),
+                                "parskip" => Some(Block::ConfigChange(ConfigChange::ParSkip(dim))),
+                                "hangindent" => Some(Block::ConfigChange(ConfigChange::HangIndent(dim))),
+                                "hangafter" => Some(Block::ConfigChange(ConfigChange::HangAfter(dim as i32))),
+                                "leftskip" => Some(Block::ConfigChange(ConfigChange::LeftSkip(dim))),
+                                "rightskip" => Some(Block::ConfigChange(ConfigChange::RightSkip(dim))),
+                                "labelsep" => Some(Block::ConfigChange(ConfigChange::LabelSep(dim))),
+                                "leftmargin" => Some(Block::ConfigChange(ConfigChange::LeftMargin(dim))),
+                                "itemindent" => Some(Block::ConfigChange(ConfigChange::ItemIndent(dim))),
+                                "itemsep" => Some(Block::ConfigChange(ConfigChange::ItemSep(dim))),
+                                "listparindent" => Some(Block::ConfigChange(ConfigChange::ListParIndent(dim))),
+                                "pretolerance" => Some(Block::ConfigChange(ConfigChange::PreTolerance(dim as i32))),
+                                "tolerance" => Some(Block::ConfigChange(ConfigChange::Tolerance(dim as i32))),
+                                "emergencystretch" => Some(Block::ConfigChange(ConfigChange::EmergencyStretch(dim))),
+                                "looseness" => Some(Block::ConfigChange(ConfigChange::Looseness(dim as i32))),
+                                "prevgraf" => Some(Block::ConfigChange(ConfigChange::PrevGraf(dim as i32))),
+                                "lastlinefit" => Some(Block::ConfigChange(ConfigChange::LastLineFit(dim as i32))),
+                                _ => None,
+                            };
+                            if let Some(b) = block {
+                                return Ok(Some(b));
+                            }
+                        }
+                        continue;
+                    }
+                    "parfillskip" => {
+                        if let Some((w, s)) = self.parse_raw_glue_command("\\parfillskip")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::ParFillSkip { width: w, stretch: s })));
+                        }
+                        continue;
+                    }
+                    "prevgraf" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\prevgraf")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::PrevGraf(dim as i32))));
+                        }
+                        continue;
+                    }
+                    "lastlinefit" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\lastlinefit")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::LastLineFit(dim as i32))));
+                        }
+                        continue;
+                    }
+                    "looseness" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\looseness")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::Looseness(dim as i32))));
+                        }
+                        continue;
+                    }
+                    "pretolerance" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\pretolerance")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::PreTolerance(dim as i32))));
+                        }
+                        continue;
+                    }
+                    "tolerance" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\tolerance")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::Tolerance(dim as i32))));
+                        }
+                        continue;
+                    }
+                    "emergencystretch" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\emergencystretch")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::EmergencyStretch(dim))));
+                        }
+                        continue;
+                    }
+                    "sloppy" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::ConfigChange(ConfigChange::Sloppy)));
+                    }
+                    "fussy" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::ConfigChange(ConfigChange::Fussy)));
+                    }
+                    "hangindent" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\hangindent")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::HangIndent(dim))));
+                        }
+                        continue;
+                    }
+                    "hangafter" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\hangafter")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::HangAfter(dim as i32))));
+                        }
+                        continue;
+                    }
+                    "parshape" => {
+                        self.byte_offset += 1 + cmd.len();
+                        let shape = self.parse_parshape_args()?;
+                        return Ok(Some(Block::ConfigChange(ConfigChange::ParShape(shape))));
+                    }
+                    "parindent" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\parindent")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::ParIndent(dim))));
+                        }
+                        continue;
+                    }
+                    "parskip" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\parskip")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::ParSkip(dim))));
+                        }
+                        continue;
+                    }
+                    "leftskip" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\leftskip")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::LeftSkip(dim))));
+                        }
+                        continue;
+                    }
+                    "rightskip" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\rightskip")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::RightSkip(dim))));
+                        }
+                        continue;
+                    }
+                    "labelsep" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\labelsep")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::LabelSep(dim))));
+                        }
+                        continue;
+                    }
+                    "leftmargin" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\leftmargin")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::LeftMargin(dim))));
+                        }
+                        continue;
+                    }
+                    "itemindent" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\itemindent")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::ItemIndent(dim))));
+                        }
+                        continue;
+                    }
+                    "itemsep" => {
+                        if let Some(dim) = self.parse_raw_dimen_command("\\itemsep")? {
+                            return Ok(Some(Block::ConfigChange(ConfigChange::ItemSep(dim))));
+                        }
+                        continue;
+                    }
+                    "newpage" | "clearpage" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::PageBreak));
+                    }
+                    "bigskip" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::VSpace(12.0)));
+                    }
+                    "medskip" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::VSpace(6.0)));
+                    }
+                    "smallskip" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::VSpace(3.0)));
+                    }
+                    "hrule" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::HRule));
+                    }
+                    "vspace" => {
+                        self.byte_offset += 1 + cmd.len();
+                        let _ = self.eat("*");
+                        let val_str = self.brace_arg()?;
+                        let dim = crate::doc_config::parse_dimension_pt(val_str).unwrap_or(12.0);
+                        return Ok(Some(Block::VSpace(dim)));
+                    }
+                    "section" => {
+                        self.byte_offset += 1 + cmd.len();
+                        let starred = self.eat("*");
+                        let title = self.require_group()?;
+                        return Ok(Some(Block::Section {
+                            level: 1,
+                            starred,
+                            title,
+                        }));
+                    }
+                    "subsection" => {
+                        self.byte_offset += 1 + cmd.len();
+                        let starred = self.eat("*");
+                        let title = self.require_group()?;
+                        return Ok(Some(Block::Section {
+                            level: 2,
+                            starred,
+                            title,
+                        }));
+                    }
+                    "subsubsection" => {
+                        self.byte_offset += 1 + cmd.len();
+                        let starred = self.eat("*");
+                        let title = self.require_group()?;
+                        return Ok(Some(Block::Section {
+                            level: 3,
+                            starred,
+                            title,
+                        }));
+                    }
+                    "tableofcontents" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::TableOfContents));
+                    }
+                    "listoffigures" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::ListOfFigures));
+                    }
+                    "listoftables" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::ListOfTables));
+                    }
+                    _ => {
+                        parse_para_or_continue!();
+                    }
                 }
+            } else {
+                parse_para_or_continue!();
             }
         }
+    }
+
+    fn parse_blocks(&mut self) -> Result<Vec<Block<'a>>, ParseError> {
+        let mut blocks = Vec::with_capacity(32);
+        while let Some(b) = self.parse_next_block()? {
+            blocks.push(b);
+        }
+        blocks.shrink_to_fit();
         Ok(blocks)
     }
 
@@ -894,6 +1024,122 @@ impl<'a> Parser<'a> {
         Ok(crate::doc_config::parse_dimension_pt(s))
     }
 
+    fn parse_raw_glue_command(&mut self, cmd: &str) -> Result<Option<(f32, f32)>, ParseError> {
+        self.eat(cmd);
+        self.skip_hws();
+        let _ = self.eat("=");
+        self.skip_hws();
+        if self.starts_with("{") {
+            let s = self.brace_arg()?;
+            return Ok(crate::doc_config::parse_glue_pt(s));
+        }
+        let start = self.byte_offset;
+        while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
+        {
+            self.bump();
+        }
+        let s = &self.source_code[start..self.byte_offset];
+        let width = match crate::doc_config::parse_dimension_pt(s) {
+            Some(w) => w,
+            None => return Ok(None),
+        };
+        self.skip_hws();
+        let stretch = if self.starts_with("plus") {
+            self.eat("plus");
+            self.skip_hws();
+            let plus_start = self.byte_offset;
+            while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
+            {
+                self.bump();
+            }
+            let plus_s = &self.source_code[plus_start..self.byte_offset];
+            if plus_s.contains("fil") {
+                f32::INFINITY
+            } else {
+                crate::doc_config::parse_dimension_pt(plus_s).unwrap_or(0.0)
+            }
+        } else {
+            0.0
+        };
+        self.skip_hws();
+        if self.starts_with("minus") {
+            self.eat("minus");
+            self.skip_hws();
+            while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
+            {
+                self.bump();
+            }
+        }
+        Ok(Some((width, stretch)))
+    }
+
+    fn parse_single_dimen_value(&mut self) -> Result<f32, ParseError> {
+        self.skip_ws();
+        if self.starts_with("{") {
+            let s = self.brace_arg()?;
+            let trimmed = s.trim();
+            if trimmed.starts_with('\\') {
+                return Ok(Self::resolve_dimen_macro(trimmed.trim_start_matches('\\')));
+            }
+            return Ok(crate::doc_config::parse_dimension_pt(trimmed).unwrap_or(0.0));
+        }
+
+        if self.peek() == Some('\\') {
+            self.bump();
+            let start = self.byte_offset;
+            while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric()) {
+                self.bump();
+            }
+            let name = &self.source_code[start..self.byte_offset];
+            return Ok(Self::resolve_dimen_macro(name));
+        }
+
+        let start = self.byte_offset;
+        while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
+        {
+            self.bump();
+        }
+        let s = &self.source_code[start..self.byte_offset];
+        Ok(crate::doc_config::parse_dimension_pt(s).unwrap_or(0.0))
+    }
+
+    fn resolve_dimen_macro(name: &str) -> f32 {
+        match name {
+            "hsize" | "linewidth" | "textwidth" => 468.0,
+            "zero" | "empty" => 0.0,
+            _ => 468.0,
+        }
+    }
+
+    fn parse_parshape_args(&mut self) -> Result<Box<[(f32, f32)]>, ParseError> {
+        self.skip_ws();
+        let _ = self.eat("=");
+        self.skip_ws();
+        let n: usize = if self.starts_with("{") {
+            let s = self.brace_arg()?;
+            s.trim().parse().unwrap_or(0)
+        } else {
+            let start = self.byte_offset;
+            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+                self.bump();
+            }
+            let s = &self.source_code[start..self.byte_offset];
+            s.trim().parse().unwrap_or(0)
+        };
+
+        if n == 0 {
+            return Ok(Vec::new().into_boxed_slice());
+        }
+
+        let mut entries = Vec::with_capacity(n.min(32));
+        for _ in 0..n {
+            let indent = self.parse_single_dimen_value()?;
+            let length = self.parse_single_dimen_value()?;
+            entries.push((indent, length));
+        }
+        Ok(entries.into_boxed_slice())
+    }
+
     fn parse_list(&mut self, kind: ListKind, open_offset: usize) -> Result<Block<'a>, ParseError> {
         let name = match kind {
             ListKind::Enumerate => "enumerate",
@@ -1034,6 +1280,7 @@ impl<'a> Parser<'a> {
                 blocks,
             });
         }
+        items.shrink_to_fit();
         Ok(Block::List(Box::new(ListData {
             kind,
             options,
@@ -1247,33 +1494,48 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_para_inlines(&mut self) -> Result<Vec<Inline<'a>>, ParseError> {
-        let mut out = Vec::with_capacity(16);
+        let mut out = Vec::with_capacity(8);
         loop {
             match self.peek() {
                 None => break,
                 Some('%') => self.skip_comment(),
                 Some('\n') if self.at_blank_line() => break,
-                Some('\\' | '$') => {
-                    if self.starts_with("\\begin")
-                        || self.starts_with("\\end")
-                        || self.at_item()
-                        || self.cmd_ends_at("\\section")
-                        || self.cmd_ends_at("\\subsection")
-                        || self.cmd_ends_at("\\subsubsection")
-                        || self.cmd_ends_at("\\maketitle")
-                        || self.cmd_ends_at("\\newpage")
-                        || self.cmd_ends_at("\\clearpage")
-                        || self.cmd_ends_at("\\bigskip")
-                        || self.cmd_ends_at("\\medskip")
-                        || self.cmd_ends_at("\\smallskip")
-                        || self.cmd_ends_at("\\hrule")
-                        || self.cmd_ends_at("\\tableofcontents")
-                        || self.cmd_ends_at("\\listoffigures")
-                        || self.cmd_ends_at("\\listoftables")
-                        || self.cmd_ends_at("\\vspace")
-                        || self.starts_with("$$")
-                        || self.starts_with("\\[")
-                    {
+                Some('$') => {
+                    if self.starts_with("$$") {
+                        break;
+                    }
+                    out.push(self.parse_inline()?);
+                }
+                Some('\\') => {
+                    let bytes = self.rest().as_bytes();
+                    if bytes.len() >= 2 && bytes[1].is_ascii_lowercase() {
+                        const TERM_MASK: u32 = (1 << (b'b' - b'a'))
+                            | (1 << (b'c' - b'a'))
+                            | (1 << (b'e' - b'a'))
+                            | (1 << (b'h' - b'a'))
+                            | (1 << (b'i' - b'a'))
+                            | (1 << (b'l' - b'a'))
+                            | (1 << (b'm' - b'a'))
+                            | (1 << (b'n' - b'a'))
+                            | (1 << (b's' - b'a'))
+                            | (1 << (b't' - b'a'))
+                            | (1 << (b'v' - b'a'));
+                        let shift = bytes[1] - b'a';
+                        if shift < 26 && ((TERM_MASK & (1 << shift)) != 0) {
+                            if let Some(cmd) = self.peek_control_word() {
+                                let is_terminator = match cmd {
+                                    "begin" | "bigskip" | "end" | "item" | "section" | "subsection"
+                                    | "subsubsection" | "smallskip" | "maketitle" | "medskip"
+                                    | "newpage" | "clearpage" | "hrule" | "tableofcontents"
+                                    | "listoffigures" | "listoftables" | "vspace" => true,
+                                    _ => false,
+                                };
+                                if is_terminator {
+                                    break;
+                                }
+                            }
+                        }
+                    } else if self.starts_with("\\[") {
                         break;
                     }
                     if self.starts_with("\\\\") {
@@ -1287,6 +1549,7 @@ impl<'a> Parser<'a> {
                 Some(_) => out.push(self.parse_inline()?),
             }
         }
+        out.shrink_to_fit();
         Ok(out)
     }
 
@@ -1318,6 +1581,10 @@ impl<'a> Parser<'a> {
                 self.bump();
                 Ok(Inline::Group(self.parse_until_rbrace()?))
             }
+            Some('~') => {
+                self.bump();
+                Ok(Inline::Text("\u{00A0}"))
+            }
             Some('&') => {
                 // alignment tab belongs to tabular; if it leaks here, keep it
                 // as a one-char token so we cannot spin on an empty text run.
@@ -1332,7 +1599,7 @@ impl<'a> Parser<'a> {
 
     fn parse_until_rbrace(&mut self) -> Result<Vec<Inline<'a>>, ParseError> {
         let open_offset = self.byte_offset.saturating_sub(1);
-        let mut inner = Vec::with_capacity(4);
+        let mut inner = Vec::with_capacity(1);
         loop {
             match self.peek() {
                 Some('}') => {
@@ -1356,6 +1623,7 @@ impl<'a> Parser<'a> {
                 Some(_) => inner.push(self.parse_inline()?),
             }
         }
+        inner.shrink_to_fit();
         Ok(inner)
     }
 
@@ -1405,17 +1673,24 @@ impl<'a> Parser<'a> {
                     ));
                 }
             }
+            if c == '-' {
+                self.bump();
+                return Ok(Inline::Text("\u{00AD}"));
+            }
             if is_single_escape(c) {
                 let start = self.byte_offset;
                 self.bump();
                 return Ok(Inline::Text(&self.source_code[start..self.byte_offset]));
             }
         }
+        let bytes = self.source_code.as_bytes();
         let start = self.byte_offset;
-        while matches!(self.peek(), Some(ch) if ch.is_ascii_alphabetic()) {
-            self.bump();
+        let mut end = start;
+        while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+            end += 1;
         }
-        let name = &self.source_code[start..self.byte_offset];
+        self.byte_offset = end;
+        let name = &self.source_code[start..end];
         if name.is_empty() {
             return Err(self.err_span(
                 cmd_start,
@@ -1435,17 +1710,18 @@ impl<'a> Parser<'a> {
             b"par" => return Ok(Inline::Break),
             b"noindent" => return Ok(Inline::NoIndent),
             b"indent" => return Ok(Inline::Indent),
+            b"frenchspacing" => {
+                self.preamble.config.french_spacing = true;
+                return Ok(Inline::Text(""));
+            }
+            b"nonfrenchspacing" => {
+                self.preamble.config.french_spacing = false;
+                return Ok(Inline::Text(""));
+            }
             b"verb" => return self.parse_verb(cmd_start),
             _ => {}
         }
         match name {
-            "textbf" => Ok(Inline::Bold(self.require_group()?)),
-            "textit" | "emph" => Ok(Inline::Italic(self.require_group()?)),
-            "texttt" => Ok(Inline::Mono(self.require_group()?)),
-            "verb" => self.parse_verb(cmd_start),
-            "par" => Ok(Inline::Break),
-            "noindent" => Ok(Inline::NoIndent),
-            "indent" => Ok(Inline::Indent),
             "hangindent" => {
                 self.skip_hws();
                 let _ = self.eat("=");
@@ -1480,6 +1756,197 @@ impl<'a> Parser<'a> {
                     s.trim().parse::<i32>().unwrap_or(1)
                 };
                 Ok(Inline::HangAfter(val))
+            }
+            "parshape" => {
+                let shape = self.parse_parshape_args()?;
+                Ok(Inline::ParShape(shape))
+            }
+            "pretolerance" => {
+                self.skip_hws();
+                let _ = self.eat("=");
+                self.skip_hws();
+                let val = if self.starts_with("{") {
+                    let s = self.brace_arg()?;
+                    s.trim().parse::<i32>().unwrap_or(100)
+                } else {
+                    let start = self.byte_offset;
+                    while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '-') {
+                        self.bump();
+                    }
+                    let s = &self.source_code[start..self.byte_offset];
+                    s.trim().parse::<i32>().unwrap_or(100)
+                };
+                Ok(Inline::PreTolerance(val))
+            }
+            "tolerance" => {
+                self.skip_hws();
+                let _ = self.eat("=");
+                self.skip_hws();
+                let val = if self.starts_with("{") {
+                    let s = self.brace_arg()?;
+                    s.trim().parse::<i32>().unwrap_or(200)
+                } else {
+                    let start = self.byte_offset;
+                    while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '-') {
+                        self.bump();
+                    }
+                    let s = &self.source_code[start..self.byte_offset];
+                    s.trim().parse::<i32>().unwrap_or(200)
+                };
+                Ok(Inline::Tolerance(val))
+            }
+            "emergencystretch" => {
+                self.skip_hws();
+                let _ = self.eat("=");
+                self.skip_hws();
+                let dim = if self.starts_with("{") {
+                    let s = self.brace_arg()?;
+                    crate::doc_config::parse_dimension_pt(s).unwrap_or(0.0)
+                } else {
+                    let start = self.byte_offset;
+                    while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
+                    {
+                        self.bump();
+                    }
+                    let s = &self.source_code[start..self.byte_offset];
+                    crate::doc_config::parse_dimension_pt(s).unwrap_or(0.0)
+                };
+                Ok(Inline::EmergencyStretch(dim))
+            }
+            "sloppy" => Ok(Inline::Sloppy),
+            "fussy" => Ok(Inline::Fussy),
+            "looseness" => {
+                self.skip_hws();
+                let _ = self.eat("=");
+                self.skip_hws();
+                let val = if self.starts_with("{") {
+                    let s = self.brace_arg()?;
+                    s.trim().parse::<i32>().unwrap_or(0)
+                } else {
+                    let start = self.byte_offset;
+                    while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '-') {
+                        self.bump();
+                    }
+                    let s = &self.source_code[start..self.byte_offset];
+                    s.trim().parse::<i32>().unwrap_or(0)
+                };
+                Ok(Inline::Looseness(val))
+            }
+            "leftskip" => {
+                self.skip_hws();
+                let _ = self.eat("=");
+                self.skip_hws();
+                let dim = if self.starts_with("{") {
+                    let s = self.brace_arg()?;
+                    crate::doc_config::parse_dimension_pt(s).unwrap_or(0.0)
+                } else {
+                    let start = self.byte_offset;
+                    while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
+                    {
+                        self.bump();
+                    }
+                    let s = &self.source_code[start..self.byte_offset];
+                    crate::doc_config::parse_dimension_pt(s).unwrap_or(0.0)
+                };
+                Ok(Inline::LeftSkip(dim))
+            }
+            "rightskip" => {
+                self.skip_hws();
+                let _ = self.eat("=");
+                self.skip_hws();
+                let dim = if self.starts_with("{") {
+                    let s = self.brace_arg()?;
+                    crate::doc_config::parse_dimension_pt(s).unwrap_or(0.0)
+                } else {
+                    let start = self.byte_offset;
+                    while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
+                    {
+                        self.bump();
+                    }
+                    let s = &self.source_code[start..self.byte_offset];
+                    crate::doc_config::parse_dimension_pt(s).unwrap_or(0.0)
+                };
+                Ok(Inline::RightSkip(dim))
+            }
+            "parfillskip" => {
+                self.skip_hws();
+                let _ = self.eat("=");
+                self.skip_hws();
+                let (width, stretch) = if self.starts_with("{") {
+                    let s = self.brace_arg()?;
+                    crate::doc_config::parse_glue_pt(s).unwrap_or((0.0, f32::INFINITY))
+                } else {
+                    let start = self.byte_offset;
+                    while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
+                    {
+                        self.bump();
+                    }
+                    let s = &self.source_code[start..self.byte_offset];
+                    let width = crate::doc_config::parse_dimension_pt(s).unwrap_or(0.0);
+                    self.skip_hws();
+                    let stretch = if self.starts_with("plus") {
+                        self.eat("plus");
+                        self.skip_hws();
+                        let plus_start = self.byte_offset;
+                        while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
+                        {
+                            self.bump();
+                        }
+                        let plus_s = &self.source_code[plus_start..self.byte_offset];
+                        if plus_s.contains("fil") {
+                            f32::INFINITY
+                        } else {
+                            crate::doc_config::parse_dimension_pt(plus_s).unwrap_or(0.0)
+                        }
+                    } else {
+                        0.0
+                    };
+                    self.skip_hws();
+                    if self.starts_with("minus") {
+                        self.eat("minus");
+                        self.skip_hws();
+                        while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic())
+                        {
+                            self.bump();
+                        }
+                    }
+                    (width, stretch)
+                };
+                Ok(Inline::ParFillSkip { width, stretch })
+            }
+            "prevgraf" => {
+                self.skip_hws();
+                let _ = self.eat("=");
+                self.skip_hws();
+                let val = if self.starts_with("{") {
+                    let s = self.brace_arg()?;
+                    s.trim().parse::<i32>().unwrap_or(0)
+                } else {
+                    let start = self.byte_offset;
+                    while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '-') {
+                        self.bump();
+                    }
+                    let s = &self.source_code[start..self.byte_offset];
+                    s.trim().parse::<i32>().unwrap_or(0)
+                };
+                Ok(Inline::PrevGraf(val))
+            }
+            "lastlinefit" => {
+                self.skip_hws();
+                let _ = self.eat("=");
+                self.skip_hws();
+                let val = if self.starts_with("{") {
+                    let s = self.brace_arg()?;
+                    s.trim().parse::<i32>().unwrap_or(0)
+                } else {
+                    let start = self.byte_offset;
+                    while matches!(self.peek(), Some(c) if c.is_ascii_digit() || c == '-') {
+                        self.bump();
+                    }
+                    let s = &self.source_code[start..self.byte_offset];
+                    s.trim().parse::<i32>().unwrap_or(0)
+                };
+                Ok(Inline::LastLineFit(val))
             }
             "hspace" => {
                 let _ = self.eat("*");
@@ -1897,6 +2364,34 @@ impl<'a> Parser<'a> {
         self.parse_until_rbrace()
     }
 
+#[inline(always)]
+fn is_pure_text_word(word: u64) -> bool {
+    // 1. Any byte < 32 (ASCII control characters: \0, \t, \n, \r, etc.)
+    let lt_32 = (word.wrapping_sub(0x2020_2020_2020_2020) & !word) & 0x8080_8080_8080_8080;
+
+    // 2. Any byte >= 123 ({, |, }, ~, DEL, or non-ASCII >= 128)
+    let ge_123 = (word.wrapping_add(0x0505_0505_0505_0505) | word) & 0x8080_8080_8080_8080;
+
+    if (lt_32 | ge_123) != 0 {
+        return false;
+    }
+
+    // 3. Delimiters in [32, 122]:
+    // Backslash '\' (0x5C = 92), '$' (0x24 = 36), '%' (0x25 = 37), '&' (0x26 = 38)
+    let w_bs = word ^ 0x5C5C_5C5C_5C5C_5C5C;
+    let w_d  = word ^ 0x2424_2424_2424_2424;
+    let w_p  = word ^ 0x2525_2525_2525_2525;
+    let w_a  = word ^ 0x2626_2626_2626_2626;
+
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    let z_bs = w_bs.wrapping_sub(ONES) & !w_bs;
+    let z_d  = w_d.wrapping_sub(ONES)  & !w_d;
+    let z_p  = w_p.wrapping_sub(ONES)  & !w_p;
+    let z_a  = w_a.wrapping_sub(ONES)  & !w_a;
+
+    ((z_bs | z_d | z_p | z_a) & 0x8080_8080_8080_8080) == 0
+}
+
     /// Contiguous source slice. Newlines stay in the slice; layout treats
     /// them as space. A `%` or command ends the run so the slice stays
     /// untransformed.
@@ -1904,10 +2399,26 @@ impl<'a> Parser<'a> {
         let bytes = self.source_code.as_bytes();
         let start = self.byte_offset;
         let mut i = start;
-        while i < bytes.len() {
+        let len = bytes.len();
+
+        loop {
+            // SWAR fast scan for contiguous printable ASCII prose (8 bytes per step)
+            while i + 8 <= len {
+                let chunk = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+                if Self::is_pure_text_word(chunk) {
+                    i += 8;
+                } else {
+                    break;
+                }
+            }
+
+            if i >= len {
+                break;
+            }
+
             let b = bytes[i];
             match b {
-                b'\\' | b'{' | b'}' | b'%' | b'&' | b'$' => break,
+                b'\\' | b'{' | b'}' | b'%' | b'&' | b'$' | b'~' => break,
                 b'\n' => {
                     let r = &self.source_code[i..];
                     if r.starts_with("\n\n") || r.starts_with("\n\r\n") {
@@ -1945,12 +2456,36 @@ impl<'a> Parser<'a> {
 fn find_unescaped_char(s: &str, target: char) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
+    let len = bytes.len();
+    let target_byte = target as u8;
+    let mask_t = (target_byte as u64) * 0x0101_0101_0101_0101;
+    const MASK_BS: u64 = 0x5C5C_5C5C_5C5C_5C5C;
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    const HIGHS: u64 = 0x8080_8080_8080_8080;
+
+    loop {
+        while i + 8 <= len {
+            let word = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+            let wt = word ^ mask_t;
+            let wb = word ^ MASK_BS;
+            let has_zero_t = (wt.wrapping_sub(ONES) & !wt) & HIGHS;
+            let has_zero_b = (wb.wrapping_sub(ONES) & !wb) & HIGHS;
+            if (has_zero_t | has_zero_b) == 0 {
+                i += 8;
+            } else {
+                break;
+            }
+        }
+
+        if i >= len {
+            break;
+        }
+
         if bytes[i] == b'\\' {
             i += 2;
             continue;
         }
-        if bytes[i] == target as u8 {
+        if bytes[i] == target_byte {
             return Some(i);
         }
         i += 1;
@@ -1958,11 +2493,24 @@ fn find_unescaped_char(s: &str, target: char) -> Option<usize> {
     None
 }
 
+pub(crate) const SINGLE_ESCAPE_LUT: [bool; 256] = {
+    let mut lut = [false; 256];
+    lut[b'%' as usize] = true;
+    lut[b'{' as usize] = true;
+    lut[b'}' as usize] = true;
+    lut[b'\\' as usize] = true;
+    lut[b'#' as usize] = true;
+    lut[b'&' as usize] = true;
+    lut[b'_' as usize] = true;
+    lut[b'$' as usize] = true;
+    lut[b'~' as usize] = true;
+    lut[b'^' as usize] = true;
+    lut
+};
+
+#[inline(always)]
 fn is_single_escape(c: char) -> bool {
-    matches!(
-        c,
-        '%' | '{' | '}' | '\\' | '#' | '&' | '_' | '$' | '~' | '^'
-    )
+    (c as u32) < 256 && SINGLE_ESCAPE_LUT[c as usize]
 }
 
 fn is_empty_inlines(v: &[Inline<'_>]) -> bool {
@@ -1973,6 +2521,18 @@ fn is_empty_inlines(v: &[Inline<'_>]) -> bool {
         | Inline::Indent
         | Inline::HangIndent(_)
         | Inline::HangAfter(_)
+        | Inline::ParShape(_)
+        | Inline::PreTolerance(_)
+        | Inline::Tolerance(_)
+        | Inline::EmergencyStretch(_)
+        | Inline::Looseness(_)
+        | Inline::LeftSkip(_)
+        | Inline::RightSkip(_)
+        | Inline::ParFillSkip { .. }
+        | Inline::PrevGraf(_)
+        | Inline::LastLineFit(_)
+        | Inline::Sloppy
+        | Inline::Fussy
         | Inline::HSpace(_) => true,
         Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x) => {
             is_empty_inlines(x)
@@ -1992,8 +2552,22 @@ fn suggest_command(name: &str) -> Option<&'static str> {
         "hspace",
         "noindent",
         "indent",
+        "frenchspacing",
+        "nonfrenchspacing",
         "hangindent",
         "hangafter",
+        "parshape",
+        "pretolerance",
+        "tolerance",
+        "emergencystretch",
+        "looseness",
+        "leftskip",
+        "rightskip",
+        "parfillskip",
+        "prevgraf",
+        "lastlinefit",
+        "sloppy",
+        "fussy",
         "textbackslash",
         "textasciitilde",
         "textasciicircum",

@@ -5,7 +5,10 @@ use crate::index::index_model::IndexRegistry;
 use crate::layout::engine::{count_digits, Layouter, Paint};
 
 /// Lays out the complete List of Figures with figure captions, dotted leaders, and page numbers.
-pub(crate) fn layout_lof<'a>(layouter: &mut Layouter<'a>, registry: &IndexRegistry<'a>) {
+pub(crate) fn layout_lof<'a>(
+    layouter: &mut Layouter<'a>,
+    registry: &IndexRegistry<'a>,
+) {
     let avail_w = (layouter.right - layouter.right_skip) - (layouter.left + layouter.left_skip);
     if avail_w <= 0.0 {
         return;
@@ -56,7 +59,7 @@ pub(crate) fn layout_lof<'a>(layouter: &mut Layouter<'a>, registry: &IndexRegist
             // B. Draw Caption
             let caption_x = left_margin + 60.0;
             layouter.paint_inlines_at_size(
-                entry.caption,
+                &entry.caption,
                 Face::Roman,
                 layouter.base_font_size,
                 caption_x,
@@ -78,7 +81,7 @@ pub(crate) fn layout_lof<'a>(layouter: &mut Layouter<'a>, registry: &IndexRegist
 
             // D. Draw Dotted Leader
             let cap_w = layouter.measure_inlines_face_size(
-                entry.caption,
+                &entry.caption,
                 Face::Roman,
                 layouter.base_font_size,
             );
@@ -111,7 +114,10 @@ pub(crate) fn layout_lof<'a>(layouter: &mut Layouter<'a>, registry: &IndexRegist
 }
 
 /// Lays out the complete List of Tables with table captions, dotted leaders, and page numbers.
-pub(crate) fn layout_lot<'a>(layouter: &mut Layouter<'a>, registry: &IndexRegistry<'a>) {
+pub(crate) fn layout_lot<'a>(
+    layouter: &mut Layouter<'a>,
+    registry: &IndexRegistry<'a>,
+) {
     let avail_w = (layouter.right - layouter.right_skip) - (layouter.left + layouter.left_skip);
     if avail_w <= 0.0 {
         return;
@@ -162,7 +168,7 @@ pub(crate) fn layout_lot<'a>(layouter: &mut Layouter<'a>, registry: &IndexRegist
             // B. Draw Caption
             let caption_x = left_margin + 60.0;
             layouter.paint_inlines_at_size(
-                entry.caption,
+                &entry.caption,
                 Face::Roman,
                 layouter.base_font_size,
                 caption_x,
@@ -184,7 +190,7 @@ pub(crate) fn layout_lot<'a>(layouter: &mut Layouter<'a>, registry: &IndexRegist
 
             // D. Draw Dotted Leader
             let cap_w = layouter.measure_inlines_face_size(
-                entry.caption,
+                &entry.caption,
                 Face::Roman,
                 layouter.base_font_size,
             );

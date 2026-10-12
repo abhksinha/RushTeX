@@ -1,11 +1,14 @@
 //! Layout calculation, multi-page streaming, and vector painting for tables.
 
 use crate::backend::fonts::Face;
-use crate::layout::engine::{explode_inlines_into_family, CellSpan, Layouter, Paint, CELL_PAD};
+use crate::layout::engine::{explode_inlines_into_family, CellLineRange, CellSpan, Layouter, Paint, CELL_PAD};
 use crate::tables::tables_model::{TableData, TableRow, TableRule};
 use crate::tables::tables_spec::{ColAlign, ColSpec};
 
-pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a TableData<'a>) {
+pub(crate) fn layout_table<'a>(
+    layouter: &mut Layouter<'a>,
+    table_data: &TableData<'a>,
+) {
     let cols = &table_data.cols;
     let rows = &table_data.rows;
     if cols.is_empty() {
@@ -25,14 +28,24 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
         (widths_heap.as_mut_slice(), col_w_heap.as_mut_slice())
     };
 
-    // Initialize with fixed widths if specified via p{width}
+    // Pre-mask fixed columns up to 64 columns in a single register
+    let mut fixed_cols_mask: u64 = 0;
     for (i, &fw) in table_data.col_widths.iter().enumerate().take(n) {
         if let Some(w) = fw {
             widths[i] = (w - 2.0 * CELL_PAD).max(1.0);
+            if i < 64 {
+                fixed_cols_mask |= 1 << i;
+            }
         }
     }
 
-    // Measure cell contents
+    // Two-pass measurement:
+    // Pass 1: Measure all single-column cells (colspan <= 1) to establish natural column widths.
+    // Multicolumn cells (colspan > 1) are buffered in a stack array (or small heap vector if > 32).
+    let mut stack_mc = [(0u16, 0u16, 0.0f32); 32];
+    let mut mc_count = 0;
+    let mut heap_mc: Option<Vec<(u16, u16, f32)>> = None;
+
     for row in rows {
         let mut c_idx = 0;
         for cell in &row.cells {
@@ -40,33 +53,68 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
                 break;
             }
             let colspan = cell.colspan.max(1) as usize;
+            let is_fixed = if c_idx < 64 {
+                (fixed_cols_mask & (1 << c_idx)) != 0
+            } else {
+                table_data.col_widths.get(c_idx).copied().flatten().is_some()
+            };
+            if colspan == 1 && is_fixed {
+                c_idx += 1;
+                continue;
+            }
             let cell_w = layouter.measure_inlines_face_size(
                 &cell.inlines,
                 Face::Roman,
                 layouter.base_font_size,
             );
             if colspan == 1 {
-                if table_data
-                    .col_widths
-                    .get(c_idx)
-                    .copied()
-                    .flatten()
-                    .is_none()
-                {
-                    widths[c_idx] = widths[c_idx].max(cell_w);
-                }
+                widths[c_idx] = widths[c_idx].max(cell_w);
             } else {
-                // Distribute multicolumn excess across spanned auto columns
-                let span_end = (c_idx + colspan).min(n);
-                let current_span_w: f32 = widths[c_idx..span_end].iter().sum();
-                if cell_w > current_span_w {
-                    let excess = (cell_w - current_span_w) / (span_end - c_idx) as f32;
-                    for w in &mut widths[c_idx..span_end] {
-                        *w += excess;
-                    }
+                if mc_count < 32 && heap_mc.is_none() {
+                    stack_mc[mc_count] = (c_idx as u16, colspan as u16, cell_w);
+                    mc_count += 1;
+                } else {
+                    let v = heap_mc.get_or_insert_with(|| {
+                        let mut vec = Vec::with_capacity(mc_count + 16);
+                        vec.extend_from_slice(&stack_mc[..mc_count]);
+                        vec
+                    });
+                    v.push((c_idx as u16, colspan as u16, cell_w));
                 }
             }
             c_idx += colspan;
+        }
+    }
+
+    // Pass 2: Distribute multicolumn excess across spanned auto columns.
+    let mc_slice: &[(u16, u16, f32)] = if let Some(ref v) = heap_mc {
+        v.as_slice()
+    } else {
+        &stack_mc[..mc_count]
+    };
+
+    for &(start_col, span, cell_w) in mc_slice {
+        let start = start_col as usize;
+        let span_end = (start + span as usize).min(n);
+        let current_span_w: f32 = widths[start..span_end].iter().sum();
+        if cell_w > current_span_w {
+            let num_auto = (start..span_end)
+                .filter(|&c| if c < 64 { (fixed_cols_mask & (1 << c)) == 0 } else { table_data.col_widths.get(c).copied().flatten().is_none() })
+                .count();
+            if num_auto > 0 {
+                let excess = (cell_w - current_span_w) / num_auto as f32;
+                for c in start..span_end {
+                    let is_auto = if c < 64 { (fixed_cols_mask & (1 << c)) == 0 } else { table_data.col_widths.get(c).copied().flatten().is_none() };
+                    if is_auto {
+                        widths[c] += excess;
+                    }
+                }
+            } else {
+                let excess = (cell_w - current_span_w) / (span_end - start) as f32;
+                for w in &mut widths[start..span_end] {
+                    *w += excess;
+                }
+            }
         }
     }
 
@@ -131,12 +179,18 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
             && (cols.first().is_some_and(|c| c.rule_left()) || rule_right));
 
     // 5. Render rows with row-level pagination and longtable header repetition
+    let mut row_math_collector = Vec::new();
     let mut row_idx = 0;
     while row_idx < rows.len() {
         let row = &rows[row_idx];
-        let row_h = prepare_row_cells(layouter, row, n, col_w, col_offsets);
+        let row_h = prepare_row_cells(layouter, row, n, col_w, col_offsets, &mut row_math_collector);
 
-        let broken = layouter.ensure_room(row_h);
+        let broken = if table_data.is_longtable {
+            layouter.y = y_top;
+            layouter.ensure_room(row_h)
+        } else {
+            false
+        };
         if broken {
             y_top = layouter.y;
             // Longtable: Repeat headers on new page!
@@ -145,20 +199,22 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
                 && row_idx >= table_data.header_row_count
             {
                 for h_row in rows.iter().take(table_data.header_row_count) {
-                    let h_row_h = prepare_row_cells(layouter, h_row, n, col_w, col_offsets);
+                    let h_row_h = prepare_row_cells(layouter, h_row, n, col_w, col_offsets, &mut row_math_collector);
                     paint_prepared_row(
                         layouter, h_row, cols, col_w, col_offsets, origin_x, table_w, rule_right, &mut y_top,
-                        h_row_h,
+                        h_row_h, &row_math_collector,
                     );
                 }
                 // Re-prepare the current row since header rendering overwrote layouter's cell buffers
-                prepare_row_cells(layouter, row, n, col_w, col_offsets);
+                prepare_row_cells(layouter, row, n, col_w, col_offsets, &mut row_math_collector);
             }
         }
 
         paint_prepared_row(
             layouter, row, cols, col_w, col_offsets, origin_x, table_w, rule_right, &mut y_top, row_h,
+            &row_math_collector,
         );
+        layouter.y = y_top;
 
         row_idx += 1;
     }
@@ -194,16 +250,18 @@ pub(crate) fn layout_table<'a>(layouter: &mut Layouter<'a>, table_data: &'a Tabl
     layouter.y = y_top - layouter.par_skip;
 }
 
-fn prepare_row_cells<'a>(
+fn prepare_row_cells<'a, 'doc>(
     layouter: &mut Layouter<'a>,
-    row: &'a TableRow<'a>,
+    row: &'doc TableRow<'a>,
     n: usize,
     col_w: &[f32],
     col_offsets: &[f32],
+    row_math_collector: &mut Vec<&'doc crate::math::MathNode<'a>>,
 ) -> f32 {
     layouter.cell_words_soa.clear();
     layouter.cell_lines.clear();
     layouter.cell_line_spans.clear();
+    row_math_collector.clear();
 
     let mut max_lines = 1u16;
     let mut c_idx = 0;
@@ -221,12 +279,13 @@ fn prepare_row_cells<'a>(
         let inner_w = (item_w - 2.0 * CELL_PAD).max(1.0);
 
         let start_idx = layouter.cell_words_soa.len();
-        explode_inlines_into_family(
+        let total_w = explode_inlines_into_family(
             &cell.inlines,
             Face::Roman,
             layouter.base_font_size,
             &mut layouter.cell_words_soa,
             layouter.font_family,
+            row_math_collector,
         );
         let end_idx = layouter.cell_words_soa.len();
 
@@ -234,6 +293,18 @@ fn prepare_row_cells<'a>(
             layouter.cell_line_spans.push(CellSpan {
                 start: layouter.cell_lines.len() as u16,
                 count: 0,
+            });
+        } else if total_w <= inner_w && !crate::layout::layout_engine::inlines_have_break(&cell.inlines) {
+            let lines_start = layouter.cell_lines.len();
+            let (trimmed_end, trimmed_w) = layouter.trim_cell_line(start_idx, end_idx, total_w);
+            layouter.cell_lines.push(CellLineRange {
+                start_word: start_idx as u16,
+                word_count: (trimmed_end - start_idx) as u16,
+                line_w: trimmed_w,
+            });
+            layouter.cell_line_spans.push(CellSpan {
+                start: lines_start as u16,
+                count: 1,
             });
         } else {
             let lines_start = layouter.cell_lines.len();
@@ -248,13 +319,17 @@ fn prepare_row_cells<'a>(
         c_idx += colspan;
     }
 
-    (max_lines as f32) * layouter.base_leading + 4.0
+    if max_lines <= 1 {
+        layouter.base_leading
+    } else {
+        (max_lines as f32) * layouter.base_leading + 2.0
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint_prepared_row<'a>(
+fn paint_prepared_row<'a, 'doc>(
     layouter: &mut Layouter<'a>,
-    row: &'a TableRow<'a>,
+    row: &'doc TableRow<'a>,
     cols: &[ColSpec],
     col_w: &[f32],
     col_offsets: &[f32],
@@ -263,6 +338,7 @@ fn paint_prepared_row<'a>(
     rule_right: bool,
     y_top: &mut f32,
     row_h: f32,
+    row_math_collector: &[&'doc crate::math::MathNode<'a>],
 ) {
     let n = cols.len();
 
@@ -337,6 +413,7 @@ fn paint_prepared_row<'a>(
                 (line_desc.start_word + line_desc.word_count) as usize,
                 inner_x.max(x + 1.0),
                 baseline,
+                row_math_collector,
             );
         }
 
@@ -489,7 +566,7 @@ fn col_range_extent(origin_x: f32, col_offsets: &[f32], start_col: usize, end_co
 
 fn render_caption<'a>(
     layouter: &mut Layouter<'a>,
-    caption_inls: &'a [crate::frontend::ast::Inline<'a>],
+    caption_inls: &[crate::frontend::ast::Inline<'a>],
     origin_x: f32,
     table_w: f32,
 ) {
@@ -499,7 +576,7 @@ fn render_caption<'a>(
 
     if layouter.current_tbl_idx < layouter.registry.table_entries.len() {
         layouter.registry.table_entries[layouter.current_tbl_idx].page =
-            (layouter.pages.len() + 1) as u32;
+            layouter.current_page_number();
         layouter.current_tbl_idx += 1;
     }
 

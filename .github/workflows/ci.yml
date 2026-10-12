@@ -1,0 +1,68 @@
+name: CI & Mathematical Parity Differential Testing
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  test_and_verify_parity:
+    name: Build, Unit Tests & 300-DPI Perceptual Parity Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Setup Rust Dependency Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install TeX Live and Rendering Tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            texlive-latex-base \
+            texlive-latex-recommended \
+            texlive-latex-extra \
+            texlive-fonts-recommended \
+            poppler-utils \
+            python3-pip \
+            python3-numpy \
+            python3-pil \
+            python3-scipy
+
+      - name: Compile RushTeX (Release Build)
+        run: cargo build --release --verbose
+
+      - name: Run Full Rust Test Suite (146+ Tests)
+        run: cargo test --verbose
+
+      - name: Run Clippy Linter
+        run: cargo clippy -- -D warnings
+
+      - name: Execute Automated Differential Regression Harness (300 DPI)
+        run: |
+          python3 scripts/differential_parity_harness.py \
+            --suite all \
+            --dpi 300 \
+            --ci \
+            --save-all \
+            --diff-dir comparison/diff
+
+      - name: Upload Differential Parity Heatmaps & Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: differential-parity-heatmaps-300dpi
+          path: comparison/diff/*.png
+          if-no-files-found: ignore

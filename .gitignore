@@ -10,3 +10,4 @@ examples/stress_*.tex
 *.toc
 *.zip
 __pycache__/
+texlive-source/

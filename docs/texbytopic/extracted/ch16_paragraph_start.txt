@@ -1,0 +1,220 @@
+Chapter 16
+
+Paragraph Start
+
+
+
+At the start of a paragraph TEX inserts a vertical skip as a separation from the preceding
+paragraph, and a horizontal skip as an indentation for the current paragraph. This chapter
+explains the exact sequence of actions, and it discusses how TEX’s decisions can be altered.
+\indent Switch to horizontal mode and insert a box of width \parindent.
+\noindent Switch to horizontal mode with an empty horizontal list.
+\parskip Amount of glue added to the surrounding vertical list when a paragraph starts.
+       Plain TEX default: 0pt plus 1pt.
+\parindent Size of the indentation box added in front of a paragraph. Plain TEX default: 20pt.
+\everypar Token list inserted in front of paragraph text;
+\leavevmode Macro to switch to horizontal mode if necessary.
+
+
+
+16.1    When does a paragraph start
+TEX starts a paragraph whenever it switches from vertical mode to (unrestricted) horizontal
+mode. This switch can be effected by one of the commands \indent and \noindent, for
+example
+{\bf And now~\dots}
+\vskip3pt
+\noindent It’s~\dots
+or by any hhorizontal commandi. Horizontal commands include characters, in-line formu-
+las, and horizontal skips, but not boxes. Consider the following examples. The character ‘I’
+is a horizontal command:
+\vskip3pt
+It’s~\dots
+A single $ is a horizontal command:
+$x$ is supposed~\dots
+The control sequence \hskip is a horizontal command:
+\hskip .5\hsize Long indentation~\dots
+
+
+                                                                                        161
+Chapter 16. Paragraph Start
+
+
+The full list of horizontal commands is given on page 74.
+Upon recognizing a horizontal command in vertical mode, TEX will perform an \indent
+command (and all the actions associated with it; see below), and after that it will reexamine
+the horizontal command, this time executing it.
+
+
+
+16.2     What happens when a paragraph starts
+The \indent and \noindent commands cause a paragraph to be started. An \indent
+command can either be placed explicitly by the user or a macro, or it can be inserted by
+TEX when a hhorizontal commandi occurs in vertical mode; a \noindent command can
+only be placed explicitly.
+After either command is encountered, \parskip glue is appended to the surrounding ver-
+tical list unless TEX is in internal vertical mode and that list is empty (for example, at the
+start of a \vbox or \vtop). TEX then switches to unrestricted horizontal mode with an
+empty horizontal list. In the case of \indent (which may be inserted implicitly) an empty
+\hbox of width \parindent is placed at the start of the horizontal list; after \noindent
+no indentation box is inserted.
+The contents of the \everypar htoken parameteri are then inserted into the input (see
+some applications below). After that, the page builder is exercised (see Chapter 27). Note
+that this happens in horizontal mode: this is to move the \parskip glue to the current page.
+If an \indent command is given while TEX is already in horizontal mode, the indentation
+box is inserted just the same. This is not very useful.
+
+
+
+16.3     Assorted remarks
+16.3.1   Starting a paragraph with a box
+An \hbox does not imply horizontal mode, so an attempt to start a paragraph with a box,
+for instance
+\hbox to 0cm{\hss$\bullet$\hskip1em}Text ....
+will make the text following the box wind up one line below the box. It is necessary to
+switch to horizontal mode explicitly, using for instance \noindent or \leavevmode. The
+latter is defined using \unhbox, which is a horizontal command.
+
+16.3.2   Starting a paragraph with a group
+If the first hhorizontal commandi of a paragraph is enclosed in braces, the \everypar is
+evaluated inside the group. This may give unexpected results. Consider this example:
+\everypar={\setbox0=\vbox\bgroup\def\par{\egroup}}
+{\bf Start} a paragraph ... \par
+The hhorizontal commandi starting the paragraph is the character ‘S’, so when \everypar
+has been inserted the input is essentially
+
+
+162                                                              Victor Eijkhout – TEX by Topic
+                                                                             16.4. Examples
+
+
+{\bf \indent\setbox0=\vbox\bgroup
+    \def\par{\egroup}Start} a paragraph ... \par
+which is equivalent to
+{\bf \setbox0=\vbox{Start} a paragraph ... \par
+The effect of this is rather different from what was intended. Also, TEX will probably end
+the job inside a group.
+
+
+
+16.4     Examples
+16.4.1   Stretchable indentation
+Considering that \parindent is a hdimeni, not a hgluei, it is not possible to declare
+\parindent=1cm plus 1fil
+in order to get a variable indentation at the start of a paragraph. This problem may be solved
+by putting
+\everypar={\nobreak\hskip 1cm plus 1fil\relax}
+The \nobreak serves to prevent (in rare cases) a line break at the stretchable glue.
+
+
+16.4.2   Suppressing indentation
+Inserting {\setbox0=\lastbox} in the horizontal list at the beginning of the paragraph
+removes the indentation: indentation consists of a box, which is available through \lastbox.
+Assigning it effectively removes it from the list.
+However, this command sequence has to be inserted at a moment when TEX has already
+switched to horizontal mode, so explicit insertion of these commands in front of the first
+hhorizontal commandi of the paragraph does not work. The moment of insertion of the
+\everypar tokens is a better candidate: specifying
+\everypar={{\setbox0=\lastbox}}
+leads to unindented paragraphs, even if \parindent is not zero.
+
+
+16.4.3   An indentation scheme
+The above idea of letting the indentation box be removed by \everypar can be put to use
+in a systematic approach to indentation, where two conditionals
+\newif\ifNeedIndent %as a rule
+\newif\ifneedindent %special cases
+control whether paragraphs should indent as a rule, and whether in special cases indentation
+is needed. This section is taken from [8].
+We take a fixed \everypar:
+\everypar={\ControlledIndentation}
+which executes in some cases the macro \RemoveIndentation
+
+
+Victor Eijkhout – TEX by Topic                                                            163
+Chapter 16. Paragraph Start
+
+
+\def\RemoveIndentation{{\setbox0=\lastbox}}
+The implementation of \ControlledIndentation is:
+\def\ControlledIndentation
+   {\ifNeedIndent \ifneedindent
+                  \else \RemoveIndentation\needindenttrue \fi
+    \else \ifneedindent \needindentfalse
+          \else         \RemoveIndentation
+    \fi   \fi}
+In order to regulate indentation for a whole document, the user now once specifies, for
+instance,
+\NeedIndenttrue
+to indicate that, in principle, all paragraphs should indent. Macros such as \section can
+then prevent indentation in individual cases:
+\def\section#1{ ... \needindentfalse}
+
+
+16.4.4   A paragraph skip scheme
+The use of \everypar to control indentation, as was sketched above, can be extended to
+the paragraph skip.
+A visible white space between paragraphs can be created by the \parskip parameter, but,
+once this parameter has been set to some value, it is difficult to prevent paragraph skip in
+certain places elegantly. Usually, white space above and below environments and section
+headings should be specifiable independently of the paragraph skip. This section sketches
+an approach where \parskip is set to zero directly above and below certain constructs,
+while the \everypar is used to restore former values. This section is taken from [9].
+First of all, here are two tools. The control sequence \csarg will be used only inside other
+macros; a typical call will look like
+\csarg\vskip{#1Parskip}
+Here is the definition:
+\def\csarg#1#2{\expandafter#1\csname#2\endcsname}
+Next follows a generalization of \vskip: the macro \vspace will not place its argument
+if the previous glue item is larger; otherwise it will eliminate the preceding glue, and place
+its argument.
+\newskip\tempskipa
+\def\vspace#1{\tempskipa=#1\relax
+    \ifvmode \ifdim\tempskipa<\lastskip
+             \else \vskip-\lastskip \vskip\tempskipa \fi
+    \else    \vskip\tempskipa \fi}
+Now assume that any construct foo with surrounding white space starts and ends with ma-
+cro calls \StartEnvironment{foo} and \EndEnvironment{foo} respectively. Further-
+more, assume that to this environment there correspond three glue registers: the \fooStartskip
+
+
+164                                                              Victor Eijkhout – TEX by Topic
+                                                                           16.4. Examples
+
+
+(glue above the environment), \fooParskip (the paragraph skip inside the environment),
+and the \fooEndskip (glue below the environment).
+For restoring the value of the paragraph skip a conditional and a glue register are needed:
+\newskip\TempParskip \newif\ifParskipNeedsRestoring
+The basic sequence for the starting and ending macros for the environments is then
+\TempParskip=\parskip\parskip=0cm\relax
+\ParskipNeedsRestoringtrue
+The implementations can now be given as:
+\def\StartEnvironment#1{\csarg\vspace{#1Startskip}
+     \begingroup % make changes local
+     \csarg\TempParskip{#1Parskip} \parskip=0cm\relax
+     \ParskipNeedsRestoringtrue}
+\def\EndEnvironment#1{\csarg\vspace{#1Endskip}
+     \endgroup % restore global values
+     \ifParskipNeedsRestoring
+     \else \TempParskip=\parskip \parskip=0cm\relax
+           \ParskipNeedsRestoringtrue
+     \fi}
+The \EndEnvironment macro needs a little comment: if an environment is used inside
+another one, and it occurs before the first paragraph in that environment, the value of the
+paragraph skip for the outer environment has already been saved. Therefore no further
+actions are required in that case.
+Note that both macros start with a vertical skip. This prevents the \begingroup and
+\endgroup statements from occurring in a paragraph.
+We now come to the main point: if necessary, the \everypar will restore the value of the
+paragraph skip.
+\everypar={\ControlledIndentation\ControlledParskip}
+\def\ControlledParskip
+   {\ifParskipNeedsRestoring
+       \parskip=\TempParskip \ParskipNeedsRestoringfalse
+    \fi}
+
+
+
+
+Victor Eijkhout – TEX by Topic                                                          165
+

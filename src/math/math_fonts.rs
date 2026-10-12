@@ -20,166 +20,15 @@ pub struct MathSymbolDef {
 /// Resolves a LaTeX math command (e.g. "alpha", "sum", "partial") to its font face,
 /// atom kind, and Adobe Symbol byte code.
 pub fn lookup_math_command(cmd: &str) -> Option<MathSymbolDef> {
-    let def = match cmd {
-        // Greek Lowercase
-        "alpha" => (MathAtomKind::Ord, Face::Symbol, "a", Some(b'a')),
-        "beta" => (MathAtomKind::Ord, Face::Symbol, "b", Some(b'b')),
-        "gamma" => (MathAtomKind::Ord, Face::Symbol, "g", Some(b'g')),
-        "delta" => (MathAtomKind::Ord, Face::Symbol, "d", Some(b'd')),
-        "epsilon" | "varepsilon" => (MathAtomKind::Ord, Face::Symbol, "e", Some(b'e')),
-        "zeta" => (MathAtomKind::Ord, Face::Symbol, "z", Some(b'z')),
-        "eta" => (MathAtomKind::Ord, Face::Symbol, "h", Some(b'h')),
-        "theta" | "vartheta" => (MathAtomKind::Ord, Face::Symbol, "q", Some(b'q')),
-        "iota" => (MathAtomKind::Ord, Face::Symbol, "i", Some(b'i')),
-        "kappa" => (MathAtomKind::Ord, Face::Symbol, "k", Some(b'k')),
-        "lambda" => (MathAtomKind::Ord, Face::Symbol, "l", Some(b'l')),
-        "mu" => (MathAtomKind::Ord, Face::Symbol, "m", Some(b'm')),
-        "nu" => (MathAtomKind::Ord, Face::Symbol, "n", Some(b'n')),
-        "xi" => (MathAtomKind::Ord, Face::Symbol, "x", Some(b'x')),
-        "pi" | "varpi" => (MathAtomKind::Ord, Face::Symbol, "p", Some(b'p')),
-        "rho" => (MathAtomKind::Ord, Face::Symbol, "r", Some(b'r')),
-        "sigma" | "varsigma" => (MathAtomKind::Ord, Face::Symbol, "s", Some(b's')),
-        "tau" => (MathAtomKind::Ord, Face::Symbol, "t", Some(b't')),
-        "upsilon" => (MathAtomKind::Ord, Face::Symbol, "u", Some(b'u')),
-        "phi" | "varphi" => (MathAtomKind::Ord, Face::Symbol, "f", Some(b'f')),
-        "chi" => (MathAtomKind::Ord, Face::Symbol, "c", Some(b'c')),
-        "psi" => (MathAtomKind::Ord, Face::Symbol, "y", Some(b'y')),
-        "omega" => (MathAtomKind::Ord, Face::Symbol, "w", Some(b'w')),
-
-        // Greek Uppercase
-        "Gamma" => (MathAtomKind::Ord, Face::Symbol, "G", Some(b'G')),
-        "Delta" => (MathAtomKind::Ord, Face::Symbol, "D", Some(b'D')),
-        "Theta" => (MathAtomKind::Ord, Face::Symbol, "Q", Some(b'Q')),
-        "Lambda" => (MathAtomKind::Ord, Face::Symbol, "L", Some(b'L')),
-        "Xi" => (MathAtomKind::Ord, Face::Symbol, "X", Some(b'X')),
-        "Pi" => (MathAtomKind::Ord, Face::Symbol, "P", Some(b'P')),
-        "Sigma" => (MathAtomKind::Ord, Face::Symbol, "S", Some(b'S')),
-        "Upsilon" => (MathAtomKind::Ord, Face::Symbol, "U", Some(b'U')),
-        "Phi" => (MathAtomKind::Ord, Face::Symbol, "F", Some(b'F')),
-        "Psi" => (MathAtomKind::Ord, Face::Symbol, "Y", Some(b'Y')),
-        "Omega" => (MathAtomKind::Ord, Face::Symbol, "W", Some(b'W')),
-
-        // Calculus & Physics
-        "partial" => (MathAtomKind::Ord, Face::Symbol, "\u{00B6}", Some(0xB6)),
-        "nabla" => (MathAtomKind::Ord, Face::Symbol, "\u{00D1}", Some(0xD1)),
-        "infty" => (MathAtomKind::Ord, Face::Symbol, "\u{00A5}", Some(0xA5)),
-        "int" => (MathAtomKind::Op, Face::Symbol, "\u{00F2}", Some(0xF2)),
-        "iint" => (
-            MathAtomKind::Op,
-            Face::Symbol,
-            "\u{00F2}\u{00F2}",
-            Some(0xF2),
-        ),
-        "sum" => (MathAtomKind::Op, Face::Symbol, "\u{00E5}", Some(0xE5)),
-        "prod" => (MathAtomKind::Op, Face::Symbol, "\u{00D5}", Some(0xD5)),
-
-        // Binary Operators
-        "times" => (MathAtomKind::Bin, Face::Symbol, "\u{00B4}", Some(0xB4)),
-        "pm" => (MathAtomKind::Bin, Face::Symbol, "\u{00B1}", Some(0xB1)),
-        "mp" => (MathAtomKind::Bin, Face::Symbol, "\u{00B1}", Some(0xB1)),
-        "div" => (MathAtomKind::Bin, Face::Symbol, "\u{00B8}", Some(0xB8)),
-        "cdot" => (MathAtomKind::Bin, Face::Symbol, "\u{00B7}", Some(0xD7)),
-        "cap" => (MathAtomKind::Bin, Face::Symbol, "\u{00C7}", Some(0xC7)),
-        "cup" => (MathAtomKind::Bin, Face::Symbol, "\u{00C8}", Some(0xC8)),
-        "oplus" => (MathAtomKind::Bin, Face::Symbol, "\u{00C4}", Some(0xC4)),
-        "otimes" => (MathAtomKind::Bin, Face::Symbol, "\u{00C5}", Some(0xC5)),
-        "ast" | "star" => (MathAtomKind::Bin, Face::Symbol, "*", Some(0x2A)),
-        "vee" | "lor" => (MathAtomKind::Bin, Face::Symbol, "\u{00DA}", Some(0xDA)),
-        "wedge" | "land" => (MathAtomKind::Bin, Face::Symbol, "\u{00D9}", Some(0xD9)),
-        "circ" => (MathAtomKind::Bin, Face::Symbol, "\u{00B0}", Some(0xB0)),
-        "bullet" => (MathAtomKind::Bin, Face::Symbol, "\u{00B7}", Some(0xD7)),
-        "dagger" => (MathAtomKind::Bin, Face::Roman, "†", Some(0x79)),
-        "ddagger" => (MathAtomKind::Bin, Face::Roman, "‡", Some(0x7A)),
-        "setminus" => (MathAtomKind::Bin, Face::Symbol, "\\", Some(b'\\')),
-
-        // Standard Functions (Roman Operators)
-        "sin" => (MathAtomKind::Op, Face::Roman, "sin", None),
-        "cos" => (MathAtomKind::Op, Face::Roman, "cos", None),
-        "tan" => (MathAtomKind::Op, Face::Roman, "tan", None),
-        "cot" => (MathAtomKind::Op, Face::Roman, "cot", None),
-        "sec" => (MathAtomKind::Op, Face::Roman, "sec", None),
-        "csc" => (MathAtomKind::Op, Face::Roman, "csc", None),
-        "arcsin" => (MathAtomKind::Op, Face::Roman, "arcsin", None),
-        "arccos" => (MathAtomKind::Op, Face::Roman, "arccos", None),
-        "arctan" => (MathAtomKind::Op, Face::Roman, "arctan", None),
-        "sinh" => (MathAtomKind::Op, Face::Roman, "sinh", None),
-        "cosh" => (MathAtomKind::Op, Face::Roman, "cosh", None),
-        "tanh" => (MathAtomKind::Op, Face::Roman, "tanh", None),
-        "log" => (MathAtomKind::Op, Face::Roman, "log", None),
-        "ln" => (MathAtomKind::Op, Face::Roman, "ln", None),
-        "exp" => (MathAtomKind::Op, Face::Roman, "exp", None),
-        "lg" => (MathAtomKind::Op, Face::Roman, "lg", None),
-        "deg" => (MathAtomKind::Op, Face::Roman, "deg", None),
-        "dim" => (MathAtomKind::Op, Face::Roman, "dim", None),
-        "hom" => (MathAtomKind::Op, Face::Roman, "hom", None),
-        "ker" => (MathAtomKind::Op, Face::Roman, "ker", None),
-        "arg" => (MathAtomKind::Op, Face::Roman, "arg", None),
-        "coth" => (MathAtomKind::Op, Face::Roman, "coth", None),
-        "Pr" => (MathAtomKind::Op, Face::Roman, "Pr", None),
-
-        // Relations
-        "le" | "leq" => (MathAtomKind::Rel, Face::Symbol, "\u{00A3}", Some(0xA3)),
-        "ge" | "geq" => (MathAtomKind::Rel, Face::Symbol, "\u{00B3}", Some(0xB3)),
-        "ne" | "neq" => (MathAtomKind::Rel, Face::Symbol, "\u{00B9}", Some(0xB9)),
-        "approx" => (MathAtomKind::Rel, Face::Symbol, "\u{00BB}", Some(0xBB)),
-        "equiv" => (MathAtomKind::Rel, Face::Symbol, "\u{00BA}", Some(0xBA)),
-        "sim" => (MathAtomKind::Rel, Face::Symbol, "~", Some(0x7E)),
-        "simeq" | "cong" => (MathAtomKind::Rel, Face::Symbol, "\u{0040}", Some(0x40)),
-        "propto" => (MathAtomKind::Rel, Face::Symbol, "\u{00B5}", Some(0xB5)),
-        "in" => (MathAtomKind::Rel, Face::Symbol, "\u{00CE}", Some(0xCE)),
-        "notin" => (MathAtomKind::Rel, Face::Symbol, "\u{00CF}", Some(0xCF)),
-        "subset" => (MathAtomKind::Rel, Face::Symbol, "\u{00CC}", Some(0xCC)),
-        "supset" => (MathAtomKind::Rel, Face::Symbol, "\u{00C9}", Some(0xC9)),
-        "subseteq" => (MathAtomKind::Rel, Face::Symbol, "\u{00CD}", Some(0xCD)),
-        "supseteq" => (MathAtomKind::Rel, Face::Symbol, "\u{00CA}", Some(0xCA)),
-        "perp" => (MathAtomKind::Rel, Face::Symbol, "^", Some(0x5E)),
-        "mid" => (MathAtomKind::Rel, Face::Symbol, "|", Some(b'|')),
-
-        // Arrows & Logic
-        "to" | "rightarrow" | "longrightarrow" | "mapsto" => {
-            (MathAtomKind::Rel, Face::Symbol, "\u{00AE}", Some(0xAE))
-        }
-        "leftarrow" | "longleftarrow" => (MathAtomKind::Rel, Face::Symbol, "\u{00AC}", Some(0xAC)),
-        "Rightarrow" | "implies" => (MathAtomKind::Rel, Face::Symbol, "\u{00DE}", Some(0xDE)),
-        "Leftarrow" => (MathAtomKind::Rel, Face::Symbol, "\u{00DC}", Some(0xDC)),
-        "Leftrightarrow" | "iff" | "longleftrightarrow" => {
-            (MathAtomKind::Rel, Face::Symbol, "\u{00DB}", Some(0xDB))
-        }
-        "uparrow" => (MathAtomKind::Rel, Face::Symbol, "\u{00AD}", Some(0xAD)),
-        "downarrow" => (MathAtomKind::Rel, Face::Symbol, "\u{00AF}", Some(0xAF)),
-        "Uparrow" => (MathAtomKind::Rel, Face::Symbol, "\u{00DD}", Some(0xDD)),
-        "Downarrow" => (MathAtomKind::Rel, Face::Symbol, "\u{00DF}", Some(0xDF)),
-        "forall" => (MathAtomKind::Ord, Face::Symbol, "\u{0022}", Some(0x22)),
-        "exists" => (MathAtomKind::Ord, Face::Symbol, "\u{0024}", Some(0x24)),
-        "neg" | "lnot" => (MathAtomKind::Ord, Face::Symbol, "\u{00D8}", Some(0xD8)),
-        "angle" => (MathAtomKind::Ord, Face::Symbol, "\u{00D0}", Some(0xD0)),
-        "langle" => (MathAtomKind::Open, Face::Symbol, "\u{00E1}", Some(0xE1)),
-        "rangle" => (MathAtomKind::Close, Face::Symbol, "\u{00F1}", Some(0xF1)),
-        "lfloor" => (MathAtomKind::Open, Face::Symbol, "\u{00EB}", Some(0xEB)),
-        "rfloor" => (MathAtomKind::Close, Face::Symbol, "\u{00FB}", Some(0xFB)),
-        "lceil" => (MathAtomKind::Open, Face::Symbol, "\u{00E9}", Some(0xE9)),
-        "rceil" => (MathAtomKind::Close, Face::Symbol, "\u{00F9}", Some(0xF9)),
-        "vert" => (MathAtomKind::Ord, Face::Symbol, "|", Some(0x6A)),
-        "Vert" => (MathAtomKind::Ord, Face::Roman, "||", None),
-        "aleph" => (MathAtomKind::Ord, Face::Symbol, "\u{00C0}", Some(0xC0)),
-        "Re" => (MathAtomKind::Ord, Face::Symbol, "\u{00C2}", Some(0xC2)),
-        "Im" => (MathAtomKind::Ord, Face::Symbol, "\u{00C1}", Some(0xC1)),
-        "wp" => (MathAtomKind::Ord, Face::Symbol, "\u{00C3}", Some(0xC3)),
-        "emptyset" => (MathAtomKind::Ord, Face::Symbol, "\u{00C6}", Some(0xC6)),
-        "surd" => (MathAtomKind::Ord, Face::Symbol, "\u{00D6}", Some(0xD6)),
-        "dots" | "ldots" | "cdots" | "dotsb" | "dotsm" | "dotsi" | "dotso" | "dotsc"
-        | "mathellipsis" => (MathAtomKind::Ord, Face::Roman, "...", None),
-        "vdots" => (MathAtomKind::Ord, Face::Roman, ":", None),
-        "ddots" => (MathAtomKind::Ord, Face::Roman, "...", None),
-
-        _ => return None,
-    };
-
-    Some(MathSymbolDef {
-        kind: def.0,
-        face: def.1,
-        glyph: def.2,
-        code: def.3,
+    crate::math::math_symbols::lookup_symbol(cmd).map(|rec| MathSymbolDef {
+        kind: rec.kind,
+        face: rec.face,
+        glyph: rec.glyph,
+        code: if rec.tfm_code == 0xFF {
+            None
+        } else {
+            Some(rec.tfm_code)
+        },
     })
 }
 
@@ -232,6 +81,14 @@ const fn build_cm_symbol_dispatch() -> CmSymbolDispatch {
     table[b'y' as usize] = CmSymbolEntry { face: Face::MathItalic, glyph_code: 0x20 };
     table[b'w' as usize] = CmSymbolEntry { face: Face::MathItalic, glyph_code: 0x21 };
 
+    // Greek Lowercase Variants (CMMI10 - MathItalic)
+    table[0x80] = CmSymbolEntry { face: Face::MathItalic, glyph_code: 0x22 }; // varepsilon
+    table[0x81] = CmSymbolEntry { face: Face::MathItalic, glyph_code: 0x23 }; // vartheta
+    table[0x82] = CmSymbolEntry { face: Face::MathItalic, glyph_code: 0x24 }; // varpi
+    table[0x83] = CmSymbolEntry { face: Face::MathItalic, glyph_code: 0x25 }; // varrho
+    table[0x84] = CmSymbolEntry { face: Face::MathItalic, glyph_code: 0x26 }; // varsigma
+    table[0x85] = CmSymbolEntry { face: Face::MathItalic, glyph_code: 0x27 }; // varphi
+
     // Greek Uppercase (CMR10 - Roman)
     table[b'G' as usize] = CmSymbolEntry { face: Face::Roman, glyph_code: 0x00 };
     table[b'D' as usize] = CmSymbolEntry { face: Face::Roman, glyph_code: 0x01 };
@@ -247,6 +104,7 @@ const fn build_cm_symbol_dispatch() -> CmSymbolDispatch {
 
     // CMSY10 Symbols
     table[0x2D] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x00 }; // minus
+    table[0xA2] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x30 }; // prime
     table[0xA5] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x31 }; // infty
     table[0xB1] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x06 }; // pm
     table[0xB4] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x02 }; // times
@@ -291,9 +149,21 @@ const fn build_cm_symbol_dispatch() -> CmSymbolDispatch {
     table[0x40] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x27 }; // simeq
     table[0xB5] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x2F }; // propto
     table[0xD0] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x27 }; // angle
-    table[0x79] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x79 }; // dagger
-    table[0x7A] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x7A }; // ddagger
+    table[0x86] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x79 }; // dagger
+    table[0x87] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x7A }; // ddagger
+    table[0x88] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x6B }; // parallel / Vert
     table[0x6A] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x6A }; // vertical bar |
+    table[b'\\' as usize] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x6E }; // backslash / setminus
+
+    // Delimiters in CMSY10
+    table[0xE1] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x68 }; // langle
+    table[0xF1] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x69 }; // rangle
+    table[0xEB] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x62 }; // lfloor
+    table[0xFB] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x63 }; // rfloor
+    table[0xE9] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x64 }; // lceil
+    table[0xF9] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x65 }; // rceil
+    table[0x7B] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x66 }; // { / lbrace
+    table[0x7D] = CmSymbolEntry { face: Face::Symbol, glyph_code: 0x67 }; // } / rbrace
 
     // CMMI10 (MathItalic)
     table[0xB6] = CmSymbolEntry { face: Face::MathItalic, glyph_code: 0x40 }; // partial
@@ -390,7 +260,7 @@ pub fn measure_char(ch: char, face: Face, size: f32, family: metrics::FontFamily
             }
         }
     }
-    if face == Face::Symbol {
+    if matches!(face, Face::Symbol | Face::Symbol7 | Face::Symbol5) {
         if let Some(code) = metrics::unicode_to_symbol_byte(ch) {
             let units = metrics::SYMBOL_WIDTHS[code as usize];
             return (units as f32) * scale;
@@ -941,7 +811,7 @@ pub fn char_height_depth(ch: char, face: Face, family: metrics::FontFamily) -> (
                 _ => {}
             }
         }
-        if face == Face::Symbol || face == Face::Symbol7 || face == Face::Symbol5 {
+        if matches!(face, Face::Symbol | Face::Symbol7 | Face::Symbol5) {
             if let Some(byte) = metrics::unicode_to_symbol_byte(ch) {
                 let sc = if byte == 0x2D { 0x00 } else { byte };
                 let m = match face {
@@ -952,11 +822,18 @@ pub fn char_height_depth(ch: char, face: Face, family: metrics::FontFamily) -> (
                 return (m.h, m.d);
             }
         }
+    } else if matches!(face, Face::Symbol | Face::Symbol7 | Face::Symbol5) {
+        if let Some(byte) = metrics::unicode_to_symbol_byte(ch) {
+            return symbol_height_depth_family(byte, family);
+        }
     }
     if ch.is_ascii_digit() {
         return (675, 0);
     }
     if face == Face::Italic || face == Face::BoldItalic || face == Face::MathItalic {
+        if ch.is_ascii_uppercase() {
+            return (683, 0);
+        }
         match ch {
             'b' | 'd' | 'h' | 'k' | 'l' => (694, 0),
             'f' => (700, 205),
@@ -1013,9 +890,11 @@ pub fn symbol_height_depth_family(code: u8, family: metrics::FontFamily) -> (u16
         // Lowercase Greek
         b'a' | b'c' | b'e' | b'i' | b'k' | b'm' | b'n' | b'o' | b'p' | b's' | b't' | b'u'
         | b'v' | b'w' => (450, 0),
-        b'b' | b'g' | b'h' | b'q' | b'r' | b'f' | b'y' => (450, 218),
-        b'd' | b'l' | b'x' => (690, 0),
-        b'z' => (690, 218),
+        b'b' | b'g' | b'h' | b'q' | b'r' | b'f' | b'y' | b'j' => (450, 218),
+        b'd' | b'l' => (690, 0),
+        b'z' | b'x' => (690, 218),
+        b'J' => (690, 0),   // vartheta
+        b'V' => (450, 218), // varsigma
         // Uppercase Greek
         b'A'..=b'Z' => (680, 0),
         _ => (500, 100),
@@ -1281,8 +1160,8 @@ pub fn lookup_accent_metrics(accent: &str, _family: metrics::FontFamily) -> Opti
             is_rule: false,
             lift: 20,
             extra_height: 250,
-            scale: 750,
-            width_ratio: 400,
+            scale: 950,
+            width_ratio: 500,
             _reserved: [0; 6],
         },
         "bar" => AccentMetrics {
@@ -1440,40 +1319,289 @@ pub fn lookup_accent_metrics(accent: &str, _family: metrics::FontFamily) -> Opti
     Some(metrics)
 }
 
+/// Top accent attachment offsets (relative to advance center) in 1000-units-per-em.
+/// Extracted from authoritative OpenType Math MATH tables (TeX Gyre Termes Math for Times, Latin Modern Math for CM).
+#[repr(C, align(64))]
+pub struct TopAccentLut {
+    pub times_upper: [i16; 26],
+    pub times_lower: [i16; 26],
+    pub cm_math_italic_upper: [i16; 26],
+    pub cm_symbol_upper: [i16; 26],
+    pub _reserved: [i16; 24],
+}
+
+pub static TOP_ACCENT_LUT: TopAccentLut = TopAccentLut {
+    times_upper: [
+        72,   // 'A'
+        4,    // 'B'
+        216,  // 'C'
+        -43,  // 'D'
+        81,   // 'E'
+        91,   // 'F'
+        189,  // 'G'
+        88,   // 'H'
+        95,   // 'I'
+        142,  // 'J'
+        101,  // 'K'
+        -11,  // 'L'
+        88,   // 'M'
+        89,   // 'N'
+        115,  // 'O'
+        18,   // 'P'
+        111,  // 'Q'
+        3,    // 'R'
+        129,  // 'S'
+        88,   // 'T'
+        85,   // 'U'
+        77,   // 'V'
+        73,   // 'W'
+        61,   // 'X'
+        84,   // 'Y'
+        84,   // 'Z'
+    ],
+    times_lower: [
+        114,  // 'a'
+        -27,  // 'b'
+        107,  // 'c'
+        238,  // 'd'
+        113,  // 'e'
+        198,  // 'f'
+        47,   // 'g'
+        -11,  // 'h'
+        85,   // 'i'
+        110,  // 'j'
+        11,   // 'k'
+        106,  // 'l'
+        38,   // 'm'
+        35,   // 'n'
+        73,   // 'o'
+        9,    // 'p'
+        130,  // 'q'
+        81,   // 'r'
+        75,   // 's'
+        94,   // 't'
+        56,   // 'u'
+        20,   // 'v'
+        20,   // 'w'
+        59,   // 'x'
+        14,   // 'y'
+        42,   // 'z'
+    ],
+    cm_math_italic_upper: [
+        139, // 'A'
+        83,  // 'B'
+        83,  // 'C'
+        56,  // 'D'
+        83,  // 'E'
+        83,  // 'F'
+        83,  // 'G'
+        56,  // 'H'
+        111, // 'I'
+        167, // 'J'
+        56,  // 'K'
+        28,  // 'L'
+        83,  // 'M'
+        83,  // 'N'
+        83,  // 'O'
+        83,  // 'P'
+        83,  // 'Q'
+        83,  // 'R'
+        83,  // 'S'
+        83,  // 'T'
+        28,  // 'U'
+        0,   // 'V'
+        83,  // 'W'
+        0,   // 'X'
+        83,  // 'Y'
+        83,  // 'Z'
+    ],
+    cm_symbol_upper: [
+        139, // 'A'
+        0,   // 'B'
+        0,   // 'C'
+        0,   // 'D'
+        0,   // 'E'
+        0,   // 'F'
+        0,   // 'G'
+        0,   // 'H'
+        0,   // 'I'
+        167, // 'J'
+        56,  // 'K'
+        0,   // 'L'
+        0,   // 'M'
+        0,   // 'N'
+        0,   // 'O'
+        0,   // 'P'
+        111, // 'Q'
+        0,   // 'R'
+        0,   // 'S'
+        0,   // 'T'
+        0,   // 'U'
+        28,  // 'V'
+        0,   // 'W'
+        0,   // 'X'
+        83,  // 'Y'
+        139, // 'Z'
+    ],
+    _reserved: [0; 24],
+};
+
+const _: () = assert!(core::mem::size_of::<TopAccentLut>() == 256);
+const _: () = assert!(core::mem::align_of::<TopAccentLut>() == 64);
+
+/// Compact representation of a Computer Modern math accent glyph and its discrete variants.
+/// Typographic placement channel for mathematical accents (mlist.c:2890-2920).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccentPosition {
+    Top,
+    Bottom,
+    Overlay,
+}
+
+/// Compact representation of a Computer Modern math accent glyph and its discrete variants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct CmAccentRecord {
+    pub name: &'static str,
+    pub face: Face,
+    pub code: u8,
+    pub position: AccentPosition,
+    pub is_wide: bool,
+    pub wide_variants: [u8; 3],
+}
+
+/// Static table of Computer Modern math accents (TeX Appendix G Rule 12 & mlist.c).
+pub static CM_ACCENT_TABLE: [CmAccentRecord; 18] = [
+    CmAccentRecord { name: "hat", face: Face::Roman, code: 0x5E, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "tilde", face: Face::Roman, code: 0x7E, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "vec", face: Face::MathItalic, code: 0x7E, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "acute", face: Face::Roman, code: 0x13, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "grave", face: Face::Roman, code: 0x12, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "check", face: Face::Roman, code: 0x14, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "breve", face: Face::Roman, code: 0x15, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "bar", face: Face::Roman, code: 0x16, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "dot", face: Face::Roman, code: 0x5F, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "ddot", face: Face::Roman, code: 0x7F, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "mathring", face: Face::Roman, code: 0x17, position: AccentPosition::Top, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "widehat", face: Face::Extension, code: 0x62, position: AccentPosition::Top, is_wide: true, wide_variants: [0x62, 0x63, 0x64] },
+    CmAccentRecord { name: "widetilde", face: Face::Extension, code: 0x65, position: AccentPosition::Top, is_wide: true, wide_variants: [0x65, 0x66, 0x67] },
+    // Bottom accents (mlist.c:2903)
+    CmAccentRecord { name: "utilde", face: Face::Roman, code: 0x7E, position: AccentPosition::Bottom, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "underaccent", face: Face::Roman, code: 0x7E, position: AccentPosition::Bottom, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "underbar", face: Face::Roman, code: 0x16, position: AccentPosition::Bottom, is_wide: false, wide_variants: [0; 3] },
+    // Overlay accents (mlist.c:2911)
+    CmAccentRecord { name: "not", face: Face::Symbol, code: 0x36, position: AccentPosition::Overlay, is_wide: false, wide_variants: [0; 3] },
+    CmAccentRecord { name: "cancel", face: Face::Symbol, code: 0x36, position: AccentPosition::Overlay, is_wide: false, wide_variants: [0; 3] },
+];
+
+impl CmAccentRecord {
+    /// Zero-allocation O(1) jump table lookup for Computer Modern accents.
+    #[inline(always)]
+    pub fn lookup(name: &str) -> Option<&'static CmAccentRecord> {
+        match name {
+            "hat" => Some(&CM_ACCENT_TABLE[0]),
+            "tilde" => Some(&CM_ACCENT_TABLE[1]),
+            "vec" => Some(&CM_ACCENT_TABLE[2]),
+            "acute" => Some(&CM_ACCENT_TABLE[3]),
+            "grave" => Some(&CM_ACCENT_TABLE[4]),
+            "check" => Some(&CM_ACCENT_TABLE[5]),
+            "breve" => Some(&CM_ACCENT_TABLE[6]),
+            "bar" => Some(&CM_ACCENT_TABLE[7]),
+            "dot" => Some(&CM_ACCENT_TABLE[8]),
+            "ddot" => Some(&CM_ACCENT_TABLE[9]),
+            "mathring" => Some(&CM_ACCENT_TABLE[10]),
+            "widehat" => Some(&CM_ACCENT_TABLE[11]),
+            "widetilde" => Some(&CM_ACCENT_TABLE[12]),
+            "utilde" => Some(&CM_ACCENT_TABLE[13]),
+            "underaccent" => Some(&CM_ACCENT_TABLE[14]),
+            "underbar" => Some(&CM_ACCENT_TABLE[15]),
+            "not" => Some(&CM_ACCENT_TABLE[16]),
+            "cancel" => Some(&CM_ACCENT_TABLE[17]),
+            _ => None,
+        }
+    }
+
+    /// Resolves the concrete glyph face, byte code, and unscaled dimensions.
+    #[inline(always)]
+    pub fn resolve_metric(&self, target_w: f32, font_size: f32) -> (Face, u8, f32, f32) {
+        if self.is_wide {
+            let m_v1 = crate::math::math_tfm::cmex10_metric(self.wide_variants[1]);
+            let w_v1 = (m_v1.w as f32) * (font_size * 0.001);
+            if target_w >= w_v1 {
+                let m_v2 = crate::math::math_tfm::cmex10_metric(self.wide_variants[2]);
+                let w_v2 = (m_v2.w as f32) * (font_size * 0.001);
+                if target_w >= w_v2 {
+                    (Face::Extension, self.wide_variants[2], (m_v2.w as f32) * (font_size * 0.001), (m_v2.h as f32) * (font_size * 0.001))
+                } else {
+                    (Face::Extension, self.wide_variants[1], (m_v1.w as f32) * (font_size * 0.001), (m_v1.h as f32) * (font_size * 0.001))
+                }
+            } else {
+                let m_v0 = crate::math::math_tfm::cmex10_metric(self.wide_variants[0]);
+                (Face::Extension, self.wide_variants[0], (m_v0.w as f32) * (font_size * 0.001), (m_v0.h as f32) * (font_size * 0.001))
+            }
+        } else {
+            let (face, w, h) = match self.face {
+                Face::Roman => {
+                    let m = crate::math::math_tfm::cmr10_metric(self.code);
+                    (Face::Roman, m.w, m.h)
+                }
+                Face::MathItalic => {
+                    let m = crate::math::math_tfm::cmmi10_metric(self.code);
+                    (Face::MathItalic, m.w, m.h)
+                }
+                Face::Symbol => {
+                    let m = crate::math::math_tfm::cmsy10_metric(self.code);
+                    (Face::Symbol, m.w, m.h)
+                }
+                Face::Extension => {
+                    let m = crate::math::math_tfm::cmex10_metric(self.code);
+                    (Face::Extension, m.w, m.h)
+                }
+                Face::AmsA => {
+                    let m = crate::math::math_tfm::msam10_metric(self.code);
+                    (Face::AmsA, m.w, m.h)
+                }
+                Face::AmsB => {
+                    let m = crate::math::math_tfm::msbm10_metric(self.code);
+                    (Face::AmsB, m.w, m.h)
+                }
+                _ => (Face::Roman, 0, 0),
+            };
+            (face, self.code, (w as f32) * (font_size * 0.001), (h as f32) * (font_size * 0.001))
+        }
+    }
+}
+
+
 /// Returns optical horizontal top accent attachment offset in 1000-units-per-em.
 /// In Computer Modern, utilizes Donald Knuth's authoritative skewchar (char 127) kerning from CMMI10/CMSY10.
+/// In Times and other families, utilizes OpenType Math TopAccentAttachment metrics.
 #[inline(always)]
-pub fn glyph_top_accent_offset(ch: char, face: Face, family: metrics::FontFamily) -> u16 {
+pub fn glyph_top_accent_offset(ch: char, face: Face, family: metrics::FontFamily) -> i16 {
     if family == metrics::FontFamily::ComputerModern {
         if face == Face::MathItalic {
+            if ch.is_ascii_uppercase() {
+                return TOP_ACCENT_LUT.cm_math_italic_upper[ch as usize - 'A' as usize];
+            }
             match ch {
-                'A' => return 139,
-                'H' => return 56,
-                'J' => return 167,
-                'P' => return 83,
-                'U' => return 28,
-                'Z' => return 83,
+                'd' => return 56,
                 'f' => return 167,
+                'j' => return 167,
                 'z' => return 56,
                 _ => {}
             }
-        } else if face == Face::Symbol {
-            match ch {
-                'A' => return 139,
-                'J' => return 167,
-                'K' => return 56,
-                'Q' => return 111,
-                'V' => return 28,
-                'Y' => return 83,
-                'Z' => return 139,
-                _ => {}
-            }
+        } else if face == Face::Symbol && ch.is_ascii_uppercase() {
+            return TOP_ACCENT_LUT.cm_symbol_upper[ch as usize - 'A' as usize];
         }
     }
-    if face != Face::Italic && face != Face::BoldItalic && face != Face::MathItalic {
-        return 0;
+    if face == Face::Italic || face == Face::BoldItalic || face == Face::MathItalic {
+        if ch.is_ascii_uppercase() {
+            return TOP_ACCENT_LUT.times_upper[ch as usize - 'A' as usize];
+        } else if ch.is_ascii_lowercase() {
+            return TOP_ACCENT_LUT.times_lower[ch as usize - 'a' as usize];
+        }
     }
-    italic_correction(ch, face, family) / 2
+    0
 }
 
 // =========================================================================

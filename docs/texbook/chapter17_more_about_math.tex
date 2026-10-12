@@ -1,0 +1,1333 @@
+\beginchapter Chapter 17. More about Math
+
+Another thing mathematicians like to do is make fractions---and they
+like to build symbols up on top of each other in a variety of different ways:
+\begindisplay
+$\displaystyle
+{1\over2}\qquad{\rm and}\qquad{n+1\over3}\qquad{\rm and}\qquad
+{n+1\choose3}\qquad{\rm and}\qquad\sum_{n=1}^3 Z_n^2\,.$
+\enddisplay
+You can get these four formulas as displayed equations by typing
+`|$$1\over2$$|' and
+`|$$n+1\over3$$|' and
+`|$$n+1\choose3$$|' and
+`|$$\sum_{n=1}^3 Z_n^2$$|';
+we shall study the simple rules for such constructions in this chapter.
+^^|\sum|^^|\choose|
+
+First let's look at ^{fractions}, which use the `^|\over|' notation. The
+control sequence |\over| applies to everything in the formula unless you
+use braces to enclose it in a specific subformula; in the latter
+^^{stacked fractions, see over}
+case, |\over| applies to everything in that subformula.
+\begindisplaymathdemo
+\it Input&\it Output\cr
+\noalign{\vskip-3pt}
+|$$x+y^2\over k+1$$|&x+y^2\over k+1\cr
+\noalign{\vskip2pt}
+|$${x+y^2\over k}+1$$|&{x+y^2\over k}+1\cr
+\noalign{\vskip-1pt}
+|$$x+{y^2\over k}+1$$|&x+{y^2\over k}+1\cr
+\noalign{\vskip-1pt}
+|$$x+{y^2\over k+1}$$|&x+{y^2\over k+1}\cr
+\noalign{\vskip-3pt}
+|$$x+y^{2\over k+1}$$|&x+y^{2\over k+1}\cr
+\endmathdemo
+You aren't allowed to use |\over| twice in the same subformula; instead of
+typing something like
+`|a \over b \over 2|', you must specify what goes over what:
+\begindisplaymathdemo
+\noalign{\vskip3pt}
+|$${a\over b}\over 2$$|&{a\over b}\over 2\cr
+|$$a\over{b\over 2}$$|&a\over{b\over 2}\cr
+\endmathdemo
+Unfortunately, both of these alternatives look pretty awful. Mathematicians
+tend to ``overuse'' |\over| when they first begin to typeset their own work
+on a system like \TeX. A good typist or copy editor will convert fractions
+to a ``^{slashed form},'' whenever a built-up construction would be too
+small or too crowded. For example, the last two cases should be treated
+as follows:
+\begindisplaymathdemo
+\noalign{\vskip3pt}
+|$$a/b \over 2$$|&a/b \over 2\cr
+|$$a \over b/2$$|&a \over b/2\cr
+\endmathdemo
+Conversion to slashed form takes a little bit of mathematical knowhow, since
+^{parentheses} sometimes need to be inserted in order to preserve the meaning
+of the formula. Besides substituting `|/|' for~`|\over|', the two parts
+of the fraction should be put in parentheses unless they are single
+symbols; for example, $a\over b$~becomes simply~$a/b$, but
+$a+1\over b$ becomes $(a+1)/b$, and $a+1\over b+1$ becomes
+${(a+1)/(b+1)}$. Furthermore, the entire fraction should generally
+be enclosed in parentheses if it appears next to something else;
+for example, ${a\over b}x$ becomes $(a/b)x$. If you are a typist without
+mathematical training, it's best to ask the author of the manuscript
+for help, in doubtful cases; you might also tactfully suggest that
+unsightly fractions be avoided altogether in future manuscripts.
+
+\exercise What's a better way to render the formula $x+y^{2\over k+1}$?
+\answer $x+y^{2/(k+1)}$\quad(|$x+y^{2/(k+1)}$|).
+
+\exercise Convert `${a+1\over b+1}x$' to slashed form.
+\answer $((a+1)/(b+1))x$\quad(|$((a+1)/(b+1))x$|).
+
+\exercise What surprise did B. L. ^{User} get when he typed `|$$x = (y^2\over
+k+1)$$|'\thinspace?
+\answer He got the displayed formula$$x=(y^2\over k+1)$$ because he forgot
+that an unconfined |\over| applies to everything.  \ (He should probably
+have typed `|$$x=\left(y^2\over k+1\right)$$|', using ideas that will be
+presented later in this chapter; this not only makes the parentheses
+larger, it keeps the `$x=$' out of the fraction, because |\left| and
+|\right| introduce subformulas.)
+
+\def\cents{\hbox{\rm\rlap/c}}
+\exercise How can you make `$7{1\over2}\cents$'? \ (Assume that
+the control sequence |\cents| yields~`$\cents$'.)^^{money}^^{cents}
+\answer `|$7{1\over2}\cents$|' or `|7$1\over2$\cents|'. \ (Incidentally,
+the definition used here was |\def\cents{\hbox{\rm\rlap/c}}|.)
+^^|\rlap|^^|\cents|
+
+The examples above show that letters and other symbols sometimes get
+smaller when they appear in fractions, just as they get smaller when they
+are used as exponents. It's about time that we studied \TeX's method for
+choosing the sizes of things. \TeX\ actually has eight different
+^{styles} in which it can treat formulas, namely
+$$\halign{\indent#\hfil\quad&#\hfil\cr
+display style&(for formulas displayed on lines by themselves)\cr
+text style&(for formulas embedded in the text)\cr
+script style&(for formulas used as superscripts or subscripts)\cr
+scriptscript style&(for second-order superscripts or subscripts)\cr}$$
+^^{display style}^^{text style}^^{script style}^^{scriptscript style}
+and four other ``^{cramped}'' styles that are almost the same except that
+exponents aren't raised quite so much. For brevity we shall refer to the
+eight styles as
+\begindisplay
+$\displaystyle D,\ D',\ T,\ T',\ S,\ S',\ \SS,\ \SS',$
+\enddisplay
+where $D$ is display style, $D'$ is cramped display style, $T$~is text style,
+etc. \TeX\ also uses three different ^{sizes of type for mathematics};
+they are called ^{text size}, ^{script size}, and ^{scriptscript size}.
+
+The normal way to typeset a formula with \TeX\ is to enclose it in dollar
+signs |$|$\,\ldots\,$|$|; this yields the formula in text style
+(style~$T$). Or you can enclose it in double dollar signs |$$|$\,\ldots\,$|$$|;
+this displays the formula in display style (style~$D$). The subformulas of
+a formula might, of course, be in different styles. Once you know
+the style, you can determine the size of type that \TeX\ will use:
+$$\everycr{\noalign{\penalty10000}}
+\halign{\indent#\hfil\qquad&#\hfil&\quad#\llap(like this)\hfil\cr
+If a letter is in style&then it will be set in\cr
+\noalign{\vskip 2pt}
+$D,D',T,T'$&text size&\cr
+$S,S'$&script size&\sevenrm\cr
+$\SS,\SS'$&scriptscript size&\fiverm\cr}$$
+There is no ``$\it SSS$'' style or ``scriptscriptscript'' size; such tiny
+symbols would be even less readable than the scriptscript ones. Therefore
+\TeX\ stays with scriptscript size as the minimum:
+$$\halign{\indent\hbox to 1.3in{#\hfil}&\hbox to 1.2in{#\hfil}&#\hfil\cr
+In a formula&the superscript&and the subscript\cr
+of style&style is&style is\cr
+\noalign{\vskip 2pt}
+$D,T$&$S$&$S'$\cr
+$D',T'$&$S'$&$S'$\cr
+$S,\SS$&$\SS$&$\SS'$\cr
+$S',\SS'$&$\SS'$&$\SS'$\cr}$$
+For example, if |x^{a_b}| is to be typeset in style $D$, then |a_b| will
+be set in style~$S$, and {\tt b}~in style~$\SS'$; the result is
+`$\displaystyle x^{a_b}$'.
+
+So far we haven't seen any difference between styles $D$ and $T$. Actually
+there is a slight difference in the positioning of exponents, although
+script size is used in each case: You get
+$\displaystyle x^2$~in $D$~style and $x^2$~in $T$~style and \vbox to 0pt{
+\vss\hbox{$\displaystyle{\atop x^2}$}\kern0pt}~in $D'$ or $T'$~style---do
+you see the difference? But there is a big distinction between $D$ style and
+$T$ style when it comes to fractions:
+$$\halign{\indent\hbox to 1.3in{#\hfil}&\hbox to 1.2in{#\hfil}&#\hfil\cr
+In a formula&the style of the&and the style of the\cr
+$\alpha$|\over|$\,\beta$ of style&numerator $\alpha$ is&denominator
+$\beta$ is\cr
+\noalign{\vskip 2pt}
+$D$&$T$&$T'$\cr
+$D'$&$T'$&$T'$\cr
+$T$&$S$&$S'$\cr
+$T'$&$S'$&$S'$\cr
+$S,\SS$&$\SS$&$\SS'$\cr
+$S',\SS'$&$\SS'$&$\SS'$\cr}$$
+^^{numerator}^^{denominator}
+Thus if you type `|$1\over2$|' (in a text) you get $1\over2$, namely style
+$S$ over style~$S'$; but if you type
+`|$$1\over2$$|' you get $$1\over2$$ (a displayed formula), which is style
+$T$ over style $T'$.
+
+\danger While we're at it, we might as well finish the style rules:
+^|\underline| does not change the style. ^{Math accents}, and the operations
+^|\sqrt| and ^|\overline|, change uncramped styles to their cramped
+counterparts; for example, $D$ changes to $D'$, but $D'$ stays as it was.
+
+\dangerexercise State the style and size of each part of the formula
+$\displaystyle \sqrt{p_2^{e'}}$, assuming that the formula itself is in
+style~$D$.
+\answer Style $D'$ is used for the subformula $p_2^{e'}$, hence style~$S'$
+is used for the superscript~$e'$ and the subscript~2, and style~$\SS'$
+is used for the supersuperscript prime. The square root sign and the $p$
+appear in text size; the 2 and the~$e$ appear in script size; and the
+$\prime$ is in scriptscript size.
+
+Suppose you don't like the style that \TeX\ selects by its automatic style
+rules.  Then you can specify the style you want by typing ^|\displaystyle|
+or ^|\textstyle| or ^|\scriptstyle| or ^|\scriptscriptstyle|; the style
+that you select will apply until the end of the formula or subformula, or
+until you select another style.  For example,
+`|$$n+\scriptstyle n+\scriptscriptstyle n.$$|' produces the display
+$$n+\scriptstyle n+\scriptscriptstyle n.$$
+This is a rather silly example, but it does show
+that the plus signs get smaller too, as the style changes. \TeX\ puts no
+space around + signs in script styles.
+
+Here's a more useful example of style changes: Sometimes you need to
+typeset a ``^{continued fraction}'' made up of many other fractions,
+all of which are supposed to be in display style:
+$$a_0+{1\over\displaystyle a_1+
+          {\strut 1\over\displaystyle a_2+
+            {\strut 1\over\displaystyle a_3+
+              {\strut 1\over a_4}}}}$$
+In order to get this effect, the idea is to type
+\begintt
+$$a_0+{1\over\displaystyle a_1+
+        {\strut 1\over\displaystyle a_2+
+          {\strut 1\over\displaystyle a_3+
+            {\strut 1\over a_4}}}}$$
+\endtt
+(The control sequence ^|\strut| has been used to make the denominators
+taller; this is a refinement that will be discussed in
+Chapter~18. Our concern now is with the style commands.) \
+Without the appearances of\/ |\strut| and |\displaystyle| in this formula,
+the result would be completely different:
+$$a_0+{1\over a_1+{1\over
+      a_2+{1\over a_3+{1\over a_4}}}}$$
+
+\danger These examples show that the numerator and denominator of a fraction
+are generally centered with respect to each other. If you prefer to have
+the numerator or denominator appear ^{flush left}, put `^|\hfill|' after
+it; or if you prefer ^{flush right}, put `|\hfill|' at the left. For
+example, if the first three appearances of `|1\over|' in the previous
+example are replaced by `|1\hfill\over|', you get the display
+$$a_0+{1\hfill\over\displaystyle a_1+
+          {\strut1\hfill\over\displaystyle a_2+
+            {\strut1\hfill\over\displaystyle a_3+
+              {\strut1\over a_4}}}}$$
+(a format for continued fractions that many authors prefer). This works
+because |\hfill| stretches at a faster rate than the glue that is
+actually used internally by \TeX\ when it centers the numerators
+and denominators.
+
+\TeX\ has another operation `^|\atop|', which is like |\over| except that
+it leaves out the fraction line:
+\begindisplaymathdemo
+|$$x\atop y+2$$|&x\atop y+2\cr
+\endmathdemo
+The plain \TeX\ format in Appendix B also defines `^|\choose|', which is
+like |\atop| but it encloses the result in parentheses:
+\begindisplaymathdemo
+|$$n\choose k$$|&n\choose k\cr
+\endmathdemo
+It is called |\choose| because it's
+a common notation for the so-called ^{binomial coefficient}
+that tells how many ways there are to choose $k$~things out of $n$~things.
+
+You can't mix |\over| and |\atop| and |\choose| with each other.
+For example, `|$$n \choose k \over 2$$|' is illegal; you must use
+grouping, to get either `|$${n\choose k}\over2$$|' or
+`|$$n\choose{k\over2}$$|', i.e.,
+\begindisplay
+$\displaystyle{{n\choose k}\over2}\qquad{\rm or}\qquad {n\choose{k\over2}}.$
+\enddisplay
+The latter formula, incidentally, would look better as
+`|$$n\choose k/2$$|' or `|$$n\choose{1\over2}k$$|', yielding
+\begindisplay
+$\displaystyle{n\choose k/2}\qquad{\rm or}\qquad{n\choose{1\over2}k}.$
+\enddisplay
+
+\medskip
+\exercise As alternatives to $\displaystyle{{n\choose k}\over2}$,
+discuss how you could obtain the two displays
+\begindisplay\abovedisplayskip=0pt\belowdisplayskip=0pt
+$\displaystyle
+{1\over2}{n\choose k}
+\qquad{\rm and}\qquad
+{\displaystyle{n\choose k}\over2}.$
+\enddisplay
+\answer |$${1\over2}{n\choose k}$$|;
+|$$\displaystyle{n\choose k}\over2$$|.
+All of these braces are necessary.
+
+\bigbreak
+\exercise Explain how to specify the displayed formula
+$${p \choose 2}x^2 y^{p-2} - {1 \over 1-x}{1 \over 1-x^2}.$$
+\answer |$${p \choose 2} x^2 y^{p-2} - {1 \over 1-x}{1 \over 1-x^2}.$$|
+
+\danger \TeX\ has a generalized version of\/ |\over| and |\atop| in which you
+specify the exact thickness of the line rule by typing
+`^|\above|\<dimen>'. For example,
+\begintt
+$$\displaystyle{a\over b}\above1pt\displaystyle{c\over d}$$
+\endtt
+will produce a ^{compound fraction} with a heavier ($1\pt$ thick) rule as
+its main bar:
+$${\displaystyle{a\over b}\above 1pt\displaystyle{c\over d}}.$$
+This sort of thing occurs primarily in textbooks on elementary mathematics.
+
+\goodbreak
+Mathematicians often use the sign $\sum$ to stand for ``^{summation}''
+and the sign $\int$ to stand for ``^{integration}.'' If you're a typist but not
+a mathematician, all you need to remember is that ^|\sum| stands for
+$\sum$ and ^|\int| for $\int$; these abbreviations appear in Appendix~F
+together with all the other symbols, in case you forget. Symbols like
+$\sum$ and $\int$ (and a few others like $\bigcup$ and $\prod$ and $\oint$
+and~$\bigotimes$, all listed in Appendix~F) are called {\sl ^{large operators}},
+^^{collective signs, see large operators} ^^{sigma signs, see sum}
+and you type them just as you type ordinary symbols or letters. The
+difference is that \TeX\ will choose a {\sl larger\/} large operator in
+display style than it will in text style. For example,
+$$\halign{\indent#\hfil\qquad yields\qquad&$#\hfil$\qquad&#\hfil\cr
+|$\sum x_n$|&\sum x_n&($T$ style)\cr
+\noalign{\vskip3pt}
+|$$\sum x_n$$|&\displaystyle\sum x_n&($D$ style).\cr}$$
+
+A displayed |\sum| usually occurs with ``^{limits},'' i.e., with
+subformulas that are to appear above and below it. You type limits just
+as if they were superscripts and subscripts; for example, if you want
+$$\sum_{n=1}^m$$
+you type either `|$$\sum_{n=1}^m$$|' or `|$$\sum^m_{n=1}$$|'.  According
+to the normal conventions of mathematical typesetting, \TeX\ will change
+this to `$\sum_{n=1}^m$' (i.e., without limits) if it occurs in text
+style rather than in display style.
+
+Integrations are slightly different from summations, in that the superscripts
+and subscripts are not set as limits even in display style:
+$$\halign{\indent\hbox to2.3in{#\hfil}\hbox to.6in{yields\hfil}&
+  $#\hfil$\qquad&#\hfil\cr
+|$\int_{-\infty}^{+\infty}$|&\int_{-\infty}^{+\infty}&($T$ style)\cr
+\noalign{\vskip3pt}
+|$$\int_{-\infty}^{+\infty}$$|&\displaystyle\int_{-\infty}^{+\infty}&
+  ($D$ style).\cr}$$
+
+\danger Some printers prefer to set limits above and below $\int$ signs;
+this takes more space on the page, but it
+gives a better appearance if the subformulas are complex, because it
+keeps them out of the way of the rest of the formula. Similarly, limits
+are occasionally desirable in text style or script style; but some
+printers prefer not to set limits on displayed $\sum$ signs. You can change
+\TeX's convention by simply typing `^|\limits|' or `^|\nolimits|' immediately
+after the large operator.
+For example,
+$$\halign{\indent\hbox to2.3in{#\hfil}\hbox to.6in{yields\hfil}&
+  $\displaystyle{#}$\hfil\cr
+|$$\int\limits_0^{\pi\over2}$$|&\int\limits_0^{\pi\over2}\cr
+\noalign{\vskip 4pt}
+|$$\sum\nolimits_{n=1}^m$$|&\sum\nolimits_{n=1}^m\cr}$$
+
+\ddanger If you say `|\nolimits\limits|' (presumably because some macro
+like |\int| specifies |\nolimits|, but you do want them), the last word
+takes precedence.  There's also a command `^|\displaylimits|' that can be
+used to restore \TeX's normal conventions; i.e., the limits will be
+displayed only in styles $D$ and $D'$.
+
+\danger Sometimes you need to put two or more rows of limits under a large
+operator; you can do this with `^|\atop|'. For example, if you want
+the displayed formula
+$$\sum_{\scriptstyle0\le i\le m\atop\scriptstyle0<j<n}P(i,j)$$
+the correct way to type it is
+\begintt
+$$\sum_{\scriptstyle0\le i\le m\atop\scriptstyle0<j<n}P(i,j)$$
+\endtt
+(perhaps with a few more spaces to make it look nicer in the manuscript
+file). The instruction `^|\scriptstyle|' was necessary here,
+twice---otherwise the lines `$0\le i\le m$' and `$0<j<n$' would have been in
+scriptscript size, which is too small. This is another instance of a rare
+case where \TeX's automatic style rules need to be overruled.
+
+\exercise How would you type the displayed formula $\displaystyle
+\sum_{i=1}^p\sum_{j=1}^q\sum_{k=1}^ra_{ij}b_{jk}c_{ki}$\enspace?
+\answer |$$\sum_{i=1}^p\sum_{j=1}^q\sum_{k=1}^ra_{ij}b_{jk}c_{ki}$$|.
+
+\dangerexercise And how would you handle $\displaystyle
+\sum_{{\scriptstyle1\le i\le p\atop\scriptstyle1\le j\le q}
+    \atop\scriptstyle1\le k\le r}a_{ij}b_{jk}c_{ki}$\enspace?
+\answer |$$\sum_{{\scriptstyle 1\le i\le p \atop \scriptstyle 1\le j\le q}
+    \atop \scriptstyle 1\le k\le r} a_{ij} b_{jk} c_{ki}$$|.
+
+Since mathematical formulas can get horribly large, \TeX\ has to have some
+way to make ever-larger symbols. For example, if you type
+\begintt
+$$\sqrt{1+\sqrt{1+\sqrt{1+
+            \sqrt{1+\sqrt{1+\sqrt{1+\sqrt{1+x}}}}}}}$$
+\endtt
+the result shows a variety of available ^{square-root signs}:
+\begindisplay
+$\displaystyle\sqrt{1+\sqrt{1+\sqrt{1+
+            \sqrt{1+\sqrt{1+\sqrt{1+\sqrt{1+x}}}}}}}$
+\enddisplay
+The three largest signs here are all essentially the same, except for a
+vertical segment `\vbox{\hbox{\tenex\char'165}\vss}' that gets repeated as
+often as necessary to reach the desired size; but the smaller signs are
+distinct characters found in \TeX's math fonts.
+
+A similar thing happens with parentheses and other so-called
+``^{delimiter}'' symbols.  For example, here are some of the different sizes of
+^^{fences, see delimiters}
+^{parentheses} and ^{braces} that plain \TeX\ might use in formulas:
+\begindisplay
+$\displaystyle
+\left(\vbox to 27pt{}\left(\vbox to 24pt{}\left(\vbox to 21pt{}
+\Biggl(\biggl(\Bigl(\bigl(({\scriptstyle({\scriptscriptstyle(\hskip3pt
+)})})\bigr)\Bigr)\biggr)\Biggr)\right)\right)\right)
+\left\{\vbox to 27pt{}\left\{\vbox to 24pt{}\left\{\vbox to 21pt{}
+\Biggl\{\biggl\{\Bigl\{\bigl\{\{{\scriptstyle\{{\scriptscriptstyle\{\hskip3pt
+\}}\}}\}\bigr\}\Bigr\}\biggr\}\Biggr\}\right\}\right\}\right\}$
+\enddisplay
+The three largest pairs in each case are made with repeatable extensions,
+so they can become as large as necessary.
+^^{pieces of symbols}
+
+Delimiters are important to mathematicians, because they provide good
+visual clues to the underlying structure of complex expressions; they delimit
+the boundaries of individual subformulas. Here is a list of the 22~basic
+delimiters provided by plain \TeX:
+\begindisplay
+\it Input&\it Delimiter\cr
+\noalign{\vskip2pt}
+|(|&left parenthesis: $($\cr
+|)|&right parenthesis: $)$\cr
+|[| or ^|\lbrack|&left bracket: $[$\cr
+|]| or ^|\rbrack|&right bracket: $]$\cr
+|\{| or ^|\lbrace|&left curly brace: $\{$\cr
+|\}| or ^|\rbrace|&right curly brace: $\}$\cr
+^|\lfloor|&left floor bracket: $\lfloor$\cr
+^|\rfloor|&right floor bracket: $\rfloor$\cr
+^|\lceil|&left ceiling bracket: $\lceil$\cr
+^|\rceil|&right ceiling bracket: $\rceil$\cr
+^|\langle|&left angle bracket: $\langle$\cr
+^|\rangle|&right angle bracket: $\rangle$\cr
+|/|&slash: $/$\cr
+^|\backslash|&reverse slash: $\backslash$\cr
+\| or ^|\vert|&vertical bar: $\vert$\cr
+|\|\| or ^|\Vert|&double vertical bar: $\Vert$\cr
+^|\uparrow|&upward arrow: $\uparrow$\cr
+^|\Uparrow|&double upward arrow: $\Uparrow$\cr
+^|\downarrow|&downward arrow: $\downarrow$\cr
+^|\Downarrow|&double downward arrow: $\Downarrow$\cr
+^|\updownarrow|&up-and-down arrow: $\updownarrow$\cr
+^|\Updownarrow|&double up-and-down arrow: $\Updownarrow$\cr
+\enddisplay
+^^{bent bars, see langle, rangle} ^^{curly braces, see lbrace, rbrace}
+^^{leftbracket}^^{rightbracket}^^{leftbrace}^^{rightbrace}^^{/}
+In some cases, there are two ways to get the same delimiter; for example,
+you can specify a left bracket by typing either `|[|' or `|\lbrack|'. The
+latter alternative has been provided because the symbol `|[|' is not
+readily available on all computer keyboards. Remember, however,
+that you should never try to specify a left brace or right brace simply by
+typing `|{|' or `|}|'; the |{| and |}| symbols are reserved for grouping.
+The right way is to type `|\{|' or `|\}|' or `|\lbrace|' or `|\rbrace|'.
+
+In order to get a slightly larger version of any of these symbols, just
+precede them by `^|\bigl|' (for opening delimiters) or `^|\bigr|' (for
+closing ones). This makes it easier to read formulas that contain
+delimiters inside delimiters:
+\beginlongmathdemo
+\it Input&\it Output\cr
+\noalign{\vskip2pt}
+|$\bigl(x-s(x)\bigr)\bigl(y-s(y)\bigr)$|&
+  \bigl(x-s(x)\bigr)\bigl(y-s(y)\bigr)\cr
+|$\bigl[x-s[x]\bigr]\bigl[y-s[y]\bigr]$|&
+  \bigl[x-s[x]\bigr]\bigl[y-s[y]\bigr]\cr
+|$\bigl|\|| |\||x|\||-|\||y|\|| \bigr|\||$|&
+  \bigl\vert\vert x\vert-\vert y\vert\bigr\vert\cr
+|$\bigl\lfloor\sqrt A\bigr\rfloor$|&
+  \bigl\lfloor\sqrt A\bigr\rfloor\cr
+\endmathdemo
+The |\big| delimiters are just enough bigger than ordinary ones so that
+the difference can be perceived, yet small enough to be used in the text
+of a paragraph. Here are all~22 of them, in the ordinary size and in
+the |\big| size:
+\begindisplay
+$(\,)\,[\,]\,\{\,\}\,\lfloor\,\rfloor\,\lceil\,\rceil\,\langle\,\rangle
+  \,/\,\backslash\,\vert\,\Vert\,\uparrow\,\Uparrow\,\downarrow\,\Downarrow
+  \,\updownarrow\,\Updownarrow$\cr
+\noalign{\smallskip}
+$\bigl(\,\bigr)\,\bigl[\,\bigr]\,\bigl\{\,\bigr\}\,\bigl\lfloor
+  \,\bigr\rfloor\,\bigl\lceil\,\bigr\rceil\,\bigl\langle\,\bigr\rangle
+  \,\big/\,\big\backslash\,\big\vert\,\big\Vert\,\bigm\uparrow\,\bigm\Uparrow
+  \,\bigm\downarrow\,\bigm\Downarrow\,\bigm\updownarrow\,\bigm\Updownarrow$\cr
+\enddisplay
+You can also type ^|\Bigl| and ^|\Bigr| to get larger symbols suitable for
+displays:
+\begindisplay
+$\Bigl(\,\Bigr)\,\Bigl[\,\Bigr]\,\Bigl\{\,\Bigr\}\,\Bigl\lfloor
+  \,\Bigr\rfloor\,\Bigl\lceil\,\Bigr\rceil\,\Bigl\langle\,\Bigr\rangle
+  \,\Big/\,\Big\backslash\,\Big\vert\,\Big\Vert\,\Bigm\uparrow\,\Bigm\Uparrow
+  \,\Bigm\downarrow\,\Bigm\Downarrow\,\Bigm\updownarrow\,\Bigm\Updownarrow$
+\enddisplay
+These are 50\% taller than their |\big| counterparts. Displayed formulas
+most often use delimiters that are even taller (twice the size of\/ |\big|);
+such delimiters are constructed by ^|\biggl| and ^|\biggr|, and they
+look like this:
+\begindisplay
+$\biggl(\,\biggr)\,\biggl[\,\biggr]\,\biggl\{\,\biggr\}\,\biggl\lfloor
+  \,\biggr\rfloor\,\biggl\lceil\,\biggr\rceil\,\biggl\langle\,\biggr\rangle
+  \,\bigg/\,\bigg\backslash\,\bigg\vert\,\bigg\Vert\,\biggm\uparrow
+  \,\biggm\Uparrow\,\biggm\downarrow\,\biggm\Downarrow\,\biggm\updownarrow
+  \,\biggm\Updownarrow$
+\enddisplay
+Finally, there are ^|\Biggl| and ^|\Biggr| versions, 2.5 times as tall
+as the |\bigl| and |\bigr| delimiters:
+\begindisplay
+$\Biggl(\,\Biggr)\,\Biggl[\,\Biggr]\,\Biggl\{\,\Biggr\}\,\Biggl\lfloor
+  \,\Biggr\rfloor\,\Biggl\lceil\,\Biggr\rceil\,\Biggl\langle\,\Biggr\rangle
+  \,\Bigg/\,\Bigg\backslash\,\Bigg\vert\,\Bigg\Vert\,\Biggm\uparrow
+  \,\Biggm\Uparrow\,\Biggm\downarrow\,\Biggm\Downarrow\,\Biggm\updownarrow
+  \,\Biggm\Updownarrow$
+\enddisplay
+
+\medskip
+\exercise Guess how to type the formula $\displaystyle
+\biggl({\partial^2\over\partial x^2}+{\partial^2\over\partial y^2}
+  \biggr)\bigl\vert\varphi(x+iy)\bigr\vert^2=0$, in display style,
+using |\bigg| delimiters for the large parentheses. \ (The symbols $\partial$
+and $\varphi$ that appear here are called ^|\partial| and ^|\varphi|.)
+\answer |$\displaystyle\biggl({\partial^2\over\partial x^2}+|\hfil\break
+|{\partial^2\over\partial y^2}\biggr)\bigl|\||\varphi(x+iy)\bigr|\||^2=0$|.
+
+\dangerexercise In practice, |\big| and |\bigg| delimiters are used much
+more often than |\Big| and |\Bigg| ones. Why do you think this is true?
+\answer Formulas that are more than one line tall are usually two lines tall,
+not 1$1\over2$ or 2$1\over2$ lines tall.
+
+\danger A |\bigl| or |\Bigl| or |\biggl| or |\Biggl| delimiter is an
+^{opening}, like a left parenthesis;
+a |\bigr| or |\Bigr| or |\biggr| or |\Biggr| delimiter is a
+^{closing}, like a right parenthesis. Plain \TeX\ also provides
+^|\bigm| and ^|\Bigm| and ^|\biggm| and ^|\Biggm| delimiters, for use
+in the middle of formulas; such a delimiter plays the r\^ole of a ^{relation},
+like an equals sign, so \TeX\ puts a bit of space on either side of it.
+\beginlongmathdemo
+|$\bigl(x\in A(n)\bigm|\||x\in B(n)\bigr)$|&
+  \tenmath\bigl(x\in A(n)\bigm\vert x\in B(n)\bigr)\cr
+\noalign{\vskip2pt}
+|$\bigcup_n X_n\bigm\|\||\bigcap_n Y_n$|&
+  \tenmath\bigcup_n X_n\bigm\Vert\bigcap_n Y_n\cr
+\endmathdemo
+^^|\bigcup|^^|\bigcap|^^|\verticalline|^^|\in|
+You can also say just ^|\big| or ^|\Big| or ^|\bigg| or ^|\Bigg|; this produces
+a delimiter that acts as an ordinary variable. It is used primarily with
+slashes and backslashes, as in the following example.
+\beginlongmathdemo
+\noalign{\vskip-2pt}
+|$${a+1\over b}\bigg/{c+1\over d}$$|&
+  \tenmath\displaystyle{a+1\over b}\bigg/{c+1\over d}\cr
+\endmathdemo
+
+\dangerexercise What's the professional way to type
+$\tenmath\bigl(x+f(x)\bigr)\big/\bigl(x-f(x)\bigr)$? \ (Look closely.)
+\answer |$\bigl(x+f(x)\bigr) \big/ \bigl(x-f(x)\bigr)$|. \ Notice especially
+the `|\big/|'; an ordinary ^{slash} would look too small between the
+|\big| parentheses.
+
+\TeX\ has a built-in mechanism that figures out how tall a pair of delimiters
+needs to be, in order to enclose a given subformula; so you can use this
+method, instead of deciding whether a delimiter should be |\big| or
+|\bigg| or whatever. All you do is say
+\begindisplay
+^|\left|\<delim$_1$>\<subformula>^|\right|\<delim$_2$>
+\enddisplay
+and \TeX\ will typeset the subformula, putting the specified delimiters at
+the left and the right. The size of the delimiters will be just big enough
+to cover the subformula. For example, in the display
+\beginlongdisplaymathdemo
+|$$1+\left(1\over1-x^2\right)^3$$|&1+\left(1\over1-x^2\right)^3\cr
+\endmathdemo
+\TeX\ has chosen |\biggl(| and |\biggr)|, because smaller delimiters
+would be too small for this particular fraction. A simple formula like
+`|$\left(x\right)$|' yields just `$\left(x\right)$'; thus, |\left| and
+|\right| sometimes choose delimiters that are smaller than |\bigl| and |\bigr|.
+
+Whenever you use |\left| and |\right| they must pair up with each other,
+just as braces do in groups. You can't have |\left| in one formula
+and |\right| in another, nor are you allowed to type things like
+`|\left(...{...\right)...}|' or
+`|\left(...\begingroup...\right)...\endgroup|'.
+This restriction makes sense, because \TeX\ needs to typeset the
+subformula that appears between |\left| and |\right| before it can decide
+how big to make the delimiters.  But it is worth explicit mention here,
+because you do {\sl not\/} have to match ^{parentheses} and ^{brackets}, etc.,
+^^{crotchets, see brackets}
+when you are not using |\left| and |\right|: \TeX\ will not complain if
+you input a formula like `|$[0,1)$|' or even `|$)($|' or just `|$)$|'.\
+(And it's a good thing \TeX\ doesn't, for such unbalanced formulas occur
+surprisingly often in mathematics papers.) \ Even when you do use |\left|
+and |\right|, \TeX\ doesn't look closely at the particular delimiters that
+you happen to choose; thus, you can type strange things like `|\left)|'
+and/or `|\right(|' if you know what you're doing. Or even if you don't.
+
+The |\over| operation in the example displayed above does not involve the
+`|1+|' at the beginning of the formula; this happens because |\left| and
+|\right| have the function of ^{grouping}, in addition to their function
+of delimiter-making.  Any definitions that you happen to make between
+|\left| and |\right| will be local, as if braces had appeared around the
+enclosed subformula.
+
+\exercise Use |\left| and |\right| to typeset the following display
+(with ^|\phi| for $\phi$):
+$$\pi(n)=\sum_{k=2}^n\left\lfloor\phi(k)\over k-1\right\rfloor.$$
+\answer |$$\pi(n)=\sum_{k=2}^n\left\lfloor\phi(k)\over k-1\right\rfloor.$$|
+
+At this point you are probably wondering why you should bother learning about
+|\bigl| and |\bigr| and their relatives, when |\left| and |\right| are there
+to calculate sizes for you automatically. Well, it's true that |\left|
+and |\right| are quite handy, but there are at least three situations in which
+you will want to use your own wisdom when selecting the proper delimiter size:
+\ (1)~Sometimes |\left| and |\right| choose a smaller delimiter than you want.
+For example, we used |\bigl| and |\bigr| to produce $\bigl\vert\vert x\vert-
+\vert y\vert\bigr\vert$ in one of the previous illustrations; |\left| and
+|\right| don't make things any bigger than necessary, so
+`|$\left|\||\left|\||x\right|\||-\left|\||y\right|\||\right|\||$|'
+yields only
+`$\left\vert \left\vert x\right\vert -\left\vert y\right\vert \right\vert$'.
+\ (2)~Sometimes |\left| and |\right| choose a larger delimiter than you want.
+This happens most frequently when they enclose a large operator in a display;
+for example, compare the following two formulas:
+\beginlongdisplaymathdemo
+\noalign{\vskip 6pt}
+|$$\left( \sum_{k=1}^n A_k \right)$$|&\left( \sum_{k=1}^n A_k \right)\cr
+\noalign{\vskip 3pt}
+|$$\biggl( \sum_{k=1}^n A_k \biggr)$$|&\biggl( \sum_{k=1}^n A_k \biggr)\cr
+\endmathdemo
+The rules of\/ |\left| and |\right| cause them to enclose the ^|\sum| together
+with its ^{limits}, but in special cases like this it looks better to let
+the limits hang out a~bit; |\bigg| delimiters are better here.
+\ (3)~Sometimes you need to break a huge displayed
+formula into two or more separate lines, and you want to make sure that
+its opening and closing delimiters have the same size; but you can't use
+|\left| on the first line and |\right| on the last, since |\left| and
+|\right| must occur in pairs. The solution is to use |\Biggl| (say) on
+the first line and |\Biggr| on the last.
+
+\danger Of course, one of the advantages of\/ |\left| and |\right| is that
+they can make arbitrarily large delimiters---much bigger than |\biggggg|!
+The slashes and angle brackets do have a maximum size, however; if you
+ask for really big versions of those symbols you will get the largest
+ones available.
+
+\exercise Prove that you have mastered delimiters: Coerce \TeX\ into
+producing the formula
+$$\pi(n)=\sum_{m=2}^n\left\lfloor\biggl(\sum_{k=1}^{m-1}\bigl\lfloor
+  (m/k)\big/\lceil m/k\rceil\bigr\rfloor\biggr)^{-1}\right\rfloor.$$
+\answer |$$\pi(n)=\sum_{m=2}^n\left\lfloor\biggl(\sum_{k=1}^{m-1}\bigl|
+\hfil\break
+|\lfloor(m/k)\big/\lceil m/k\rceil\bigr\rfloor\biggr)^{-1}\right\rfloor.$$|
+
+\danger If you type `|.|'\ after |\left| or |\right|, instead of
+specifying one of the basic delimiters, you get a so-called ^{null
+delimiter} (which is blank). Why on earth would anybody want that, you may
+ask. Well, you sometimes need to produce formulas that contain only one
+large delimiter. For example, the display
+$$\vert x\vert=\cases{x,&if $x\ge0$\cr
+  -x,&if $x<0$\cr}$$
+has a `$\{$' but no `$\}$'. It can be produced by a construction of the form
+\begindisplay
+|$$|\||x|\||=\left\{ ... \right.$$|
+\enddisplay
+Chapter 18 explains how to fill in the `\hbox{|...|}' to finish this
+construction; let's just notice for now that the `|\right.|'\ makes it
+possible to have an invisible right delimiter to go with the visible
+left brace.
+
+\ddanger A null delimiter isn't completely void; it is an empty box
+whose width is a \TeX\ parameter called ^|\nulldelimiterspace|.
+We will see later that null delimiters are inserted next to fractions.
+Plain \TeX\ sets |\nulldelimiterspace=1.2pt|.
+
+You can type `|<|' or `|>|' as convenient abbreviations for ^|\langle| and
+^|\rangle|, when \TeX\ is looking for a delimiter. For example,
+`|\bigl<|' is equivalent to `|\bigl\langle|', and `|\right>|' is
+equivalent to `|\right\rangle|'. Of course `|<|' and `|>|' ordinarily
+produce the ^{less-than} and ^{greater-than} relations `${<}\,{>}$', which
+are quite different from ^{angle brackets} `$\langle\,\rangle$'.
+
+\danger Plain \TeX\ also makes available a few more delimiters, which were
+not listed in the basic set of~22 because they are sort of special.
+The control sequences ^|\arrowvert|, ^|\Arrowvert|, and ^|\bracevert| produce
+delimiters made from the repeatable parts of the vertical arrows, double
+vertical arrows, and large braces, respectively, without the arrowheads
+or the curly parts of the braces. They produce results similar to
+^|\vert| or ^|\Vert|, but they are surrounded by more white space and
+they have a different weight. You can also use ^|\lgroup| and ^|\rgroup|,
+which are constructed from braces without the middle parts; and
+^|\lmoustache| and ^|\rmoustache|, ^^{moustaches}
+which give you the top and bottom halves of large braces. For example,
+here are the |\Big| and |\bigg| versions of\/ |\vert|, |\Vert|, and
+these seven special delimiters:
+$$\halign{\indent$#\hfil$\cr
+\ldots\Big\vert\ldots\Big\Vert
+\ldots\Big\arrowvert\ldots\Big\Arrowvert\ldots\Big\bracevert
+\ldots\Big\lgroup\ldots\Big\rgroup\ldots\Big\lmoustache\ldots\Big\rmoustache
+\ldots\,;\cr
+\noalign{\smallskip}
+\ldots\bigg\vert\ldots\bigg\Vert
+\ldots\bigg\arrowvert\ldots\bigg\Arrowvert\ldots\bigg\bracevert
+\ldots\bigg\lgroup\ldots\bigg\rgroup\ldots\bigg\lmoustache\ldots\bigg\rmoustache
+\ldots\,.\cr}$$
+Notice that |\lgroup| and |\rgroup| are rather like bold parentheses, with
+sharper bends at the corners; this makes them attractive for certain large
+displays. But you cannot use them exactly like parentheses, because
+they are available only in large sizes (|\Big|~or~more).
+
+\ddanger Question: What happens if a ^{subscript} or ^{superscript}
+follows a large delimiter? Answer:~That's a good question. After a |\left|
+delimiter, it is the first subscript or superscript of the enclosed
+subformula, so it is effectively preceded by |{}|. After a |\right|
+delimiter, it is a subscript or superscript of the entire |\left...\right|
+subformula. And after a |\bigl| or |\bigr| or |\bigm| or |\big| delimiter,
+it applies only to that particular delimiter. Thus, `|\bigl(_2|' works
+quite differently from `|\left(_2|'.
+
+\danger If you look closely at the examples of math typesetting in this
+chapter, you will notice that large parentheses and brackets are
+symmetric with respect to an invisible horizontal line that runs a little
+bit above the ^{baseline}; when a delimiter gets larger, its height and
+depth both grow by the same amount. This horizontal line is called the
+{\sl^{axis}\/} of the formula; for example, a formula in the text of the
+present paragraph would have an axis at this level: $\hskip 2em\over$. The
+bar line in every fraction is centered on the axis, regardless of the size
+of the numerator or denominator.
+
+\danger Sometimes it is necessary to create a special box that should be
+centered vertically with respect to the axis. \ (For example, the
+`$\vert x\vert=\bigl\{\,\ldots$' example above was done with such a box.) \
+\TeX\ provides a simple way to do this: You just say
+\begindisplay
+|\vcenter{|\<vertical mode material>|}|
+\enddisplay
+and the vertical mode material will be packed into a box just as if
+^|\vcenter| had been ^|\vbox|. Then the box will be raised or lowered until
+its top edge is as far above the axis as the bottom edge is below.
+
+\ddanger The concept of ``axis'' is meaningful for \TeX\ only in math
+formulas, not in ordinary text; therefore \TeX\ allows you to use
+|\vcenter| only in math mode. If you really need to center something
+vertically in horizontal mode, the solution is to say `|$\vcenter{...}$|'.
+ \ (Incidentally, the constructions `|\vcenter| |to|\<dimen>'
+and `|\vcenter| |spread|\<dimen>' are legal too, in math mode;
+vertical glue is always set by the rules for |\vbox| in
+Chapter~12. But |\vcenter| by itself is usually sufficient.)
+
+\danger Any box can be put into a formula by simply saying ^|\hbox| or
+|\vbox| or ^|\vtop| or ^|\box| or ^|\copy| in the normal way, even when
+you are in math mode.  Furthermore you can use ^|\raise| or ^|\lower|, as
+if you were in horizontal mode, and you can insert vertical rules with
+^|\vrule|.  Such constructions, like |\vcenter|, produce boxes that can be
+used like ordinary symbols in math formulas.
+
+\ddanger Sometimes you need to make up your own symbols, when you run across
+something unusual that doesn't occur in the fonts. If the new symbol
+occurs only in one place, you can use |\hbox| or |\vcenter| or something
+to insert exactly what you want; but if you are defining a macro for
+general use, you may want to use different constructions in different
+styles. \TeX\ has a special feature called ^|\mathchoice| that comes
+to the rescue in such situations: You write
+\begindisplay
+|\mathchoice{|\<math>|}{|\<math>|}{|\<math>|}{|\<math>|}|
+\enddisplay
+where each \<math> specifies a subformula. \TeX\ will choose the first
+subformula in style $D$ or~$D'$, the second in style $T$ or~$T'$, the
+third in style $S$ or~$S'$, the fourth in style $\SS$ or $\SS'$.
+\ (\TeX\ actually typesets all four subformulas, before it chooses the
+final one, because the actual style is not always known at the time a
+|\mathchoice| is encountered; for example, when you type `|\over|' you often
+change the style of everything that has occurred earlier in the formula.
+Therefore |\mathchoice| is somewhat expensive in terms of time and space,
+and you should use it only when you're willing to pay the price.)
+
+\ddangerexercise Guess what output is produced by the following commands:
+\begintt
+\def\puzzle{{\mathchoice{D}{T}{S}{SS}}}
+$$\puzzle{\puzzle\over\puzzle^{\puzzle^\puzzle}}$$
+\endtt
+\answer A displayed formula equivalent to |$${D}{{T}\over{T}^{{S}^{SS}}}$$|.
+
+\ddangerexercise Devise a `^|\square|' macro that produces a
+\def\sqr#1#2{{\vcenter{\vbox{\hrule height.#2pt
+      \hbox{\vrule width.#2pt height#1pt \kern#1pt \vrule}
+      \hrule height.#2pt}}}}%
+`$\,\sqr34\,$' for use in math formulas. The box should be symmetrical
+with respect to the axis, and its inside dimensions should be $3\pt$ in
+display and text styles, $2.1\pt$ in script styles, and $1.5\pt$ in
+scriptscript styles. The rules should be $0.4\pt$ thick in
+display and text styles, $0.3\pt$ thick otherwise.
+\answer |\def\sqr#1#2{{\vcenter{\vbox{\hrule height.#2pt|\parbreak
+        |        \hbox{\vrule width.#2pt height#1pt \kern#1pt|\parbreak
+        |           \vrule width.#2pt}|\parbreak
+        |        \hrule height.#2pt}}}}|\parbreak
+        |\def\square{\mathchoice\sqr34\sqr34\sqr{2.1}3\sqr{1.5}3}|
+
+\ddanger Plain \TeX\ has a macro called ^|\mathpalette| that is useful
+for |\mathchoice| constructions; `|\mathpalette\a{xyz}|' expands to
+the four-pronged array of choices
+`|\mathchoice|\stretch|{\a|\stretch|\displaystyle|\stretch|{xyz}}|\stretch
+|...|\stretch|{\a|\stretch|\scriptscriptstyle|\stretch|{xyz}}|\stretch'.
+Thus the first argument to |\mathpalette| is a control sequence whose
+first argument is a style selection. Appendix~B contains several examples
+that show how |\mathpalette| can be applied. \ (See in particular the
+definitions of\/ |\phantom|, |\root|, and |\smash|; the ^{congruence sign}
+^|\cong| ($\cong$) is also constructed from $=$ and $\sim$ using
+|\mathpalette|.)
+^^{constructing new math symbols}
+^^{math symbols, construction of}
+
+\ddanger At the beginning of this chapter we discussed the commands
+|\over|, |\atop|, |\choose|, and |\above|. These are special cases of
+\TeX's ``^{generalized fraction}'' feature, which includes also the
+three primitives
+\begindisplay
+|\overwithdelims|\<delim$_1$>\<delim$_2$>\cr
+|\atopwithdelims|\<delim$_1$>\<delim$_2$>\cr
+|\abovewithdelims|\<delim$_1$>\<delim$_2$>\<dimen>\cr
+\enddisplay
+The third of these is the most general, as it encompasses all of the other
+generalized fractions:  ^|\overwithdelims| uses a ^{fraction} bar whose
+thickness is the default for the current size, and ^|\atopwithdelims| uses
+an invisible fraction bar whose thickness is zero, while
+^|\abovewithdelims| uses a bar whose thickness is specified explicitly.
+\TeX\ places the immediately preceding subformula (the ^{numerator}) over
+the immediately following subformula (the ^{denominator}), separated by a
+bar line of the desired thickness; then it puts \<delim$_1$> at the left
+and \<delim$_2$> at the right. For example, `^|\choose|' is equivalent to
+`|\atopwithdelims()|'. If you define |\legendre| to be
+`|\overwithdelims()|', you can typeset the ^{Legendre symbol}
+\def\legendre{\overwithdelims()}%
+`$a\legendre b$' by saying `|{a\legendre b}|'. The size of the surrounding
+delimiters depends only on the style, not on the size of the fractions;
+larger delimiters are used in styles $D$ and~$D'$ (see Appendix~G\null). The
+simple commands ^|\over|, ^|\atop|, and ^|\above| are equivalent to the
+corresponding `|withdelims|' commands when the delimiters are null; for
+example, `|\over|' is an abbreviation for `|\overwithdelims..|'.
+
+\def\euler{\atopwithdelims<>}
+\ddangerexercise Define a control sequence |\euler| so that the
+^{Eulerian number} $n\euler k$ will be produced when you type `|{n\euler k}|'
+in a formula.
+\answer|\def\euler{\atopwithdelims<>}|.
+
+\ddanger Appendix G explains exactly how \TeX\ computes the desired size
+of delimiters for |\left| and~|\right|. The general idea is that delimiters
+are vertically centered with respect to the ^{axis}; hence, if we want
+to cover a subformula between |\left| and |\right| that extends $y_1$~units
+above the axis and $y_2$~units below, we need to make a delimiter whose
+height plus depth is at least $y$~units, where $y=2\max(y_1,y_2)$.
+It is usually best not to cover the formula completely, however,
+but just to come close; so \TeX\ allows you to specify
+two parameters, the ^|\delimiterfactor|~$f$ (an~integer) and the
+^|\delimitershortfall|~$\delta$ (a~dimension). The minimum delimiter size
+is taken to be at least $y\cdot f/1000$, and at least $y-\delta$. Appendix~B
+sets $f=901$ and $\delta=5\pt$. Thus, if $y=30\pt$, the plain \TeX\ format
+causes the delimiter to be more than $27\pt$ tall; if $y=100\pt$, the
+corresponding delimiter will be at least $95\pt$ tall.
+
+\danger So far we have been discussing the rules for typing math formulas,
+but we haven't said much about how \TeX\ actually goes about converting
+its input into lists of boxes and glue. Almost all of the control
+sequences that have been mentioned in Chapters 16 and~17 are ``high level''
+features of the plain \TeX\ format; they are not built into \TeX\ itself.
+Appendix~B defines those control sequences in terms of more primitive
+commands that \TeX\ actually deals with. For example, `|\choose|' is
+an abbreviation for `|\atopwithdelims()|'; Appendix~B not only introduces
+|\choose|, it also tells \TeX\ where to find the delimiters |(| and~|)|
+in various sizes. The plain \TeX\ format defines all of the special
+characters like |\alpha| and~|\mapsto|, all of the special accents like
+|\tilde| and~|\widehat|, all of the large operators like |\sum| and~|\int|,
+and all of the delimiters like |\lfloor| and~|\vert|. Any of these things
+can be redefined, in order to adapt \TeX\ to other mathematical styles
+and/or to other fonts.
+
+\danger The remainder of this chapter discusses the low-level commands
+that \TeX\ actually obeys behind the scenes.  Every paragraph on the next
+few pages is marked with double dangerous bends, so you should skip to
+Chapter~18 unless you are a glutton for \TeX nicalities.
+
+\ninepoint
+\ddanger All characters that are typeset in math mode belong to one of
+sixteen {\sl^{families} of fonts}, numbered internally from 0 to~15. Each
+of these families consists of three fonts: one for text size, one for
+script size, and one for scriptscript size. The commands ^|\textfont|,
+^|\scriptfont|, and ^|\scriptscriptfont| are used to specify the members
+of each family.  For example, ^{family~0} in the plain \TeX\ format is
+used for roman letters, and Appendix~B contains the instructions
+\begintt
+\textfont0=\tenrm
+\scriptfont0=\sevenrm
+\scriptscriptfont0=\fiverm
+\endtt
+to set up this family: The 10-point roman font (^|\tenrm|) is used for
+normal symbols, 7-point roman (^|\sevenrm|) is used for subscripts, and
+5-point roman (^|\fiverm|) is used for sub-subscripts. Since there are up to
+256~characters per font, and 3~fonts per family, and 16~families, \TeX\ can
+access up to 12,288 characters in any one formula (4096 in~each of
+the three sizes). Imagine that.
+
+\ddanger A definition like |\textfont|\<family number>|=|\<font identifier>
+is local to the group that contains it, so you can easily change family
+membership from one set of conventions to another and back again. Furthermore
+you can put any font into any family; for example, the command
+\begintt
+\scriptscriptfont0=\scriptfont0
+\endtt
+makes sub-subscripts in family~0 the same size as the subscripts currently
+are. \TeX\ doesn't check to see if the families are sensibly organized; it
+just follows instructions. \ (However, fonts cannot be used in families
+2 and~3 unless they contain a certain number of special parameters, as we
+shall see later.) \ Incidentally, \TeX\ uses ^|\nullfont|, which contains
+no characters, for each family member that has not been defined.
+
+\ddanger During the time that a math formula is being read,
+\TeX\ remembers each symbol as being ``character position so-and-so in
+family number such-and-such,'' but it does not take note of what fonts
+are actually in the families until reaching the end of the formula.
+Thus, if you have loaded a font called |\Helvetica| that contains Swiss-style
+numerals, and if you say something like
+\begintt
+$\textfont0=\tenrm 9 \textfont0=\Helvetica 9$
+\endtt
+you will get two 9's in font |\Helvetica|, assuming that \TeX\ has been
+set up to take 9's from family~0. The reason is that |\textfont0|
+is~|\Helvetica| at the end of the formula, and that's when it counts. On
+the other hand, if you say
+\begintt
+$\textfont0=\tenrm 9 \hbox{$9\textfont0=\Helvetica$}$
+\endtt
+the first 9 will be from |\tenrm| and the second from |\Helvetica|, because
+the formula in the hbox will be typeset before it is incorporated into
+the surrounding formula.
+
+\ddangerexercise If you say `|${\textfont0=\Helvetica 9}$|', what
+font will be used for the~9?
+\answer The |\textfont0| that was current at the beginning of the formula
+will be used, because this redefinition is local to the braces. \
+(It would be a different story if `^|\global||\textfont|' had appeared instead;
+that would have changed the meaning of\/ |\textfont0| at all levels.)
+
+\ddanger Every ^{math character} is given an identifying code
+number between 0 and~4095, obtained by adding 256~times the family number
+to the position number. This is easily expressed in ^{hexadecimal
+notation}, using one hexadecimal digit for the family and two for the
+character; for example, \hex{24A} stands for character~\hex{4A} in
+family~2. Each character is also assigned to one of eight classes,
+^^{classes of math characters, table} ^^{math codes} ^^{table of ...}
+numbered 0 to~7, as follows:
+$$\halign{\indent#\hfil&\quad#\hfil&\quad#\hfil&
+\hskip4em#\hfil&\quad#\hfil&\quad#\hfil\cr
+\it \kern-2pt Class&\it Meaning&\kern-2pt\it Example&
+\it \kern-2pt Class&\it Meaning&\kern-2pt\it Example\cr
+\noalign{\vskip2pt}
+0&Ordinary&|/|&
+4&Opening&|(|\cr
+1&Large operator&|\sum|&
+5&Closing&|)|\cr
+2&Binary operation&|+|&
+6&Punctuation&|,|\cr
+3&Relation&|=|&
+7&Variable family&|x|\cr
+}$$
+^^{large operator}^^{binary operation}^^{relation}^^{opening}^^{closing}
+^^{punctuation}^^{variable family}
+Classes 0 to 6 tell what ``part of speech'' the character belongs to, in
+math-printing language; class~7 is a special case discussed below. The class
+number is multiplied by 4096 and added to the character number, and this
+is the same as making it the leading digit of a four-digit hexadecimal
+number. For example, Appendix~B defines |\sum| to be the math character
+\hex{1350}, meaning that it is a large operator (class~1) found in position
+\hex{50} of family~3.
+
+\ddangerexercise The ^|\oplus| and ^|\bullet| symbols ($\oplus$ and $\bullet$)
+are binary operations that appear in positions 8 and~15 (decimal)
+of family~2, when the fonts of plain~\TeX\ are being used. Guess
+what their math character codes are. \ (This is too easy.)
+\answer \hex{2208} and \hex{220F}.
+
+\ddanger Class 7 is a special case that allows math symbols to change families.
+It behaves exactly like class~0, except that the specified family is
+replaced by the current value of an integer parameter called ^|\fam|,
+provided that |\fam| is a legal family number (i.e., if it lies between
+0 and~15). \TeX\ automatically sets |\fam=-1| whenever math mode is entered;
+therefore class~7 and class~0 are equivalent unless |\fam| has been
+given a new value. Plain \TeX\ changes |\fam| to~0 when the user
+types `^|\rm|'; this makes it convenient to get roman letters in formulas,
+as we will see in Chapter~18, since letters belong to class~7. \ (The
+control sequence |\rm| is an abbreviation for `|\fam=0 \tenrm|'; thus,
+|\rm| causes
+|\fam| to become zero, and it makes |\tenrm| the ``^{current font}.''
+In horizontal mode, the |\fam| value is irrelevant and the current font
+governs the typesetting of letters; but in math mode, the current font is
+irrelevant and the |\fam| value governs the letters. The current font
+affects math mode only if\/ |\|\] is used ^^{control space} or if
+dimensions are given in ^|ex| or ^|em| units;
+it also has an effect if an |\hbox| appears inside a formula, since
+the contents of an hbox are typeset in horizontal mode.)
+
+\ddanger The interpretation of characters in math mode is defined by a
+table of~256 ``mathcode'' values; these table entries can be changed
+by the ^|\mathcode| command, just as the category codes are changed
+by ^|\catcode| (see Chapter~7). Each mathcode specifies class, family, and
+character position, as described above. For example, Appendix~B contains
+the commands
+\begintt
+\mathcode`<="313C
+\mathcode`*="2203
+\endtt
+which cause \TeX\ to treat the character `|<|' in math mode as a relation
+^^{less than} (class~3) found in position \hex{3C} of family~1, and to treat an
+^{asterisk} `|*|' as a binary operation found in position~3 of family~2.
+The initial value of\/ |\mathcode`b| is \hex{7162}; thus, |b|~is character
+\hex{62} in ^{family~1} (italics), and its family will vary with |\fam|.
+\ (|INITEX| starts out with |\mathcode|$\,x=x$ for all characters~$x$
+that are neither
+letters nor digits. The ten digits have |\mathcode|$\,x=x+\hbox{\hex{7000}}$;
+the 52 letters have |\mathcode|$\,x=x+\hbox{\hex{7100}}$.) \
+\TeX\ looks at the mathcode only when it is typesetting a character whose
+catcode is 11~(letter) or 12~(other), or when it encounters a character that
+is given explicitly as ^|\char|\<number>.
+
+\ddanger A |\mathcode| can also have the special value \hex{8000}, which
+causes the character to behave as if it has catcode~13 (active). Appendix~B
+uses this feature to make |'| ^^{apostrophe} expand to |^{|^|\prime||}| in a
+slightly tricky way. The mathcode of |'| does not ^^{active math character}
+interfere with the use of |'| in ^{octal} constants.
+
+\ddanger The mathcode table allows you to refer indirectly to any character in
+any family, with the touch of a single key. You can also specify a math
+character code directly, by typing ^|\mathchar|, which is analogous to
+^|\char|. For example, the command `|\mathchar"1ABC|' specifies a
+character of class~1, family~10 (\hex A), and position \hex{BC}. A~hundred
+or so definitions like
+\begintt
+\def\sum{\mathchar"1350 }
+\endtt
+would therefore suffice to define the special symbols of plain \TeX\null. But
+there is a better way: \TeX\ has a primitive command ^|\mathchardef|,
+which relates to |\mathchar| just as ^|\chardef| does to |\char|.
+Appendix~B has a hundred or so definitions like
+\begintt
+\mathchardef\sum="1350
+\endtt
+to define the special symbols. A |\mathchar| must be between 0 and 32767
+(\hex{7FFF}).
+
+\ddanger A character of class~1, i.e., a ^{large operator} like |\sum|, will
+be vertically centered with respect to the axis when it is typeset. Thus,
+the large operators can be used with different sizes of type. This vertical
+adjustment is not made for symbols of the other classes.
+
+\ddanger \TeX\ associates classes with subformulas as well as with individual
+characters. Thus, for example, you can treat a complex construction as if
+it were a binary operation or a relation, etc., if you want to. The
+commands ^|\mathord|, ^|\mathop|, ^|\mathbin|, ^|\mathrel|, ^|\mathopen|,
+^|\mathclose|, and ^|\mathpunct| are used for this purpose; each of them
+is followed either by a single character or by a subformula in braces.
+For example, |\mathopen\mathchar"1234| is equivalent to |\mathchar"4234|,
+because |\mathopen| forces class~4 (opening). In the formula
+`|$G\mathbin:H$|', the ^{colon} is~treated as a binary operation.
+And Appendix~B constructs large opening symbols by
+defining ^|\bigl||#1| to be an abbreviation for
+\begintt|let|0|rm
+\mathopen{\hbox{$\left#1|<|0strut>\right.$}}
+\endtt
+There's also an eighth classification, ^|\mathinner|, which is not
+normally used for individual symbols; ^|\left|$\,\ldots\,$^|\right|
+constructions are treated as ``inner'' subformulas, which means that
+they will be surrounded by additional space in certain circumstances.
+All other subformulas are generally treated as ordinary symbols,
+whether they are formed by |\overline| or |\hbox| or |\vcenter| or
+by simply being enclosed in braces. Thus, |\mathord| isn't really
+a necessary part of the \TeX\ language; instead of typing
+`|$1\mathord,234$|' you can get the same effect from `|$1{,}234$|'.
+
+\ddangerexercise Commands like |\mathchardef\alpha="010B| are used in
+Appendix~B to define the lowercase ^{Greek} letters. Suppose that you want
+to extend plain \TeX\ by putting ^{boldface math italic} letters
+in family~9, analogous to the normal math italic letters in family~1.
+\ (Such fonts aren't available in stripped down versions of \TeX, but
+let's assume that they exist.) \ Assume that the control sequence
+|\bmit| has been defined as an abbreviation for `|\fam=9|'; hence
+`|{\bmit b}|' will give a boldface math italic~|b|. What change to the
+definition of\/ |\alpha| will make |{\bmit\alpha}| produce a boldface~alpha?
+\checkequals\bmiexno\exno
+\answer |\mathchardef\alpha="710B|. Incidentally, |{\rm\alpha}| will
+then give a spurious result, because character position \hex{0B} of
+roman fonts does not contain an alpha; you should warn
+your users about what characters they are allowed to type under the
+influence of special conventions like ^|\rm|.
+
+\ddanger ^{Delimiters} are specified in a similar but more complicated
+way. Each character has not only a~|\catcode| and a~|\mathcode| but also
+a~^|\delcode|, which is either negative (for characters that should not
+act as delimiters) or less than \hex{1000000}. In other words,
+nonnegative delcodes consist of six hexadecimal digits. The first three
+digits specify a ``small'' variant of the delimiter, and the last three
+specify a ``large'' variant. For example, the command
+\begintt
+\delcode`x="123456
+\endtt
+means that if the letter |x| is used as a delimiter, its small variant
+is found in position \hex{23} of family~1, and its large variant is found
+in position \hex{56} of family~4. If the small or large variant is
+given as |000|, however (position~0 of ^{family~0}), that variant is ignored.
+\TeX\ looks at the delcode when a character follows ^|\left| or ^|\right|,
+or when a character follows one of the ^|withdelims| commands; a
+negative delcode leads to an error message, but otherwise \TeX\ finds
+a suitable delimiter by first trying the small variant and then
+the large. \ (Appendix~G discusses this process in more detail.) \
+For example, Appendix~B contains the commands
+\begintt
+\delcode`(="028300  \delcode`.=0
+\endtt
+which specify that the small variant of a left parenthesis is found in
+position \hex{28} of family~0, and that the large variant is in position~0
+of family~3; also, a period has no variants, hence `|\left.|'\ will produce
+a ^{null delimiter}. There actually are several different left parenthesis
+symbols in family~3; the smallest is in position~0, and the others are
+linked together by information that comes with the font. All delcodes
+are~$-1$ until they are changed by a |\delcode| command.
+
+\ddangerexercise Appendix~B defines |\delcode`<| so that there is a
+shorthand notation for ^{angle brackets}. Why do you think Appendix~B
+doesn't go further and define |\delcode`{|?
+\answer Assigning |\delcode`{| would not work to allow `|\left{|', because
+the brace has category~1 and isn't a legal \<delim>.
+Allowing brace delimiters would be a bad idea because it would
+mess up other constructions, such as arguments to macros, and
+components of alignments. Moreover, a user who
+gets away with `|\left{|' is likely to try also `|\bigl{|', which
+fails miserably.
+
+\ddanger A delimiter can also be given directly, as `^|\delimiter|\<number>'.
+In this case the number can be as high as \hex{7FFFFFF}, i.e., seven
+hexadecimal digits; the leading digit specifies a class, from 0 to~7,
+as in a |\mathchar|. For example, Appendix~B contains the definition
+\begintt
+\def\langle{\delimiter"426830A }
+\endtt
+and this means that ^|\langle| is an opening (class 4) whose small
+variant is \hex{268} and whose large variant is \hex{30A}. When |\delimiter|
+appears after |\left| or |\right|, the class digit is ignored; but
+when |\delimiter| occurs in other contexts, i.e., when \TeX\ isn't
+looking for a delimiter, the three rightmost digits are dropped and
+the remaining four digits act as a |\mathchar|. For example, the expression
+`|$\langle x$|' is treated as if it were `|$\mathchar"4268 x$|'.
+
+\ddangerexercise What goes wrong if you type
+`|\bigl\delimiter"426830A|'\thinspace?
+\answer Since |\bigl| is defined as a macro with one parameter,
+it gets just `|\delimiter|' as the argument. You have to write
+`|\bigl{\delimiter"426830A}|' to make this work. On the other hand,
+|\left| will balk if the following character is a left brace. Therefore
+it's best to have control sequence names for all delimiters.
+
+\ddanger Granted that these numeric conventions for |\mathchar| and
+|\delimiter| are not beautiful, they sure do pack a lot of information into
+a small space. That's why \TeX\ uses them for low-level definitions inside
+formats. Two other low-level primitives also deserve to be mentioned:
+^|\radical| and ^|\mathaccent|. Plain \TeX\ makes ^{square root signs}
+and math accents available by giving the commands
+\begintt
+\def\sqrt{\radical"270370 }
+\def\widehat{\mathaccent"362 }
+\endtt
+and several more like them. The idea is that |\radical| is followed by
+a delimiter code and |\mathaccent| is followed by a math character code,
+so that \TeX\ knows the family and character positions for the symbols
+used in radical and accent constructions. Appendix~G gives precise
+information about the positioning of these characters. By changing the
+definitions, \TeX\ could easily be extended so that it would typeset a
+variety of different radical signs and a variety of different accent
+signs, if such symbols were available in the fonts.
+^^{surd signs, see radical}
+
+\ddanger Plain \TeX\ uses ^{family~1} for math italic letters, ^{family~2} for
+ordinary math symbols, and ^{family~3} for large symbols. \TeX\ insists that
+^^{math fonts}
+the fonts in families 2 and~3 have special ^|\fontdimen| parameters,
+which govern mathematical spacing according to the rules in Appendix~G\null;
+the ^|cmsy| and ^|cmex| ^{symbol fonts} have these parameters, so
+their assignment to families 2 and~3 is almost mandatory. \ (There is, however,
+a way to modify the parameters of any font, using the ^|\fontdimen| command.) \
+^|INITEX| initializes the mathcodes of all ^{letters} |A| to~|Z| and |a| to~|z|
+so that they are symbols of class~7 and family~1; that's why
+it is natural to use family~1 for math italics.  Similarly, the digits |0|
+to~|9| are class~7 and family~0.  None of the other families
+is treated in any special way by \TeX. Thus, for example, plain \TeX\ puts
+^{text italic} in family~4, slanted roman in family~5, bold roman in family~6,
+and typewriter type in family~7, but any of these numbers could be
+switched around. There is a macro ^|\newfam|, analogous to |\newbox|,
+that will assign symbolic names to families that aren't already used.
+
+\ddanger When \TeX\ is in horizontal mode, it is making a horizontal list;
+in vertical mode, it is making a vertical list. Therefore it should come
+as no great surprise that \TeX\ is making a ^{math list} when it is in
+^{math mode}. The contents of horizontal lists were explained in Chapter~14,
+and the contents of vertical lists were explained in Chapter~15; it's time
+now to describe what math lists are made of. Each item in a math list
+is one of the following types of things:\enddanger
+
+\smallskip
+\item\bull an ^{atom} (to be explained momentarily);
+
+\item\bull horizontal material (a rule or discretionary or penalty or
+``whatsit'');
+
+\item\bull vertical material (from |\mark| or |\insert| or |\vadjust|);
+
+\item\bull a glob of ^{glue} (from |\hskip| or |\mskip| or |\nonscript|);
+
+\item\bull a ^{kern} (from |\kern| or |\mkern|);
+
+\item\bull a ^{style change} (from |\displaystyle|, |\textstyle|, etc.);
+
+\item\bull a ^{generalized fraction} (from |\above|, |\over|, etc.);
+
+\item\bull a ^{boundary} (from |\left| or |\right|);
+
+\item\bull a four-way ^{choice} (from ^|\mathchoice|).
+
+\ddanger The most important items are called {\sl atoms}, and they have
+three parts: a {\sl^{nucleus}}, a {\sl^{superscript}}, and a {\sl^{subscript}}.
+For example, if you type
+\begintt
+(x_i+y)^{\overline{n+1}}
+\endtt
+in math mode, you get a math list consisting of five atoms:
+$($, $x_i$, $+$, $y$, and~$)^{\overline{n+1}}$. The nuclei of these atoms
+are $($, $x$, $+$, $y$, and~$)$; the subscripts are empty except for the
+second atom, which has subscript~$i$; the superscripts are empty except for the
+last atom, whose superscript is~$\overline{n+1}$. This superscript is
+itself a math list consisting of one atom, whose nucleus is~$n+1$; and that
+nucleus is a math list consisting of three atoms.
+
+\ddanger There are thirteen kinds of atoms, each of which might act
+differently in a formula; for example, `$($' is an Open atom because
+^^{atomic types, table}
+it comes from an opening. Here is a complete list of the different kinds:
+$$\halign{\indent#\hfil&\enskip#\hfil\cr
+Ord&is an ordinary atom like `$x$'\thinspace;\cr
+Op&is a large operator atom like `$\sum$'\thinspace;\cr
+Bin&is a binary operation atom like `$+$'\thinspace;\cr
+Rel&is a relation atom like `$=$'\thinspace;\cr
+Open&is an opening atom like `$($'\thinspace;\cr
+Close&is a closing atom like `$)$'\thinspace;\cr
+Punct&is a punctuation atom like `$,$'\thinspace;\cr
+Inner&is an inner atom produced by `|\left|$\,\ldots\,$|\right|';\cr
+Over&is an overline atom like `$\overline x$'\thinspace;\cr
+Under&is an underline atom like `$\underline x$'\thinspace;\cr
+Acc&is an accented atom like `$\hat x$'\thinspace;\cr
+Rad&is a radical atom like `$\sqrt2$'\thinspace;\cr
+Vcent&is a vbox to be centered, produced by |\vcenter|.\cr
+}$$
+
+\ddanger An atom's nucleus, superscript, and subscript are called its
+{\sl ^{fields}}, and there are four possibilities for each of these fields.
+A field can be\enddanger
+
+\smallskip
+\item\bull empty;
+
+\item\bull a math symbol (specified by family and position number);
+
+\item\bull a box; or
+
+\item\bull a math list.
+
+\smallskip\noindent
+For example, the Close atom $)^{\overline{n+1}}$ considered above has an
+empty subscript field; its nucleus is the symbol `$)$', which is
+character~\hex{28} of family~0 if the conventions of plain \TeX\ are
+in force; and its superscript field is the math list $\overline{n+1}$.
+The latter math list consists of an Over atom whose nucleus
+is the math list $n+1$; and that math list, in turn, consists of
+three atoms of types Ord, Bin, Ord.
+
+\ddanger You can see \TeX's view of a math list by typing ^|\showlists|
+in math mode. ^^{internal list format}
+For example, after `|$(x_i+y)^{\overline{n+1}}\showlists|' your log
+file gets the following curious data:
+\begindisplay
+|\mathopen|\cr
+|.\fam0 (|\cr
+|\mathord|\cr
+|.\fam1 x|\cr
+|_\fam1 i|\cr
+\noalign{\penalty-500}
+|\mathbin|\cr
+|.\fam0 +|\cr
+\noalign{\penalty-500}
+|\mathord|\cr
+|.\fam1 y|\cr
+\noalign{\penalty-500}
+|\mathclose|\cr
+|.\fam0 )|\cr
+|^\overline|\cr
+|^.\mathord|\cr
+|^..\fam1 n|\cr
+|^.\mathbin|\cr
+|^..\fam0 +|\cr
+|^.\mathord|\cr
+|^..\fam0 1|\cr
+\enddisplay
+In our previous experiences with |\showlists| we observed that there can
+be boxes within boxes, and that each line in the log file is
+prefixed by dots to indicate its position in the hierarchy. Math lists
+have a slightly more complex structure; therefore a dot is used to denote
+the nucleus of an atom, a~`|^|' is used for the superscript field, and
+a~`|_|' is used for the subscript field. Empty fields are not shown. Thus,
+for example, the Ord atom~$x_i$ is represented here by three lines
+`|\mathord|', `|.\fam1 x|', and `|_\fam1 i|'.
+
+\ddanger Certain kinds of atoms carry additional information besides their
+nucleus, subscript, and superscript fields: An Op atom will be marked
+`^|\limits|' or `^|\nolimits|' if the normal ^|\displaylimits|
+convention has been overridden; a Rad atom contains
+a delimiter field to specify what radical sign is to be used; and an Acc atom
+contains the family and character codes of the accent symbol.
+
+\ddanger When you say ^|\hbox||{...}| in math mode, an Ord atom is placed
+on the current math list, with the hbox as its nucleus.  Similarly,
+^|\vcenter||{...}| produces a Vcent atom whose nucleus is a box. But in
+most cases the nucleus of an atom will be either a symbol or a math list.
+You can experiment with |\showlists| to discover how other things like
+fractions and mathchoices are represented internally.
+
+\ddanger Chapter~26 contains complete details of how math lists are
+constructed.  As soon as math mode ends (i.e., when the closing `|$|'
+occurs), \TeX\ dismantles the current math list and converts it into a
+horizontal list.  The rules for this conversion are spelled out in
+Appendix~G\null. You can see ``before and after'' representations of such math
+typesetting by ending a formula with `|\showlists$\showlists|'; the first
+|\showlists| will display the math list, and the second will show the
+(possibly complex) horizontal list that is manufactured from it.
+
+\endchapter
+
+The learning time is short. A few minutes gives the general flavor, and
+typing a page or two of a paper generally uncovers most of the misconceptions.
+\author ^{KERNIGHAN} and ^{CHERRY}, {\sl A System for %
+  Typesetting Mathematics\/} (1975)
+  % in Communications of the ACM p152
+
+\bigskip
+
+Within a few hours (a few days at most)
+a typist with no math or typesetting experience
+can be taught to input even the most complex equations.
+\author PETER J. ^{BOEHM}, {\sl Software and Hardware Considerations %
+  for a\break Technical Typesetting System\/} (1976)
+%  in IEEE Transactions on Professional Communication PC-19, pp15--19
+
+\eject

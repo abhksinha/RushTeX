@@ -12,3 +12,4 @@ pub use frontend_parser as parser;
 
 pub use frontend_ast::*;
 pub use frontend_parser::parse;
+pub(crate) use frontend_parser::Parser;

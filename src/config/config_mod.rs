@@ -67,6 +67,15 @@ pub struct DocumentConfig {
     pub list_item_indent: f32,
     pub list_item_sep: f32,
     pub list_par_indent: f32,
+    pub french_spacing: bool,
+    pub pre_tolerance: i32,
+    pub tolerance: i32,
+    pub emergency_stretch: f32,
+    pub looseness: i32,
+    pub par_fill_width: f32,
+    pub par_fill_stretch: f32,
+    pub prev_graf: i32,
+    pub last_line_fit: i32,
 }
 
 impl Default for DocumentConfig {
@@ -93,6 +102,15 @@ impl Default for DocumentConfig {
             list_item_indent: 0.0,
             list_item_sep: 4.0,
             list_par_indent: 0.0,
+            french_spacing: false,
+            pre_tolerance: 100,
+            tolerance: 200,
+            emergency_stretch: 0.0,
+            looseness: 0,
+            par_fill_width: 0.0,
+            par_fill_stretch: f32::INFINITY,
+            prev_graf: 0,
+            last_line_fit: 0,
         }
     }
 }
@@ -355,4 +373,42 @@ pub fn parse_dimension_pt(dimension_str: &str) -> Option<f32> {
         "ex" => Some(numeric_value * 5.5),
         _ => None,
     }
+}
+
+/// Parse TeX glue string into (width_pt, stretch_pt).
+/// For example:
+/// - `0pt plus 1fil` -> `(0.0, f32::INFINITY)`
+/// - `0pt` -> `(0.0, 0.0)`
+/// - `1cm plus 1fil` -> `(28.346..., f32::INFINITY)`
+/// - `10pt plus 5pt` -> `(10.0, 5.0)`
+pub fn parse_glue_pt(glue_str: &str) -> Option<(f32, f32)> {
+    let s = glue_str.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (w_str, rest) = if let Some(pos) = s.find("plus") {
+        (&s[..pos], &s[pos..])
+    } else if let Some(pos) = s.find("minus") {
+        (&s[..pos], "")
+    } else {
+        (s, "")
+    };
+    let width = parse_dimension_pt(w_str.trim())?;
+    let stretch = if rest.starts_with("plus") {
+        let after_plus = rest["plus".len()..].trim();
+        let stretch_str = if let Some(m_pos) = after_plus.find("minus") {
+            &after_plus[..m_pos]
+        } else {
+            after_plus
+        }
+        .trim();
+        if stretch_str.contains("fil") {
+            f32::INFINITY
+        } else {
+            parse_dimension_pt(stretch_str).unwrap_or(0.0)
+        }
+    } else {
+        0.0
+    };
+    Some((width, stretch))
 }

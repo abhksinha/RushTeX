@@ -173,8 +173,8 @@ const fn const_get_dist_code(dist: usize) -> (u8, u8, u16) {
     }
 }
 
-const fn generate_length_encode_table() -> [(u32, u8); 256] {
-    let mut table = [(0u32, 0u8); 256];
+const fn generate_length_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
     let lit_codes = generate_lit_len_codes();
     let lit_bits = generate_lit_len_bits();
     let mut len = 3;
@@ -184,29 +184,29 @@ const fn generate_length_encode_table() -> [(u32, u8); 256] {
         let huff_bits = lit_bits[code as usize];
         let combined = huff_code | ((extra_val as u32) << huff_bits);
         let total = huff_bits + extra_bits;
-        table[len - 3] = (combined, total);
+        table[len - 3] = combined | ((total as u32) << 16);
         len += 1;
     }
     table
 }
 
-const fn generate_dist_encode_table_512() -> [(u32, u8); 513] {
-    let mut table = [(0u32, 0u8); 513];
+const fn generate_dist_table_2048() -> [u32; 2049] {
+    let mut table = [0u32; 2049];
     let dist_codes = generate_dist_codes();
     let mut dist = 1;
-    while dist <= 512 {
+    while dist <= 2048 {
         let (code, extra_bits, extra_val) = const_get_dist_code(dist);
         let huff_code = dist_codes[code as usize] as u32;
         let combined = huff_code | ((extra_val as u32) << 5);
         let total = 5 + extra_bits;
-        table[dist] = (combined, total);
+        table[dist] = combined | ((total as u32) << 16);
         dist += 1;
     }
     table
 }
 
-pub static LENGTH_ENCODE_TABLE: [(u32, u8); 256] = generate_length_encode_table();
-pub static DIST_ENCODE_TABLE_512: [(u32, u8); 513] = generate_dist_encode_table_512();
+pub static LENGTH_TABLE: [u32; 256] = generate_length_table();
+pub static DIST_TABLE_2048: [u32; 2049] = generate_dist_table_2048();
 
 const fn generate_lit_table() -> [u32; 256] {
     let mut table = [0u32; 256];
@@ -222,7 +222,7 @@ const fn generate_lit_table() -> [u32; 256] {
 
 pub static LIT_TABLE: [u32; 256] = generate_lit_table();
 
-/// Computes Adler-32 checksum (RFC 1950) with 16-byte unrolled arithmetic.
+/// Computes Adler-32 checksum (RFC 1950) with 16-byte unrolled parallel arithmetic.
 pub fn adler32(data: &[u8]) -> u32 {
     let mut s1 = 1u32;
     let mut s2 = 0u32;
@@ -231,38 +231,36 @@ pub fn adler32(data: &[u8]) -> u32 {
     for chunk in data.chunks(5552) {
         let mut slice = chunk;
         while slice.len() >= 16 {
-            s1 += slice[0] as u32;
-            s2 += s1;
-            s1 += slice[1] as u32;
-            s2 += s1;
-            s1 += slice[2] as u32;
-            s2 += s1;
-            s1 += slice[3] as u32;
-            s2 += s1;
-            s1 += slice[4] as u32;
-            s2 += s1;
-            s1 += slice[5] as u32;
-            s2 += s1;
-            s1 += slice[6] as u32;
-            s2 += s1;
-            s1 += slice[7] as u32;
-            s2 += s1;
-            s1 += slice[8] as u32;
-            s2 += s1;
-            s1 += slice[9] as u32;
-            s2 += s1;
-            s1 += slice[10] as u32;
-            s2 += s1;
-            s1 += slice[11] as u32;
-            s2 += s1;
-            s1 += slice[12] as u32;
-            s2 += s1;
-            s1 += slice[13] as u32;
-            s2 += s1;
-            s1 += slice[14] as u32;
-            s2 += s1;
-            s1 += slice[15] as u32;
-            s2 += s1;
+            let b0 = slice[0] as u32;
+            let b1 = slice[1] as u32;
+            let b2 = slice[2] as u32;
+            let b3 = slice[3] as u32;
+            let b4 = slice[4] as u32;
+            let b5 = slice[5] as u32;
+            let b6 = slice[6] as u32;
+            let b7 = slice[7] as u32;
+            let b8 = slice[8] as u32;
+            let b9 = slice[9] as u32;
+            let b10 = slice[10] as u32;
+            let b11 = slice[11] as u32;
+            let b12 = slice[12] as u32;
+            let b13 = slice[13] as u32;
+            let b14 = slice[14] as u32;
+            let b15 = slice[15] as u32;
+
+            let sum03 = b0 + b1 + b2 + b3;
+            let sum47 = b4 + b5 + b6 + b7;
+            let sum8b = b8 + b9 + b10 + b11;
+            let sumcf = b12 + b13 + b14 + b15;
+            let sum_all = (sum03 + sum47) + (sum8b + sumcf);
+
+            let w0 = 16 * b0 + 15 * b1 + 14 * b2 + 13 * b3;
+            let w1 = 12 * b4 + 11 * b5 + 10 * b6 + 9 * b7;
+            let w2 = 8 * b8 + 7 * b9 + 6 * b10 + 5 * b11;
+            let w3 = 4 * b12 + 3 * b13 + 2 * b14 + b15;
+
+            s2 += (s1 << 4) + ((w0 + w1) + (w2 + w3));
+            s1 += sum_all;
             slice = &slice[16..];
         }
         for &b in slice {
@@ -275,11 +273,13 @@ pub fn adler32(data: &[u8]) -> u32 {
     (s2 << 16) | s1
 }
 
-/// Bit writer accumulator for fast LSB-first emission.
+/// Bit writer accumulator with 256-byte L1 stack buffer to eliminate per-word heap vector churn.
 struct BitWriter<'a> {
     buf: &'a mut Vec<u8>,
     bit_buf: u64,
     bit_count: u8,
+    stack: [u8; 256],
+    stack_len: usize,
 }
 
 impl<'a> BitWriter<'a> {
@@ -289,27 +289,40 @@ impl<'a> BitWriter<'a> {
             buf,
             bit_buf: 0,
             bit_count: 0,
+            stack: [0u8; 256],
+            stack_len: 0,
         }
     }
 
     #[inline(always)]
-    fn write_bits(&mut self, val: u32, count: u8) {
-        self.bit_buf |= (val as u64) << self.bit_count;
+    fn write_bits(&mut self, val: u64, count: u8) {
+        self.bit_buf |= val << self.bit_count;
         self.bit_count += count;
         if self.bit_count >= 32 {
             let low = (self.bit_buf as u32).to_le_bytes();
-            self.buf.extend_from_slice(&low);
+            let slen = self.stack_len;
+            self.stack[slen..slen + 4].copy_from_slice(&low);
+            self.stack_len = slen + 4;
             self.bit_buf >>= 32;
             self.bit_count -= 32;
+            if self.stack_len >= 240 {
+                self.buf.extend_from_slice(&self.stack[..self.stack_len]);
+                self.stack_len = 0;
+            }
         }
     }
 
     #[inline(always)]
-    fn finish(self) {
+    fn finish(mut self) {
         let bytes = (self.bit_count as usize).div_ceil(8);
         if bytes > 0 {
             let le = self.bit_buf.to_le_bytes();
-            self.buf.extend_from_slice(&le[..bytes]);
+            let slen = self.stack_len;
+            self.stack[slen..slen + bytes].copy_from_slice(&le[..bytes]);
+            self.stack_len = slen + bytes;
+        }
+        if self.stack_len > 0 {
+            self.buf.extend_from_slice(&self.stack[..self.stack_len]);
         }
     }
 }
@@ -326,6 +339,7 @@ impl<'a> BitWriter<'a> {
 ///   L1 cache line accesses in half.
 pub struct DeflateCompressor {
     table: [u64; 4096],
+    epoch: u32,
 }
 
 impl Default for DeflateCompressor {
@@ -338,6 +352,7 @@ impl DeflateCompressor {
     pub fn new() -> Self {
         Self {
             table: [0u64; 4096],
+            epoch: 0,
         }
     }
 
@@ -368,20 +383,40 @@ impl DeflateCompressor {
         if input_data.is_empty() {
             let mut bit_writer = BitWriter::new(destination_buffer);
             bit_writer.write_bits(0b011, 3); // BFINAL=1, BTYPE=01
-            bit_writer.write_bits(LIT_LEN_CODES[256] as u32, LIT_LEN_BITS[256]); // EOB
+            bit_writer.write_bits(LIT_LEN_CODES[256] as u64, LIT_LEN_BITS[256]); // EOB
             bit_writer.finish();
             return;
         }
 
         destination_buffer.reserve(input_data.len() + 64);
 
-        // Clear table (32 KB) - fits completely in L1 cache
-        self.table.fill(0);
+        let total_input_length = input_data.len();
+        if total_input_length <= 65535 {
+            self.epoch = (self.epoch + 1) & 0x00FF_FFFF;
+            if self.epoch == 0 {
+                self.table.fill(0);
+                self.epoch = 1;
+            }
+            self.compress_raw_inner::<true>(input_data, destination_buffer);
+        } else {
+            self.table.fill(0);
+            self.compress_raw_inner::<false>(input_data, destination_buffer);
+        }
+    }
+
+    #[inline(always)]
+    fn compress_raw_inner<const USE_EPOCH: bool>(
+        &mut self,
+        input_data: &[u8],
+        destination_buffer: &mut Vec<u8>,
+    ) {
+        let total_input_length = input_data.len();
+        let curr_epoch = self.epoch;
+        let epoch_high = (curr_epoch as u64) << 40;
 
         let mut bit_writer = BitWriter::new(destination_buffer);
         bit_writer.write_bits(0b011, 3); // BFINAL=1, BTYPE=01 (Fixed Huffman)
 
-        let total_input_length = input_data.len();
         let mut current_position = 0;
         let mut misses = 0u32;
 
@@ -395,17 +430,26 @@ impl DeflateCompressor {
             let hash_index = (prefix3.wrapping_mul(0x1e35a7bd) >> 20) as usize & 4095;
 
             let entry = self.table[hash_index];
-            let prev_pos = entry as u32;
-            let prev_prefix = (entry >> 32) as u32;
-            self.table[hash_index] =
-                (current_position as u32 + 1) as u64 | ((prefix3 as u64) << 32);
+
+            let (is_valid, previous_index) = if USE_EPOCH {
+                let expected = epoch_high | ((prefix3 as u64) << 16);
+                let valid = ((entry ^ expected) & 0xFFFF_FFFF_FFFF_0000) == 0;
+                let prev_idx = (entry as u16).wrapping_sub(1) as usize;
+                self.table[hash_index] = expected | ((current_position as u32 + 1) as u64);
+                (valid, prev_idx)
+            } else {
+                let expected = (prefix3 as u64) << 32;
+                let valid = (entry >> 32) == (prefix3 as u64) && (entry as u32) > 0;
+                let prev_idx = (entry as u32).wrapping_sub(1) as usize;
+                self.table[hash_index] = expected | ((current_position as u32 + 1) as u64);
+                (valid, prev_idx)
+            };
 
             let mut match_length = 0;
             let mut match_distance = 0;
 
             // Verified match: if prefix matches in L1 cache, first 3 bytes are guaranteed!
-            if prev_pos > 0 && prev_prefix == prefix3 {
-                let previous_index = (prev_pos - 1) as usize;
+            if is_valid {
                 match_distance = current_position - previous_index;
                 if match_distance > 0 && match_distance <= 32768 {
                     match_length = 3;
@@ -440,50 +484,73 @@ impl DeflateCompressor {
             }
 
             if match_length >= 3 {
-                let (len_bits, len_count) = LENGTH_ENCODE_TABLE[match_length - 3];
-                bit_writer.write_bits(len_bits, len_count);
+                let len_entry = LENGTH_TABLE[match_length - 3];
+                let len_bits = (len_entry & 0xFFFF) as u64;
+                let len_count = (len_entry >> 16) as u8;
 
-                let (dist_bits, dist_count) = if match_distance <= 512 {
-                    DIST_ENCODE_TABLE_512[match_distance]
+                let (dist_bits, dist_count) = if match_distance <= 2048 {
+                    let dist_entry = DIST_TABLE_2048[match_distance];
+                    ((dist_entry & 0xFFFF) as u64, (dist_entry >> 16) as u8)
                 } else {
                     let (code, extra_bits, extra_val) = const_get_dist_code(match_distance);
-                    let bits = (DIST_CODES[code as usize] as u32) | ((extra_val as u32) << 5);
+                    let bits = ((DIST_CODES[code as usize] as u32) | ((extra_val as u32) << 5)) as u64;
                     (bits, 5 + extra_bits)
                 };
-                bit_writer.write_bits(dist_bits, dist_count);
+
+                let combined = len_bits | (dist_bits << len_count);
+                bit_writer.write_bits(combined, len_count + dist_count);
 
                 current_position += match_length;
                 misses = 0;
             } else {
                 let literal_byte = input_data[current_position] as usize;
                 let entry = LIT_TABLE[literal_byte];
-                bit_writer.write_bits(entry & 0xFFFF, (entry >> 16) as u8);
+                bit_writer.write_bits((entry & 0xFFFF) as u64, (entry >> 16) as u8);
                 current_position += 1;
                 misses += 1;
                 if misses > 32 {
                     let step = (misses >> 5).min(4) as usize;
                     let fast_literals =
                         (step - 1).min(total_input_length.saturating_sub(current_position + 4));
-                    for _ in 0..fast_literals {
-                        let lit = input_data[current_position] as usize;
-                        let entry = LIT_TABLE[lit];
-                        bit_writer.write_bits(entry & 0xFFFF, (entry >> 16) as u8);
+                    let mut k = 0;
+                    while k + 1 < fast_literals {
+                        let e0 = LIT_TABLE[input_data[current_position] as usize];
+                        let e1 = LIT_TABLE[input_data[current_position + 1] as usize];
+                        let c0 = (e0 & 0xFFFF) as u64;
+                        let b0 = (e0 >> 16) as u8;
+                        let c1 = (e1 & 0xFFFF) as u64;
+                        let b1 = (e1 >> 16) as u8;
+                        bit_writer.write_bits(c0 | (c1 << b0), b0 + b1);
+                        current_position += 2;
+                        k += 2;
+                    }
+                    if k < fast_literals {
+                        let entry = LIT_TABLE[input_data[current_position] as usize];
+                        bit_writer.write_bits((entry & 0xFFFF) as u64, (entry >> 16) as u8);
                         current_position += 1;
                     }
                 }
             }
         }
 
-        // Emit remaining trailing literal bytes
-        while current_position < total_input_length {
-            let literal_byte = input_data[current_position] as usize;
-            let entry = LIT_TABLE[literal_byte];
-            bit_writer.write_bits(entry & 0xFFFF, (entry >> 16) as u8);
-            current_position += 1;
+        // Emit remaining trailing literal bytes (batched 2 at a time)
+        while current_position + 1 < total_input_length {
+            let e0 = LIT_TABLE[input_data[current_position] as usize];
+            let e1 = LIT_TABLE[input_data[current_position + 1] as usize];
+            let c0 = (e0 & 0xFFFF) as u64;
+            let b0 = (e0 >> 16) as u8;
+            let c1 = (e1 & 0xFFFF) as u64;
+            let b1 = (e1 >> 16) as u8;
+            bit_writer.write_bits(c0 | (c1 << b0), b0 + b1);
+            current_position += 2;
+        }
+        if current_position < total_input_length {
+            let entry = LIT_TABLE[input_data[current_position] as usize];
+            bit_writer.write_bits((entry & 0xFFFF) as u64, (entry >> 16) as u8);
         }
 
         // Emit End of Block (EOB = 256)
-        bit_writer.write_bits(LIT_LEN_CODES[256] as u32, LIT_LEN_BITS[256]);
+        bit_writer.write_bits(LIT_LEN_CODES[256] as u64, LIT_LEN_BITS[256]);
         bit_writer.finish();
     }
 }

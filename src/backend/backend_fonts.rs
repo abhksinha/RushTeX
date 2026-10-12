@@ -647,7 +647,7 @@ pub static SYMBOL_WIDTHS: AlignedTable<256> = AlignedTable([
     611, 763, 603, 722, 333, 631, 722, 686, 889, 722, 722, 768, 741, 556, 592, 611, 690, 439, 768,
     645, 795, 611, 333, 863, 333, 658, 500, 500, 631, 549, 549, 494, 439, 521, 411, 603, 329, 603,
     549, 549, 576, 521, 549, 549, 521, 549, 603, 439, 576, 713, 686, 493, 686, 494, 480, 200, 480,
-    549, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    549, 0, 439, 490, 631, 549, 549, 534, 500, 500, 556, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 750, 620, 247, 549, 167, 713, 500, 753, 753, 753, 753, 1042, 987, 603, 987, 603, 400,
     549, 411, 549, 549, 713, 494, 460, 549, 549, 549, 549, 1000, 603, 1000, 658, 823, 686, 795,
     987, 768, 768, 823, 768, 768, 713, 713, 713, 713, 713, 713, 713, 768, 713, 790, 790, 890, 823,
@@ -699,7 +699,12 @@ pub fn unicode_to_symbol_byte(ch: char) -> Option<u8> {
         'σ' => b's',
         'τ' => b't',
         'υ' => b'u',
-        'φ' => b'f',
+        'φ' => b'j', // varphi (\u{03C6})
+        '\u{03D5}' => b'f', // phi (\u{03D5})
+        '\u{03D1}' => b'J', // vartheta
+        '\u{03D6}' => b'v', // varpi
+        '\u{03F1}' => b'r', // varrho
+        '\u{03F5}' => b'e', // lunate epsilon
         'χ' => b'c',
         'ψ' => b'y',
         'ω' => b'w',
@@ -738,6 +743,8 @@ pub fn unicode_to_symbol_byte(ch: char) -> Option<u8> {
         '∴' => 0x5C,
         '⊥' => 0x5E,
         '∼' => 0x7E,
+        '′' => 0xA2,
+        '″' => 0xB2,
         '≤' => 0xA3,
         '∕' => 0xA4,
         '∞' => 0xA5,
@@ -762,7 +769,7 @@ pub fn unicode_to_symbol_byte(ch: char) -> Option<u8> {
         '∉' => 0xCF,
         '∇' => 0xD1,
         '∏' => 0xD5,
-        '√' => 0xD6,
+        '√' => 0xC3,
         '⋅' => 0xD7,
         '¬' => 0xD8,
         '∧' => 0xD9,
@@ -791,13 +798,15 @@ pub fn unicode_to_symbol_byte(ch: char) -> Option<u8> {
 
 #[inline]
 pub fn symbol_char_units(character: char) -> u16 {
-    let character_code = character as u32;
-    if character_code < 256 {
-        SYMBOL_WIDTHS[character_code as usize]
-    } else if let Some(byte) = unicode_to_symbol_byte(character) {
+    if let Some(byte) = unicode_to_symbol_byte(character) {
         SYMBOL_WIDTHS[byte as usize]
     } else {
-        500
+        let character_code = character as u32;
+        if character_code < 256 {
+            SYMBOL_WIDTHS[character_code as usize]
+        } else {
+            500
+        }
     }
 }
 
@@ -812,55 +821,44 @@ pub fn dingbats_char_units(character: char) -> u16 {
 }
 
 /// Resolves the 64-byte aligned ASCII font width table for a given family and face in O(1) time.
+pub static WIDTH_TABLE_MAP: [&AlignedTable<128>; 72] = [
+    // Times (0..17)
+    &TIMES_ROMAN_WIDTHS, &TIMES_BOLD_WIDTHS, &TIMES_ITALIC_WIDTHS, &TIMES_BOLD_ITALIC_WIDTHS,
+    &COURIER_WIDTHS, &COURIER_WIDTHS, &TIMES_ROMAN_WIDTHS, &TIMES_ROMAN_WIDTHS,
+    &TIMES_ROMAN_WIDTHS, &TIMES_ITALIC_WIDTHS, &TIMES_ROMAN_WIDTHS, &TIMES_ROMAN_WIDTHS,
+    &TIMES_ROMAN_WIDTHS, &TIMES_ROMAN_WIDTHS, &TIMES_ROMAN_WIDTHS, &TIMES_ROMAN_WIDTHS,
+    &TIMES_ROMAN_WIDTHS, &TIMES_ROMAN_WIDTHS,
+
+    // Helvetica (18..35)
+    &HELVETICA_ROMAN_WIDTHS, &HELVETICA_BOLD_WIDTHS, &HELVETICA_ROMAN_WIDTHS, &HELVETICA_BOLD_WIDTHS,
+    &COURIER_WIDTHS, &COURIER_WIDTHS, &HELVETICA_ROMAN_WIDTHS, &HELVETICA_ROMAN_WIDTHS,
+    &HELVETICA_ROMAN_WIDTHS, &HELVETICA_ROMAN_WIDTHS, &HELVETICA_ROMAN_WIDTHS, &HELVETICA_ROMAN_WIDTHS,
+    &HELVETICA_ROMAN_WIDTHS, &HELVETICA_ROMAN_WIDTHS, &HELVETICA_ROMAN_WIDTHS, &HELVETICA_ROMAN_WIDTHS,
+    &HELVETICA_ROMAN_WIDTHS, &HELVETICA_ROMAN_WIDTHS,
+
+    // Palatino (36..53)
+    &PALATINO_ROMAN_WIDTHS, &PALATINO_BOLD_WIDTHS, &PALATINO_ITALIC_WIDTHS, &PALATINO_BOLD_ITALIC_WIDTHS,
+    &COURIER_WIDTHS, &COURIER_WIDTHS, &PALATINO_ROMAN_WIDTHS, &PALATINO_ROMAN_WIDTHS,
+    &PALATINO_ROMAN_WIDTHS, &PALATINO_ITALIC_WIDTHS, &PALATINO_ROMAN_WIDTHS, &PALATINO_ROMAN_WIDTHS,
+    &PALATINO_ROMAN_WIDTHS, &PALATINO_ROMAN_WIDTHS, &PALATINO_ROMAN_WIDTHS, &PALATINO_ROMAN_WIDTHS,
+    &PALATINO_ROMAN_WIDTHS, &PALATINO_ROMAN_WIDTHS,
+
+    // ComputerModern (54..71)
+    &CMR10_WIDTHS, &CMBX10_WIDTHS, &CMTI10_WIDTHS, &CMBX10_WIDTHS,
+    &CMTT10_WIDTHS, &CMTT10_WIDTHS, &CMSY10_WIDTHS, &CMR10_WIDTHS,
+    &CMEX10_WIDTHS, &CMMI10_WIDTHS, &CMR7_WIDTHS, &CMR5_WIDTHS,
+    &CMMI7_WIDTHS, &CMMI5_WIDTHS, &CMSY7_WIDTHS, &CMSY5_WIDTHS,
+    &MSAM10_WIDTHS, &MSBM10_WIDTHS,
+];
+
+/// Resolves the 64-byte aligned ASCII font width table for a given family and face in O(1) branchless time.
 #[inline(always)]
 pub fn resolve_width_table(family: FontFamily, font_face: Face) -> &'static [u16; 128] {
-    if font_face.is_mono() {
-        return match family {
-            FontFamily::ComputerModern => &CMTT10_WIDTHS,
-            _ => &COURIER_WIDTHS,
-        };
-    }
-    match family {
-        FontFamily::Times => match font_face {
-            Face::Roman => &TIMES_ROMAN_WIDTHS,
-            Face::Bold => &TIMES_BOLD_WIDTHS,
-            Face::Italic | Face::MathItalic => &TIMES_ITALIC_WIDTHS,
-            Face::BoldItalic => &TIMES_BOLD_ITALIC_WIDTHS,
-            _ => &TIMES_ROMAN_WIDTHS,
-        },
-        FontFamily::Helvetica => {
-            if font_face.is_bold() {
-                &HELVETICA_BOLD_WIDTHS
-            } else {
-                &HELVETICA_ROMAN_WIDTHS
-            }
-        }
-        FontFamily::Palatino => match font_face {
-            Face::Roman => &PALATINO_ROMAN_WIDTHS,
-            Face::Bold => &PALATINO_BOLD_WIDTHS,
-            Face::Italic | Face::MathItalic => &PALATINO_ITALIC_WIDTHS,
-            Face::BoldItalic => &PALATINO_BOLD_ITALIC_WIDTHS,
-            _ => &PALATINO_ROMAN_WIDTHS,
-        },
-        FontFamily::ComputerModern => match font_face {
-            Face::Roman => &CMR10_WIDTHS,
-            Face::Bold => &CMBX10_WIDTHS,
-            Face::Italic => &CMTI10_WIDTHS,
-            Face::BoldItalic => &CMBX10_WIDTHS,
-            Face::MathItalic => &CMMI10_WIDTHS,
-            Face::Mono | Face::MonoBold => &CMTT10_WIDTHS,
-            Face::Symbol => &CMSY10_WIDTHS,
-            Face::Extension => &CMEX10_WIDTHS,
-            Face::Dingbats => &CMR10_WIDTHS,
-            Face::Roman7 => &CMR7_WIDTHS,
-            Face::Roman5 => &CMR5_WIDTHS,
-            Face::MathItalic7 => &CMMI7_WIDTHS,
-            Face::MathItalic5 => &CMMI5_WIDTHS,
-            Face::Symbol7 => &CMSY7_WIDTHS,
-            Face::Symbol5 => &CMSY5_WIDTHS,
-            Face::AmsA => &MSAM10_WIDTHS,
-            Face::AmsB => &MSBM10_WIDTHS,
-        },
+    let idx = (family as usize) * 18 + (font_face as usize);
+    if idx < WIDTH_TABLE_MAP.len() {
+        &WIDTH_TABLE_MAP[idx].0
+    } else {
+        &TIMES_ROMAN_WIDTHS.0
     }
 }
 
@@ -876,6 +874,21 @@ pub fn resolve_space_units(family: FontFamily, font_face: Face) -> u32 {
     match family {
         FontFamily::Times | FontFamily::Palatino => 250,
         FontFamily::Helvetica | FontFamily::ComputerModern => 278,
+    }
+}
+
+/// Resolves extra space (fontdimen 7) in 1000-units/em space with zero memory lookups.
+/// According to TeX specifications (TeX by Topic Ch 20), extra space is added to the
+/// interword space when space factor >= 2000 (e.g. after sentence-ending punctuation).
+#[inline(always)]
+pub fn resolve_extra_space_units(family: FontFamily, font_face: Face) -> u32 {
+    if font_face.is_mono() {
+        return 0;
+    }
+    match family {
+        FontFamily::Times | FontFamily::Palatino => 83,
+        FontFamily::Helvetica => 93,
+        FontFamily::ComputerModern => 111,
     }
 }
 
@@ -897,6 +910,11 @@ pub fn resolve_digit_units(family: FontFamily, font_face: Face) -> u32 {
 
 #[inline]
 pub fn char_units_family(character: char, font_face: Face, family: FontFamily) -> u16 {
+    let character_code = character as u32;
+    if character_code < 128 && !matches!(font_face, Face::Symbol | Face::Symbol7 | Face::Symbol5 | Face::Dingbats) {
+        let table = resolve_width_table(family, font_face);
+        return table[character_code as usize];
+    }
     if font_face.is_mono() {
         return match family {
             FontFamily::ComputerModern => 525,
@@ -915,6 +933,9 @@ pub fn char_units_family(character: char, font_face: Face, family: FontFamily) -
             if character == '-' || character == '−' {
                 return crate::math::math_tfm::cmsy10_metric(0x00).w;
             }
+            if character == '′' || character == '\'' {
+                return crate::math::math_tfm::cmsy10_metric(0x30).w;
+            }
             if let Some(byte) = unicode_to_symbol_byte(character) {
                 let code = if byte == 0x2D { 0x00 } else { byte };
                 return crate::math::math_tfm::cmsy10_metric(code).w;
@@ -931,6 +952,9 @@ pub fn char_units_family(character: char, font_face: Face, family: FontFamily) -
         if character == '-' || character == '−' {
             return crate::math::math_tfm::cmsy7_metric(0x00).w;
         }
+        if character == '′' || character == '\'' {
+            return crate::math::math_tfm::cmsy7_metric(0x30).w;
+        }
         if let Some(byte) = unicode_to_symbol_byte(character) {
             let code = if byte == 0x2D { 0x00 } else { byte };
             return crate::math::math_tfm::cmsy7_metric(code).w;
@@ -946,6 +970,9 @@ pub fn char_units_family(character: char, font_face: Face, family: FontFamily) -
         if character == '-' || character == '−' {
             return crate::math::math_tfm::cmsy5_metric(0x00).w;
         }
+        if character == '′' || character == '\'' {
+            return crate::math::math_tfm::cmsy5_metric(0x30).w;
+        }
         if let Some(byte) = unicode_to_symbol_byte(character) {
             let code = if byte == 0x2D { 0x00 } else { byte };
             return crate::math::math_tfm::cmsy5_metric(code).w;
@@ -960,7 +987,6 @@ pub fn char_units_family(character: char, font_face: Face, family: FontFamily) -
     if font_face == Face::Dingbats {
         return dingbats_char_units(character);
     }
-    let character_code = character as u32;
     if character_code < 128 {
         let table = resolve_width_table(family, font_face);
         table[character_code as usize]
@@ -1002,9 +1028,9 @@ pub fn width(character: char, font_face: Face, font_size_points: f32) -> f32 {
     width_family(character, font_face, font_size_points, FontFamily::Times)
 }
 
-/// 4-Way SWAR unrolled fast path: processes 4 ASCII characters per iteration
+/// 8-Way SWAR unrolled fast path: processes 8 ASCII characters per iteration
 /// with independent accumulators to exploit CPU superscalar instruction-level parallelism.
-#[inline]
+#[inline(always)]
 pub fn string_units_table(text: &str, table: &[u16; 128]) -> u32 {
     let byte_slice = text.as_bytes();
     let mut acc0: u32 = 0;
@@ -1012,21 +1038,33 @@ pub fn string_units_table(text: &str, table: &[u16; 128]) -> u32 {
     let mut acc2: u32 = 0;
     let mut acc3: u32 = 0;
     let mut byte_index = 0;
+    let len = byte_slice.len();
 
-    while byte_index + 4 <= byte_slice.len() {
-        let b0 = byte_slice[byte_index];
-        let b1 = byte_slice[byte_index + 1];
-        let b2 = byte_slice[byte_index + 2];
-        let b3 = byte_slice[byte_index + 3];
+    // 8-character 64-bit SWAR fast path
+    while byte_index + 8 <= len {
+        let chunk = u64::from_le_bytes(byte_slice[byte_index..byte_index + 8].try_into().unwrap());
+        if (chunk & 0x8080_8080_8080_8080) == 0 {
+            let b0 = (chunk & 0x7F) as usize;
+            let b1 = ((chunk >> 8) & 0x7F) as usize;
+            let b2 = ((chunk >> 16) & 0x7F) as usize;
+            let b3 = ((chunk >> 24) & 0x7F) as usize;
+            let b4 = ((chunk >> 32) & 0x7F) as usize;
+            let b5 = ((chunk >> 40) & 0x7F) as usize;
+            let b6 = ((chunk >> 48) & 0x7F) as usize;
+            let b7 = ((chunk >> 56) & 0x7F) as usize;
 
-        if (b0 | b1 | b2 | b3) < 128 {
-            acc0 += table[b0 as usize] as u32;
-            acc1 += table[b1 as usize] as u32;
-            acc2 += table[b2 as usize] as u32;
-            acc3 += table[b3 as usize] as u32;
-            byte_index += 4;
+            acc0 += table[b0] as u32;
+            acc1 += table[b1] as u32;
+            acc2 += table[b2] as u32;
+            acc3 += table[b3] as u32;
+            acc0 += table[b4] as u32;
+            acc1 += table[b5] as u32;
+            acc2 += table[b6] as u32;
+            acc3 += table[b7] as u32;
+            byte_index += 8;
         } else {
             // Non-ASCII fallback for first character in chunk
+            let b0 = byte_slice[byte_index];
             if b0 < 128 {
                 acc0 += table[b0 as usize] as u32;
                 byte_index += 1;
@@ -1039,8 +1077,25 @@ pub fn string_units_table(text: &str, table: &[u16; 128]) -> u32 {
         }
     }
 
+    // 4-character 32-bit SWAR path
+    if byte_index + 4 <= len {
+        let chunk = u32::from_le_bytes(byte_slice[byte_index..byte_index + 4].try_into().unwrap());
+        if (chunk & 0x8080_8080) == 0 {
+            let b0 = (chunk & 0x7F) as usize;
+            let b1 = ((chunk >> 8) & 0x7F) as usize;
+            let b2 = ((chunk >> 16) & 0x7F) as usize;
+            let b3 = ((chunk >> 24) & 0x7F) as usize;
+
+            acc0 += table[b0] as u32;
+            acc1 += table[b1] as u32;
+            acc2 += table[b2] as u32;
+            acc3 += table[b3] as u32;
+            byte_index += 4;
+        }
+    }
+
     // Scalar remainder loop for trailing 1..3 bytes
-    while byte_index < byte_slice.len() {
+    while byte_index < len {
         let byte_value = byte_slice[byte_index];
         if byte_value < 128 {
             acc0 += table[byte_value as usize] as u32;
@@ -1058,35 +1113,40 @@ pub fn string_units_table(text: &str, table: &[u16; 128]) -> u32 {
 /// Fast branchless sum of font metric units for `text` with specified `family`.
 pub fn string_units_family(text: &str, font_face: Face, family: FontFamily) -> u32 {
     if font_face.is_mono() {
-        let byte_slice = text.as_bytes();
-        let mut char_count = 0u32;
-        let mut i = 0;
-        while i < byte_slice.len() {
-            let b = byte_slice[i];
-            if b < 128 {
-                char_count += 1;
-                i += 1;
-            } else {
-                let character = text[i..].chars().next().unwrap();
-                i += character.len_utf8();
-                char_count += 1;
-            }
-        }
         let mono_unit = match family {
             FontFamily::ComputerModern => 525,
             _ => 600,
         };
+        let byte_slice = text.as_bytes();
+        let len = byte_slice.len();
+        let mut idx = 0;
+        let mut is_all_ascii = true;
+        while idx + 8 <= len {
+            let chunk = u64::from_le_bytes(byte_slice[idx..idx + 8].try_into().unwrap());
+            if (chunk & 0x8080_8080_8080_8080) != 0 {
+                is_all_ascii = false;
+                break;
+            }
+            idx += 8;
+        }
+        if is_all_ascii {
+            while idx < len {
+                if byte_slice[idx] >= 128 {
+                    is_all_ascii = false;
+                    break;
+                }
+                idx += 1;
+            }
+        }
+        let char_count = if is_all_ascii {
+            len as u32
+        } else {
+            text.chars().count() as u32
+        };
         return char_count * mono_unit;
     }
     if font_face == Face::Extension {
-        let byte_slice = text.as_bytes();
-        let mut acc = 0u32;
-        for &b in byte_slice {
-            if b < 128 {
-                acc += CMEX10_WIDTHS[b as usize] as u32;
-            }
-        }
-        return acc;
+        return string_units_table(text, &CMEX10_WIDTHS.0);
     }
     if font_face == Face::Symbol {
         let byte_slice = text.as_bytes();

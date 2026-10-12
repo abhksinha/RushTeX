@@ -6,14 +6,14 @@
 use crate::frontend::ast::Inline;
 
 /// A single entry in the Table of Contents.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TocEntry<'a> {
     /// Heading hierarchy depth: 1 for `\section`, 2 for `\subsection`, 3 for `\subsubsection`.
     pub level: u8,
     /// Hierarchical numbering components: `[section, subsection, subsubsection, paragraph]`.
     pub number: [u16; 4],
     /// Title inlines.
-    pub title: &'a [Inline<'a>],
+    pub title: Vec<Inline<'a>>,
     /// Resolved 1-based page number.
     pub page: u32,
 }
@@ -35,23 +35,23 @@ impl<'a> TocEntry<'a> {
 }
 
 /// A single entry in the List of Figures.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct FigureEntry<'a> {
     /// 1-based sequential figure number.
     pub number: u32,
     /// Caption inlines.
-    pub caption: &'a [Inline<'a>],
+    pub caption: Vec<Inline<'a>>,
     /// Resolved 1-based page number.
     pub page: u32,
 }
 
 /// A single entry in the List of Tables.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TableEntry<'a> {
     /// 1-based sequential table number.
     pub number: u32,
     /// Caption inlines.
-    pub caption: &'a [Inline<'a>],
+    pub caption: Vec<Inline<'a>>,
     /// Resolved 1-based page number.
     pub page: u32,
 }

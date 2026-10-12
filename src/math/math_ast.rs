@@ -141,6 +141,20 @@ pub static STYLE_TRANSITION_LUT: StyleTransitionLut = StyleTransitionLut {
     _padding: [0; 24],
 };
 
+impl MathStyle {
+    /// Canonical superscript style transition (TeX Appendix G Rule 18).
+    #[inline(always)]
+    pub fn sup(self) -> MathStyle {
+        STYLE_TRANSITION_LUT.sup[self as usize]
+    }
+
+    /// Canonical subscript style transition (TeX Appendix G Rule 18).
+    #[inline(always)]
+    pub fn sub(self) -> MathStyle {
+        STYLE_TRANSITION_LUT.sub[self as usize]
+    }
+}
+
 /// Contiguous stack-allocated array for math style scoping.
 ///
 /// Exactly 32 bytes (`align(32)`), fitting in half of a 64-byte L1 cache line,
@@ -510,12 +524,38 @@ pub struct MatrixData<'a> {
     pub col_alignments: Vec<ColAlign>,
 }
 
+/// Four canonical mathematical ellipsis kinds defined in Donald Knuth's The TeXbook.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum EllipsisKind {
+    /// Baseline low dots: `\ldots` or low `\dots` ($x_1, \dots, x_n$).
+    Low = 0,
+    /// Axis-centered dots: `\cdots` or binary `\dots` ($x_1 + \dots + x_n$).
+    Centered = 1,
+    /// Vertical dots: `\vdots` (matrix columns).
+    Vertical = 2,
+    /// Diagonal dots: `\ddots` (matrix diagonals).
+    Diagonal = 3,
+}
+
+const _: () = assert!(core::mem::size_of::<EllipsisKind>() == 1);
+
+/// Data payload for horizontal extensible arrows (\xrightarrow[sub]{sup}, \xleftarrow[sub]{sup}).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtensibleArrowData<'a> {
+    pub arrow: &'a str,
+    pub sub: Option<MathNode<'a>>,
+    pub sup: Option<MathNode<'a>>,
+}
+
 /// Abstract Syntax Tree node for mathematical expressions.
 ///
 /// Exactly 32 bytes in size to allow precisely two nodes to occupy a single
 /// 64-byte L1 CPU cache line with 100% packing density and zero line splits.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MathNode<'a> {
+    /// Mathematical ellipsis (\ldots, \cdots, \vdots, \ddots).
+    Ellipsis(EllipsisKind),
     /// Mathematical symbol (Greek, operator, relation, differential).
     Symbol {
         kind: MathAtomKind,
@@ -565,6 +605,8 @@ pub enum MathNode<'a> {
     },
     /// Reduced Planck constant ($\hbar$).
     HBar,
+    /// Conditional math glue primitive (\nonscript) suppressing following glue in script styles (mlist.c:4557).
+    Nonscript,
     /// Horizontal sequence of math nodes.
     Row(Vec<MathNode<'a>>),
     /// Explicit mathematical style scope (`\displaystyle`, `\textstyle`, etc.).
@@ -578,14 +620,49 @@ pub enum MathNode<'a> {
     MathChoice(Box<MathChoiceData<'a>>),
     /// Middle delimiter within a dynamic fence (`\middle |`).
     MiddleDelim { delim: &'a str, options: u8 },
+    /// Manually sized delimiter (`\big`, `\Big`, `\bigg`, `\Bigg` and directional variants).
+    SizedDelim {
+        delim: &'a str,
+        size_tier: u8,
+        kind: MathAtomKind,
+        is_left: bool,
+    },
     /// Extensible horizontal overbrace (`\overbrace{content}`).
     Overbrace(Box<MathNode<'a>>),
     /// Extensible horizontal underbrace (`\underbrace{content}`).
     Underbrace(Box<MathNode<'a>>),
+    /// Extensible horizontal overbracket (`\overbracket{content}`).
+    Overbracket(Box<MathNode<'a>>),
+    /// Extensible horizontal underbracket (`\underbracket{content}`).
+    Underbracket(Box<MathNode<'a>>),
+    /// Horizontal extensible arrow with optional limits above/below (`\xrightarrow[sub]{sup}`).
+    ExtensibleArrow(Box<ExtensibleArrowData<'a>>),
     /// Explicit atom class coercion (`\mathord`, `\mathbin`, `\mathrel`, etc.).
     Coerce {
         kind: MathAtomKind,
         content: Box<MathNode<'a>>,
+    },
+    /// Display equation with optional custom tag and alignment side (TeX \eqno / \leqno, LaTeX \tag).
+    Tagged {
+        formula: Box<MathNode<'a>>,
+        tag: Box<MathNode<'a>>,
+        is_left: bool,
+        starred: bool,
+    },
+    /// Standard TeX strut ensuring baseline height and depth.
+    Strut,
+    /// Transparent phantom spacing node (`\phantom`, `\hphantom`, `\vphantom`).
+    Phantom {
+        content: Box<MathNode<'a>>,
+        width: bool,
+        height_depth: bool,
+    },
+    /// Smashed or zero-dimension box (`\smash`, `\rlap`, `\llap`).
+    DimensionBox {
+        content: Box<MathNode<'a>>,
+        zero_width: bool,
+        shift_left: bool,
+        zero_height_depth: bool,
     },
 }
 
@@ -612,6 +689,10 @@ impl<'a> MathNode<'a> {
     /// skipping trailing explicit spaces in rows.
     pub fn atom_kind(&self) -> MathAtomKind {
         match self {
+            MathNode::Ellipsis(kind) => match kind {
+                EllipsisKind::Low | EllipsisKind::Centered | EllipsisKind::Diagonal => MathAtomKind::Inner,
+                EllipsisKind::Vertical => MathAtomKind::Ord,
+            },
             MathNode::Symbol { kind, .. } => *kind,
             MathNode::Number(_) => MathAtomKind::Ord,
             MathNode::Variable(_) => MathAtomKind::Ord,
@@ -625,6 +706,7 @@ impl<'a> MathNode<'a> {
             MathNode::Space(_) => MathAtomKind::Ord,
             MathNode::StyleChange { content, .. } => content.atom_kind(),
             MathNode::HBar => MathAtomKind::Ord,
+            MathNode::Nonscript => MathAtomKind::Ord,
             MathNode::Row(nodes) => {
                 for n in nodes.iter().rev() {
                     if !matches!(n, MathNode::Space(_)) {
@@ -637,9 +719,15 @@ impl<'a> MathNode<'a> {
             MathNode::Vcenter(_) => MathAtomKind::Ord,
             MathNode::MathChoice(choice) => choice.display.atom_kind(),
             MathNode::MiddleDelim { .. } => MathAtomKind::Inner,
-            MathNode::Overbrace(_) => MathAtomKind::Op,
-            MathNode::Underbrace(_) => MathAtomKind::Op,
+            MathNode::SizedDelim { kind, .. } => *kind,
+            MathNode::Overbrace(_) | MathNode::Underbrace(_)
+            | MathNode::Overbracket(_) | MathNode::Underbracket(_) => MathAtomKind::Op,
+            MathNode::ExtensibleArrow(_) => MathAtomKind::Rel,
             MathNode::Coerce { kind, .. } => *kind,
+            MathNode::Tagged { formula, .. } => formula.atom_kind(),
+            MathNode::Strut => MathAtomKind::Ord,
+            MathNode::Phantom { content, .. } => content.atom_kind(),
+            MathNode::DimensionBox { content, .. } => content.atom_kind(),
         }
     }
 
@@ -658,9 +746,14 @@ impl<'a> MathNode<'a> {
             MathNode::Vcenter(_) => MathAtomKind::Ord,
             MathNode::MathChoice(choice) => choice.display.first_atom_kind(),
             MathNode::MiddleDelim { .. } => MathAtomKind::Inner,
-            MathNode::Overbrace(_) => MathAtomKind::Op,
-            MathNode::Underbrace(_) => MathAtomKind::Op,
+            MathNode::Overbrace(_) | MathNode::Underbrace(_)
+            | MathNode::Overbracket(_) | MathNode::Underbracket(_) => MathAtomKind::Op,
+            MathNode::ExtensibleArrow(_) => MathAtomKind::Rel,
             MathNode::Coerce { kind, .. } => *kind,
+            MathNode::Tagged { formula, .. } => formula.first_atom_kind(),
+            MathNode::Strut => MathAtomKind::Ord,
+            MathNode::Phantom { content, .. } => content.first_atom_kind(),
+            MathNode::DimensionBox { content, .. } => content.first_atom_kind(),
             _ => self.atom_kind(),
         }
     }
@@ -676,6 +769,9 @@ impl<'a> MathNode<'a> {
             },
             MathNode::SubSup { nucleus, .. } => nucleus.atom_kind_in_style(style),
             MathNode::Coerce { kind, .. } => *kind,
+            MathNode::Tagged { formula, .. } => formula.atom_kind_in_style(style),
+            MathNode::Phantom { content, .. } => content.atom_kind_in_style(style),
+            MathNode::DimensionBox { content, .. } => content.atom_kind_in_style(style),
             MathNode::Row(nodes) => {
                 for n in nodes.iter().rev() {
                     if !matches!(n, MathNode::Space(_)) {

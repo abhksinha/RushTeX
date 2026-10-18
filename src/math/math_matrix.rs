@@ -103,16 +103,16 @@ impl MatrixLayoutMetricsEngine {
                 let row_sep = 0.0;
                 (min_rh, min_rd, row_sep)
             }
-            MatrixEnvKind::Aligned | MatrixEnvKind::Gather | MatrixEnvKind::Multline => {
+            MatrixEnvKind::Aligned | MatrixEnvKind::AlignedAt | MatrixEnvKind::Gather | MatrixEnvKind::Multline => {
                 // AMS multiline environments use standard strut + \jot (3pt = 0.30em)
                 let row_sep = 0.30 * font_size;
                 (base_rh, base_rd, row_sep)
             }
-            MatrixEnvKind::Matrix => {
+            MatrixEnvKind::Matrix | MatrixEnvKind::Array => {
                 let row_sep = 0.0;
                 (base_rh, base_rd, row_sep)
             }
-            MatrixEnvKind::SmallMatrix => {
+            MatrixEnvKind::SmallMatrix | MatrixEnvKind::Subarray | MatrixEnvKind::Overlay | MatrixEnvKind::Vereq => {
                 let min_rh = 0.60 * font_size;
                 let min_rd = 0.25 * font_size;
                 let row_sep = 0.0;
@@ -131,13 +131,16 @@ impl MatrixLayoutMetricsEngine {
     #[inline(always)]
     pub fn col_gap(env_kind: MatrixEnvKind, col_idx: usize, font_size: f32) -> f32 {
         match env_kind {
+            // Between equation pairs `aligned` puts 2\minalignsep (20pt, measured against
+            // amsmath), `alignedat` none.
             MatrixEnvKind::Aligned => {
                 if col_idx.is_multiple_of(2) {
-                    0.0 // Exactly 0 between relation/right and left
+                    0.0
                 } else {
-                    1.0 * font_size // 1em (\alignedspace) between equation pairs
+                    2.0 * font_size
                 }
             }
+            MatrixEnvKind::AlignedAt => 0.0,
             MatrixEnvKind::Cases => {
                 1.0 * font_size // \quad = 1em
             }
@@ -145,10 +148,10 @@ impl MatrixLayoutMetricsEngine {
                 1.0 * font_size // \quad = 1em
             }
             MatrixEnvKind::Multline => 0.0,
-            MatrixEnvKind::SmallMatrix => {
+            MatrixEnvKind::SmallMatrix | MatrixEnvKind::Subarray | MatrixEnvKind::Overlay | MatrixEnvKind::Vereq => {
                 0.50 * font_size // Compact inter-column separation
             }
-            MatrixEnvKind::Matrix => {
+            MatrixEnvKind::Matrix | MatrixEnvKind::Array => {
                 1.0 * font_size // 2 * \arraycolsep = 10pt = 1em
             }
         }
@@ -171,7 +174,9 @@ impl MatrixLayoutMetricsEngine {
             return 0.0;
         }
 
-        let mut curr_x = 0.0f32;
+        // `array` keeps the \arraycolsep (0.5em) that `matrix` removes with `@{}`.
+        let outer_pad = if env_kind == MatrixEnvKind::Array { 0.5 * font_size } else { 0.0 };
+        let mut curr_x = outer_pad;
         let multline_gap = 1.0 * font_size;
 
         for c in 0..num_cols {
@@ -180,16 +185,10 @@ impl MatrixLayoutMetricsEngine {
             curr_x += col_widths[c] + gap;
         }
 
-        let mut matrix_w: f32 = col_widths.iter().sum::<f32>();
+        let mut matrix_w: f32 = col_widths.iter().sum::<f32>() + 2.0 * outer_pad;
         if env_kind == MatrixEnvKind::Multline {
             if num_rows > 1 {
                 matrix_w += 2.0 * multline_gap;
-            }
-        } else if env_kind == MatrixEnvKind::Aligned {
-            for c in 0..num_cols {
-                if c % 2 == 1 {
-                    matrix_w += 1.0 * font_size;
-                }
             }
         } else {
             for c in 0..num_cols.saturating_sub(1) {
@@ -230,7 +229,7 @@ impl MatrixLayoutMetricsEngine {
         col_idx: usize,
     ) -> ColAlign {
         let fallback_align = match env_kind {
-            MatrixEnvKind::Aligned => {
+            MatrixEnvKind::Aligned | MatrixEnvKind::AlignedAt => {
                 if col_idx.is_multiple_of(2) {
                     ColAlign::Right
                 } else {
@@ -246,6 +245,7 @@ impl MatrixLayoutMetricsEngine {
 
     /// Computes horizontal offset within a cell for content alignment.
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub fn compute_cell_offset_x(
         env_kind: MatrixEnvKind,
         align: ColAlign,

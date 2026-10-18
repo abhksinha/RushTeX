@@ -11,3 +11,9 @@ examples/stress_*.tex
 *.zip
 __pycache__/
 texlive-source/
+
+# Local build/profiling artifacts
+*.dvi
+perf.data
+perf.data.old
+flamegraph.svg

@@ -430,7 +430,8 @@ pub struct BigOpData<'a> {
     pub op: &'a str,
     pub sub: Option<Box<MathNode<'a>>>,
     pub sup: Option<Box<MathNode<'a>>>,
-    pub limits: bool,
+    /// `OP_LIMITS_DISPLAY`, `OP_LIMITS_LIMITS` or `OP_LIMITS_NOLIMITS`.
+    pub limits: u8,
 }
 
 /// Delimiter option bitfield constants (Batch 1: Item 55).
@@ -445,6 +446,9 @@ pub const FRACTION_OPT_EXACT: u8 = 1 << 0;
 pub const FRACTION_OPT_NORULE: u8 = 1 << 1;
 pub const FRACTION_OPT_NOAXIS: u8 = 1 << 2;
 pub const FRACTION_OPT_SKEWED: u8 = 1 << 3;
+/// The fraction carries its own delimiters (`\atopwithdelims`, `\binom`, `\genfrac`), which
+/// replace the `\nulldelimiterspace` TeX otherwise puts on both sides (§748).
+pub const FRACTION_OPT_DELIMITED: u8 = 1 << 4;
 
 /// Data payload for dynamic delimiters (boxed to guarantee MathNode fits within 32 bytes).
 #[derive(Debug, Clone, PartialEq)]
@@ -503,6 +507,16 @@ pub enum MatrixEnvKind {
     Gather = 3,
     Multline = 4,
     SmallMatrix = 5,
+    /// amsmath `subarray` / `\substack`: script-style rows set as tight as limits.
+    Subarray = 6,
+    /// LaTeX `array`: like `matrix`, plus `\arraycolsep` outside the first and last columns.
+    Array = 7,
+    /// amsmath `alignedat` / `alignat`: `aligned` with no space between column pairs.
+    AlignedAt = 8,
+    /// plain `\ooalign`: rows overprinted on one baseline in a `\vtop`, in the current style.
+    Overlay = 9,
+    /// fontmath `\@vereq` (`\cong`): rows stacked with `\lineskip -.5pt`, lowered .5pt.
+    Vereq = 10,
 }
 
 /// Column alignment for matrices and alignment grids.
@@ -548,6 +562,19 @@ pub struct ExtensibleArrowData<'a> {
     pub sup: Option<MathNode<'a>>,
 }
 
+/// A horizontal math skip in the unit TeX measures it in: `TextEm` follows the text font
+/// (`\quad`, control space), `Mu` follows the current style's math quad (`\,`, `\mkern`),
+/// and `Pt` is absolute (`\kern3pt`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MathSkip {
+    TextEm(f32),
+    Mu(f32),
+    Pt(f32),
+    /// The interword space (fontdimen 2) of the text font at the current style's size, as
+    /// between the words of `\text{...}`.
+    TextSpace,
+}
+
 /// Abstract Syntax Tree node for mathematical expressions.
 ///
 /// Exactly 32 bytes in size to allow precisely two nodes to occupy a single
@@ -562,6 +589,9 @@ pub enum MathNode<'a> {
         face: Face,
         glyph: &'a str,
         code: Option<u8>,
+        /// TeX math code (`class << 12 | family << 8 | char`) from LaTeX's symbol
+        /// declarations; 0 when the symbol has none. Used by Computer Modern layout.
+        mathcode: u16,
     },
     /// Numerical constant (rendered in Roman font).
     Number(&'a str),
@@ -579,6 +609,9 @@ pub enum MathNode<'a> {
         den: Box<MathNode<'a>>,
         has_rule: bool,
         options: u8,
+        /// Rule thickness in pt from `\above` or `\genfrac`; negative takes the font's
+        /// default rule thickness.
+        thickness: f32,
     },
     /// Radical with optional index root ($\sqrt{A}$ or $\sqrt[n]{A}$).
     Radical {
@@ -596,8 +629,8 @@ pub enum MathNode<'a> {
         accent: &'a str,
         nucleus: Box<MathNode<'a>>,
     },
-    /// Explicit horizontal spacing in points ($\,$, $\;$, $\quad$).
-    Space(f32),
+    /// Explicit horizontal spacing (`\,`, `\quad`, `\mkern`, `\kern`).
+    Space(MathSkip),
     /// Font style switch ($\mathrm{...}$, $\mathbf{...}$).
     StyleChange {
         face: Face,
@@ -618,6 +651,9 @@ pub enum MathNode<'a> {
     Vcenter(Box<MathNode<'a>>),
     /// 4-branch mathematical choice for style-dependent layouts (`\mathchoice{D}{T}{S}{SS}`).
     MathChoice(Box<MathChoiceData<'a>>),
+    /// A LaTeX composite built from TeX glyphs (first, used with Computer Modern) and the
+    /// equivalent single Base-14 glyph (second, used with other font families).
+    FamilyChoice(Box<(MathNode<'a>, MathNode<'a>)>),
     /// Middle delimiter within a dynamic fence (`\middle |`).
     MiddleDelim { delim: &'a str, options: u8 },
     /// Manually sized delimiter (`\big`, `\Big`, `\bigg`, `\Bigg` and directional variants).
@@ -642,6 +678,11 @@ pub enum MathNode<'a> {
         kind: MathAtomKind,
         content: Box<MathNode<'a>>,
     },
+    /// xcolor colour scope (`\color`, `\textcolor`); transparent for atom spacing.
+    Colored {
+        color: crate::frontend::ast::PackedColor,
+        content: Box<MathNode<'a>>,
+    },
     /// Display equation with optional custom tag and alignment side (TeX \eqno / \leqno, LaTeX \tag).
     Tagged {
         formula: Box<MathNode<'a>>,
@@ -664,7 +705,40 @@ pub enum MathNode<'a> {
         shift_left: bool,
         zero_height_depth: bool,
     },
+    /// An Op atom with an arbitrary nucleus (`\mathop{...}`), carrying its `\limits`
+    /// setting (`OP_LIMITS_*`) for Rule 13.
+    OpLimits {
+        content: Box<MathNode<'a>>,
+        mode: u8,
+    },
+    /// `\boxed{...}`: the content in display style inside an `\fbox`.
+    Boxed(Box<MathNode<'a>>),
+    /// amsmath `\sideset{pre}{post}\op`: (the operator, the pre-scripts on an empty box as
+    /// tall as it, the operator with `\nolimits` post-scripts).
+    SideSet(Box<(MathNode<'a>, MathNode<'a>, MathNode<'a>)>),
 }
+
+/// Glyph strings of math-letter runs joined into a ligature word (`\mathrm{ff}`). They are
+/// recognised by address, so a `\text{ff}` word from the source is never mistaken for one.
+pub static MATH_LIGATURE_WORDS: [&str; 5] = ["ffi", "ffl", "ff", "fi", "fl"];
+
+/// Whether `glyph` is one of [`MATH_LIGATURE_WORDS`] (same address, not just same text).
+#[inline]
+pub fn is_math_ligature_word(glyph: &str) -> bool {
+    MATH_LIGATURE_WORDS.iter().any(|w| core::ptr::eq(w.as_ptr(), glyph.as_ptr()) && w.len() == glyph.len())
+}
+
+/// `\displaylimits` (the default): limits above and below only in display style.
+pub const OP_LIMITS_DISPLAY: u8 = 0;
+/// `\limits`: limits above and below in every style.
+pub const OP_LIMITS_LIMITS: u8 = 1;
+/// `\nolimits`: scripts beside the nucleus.
+pub const OP_LIMITS_NOLIMITS: u8 = 2;
+/// Mask for the three modes above.
+pub const OP_LIMITS_MODE_MASK: u8 = 3;
+/// The nucleus is a box (e.g. amsmath's `\mathop{\kern0pt #1}`), never a single character, so
+/// Rule 13 does not centre it on the axis.
+pub const OP_LIMITS_BOXED_NUCLEUS: u8 = 1 << 2;
 
 #[cfg(target_pointer_width = "64")]
 const _: () = {
@@ -709,7 +783,7 @@ impl<'a> MathNode<'a> {
             MathNode::Nonscript => MathAtomKind::Ord,
             MathNode::Row(nodes) => {
                 for n in nodes.iter().rev() {
-                    if !matches!(n, MathNode::Space(_)) {
+                    if !matches!(n, MathNode::Space(_) | MathNode::Nonscript) {
                         return n.atom_kind();
                     }
                 }
@@ -718,16 +792,22 @@ impl<'a> MathNode<'a> {
             MathNode::StyleScope { content, .. } => content.atom_kind(),
             MathNode::Vcenter(_) => MathAtomKind::Ord,
             MathNode::MathChoice(choice) => choice.display.atom_kind(),
-            MathNode::MiddleDelim { .. } => MathAtomKind::Inner,
+            MathNode::FamilyChoice(choice) => choice.0.atom_kind(),
+            // e-TeX: `\middle` closes the preceding sublist and opens the next one.
+            MathNode::MiddleDelim { .. } => MathAtomKind::Open,
             MathNode::SizedDelim { kind, .. } => *kind,
             MathNode::Overbrace(_) | MathNode::Underbrace(_)
             | MathNode::Overbracket(_) | MathNode::Underbracket(_) => MathAtomKind::Op,
             MathNode::ExtensibleArrow(_) => MathAtomKind::Rel,
             MathNode::Coerce { kind, .. } => *kind,
+            MathNode::Colored { content, .. } => content.atom_kind(),
             MathNode::Tagged { formula, .. } => formula.atom_kind(),
             MathNode::Strut => MathAtomKind::Ord,
-            MathNode::Phantom { content, .. } => content.atom_kind(),
-            MathNode::DimensionBox { content, .. } => content.atom_kind(),
+            // `\phantom`, `\smash` and the laps build boxes, which are Ord atoms.
+            MathNode::Phantom { .. } | MathNode::DimensionBox { .. } => MathAtomKind::Ord,
+            MathNode::OpLimits { .. } => MathAtomKind::Op,
+            MathNode::Boxed(_) => MathAtomKind::Ord,
+            MathNode::SideSet(_) => MathAtomKind::Op,
         }
     }
 
@@ -736,7 +816,7 @@ impl<'a> MathNode<'a> {
         match self {
             MathNode::Row(nodes) => {
                 for n in nodes {
-                    if !matches!(n, MathNode::Space(_)) {
+                    if !matches!(n, MathNode::Space(_) | MathNode::Nonscript) {
                         return n.first_atom_kind();
                     }
                 }
@@ -745,15 +825,16 @@ impl<'a> MathNode<'a> {
             MathNode::StyleScope { content, .. } => content.first_atom_kind(),
             MathNode::Vcenter(_) => MathAtomKind::Ord,
             MathNode::MathChoice(choice) => choice.display.first_atom_kind(),
-            MathNode::MiddleDelim { .. } => MathAtomKind::Inner,
+            MathNode::FamilyChoice(choice) => choice.0.first_atom_kind(),
+            MathNode::MiddleDelim { .. } => MathAtomKind::Close,
             MathNode::Overbrace(_) | MathNode::Underbrace(_)
             | MathNode::Overbracket(_) | MathNode::Underbracket(_) => MathAtomKind::Op,
             MathNode::ExtensibleArrow(_) => MathAtomKind::Rel,
             MathNode::Coerce { kind, .. } => *kind,
+            MathNode::Colored { content, .. } => content.first_atom_kind(),
             MathNode::Tagged { formula, .. } => formula.first_atom_kind(),
             MathNode::Strut => MathAtomKind::Ord,
-            MathNode::Phantom { content, .. } => content.first_atom_kind(),
-            MathNode::DimensionBox { content, .. } => content.first_atom_kind(),
+            MathNode::Phantom { .. } | MathNode::DimensionBox { .. } => MathAtomKind::Ord,
             _ => self.atom_kind(),
         }
     }
@@ -769,12 +850,12 @@ impl<'a> MathNode<'a> {
             },
             MathNode::SubSup { nucleus, .. } => nucleus.atom_kind_in_style(style),
             MathNode::Coerce { kind, .. } => *kind,
+            MathNode::Colored { content, .. } => content.atom_kind_in_style(style),
             MathNode::Tagged { formula, .. } => formula.atom_kind_in_style(style),
-            MathNode::Phantom { content, .. } => content.atom_kind_in_style(style),
-            MathNode::DimensionBox { content, .. } => content.atom_kind_in_style(style),
+            MathNode::Phantom { .. } | MathNode::DimensionBox { .. } => MathAtomKind::Ord,
             MathNode::Row(nodes) => {
                 for n in nodes.iter().rev() {
-                    if !matches!(n, MathNode::Space(_)) {
+                    if !matches!(n, MathNode::Space(_) | MathNode::Nonscript) {
                         return n.atom_kind_in_style(style);
                     }
                 }

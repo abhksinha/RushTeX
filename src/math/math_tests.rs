@@ -59,13 +59,13 @@ mod tests {
 
         // Italic correction for 'f' is significant in italic face, 0 in roman
         let ic_f_italic = italic_correction('f', Face::Italic, FontFamily::Times);
-        assert!(ic_f_italic >= 100);
+        assert!(ic_f_italic >= 100.0);
         let ic_f_roman = italic_correction('f', Face::Roman, FontFamily::Times);
-        assert_eq!(ic_f_roman, 0);
+        assert_eq!(ic_f_roman, 0.0);
 
         // Integral symbol has italic correction
         let ic_int = symbol_italic_correction(0xF2);
-        assert_eq!(ic_int, 100);
+        assert_eq!(ic_int, 100.0);
     }
 
     #[test]
@@ -400,7 +400,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         assert_eq!(size_of::<crate::math::math_fonts::AccentMetrics>(), 32);
         assert_eq!(size_of::<crate::math::math_fonts::MatrixMetrics>(), 16);
         assert_eq!(size_of::<crate::math::math_fonts::HBarMetrics>(), 16);
-        assert_eq!(size_of::<crate::math::math_tfm::GlyphMetric>(), 8);
+        assert_eq!(size_of::<crate::math::math_tfm::PackedGlyphMetric>(), 8);
         assert_eq!(size_of::<crate::math::math_tfm::DelimiterRecipe>(), 4);
         assert_eq!(size_of::<crate::math::math_spacing::SpacingLut>(), 768);
         assert_eq!(
@@ -418,19 +418,19 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
 
         // 1. Verify Appendix F canonical metrics
         let minus_metric = cmsy10_metric(0x00);
-        assert_eq!(minus_metric.w, 778);
-        assert_eq!(minus_metric.h, 583);
-        assert_eq!(minus_metric.d, 83);
+        assert_eq!(minus_metric.w.round(), 778.0);
+        assert_eq!(minus_metric.h.round(), 583.0);
+        assert_eq!(minus_metric.d.round(), 83.0);
 
         let pi_metric = cmmi10_metric(0x19); // octal 31 = TeX \pi
-        assert_eq!(pi_metric.w, 570);
-        assert_eq!(pi_metric.h, 431);
-        assert_eq!(pi_metric.d, 0);
+        assert_eq!(pi_metric.w.round(), 570.0);
+        assert_eq!(pi_metric.h.round(), 431.0);
+        assert_eq!(pi_metric.d.round(), 0.0);
 
         let small_rad = cmex10_metric(0x70);
-        assert_eq!(small_rad.w, 1000);
-        assert_eq!(small_rad.h, 40);
-        assert_eq!(small_rad.d, 1160);
+        assert_eq!(small_rad.w.round(), 1000.0);
+        assert_eq!(small_rad.h.round(), 40.0);
+        assert_eq!(small_rad.d.round(), 1160.0);
 
         assert_eq!(RADICAL_VARIANTS_CMEX[0], (40, 1160));
         assert_eq!(RADICAL_RECIPE_CMEX.top, 0x76);
@@ -465,7 +465,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         let top_gap = overbar.y - 4.31; // pi ink height in cmmi10 is 4.31
         // Clearance below \pi baseline to radical hook bottom
         let m = cmsy10_metric(0x70);
-        let d = (m.d as f32 * 0.001) * 10.0;
+        let d = (m.d * 0.001) * 10.0;
         let bottom_gap = -(radical_glyph.y - d);
 
         // TeX Rule 11: Top and bottom clearances must be balanced within 0.6pt (not 8x skewed)
@@ -531,7 +531,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
 
         // Adobe Symbol binary operators should have accurate centered height/depth
         let (pm_h, pm_d) = symbol_height_depth(0xB1);
-        assert_eq!((pm_h, pm_d), (500, 50));
+        assert_eq!((pm_h, pm_d), (500.0, 50.0));
     }
 
     #[test]
@@ -862,6 +862,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
             den: Box::new(MathNode::Variable('k')),
             has_rule: false,
             options: 0,
+            thickness: -1.0,
         };
         render_math(
             &pure_atop,
@@ -1037,7 +1038,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         if let Paint::GlyphRun { y, size, face, .. } = sum_glyph {
             let (op_h, op_d): (f32, f32) = if *face == Face::Extension {
                 let m = crate::math::math_tfm::cmex10_metric(0x58);
-                ((m.h as f32 * 0.001) * size, (m.d as f32 * 0.001) * size)
+                ((m.h * 0.001) * size, (m.d * 0.001) * size)
             } else {
                 (0.850 * size, 0.350 * size)
             };
@@ -2414,7 +2415,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
 
         use crate::math::math_fraction::FractionShiftResolver;
         let cm_params = crate::math::math_fonts::math_font_parameters(crate::backend::fonts::FontFamily::ComputerModern);
-        let res_frac = FractionShiftResolver::resolve(MathStyle::Display, true, 2.5, 0.4, 1.0, 4.0, 1.0, &cm_params);
+        let res_frac = FractionShiftResolver::resolve(MathStyle::Display, true, 2.5, 0.4, 1.0, 4.0, 1.0, cm_params);
         assert!(res_frac.num_shift > 0.0);
         assert!(res_frac.den_shift > 0.0);
         assert_eq!(res_frac.rule_thickness, 0.4);
@@ -2512,13 +2513,13 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
 
         let font_params = crate::math::math_fonts::math_font_parameters(crate::backend::fonts::FontFamily::ComputerModern);
         let resolved = ScriptShiftResolver::resolve(
-            true, true, MathStyle::Display, true, 8.0, 2.0, 1.5, 4.0, 4.5, 1.0, &font_params,
+            true, true, MathStyle::Display, true, 8.0, 2.0, 1.5, 4.0, 4.5, 1.0, font_params, (2.5, 0.5),
         );
         assert!(resolved.sup_shift > 0.0);
         assert!(resolved.sub_shift > 0.0);
         let pair = TransientScriptPair::new(MathBox::with_dims(5.0, 6.0, 1.0), MathBox::with_dims(4.0, 3.0, 2.0));
-        assert!(pair.total_height(true, 8.0, resolved.sup_shift) >= 8.0);
-        assert!(pair.total_depth(true, 2.0, resolved.sub_shift) >= 2.0);
+        assert!(pair.total_height(true, true, 8.0, resolved.sup_shift, resolved.sub_shift) >= 8.0);
+        assert!(pair.total_depth(true, true, 2.0, resolved.sup_shift, resolved.sub_shift) >= 2.0);
         let r_bound = pair.right_bound(true, true, 0.0, 10.0, 10.0, 10.0, 0.5);
         assert!(r_bound >= 15.5);
 
@@ -2602,9 +2603,9 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         assert_eq!(sub_pos_y, 2.0 - 1.0 - 3.0);
 
         let l_box = LimitClearanceGovernor::compute_limits_box(
-            12.0, 0.0, 8.0, 2.0, true, 12.0, 4.0, true, -6.0, 1.0, 0.5, 10.0,
+            12.0, 0.0, 8.0, 2.0, true, 12.0, 4.0, true, -6.0, 1.0, 0.5,
         );
-        assert!(l_box.w >= 12.0);
+        assert_eq!(l_box.w, 12.0);
         assert_eq!(l_box.h, 16.5);
         assert_eq!(l_box.d, 7.5);
 
@@ -2627,24 +2628,20 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
             crate::backend::fonts::FontFamily::ComputerModern,
             10.0,
             1.0,
-            &cm_params,
+            cm_params,
         );
         assert!(resolved_limits.upper_clearance > 0.0);
         assert!(resolved_limits.lower_clearance > 0.0);
 
+        // TeX §749/§756: subscript tucked under the slant (width minus italic correction),
+        // superscript at the full width; Rule 18 drops apply to the box nucleus.
         let (sx_rel, bx_rel, sup_shift, sub_shift) = BigOpShiftResolver::resolve_side_scripts(
-            "int", true, true, 10.0, 8.0, 3.0, 1.0, 0.0, 10.0, 1.0, true, true, &cm_params,
+            10.0, 1.0, 8.0, 3.0, true, true, MathStyle::Display, 1.0, 1.0, 1.0, cm_params, (2.5, 0.5),
         );
-        assert_eq!(sx_rel, 10.0 + 0.5);
-        assert_eq!(bx_rel, 10.0 - 2.2);
-        assert!(sup_shift >= 9.5);
-        assert!(sub_shift >= 7.5);
-
-        let (adj_sup, adj_sub) = BigOpShiftResolver::enforce_side_script_clearance(
-            2.0, 2.0, 1.0, 1.0, 4.0, 4.5,
-        );
-        assert!((adj_sup - 4.6).abs() < 1e-5);
-        assert!((adj_sub - 1.4).abs() < 1e-5);
+        assert_eq!(sx_rel, 10.0);
+        assert_eq!(bx_rel, 9.0);
+        assert!(sup_shift >= 8.0 - 2.5);
+        assert!(sub_shift >= 3.0 + 0.5);
 
         let side_box = BigOpShiftResolver::compute_side_scripts_box(
             10.0, 0.0, 8.0, 2.0, true, 10.5, 4.0, 9.0, 3.0, true, 8.0, 4.0, 6.0, 1.0,
@@ -2698,7 +2695,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         assert_eq!(bar_res.unwrap().1, 10.0);
 
         let d_box = DelimiterSizingGovernor::compute_delimited_box(
-            5.0, 15.0, 20.0, 10.0, 4.0, 5.0, 15.0, 15.0, 2.5,
+            5.0, 15.0, 20.0, 10.0, 4.0, 5.0, 15.0, 2.5,
         );
         assert_eq!(d_box.w, 30.0);
         assert_eq!(d_box.h, 10.0);
@@ -3232,7 +3229,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
         assert!((b_matrix.d - 9.5000).abs() < 0.01, "Matrix depth parity: expected 9.5000pt, got {}", b_matrix.d);
 
         // 2. Aligned: 33.8240 pt width, 16.0000 pt height, 11.0000 pt depth (\jot = 3pt baselineskip expansion)
-        assert!((b_aligned.w - 33.8240).abs() < 0.01, "Aligned width parity: expected ~33.8240pt, got {}", b_aligned.w);
+        assert!((b_aligned.w - 23.8240).abs() < 0.01, "Aligned width parity: expected ~23.8240pt (pdfLaTeX), got {}", b_aligned.w);
         assert!((b_aligned.h - 16.0000).abs() < 0.01, "Aligned height parity: expected 16.0000pt, got {}", b_aligned.h);
         assert!((b_aligned.d - 11.0000).abs() < 0.01, "Aligned depth parity: expected 11.0000pt, got {}", b_aligned.d);
 
@@ -3370,7 +3367,7 @@ Euler identity & $e^{i\pi} + 1 = 0$ \\
     #[test]
     fn test_display_math_vertical_spacing_and_page_builder() {
         // Case 1: Short preceding line -> abovedisplayshortskip (0pt)
-        let short_doc_src = r"\documentclass{article}
+        let short_doc_src = r"\documentclass{article}\usepackage[margin=1in]{geometry}
 \begin{document}
 Hi
 \begin{equation*}
@@ -3386,7 +3383,7 @@ E = mc^2
         }
 
         // Case 2: Long preceding line that fills almost the entire measure (> 400pt)
-        let long_doc_src = r"\documentclass{article}
+        let long_doc_src = r"\documentclass{article}\usepackage[margin=1in]{geometry}
 \begin{document}
 This is a very long paragraph that spans across the entire line so that the predisplaysize is large enough to exceed the equation clearance and reaches almost the right margin of the page.
 \begin{equation*}
@@ -3418,11 +3415,11 @@ E = mc^2
         let delta_short = text_y_short - math_y_short;
         let delta_long = last_text_y_long - math_y_long;
         // The long paragraph's line reaches past the equation clearance, triggering
-        // abovedisplayskip (11.0pt), while the short line triggers abovedisplayshortskip (0.0pt).
-        // The difference must be exactly base_font_size (11.0pt).
+        // abovedisplayskip (10.0pt), while the short line triggers abovedisplayshortskip (0.0pt).
+        // The difference must be exactly base_font_size (10.0pt, the LaTeX default).
         assert!(
-            ((delta_long - delta_short) - 11.0).abs() < 1e-4,
-            "Expected exact 11.0pt skip difference, got {}",
+            ((delta_long - delta_short) - 10.0).abs() < 1e-4,
+            "Expected exact 10.0pt skip difference, got {}",
             delta_long - delta_short
         );
     }
@@ -3908,16 +3905,17 @@ Hello world without any math.
 
         // Ground-truth measurements directly from TeX Live / pdfLaTeX ($ ... $ mode)
         let advanced_corpus: [(&str, f32, f32, f32); 16] = [
-            (r"\frac{1}{1 + \frac{1}{x}}", 18.1620, 8.4480, 6.4160),
+            (r"\frac{1}{1 + \frac{1}{x}}", 18.8830, 8.4480, 6.4190),
             (r"\binom{n}{k}", 14.1020, 8.5000, 3.5000),
             (r"\sqrt[3]{x}", 14.6750, 8.0050, 2.3950),
             (r"\sqrt[3]{x^2+1}", 36.3823, 9.1340, 1.2660),
             (r"\left( \frac{a}{b} \right)", 15.9000, 8.5000, 3.5000),
             (r"\left[ \frac{1}{2} \right]", 14.7230, 8.5000, 3.5000),
             (r"\left\{ \frac{x^2}{y^2} \right\}", 24.1810, 11.5000, 6.5000),
-            (r"\sum_{i=1}^n x_i", 35.2246, 7.5000, 3.0000),
-            (r"\prod_{k=1}^m a_k", 36.9506, 7.5000, 3.0000),
-            (r"\int_0^\infty e^{-x^2} dx", 47.5816, 9.8670, 3.5000),
+            // Operator rows re-measured with pdfLaTeX (\sbox + \wd/\ht/\dp, Computer Modern 10pt).
+            (r"\sum_{i=1}^n x_i", 34.7211, 8.0418, 3.0001),
+            (r"\prod_{k=1}^m a_k", 36.3624, 8.0418, 3.0001),
+            (r"\int_0^\infty e^{-x^2} dx", 47.5695, 9.8689, 3.5556),
             (r"\hat{x} + \vec{A} + \bar{z}", 42.7587, 9.6600, 0.8300),
             (r"\overline{x+y}", 23.2043, 7.8300, 1.9400),
             (r"\underline{a-b}", 21.8043, 6.9400, 2.8300),
@@ -3978,8 +3976,9 @@ Hello world without any math.
         // 2. Colon vs \colon
         let node_colon_rel = parse_math_str(":");
         assert_eq!(node_colon_rel.atom_kind(), MathAtomKind::Rel);
+        // amsmath `\colon` opens with `\mathpunct{}` and ends with `\mathord{:}`.
         let node_colon_punct = parse_math_str(r"\colon");
-        assert_eq!(node_colon_punct.atom_kind(), MathAtomKind::Punct);
+        assert_eq!(node_colon_punct.first_atom_kind(), MathAtomKind::Punct);
 
         let b_rel = measure_math(&parse_math_str("f: X"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
         let b_punct = measure_math(&parse_math_str(r"f\colon X"), 10.0, FontFamily::ComputerModern, MathStyle::Text);
@@ -3991,8 +3990,12 @@ Hello world without any math.
         assert_eq!(node_ldots, MathNode::Ellipsis(EllipsisKind::Low));
         assert_eq!(node_ldots.atom_kind(), MathAtomKind::Inner);
 
+        // amsmath's `\cdots` at the end of a formula adds `\,` (`\extrap@`).
         let node_cdots = parse_math_str(r"\cdots");
-        assert_eq!(node_cdots, MathNode::Ellipsis(EllipsisKind::Centered));
+        assert_eq!(
+            node_cdots,
+            MathNode::Row(vec![MathNode::Ellipsis(EllipsisKind::Centered), MathNode::Space(crate::math::math_ast::MathSkip::Mu(3.0))])
+        );
         assert_eq!(node_cdots.atom_kind(), MathAtomKind::Inner);
 
         let node_vdots = parse_math_str(r"\vdots");
@@ -4214,8 +4217,8 @@ H\psi = E\psi \leqno (Schrodinger)
         // 5. TeX \strut primitive
         let strut_box = measure_math(&MathNode::Strut, 10.0, FontFamily::ComputerModern, MathStyle::Text);
         assert_eq!(strut_box.w, 0.0);
-        assert!((strut_box.h - 8.5).abs() < 1e-3, "Strut height must be 8.5pt at 10pt font, got {}", strut_box.h);
-        assert!((strut_box.d - 3.5).abs() < 1e-3, "Strut depth must be 3.5pt at 10pt font, got {}", strut_box.d);
+        assert!((strut_box.h - 8.4).abs() < 1e-3, "Strut height must be 8.4pt at 10pt font, got {}", strut_box.h);
+        assert!((strut_box.d - 3.6).abs() < 1e-3, "Strut depth must be 3.6pt at 10pt font, got {}", strut_box.d);
 
         // 6. Phantoms (\phantom, \hphantom, \vphantom)
         let sample = parse_math_str(r"\sum_{i=1}^n x_i");

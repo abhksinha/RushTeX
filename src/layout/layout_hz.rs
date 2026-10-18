@@ -388,7 +388,11 @@ pub struct HzLineDescriptor {
     pub line_indent: f32,
     pub start_word: u16,
     pub word_count: u16,
-    pub num_spaces: u16,
+    /// The first word starts at this byte offset: it is the post-break part of a word
+    /// hyphenated at the end of the previous line (0 = whole word).
+    pub head_cut: u8,
+    /// The last word ends at this byte offset and takes a hyphen (0 = whole word).
+    pub tail_cut: u8,
     pub expansion_permille: i8,
     pub packed_flags: u8,
 }
@@ -403,7 +407,6 @@ impl HzLineDescriptor {
     pub fn new(
         start_word: u16,
         word_count: u16,
-        num_spaces: u16,
         justify: bool,
         expansion_permille: i8,
         line_w: f32,
@@ -417,10 +420,18 @@ impl HzLineDescriptor {
             line_indent,
             start_word,
             word_count,
-            num_spaces,
+            head_cut: 0,
+            tail_cut: 0,
             expansion_permille,
             packed_flags: justify_bit | prot_tenths,
         }
+    }
+
+    /// Sets the byte offsets of the hyphenation cuts in the first and last word.
+    #[inline(always)]
+    pub fn set_cuts(&mut self, head: u8, tail: u8) {
+        self.head_cut = head;
+        self.tail_cut = tail;
     }
 
     /// Whether this line should be justified.
@@ -465,6 +476,7 @@ pub fn hash_combine(mut h: u64, val: u64) -> u64 {
 }
 
 /// Computes an ultra-fast 64-bit content hash of a paragraph and its layout environment.
+#[allow(clippy::too_many_arguments)]
 pub fn hash_paragraph(
     soa: &ParagraphSoA,
     measure: f32,
@@ -717,6 +729,7 @@ pub fn word_ends_with_hyphen(text: &str) -> bool {
 /// and dynamic programming passes entirely when a paragraph fits within the initial measure
 /// without complex shaping constraints.
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 pub fn try_layout_single_line_paragraph<'a>(
     soa: &ParagraphSoA<'a>,
     measure: f32,
@@ -753,17 +766,12 @@ pub fn try_layout_single_line_paragraph<'a>(
     }
 
     let mut line_w = 0.0f32;
-    let mut num_spaces = 0u16;
 
     for idx in eff_start..eff_end {
-        let kind = soa.attrs[idx].kind();
-        if kind == WordKind::Break {
+        if soa.attrs[idx].kind() == WordKind::Break {
             return false;
         }
         line_w += soa.widths[idx];
-        if kind == WordKind::Space {
-            num_spaces += 1;
-        }
     }
 
     if line_w + par_fill_width <= avail {
@@ -771,7 +779,6 @@ pub fn try_layout_single_line_paragraph<'a>(
         out_lines.push(HzLineDescriptor::new(
             eff_start as u16,
             (eff_end - eff_start) as u16,
-            num_spaces,
             justify,
             0,
             line_w,
@@ -787,6 +794,7 @@ pub fn try_layout_single_line_paragraph<'a>(
 /// Main entry point: breaks a paragraph into lines using the `hz`-algorithm.
 /// Main entry point: breaks a paragraph into lines using the `hz`-algorithm with parshape support.
 /// Automatically selects between the ultra-fast linear pass or full dynamic programming.
+#[allow(clippy::too_many_arguments)]
 pub fn hz_break_paragraph_shape<'a>(
     soa: &ParagraphSoA<'a>,
     measure: f32,
@@ -846,6 +854,83 @@ pub fn hz_break_paragraph<'a>(
 }
 
 /// High-speed $O(N)$ single-pass `hz` line breaker with parshape support.
+/// Line breaking for ragged paragraphs (`\raggedright`, `\raggedleft`, `\centering`).
+///
+/// The fil glue at a margin makes every line that is not overfull badness 0, so TeX's
+/// optimum is the fewest lines, and among those (ties go to the latest feasible break,
+/// §836 `d <= minimal_demerits`) the greedy fill at natural width. Shrinking a line only
+/// adds demerits for the same line count, so lines are never shrunk. Breaks fall only at
+/// interword spaces (and forced `\\` breaks); words are never hyphenated, as the first
+/// pass already succeeds.
+pub fn ragged_break_paragraph<'a>(
+    soa: &ParagraphSoA<'a>,
+    measure: f32,
+    first_line_indent: f32,
+    custom_hang_indent: f32,
+    hang_after: i32,
+    par_shape: &[(f32, f32)],
+    out_lines: &mut Vec<HzLineDescriptor>,
+) {
+    let n = soa.len();
+    let mut line_index = 0usize;
+    let mut start = 0usize;
+    while start < n {
+        // Leading spaces at a line start are discarded.
+        while start < n && soa.attrs[start].is_space() {
+            start += 1;
+        }
+        if start >= n {
+            break;
+        }
+        let (indent, available) =
+            calculate_line_geometry(line_index, measure, first_line_indent, custom_hang_indent, hang_after, par_shape);
+        let mut w = 0.0f32;
+        let mut spaces = 0u32;
+        // Last legal break: (end index, width and spaces before it).
+        let mut last_break: Option<(usize, f32, u32)> = None;
+        let mut i = start;
+        let mut forced = false;
+        while i < n {
+            let attr = soa.attrs[i];
+            if attr.kind() == WordKind::Break {
+                forced = true;
+                break;
+            }
+            if attr.is_space() {
+                last_break = Some((i, w, spaces));
+                w += soa.widths[i];
+                if attr.kind() == WordKind::Space {
+                    spaces += 1;
+                }
+                i += 1;
+                continue;
+            }
+            let next_w = w + soa.widths[i];
+            if next_w > available {
+                if let Some((b, bw, bs)) = last_break.filter(|&(b, _, _)| b > start) {
+                    let (end, tw, _) = trim_trailing_spaces(soa, start as u32, b as u32, bw, bs);
+                    out_lines.push(HzLineDescriptor::new(start as u16, (end as usize - start) as u16, false, 0, tw, indent, 0.0));
+                    line_index += 1;
+                    start = b;
+                    i = n + 1; // line emitted
+                    break;
+                }
+                // A single unbreakable run wider than the line stays overfull.
+            }
+            w = next_w;
+            i += 1;
+        }
+        if i == n + 1 {
+            continue;
+        }
+        let (end, tw, _) = trim_trailing_spaces(soa, start as u32, i as u32, w, spaces);
+        out_lines.push(HzLineDescriptor::new(start as u16, (end as usize - start) as u16, false, 0, tw, indent, 0.0));
+        line_index += 1;
+        start = if forced { i + 1 } else { i };
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn hz_break_paragraph_fast_shape<'a>(
     soa: &ParagraphSoA<'a>,
     measure: f32,
@@ -882,12 +967,11 @@ pub fn hz_break_paragraph_fast_shape<'a>(
         let w = soa.widths[word_idx];
 
         if k == WordKind::Break {
-            let (trimmed_end, trimmed_w, trimmed_sp) =
+            let (trimmed_end, trimmed_w, _) =
                 trim_trailing_spaces(soa, line_start, word_idx as u32, line_w, num_spaces);
             out_lines.push(HzLineDescriptor::new(
                 line_start as u16,
                 (trimmed_end - line_start) as u16,
-                trimmed_sp as u16,
                 false,
                 0,
                 trimmed_w,
@@ -945,13 +1029,12 @@ pub fn hz_break_paragraph_fast_shape<'a>(
                     line_w += w;
                     word_idx += 1;
 
-                    let (trimmed_end, trimmed_w, trimmed_sp) =
+                    let (trimmed_end, trimmed_w, _) =
                         trim_trailing_spaces(soa, line_start, word_idx as u32, line_w, num_spaces);
 
                     out_lines.push(HzLineDescriptor::new(
                         line_start as u16,
                         (trimmed_end - line_start) as u16,
-                        trimmed_sp as u16,
                         true,
                         required_permille,
                         trimmed_w,
@@ -1004,7 +1087,6 @@ pub fn hz_break_paragraph_fast_shape<'a>(
                     out_lines.push(HzLineDescriptor::new(
                         line_start as u16,
                         (trimmed_end - line_start) as u16,
-                        trimmed_sp as u16,
                         true,
                         expansion,
                         trimmed_w,
@@ -1049,7 +1131,7 @@ pub fn hz_break_paragraph_fast_shape<'a>(
     }
 
     if line_start < num_words as u32 {
-        let (trimmed_end, trimmed_w, trimmed_sp) =
+        let (trimmed_end, trimmed_w, _) =
             trim_trailing_spaces(soa, line_start, num_words as u32, line_w, num_spaces);
         if trimmed_end > line_start {
             let last_idx = (trimmed_end - 1) as usize;
@@ -1062,7 +1144,6 @@ pub fn hz_break_paragraph_fast_shape<'a>(
             out_lines.push(HzLineDescriptor::new(
                 line_start as u16,
                 (trimmed_end - line_start) as u16,
-                trimmed_sp as u16,
                 false,
                 0,
                 trimmed_w,
@@ -1124,6 +1205,7 @@ pub fn hz_break_paragraph_optimal<'a>(
 /// Single-pass dynamic-programming global shortest-path optimizer with parshape support.
 /// Evaluates candidate line breaks under given `allow_hyphenation`, `max_badness`, and `emergency_stretch`.
 /// Returns `true` if a feasible path reaches the end of the paragraph.
+#[allow(clippy::too_many_arguments)]
 pub fn hz_break_paragraph_optimal_pass<'a>(
     soa: &ParagraphSoA<'a>,
     measure: f32,
@@ -1200,7 +1282,7 @@ pub fn hz_break_paragraph_optimal_pass<'a>(
     let prefix = &prefix_buf[..=num_words];
 
     // Paragraph start: TeX acts as if preceded by a Decent line (Class 2, TeX by Topic 19.1.3)
-    nodes[0 * 4 + (FITNESS_DECENT as usize)].cost = 0.0;
+    nodes[FITNESS_DECENT as usize].cost = 0.0;
 
     let has_break = soa.attrs.iter().any(|a| a.kind() == WordKind::Break);
     let is_uniform_measure = par_shape.is_empty() && custom_hang_indent == 0.0;
@@ -1263,6 +1345,7 @@ pub fn hz_break_paragraph_optimal_pass<'a>(
         for t in 0..4 {
             let mut min_c = f32::INFINITY;
             let mut min_p = 0u8;
+            #[allow(clippy::needless_range_loop)]
             for p_idx in 0..valid_pred_count {
                 let (c_prev, pred_node) = valid_preds[p_idx];
                 let adj = ADJ_TABLE[t][c_prev as usize];
@@ -1304,6 +1387,7 @@ pub fn hz_break_paragraph_optimal_pass<'a>(
             }
         };
 
+        #[allow(clippy::needless_range_loop)]
         for j in start_j..=num_words {
             let raw_w = prefix[j].w - base_w;
             if raw_w > avail + 30.0 {
@@ -1681,7 +1765,6 @@ pub fn hz_break_paragraph_optimal_pass<'a>(
             0.0
         };
         let line_w = prefix[eff_end].w - prefix[eff_start].w + hyph_extra_w;
-        let num_spaces = prefix[eff_end].sp - prefix[eff_start].sp;
 
         let is_last = end == num_words;
         let justify = if is_last {
@@ -1692,7 +1775,6 @@ pub fn hz_break_paragraph_optimal_pass<'a>(
         out_lines.push(HzLineDescriptor::new(
             eff_start as u16,
             (eff_end - eff_start) as u16,
-            num_spaces,
             justify,
             exp,
             line_w,
@@ -1726,6 +1808,7 @@ pub fn hz_break_paragraph_optimal_pass<'a>(
 ///   or linear pass to guarantee text is never dropped.
 ///
 /// Returns the successful pass number (`1`, `2`, `3`, or `0` for fallback).
+#[allow(clippy::too_many_arguments)]
 pub fn hz_break_paragraph_three_pass<'a>(
     soa: &ParagraphSoA<'a>,
     measure: f32,
@@ -1878,6 +1961,7 @@ pub fn hz_break_paragraph_three_pass<'a>(
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn emit_line_from_soa<'a>(
     soa: &ParagraphSoA<'a>,
     out_lines: &mut Vec<HzLineDescriptor>,
@@ -1900,12 +1984,8 @@ fn emit_line_from_soa<'a>(
     }
 
     let mut line_w = 0.0f32;
-    let mut num_spaces = 0u16;
     for idx in eff_start..eff_end {
         line_w += soa.widths[idx];
-        if soa.attrs[idx].kind() == WordKind::Space {
-            num_spaces += 1;
-        }
     }
     let is_hyphen_break = eff_end > eff_start && soa.attrs[eff_end - 1].kind() == WordKind::Hyphen;
     if is_hyphen_break {
@@ -1921,7 +2001,6 @@ fn emit_line_from_soa<'a>(
     out_lines.push(HzLineDescriptor::new(
         eff_start as u16,
         (eff_end - eff_start) as u16,
-        num_spaces,
         justify,
         exp,
         line_w,
@@ -1933,6 +2012,13 @@ fn emit_line_from_soa<'a>(
 /// Constructs a compact 4-byte candidate breakpoint array and prefix sums directly from `words_soa`.
 /// Avoids materializing a secondary `ParagraphSoA` structure.
 /// Skips hyphenation hash and cache lookups for words that never fall near the right margin horizon.
+/// Hyphenation-cache key of the design-size master of `face` at `size` (0 = none).
+#[inline]
+fn hyphen_master_key(family: FontFamily, face: Face, size: f32) -> u8 {
+    crate::backend::optical::OpticalMaster::select(family, face, size).map_or(0, |m| m as u8 + 1)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn build_breakpoints<'a>(
     soa: &ParagraphSoA<'a>,
     font_family: FontFamily,
@@ -1959,7 +2045,6 @@ pub fn build_breakpoints<'a>(
         _pad: 0,
     });
 
-    let scale = base_font_size * 0.001;
     let default_face = if soa.attrs.is_empty() {
         Face::Roman
     } else {
@@ -2085,7 +2170,11 @@ pub fn build_breakpoints<'a>(
         };
 
         if is_candidate {
+            // The word's own size: its pieces are measured in its design-size master.
+            let word_size = soa.size_span(w, base_font_size).0;
+            let scale = word_size * 0.001;
             let fam_face = ((font_family as u8) << 4) | ((face as u8) & 0x0F);
+            let master = hyphen_master_key(font_family, face, word_size);
             let word_hash = hash_word(text);
             let set_idx = (word_hash as usize) & crate::layout::layout_hyphen::HYPHEN_CACHE_SET_MASK;
             let slot0 = set_idx * 2;
@@ -2096,15 +2185,17 @@ pub fn build_breakpoints<'a>(
             let entry = if e0.hash == word_hash
                 && e0.word_len == text.len() as u16
                 && e0.family_face == fam_face
+                && e0.master == master
             {
                 *e0
             } else if e1.hash == word_hash
                 && e1.word_len == text.len() as u16
                 && e1.family_face == fam_face
+                && e1.master == master
             {
                 *e1
             } else {
-                let table = metrics::resolve_width_table(font_family, face);
+                let table = metrics::resolve_width_table_at(font_family, face, word_size);
                 let flat_table = FlatAsciiWidthTable::from_table(table);
                 hyphen_scratch.clear();
                 crate::layout::layout_hyphen::hyphenate_word(
@@ -2118,17 +2209,38 @@ pub fn build_breakpoints<'a>(
                 let mut piece_units = [0u16; 13];
                 let mut b_count = 0;
                 if hyphen_scratch.len() > 1 && hyphen_scratch.len() <= 13 {
-                    let mut offset = 0;
-                    for (p, piece) in hyphen_scratch[..hyphen_scratch.len() - 1].iter().enumerate() {
-                        offset += piece.len();
-                        if offset <= 255 && b_count < 12 {
-                            new_breaks[b_count] = offset as u8;
-                            piece_units[p] = (flat_table.string_units_or(piece, table).min(65535)) as u16;
-                            b_count += 1;
+                    if let Some(font) = crate::backend::shape::text_font_at(font_family, face, word_size) {
+                        // Shaped fonts: a break's pre-break width is the shaped prefix (TeX's
+                        // discretionary pre-break text), so ligatures/kerns spanning a
+                        // hyphenation point stay intact while the word is unbroken. Pieces are
+                        // differences of rounded shaped prefixes, keeping their sums exact.
+                        let mut offset = 0;
+                        let mut prev_units = 0i32;
+                        for piece in hyphen_scratch[..hyphen_scratch.len() - 1].iter() {
+                            offset += piece.len();
+                            if offset <= 255 && b_count < 12 {
+                                let units = font.width_units(&text[..offset]).round() as i32;
+                                new_breaks[b_count] = offset as u8;
+                                piece_units[b_count] = (units - prev_units).clamp(0, 65535) as u16;
+                                prev_units = units;
+                                b_count += 1;
+                            }
                         }
+                        let units = font.width_units(text).round() as i32;
+                        piece_units[b_count] = (units - prev_units).clamp(0, 65535) as u16;
+                    } else {
+                        let mut offset = 0;
+                        for (p, piece) in hyphen_scratch[..hyphen_scratch.len() - 1].iter().enumerate() {
+                            offset += piece.len();
+                            if offset <= 255 && b_count < 12 {
+                                new_breaks[b_count] = offset as u8;
+                                piece_units[p] = (flat_table.string_units_or(piece, table).min(65535)) as u16;
+                                b_count += 1;
+                            }
+                        }
+                        let last_piece = hyphen_scratch[hyphen_scratch.len() - 1];
+                        piece_units[b_count] = (flat_table.string_units_or(last_piece, table).min(65535)) as u16;
                     }
-                    let last_piece = hyphen_scratch[hyphen_scratch.len() - 1];
-                    piece_units[b_count] = (flat_table.string_units_or(last_piece, table).min(65535)) as u16;
                 }
 
                 let new_entry = HyphenCacheEntry {
@@ -2136,10 +2248,11 @@ pub fn build_breakpoints<'a>(
                     word_len: text.len() as u16,
                     num_breaks: b_count as u8,
                     family_face: fam_face,
+                    master,
                     breaks: new_breaks,
                     piece_units,
                     total_units: (w_width / scale).round().min(65535.0) as u16,
-                    _pad: [0; 12],
+                    _pad: [0; 11],
                 };
                 if e0.hash == 0 {
                     hyphen_cache[slot0] = new_entry;
@@ -2281,6 +2394,7 @@ pub fn build_breakpoints<'a>(
 
 /// Dynamic programming line breaker executing directly on compact [`Breakpoint`] candidates.
 /// On successful line breaking, in-place word splitting is performed only on selected breakpoints in `soa`.
+#[allow(clippy::too_many_arguments)]
 pub fn hz_break_paragraph_breakpoints_pass<'a>(
     soa: &mut ParagraphSoA<'a>,
     breakpoints: &[Breakpoint],
@@ -2394,6 +2508,7 @@ pub fn hz_break_paragraph_breakpoints_pass<'a>(
         for t in 0..4 {
             let mut min_c = f32::INFINITY;
             let mut min_p = 0u8;
+            #[allow(clippy::needless_range_loop)]
             for p_idx in 0..valid_pred_count {
                 let (c_prev, pred_cost, _) = valid_preds[p_idx];
                 let adj = ADJ_TABLE[t][c_prev as usize];
@@ -2836,8 +2951,11 @@ pub fn hz_break_paragraph_breakpoints_pass<'a>(
             let text = soa.texts[w_in_soa];
             let face = soa.attrs[w_in_soa].face();
             let orig_w_val = soa.widths[w_in_soa];
+            let word_size = soa.size_span(w_in_soa, scale * 1000.0).0;
+            let scale = word_size * 0.001;
 
             let fam_face = ((font_family as u8) << 4) | ((face as u8) & 0x0F);
+            let master = hyphen_master_key(font_family, face, word_size);
             let word_hash = hash_word(text);
             let set_idx = (word_hash as usize) & crate::layout::layout_hyphen::HYPHEN_CACHE_SET_MASK;
             let slot0 = set_idx * 2;
@@ -2847,6 +2965,7 @@ pub fn hz_break_paragraph_breakpoints_pass<'a>(
             let entry = if e0.hash == word_hash
                 && e0.word_len == text.len() as u16
                 && e0.family_face == fam_face
+                && e0.master == master
             {
                 e0
             } else {
@@ -2856,6 +2975,7 @@ pub fn hz_break_paragraph_breakpoints_pass<'a>(
             let b_pos = if entry.hash == word_hash
                 && entry.word_len == text.len() as u16
                 && entry.family_face == fam_face
+                && entry.master == master
             {
                 (entry.breaks[split_p] as usize).min(text.len())
             } else {
@@ -2869,7 +2989,12 @@ pub fn hz_break_paragraph_breakpoints_pass<'a>(
                 cum_units += entry.piece_units[p] as u32;
             }
             let prefix_w = (cum_units as f32) * scale;
-            let suffix_w = orig_w_val - prefix_w;
+            // The post-break text is shaped afresh (a ligature split by the break re-forms
+            // from its remaining characters), so measure it as the backend will emit it.
+            let suffix_w = match crate::backend::shape::text_font_at(font_family, face, word_size) {
+                Some(font) => font.width_units(suffix_slice) * scale,
+                None => orig_w_val - prefix_w,
+            };
 
             soa.texts[w_in_soa] = prefix_slice;
             soa.widths[w_in_soa] = prefix_w;
@@ -2877,6 +3002,7 @@ pub fn hz_break_paragraph_breakpoints_pass<'a>(
 
             soa.texts.insert(w_in_soa + 1, suffix_slice);
             soa.widths.insert(w_in_soa + 1, suffix_w);
+            soa.glue.insert(w_in_soa + 1, [0.0; 2]);
             soa.attrs.insert(w_in_soa + 1, PackedWordAttr::new(WordKind::Word, face));
 
             for m in &mut soa.math_indices {
@@ -2927,6 +3053,7 @@ pub fn hz_break_paragraph_breakpoints_pass<'a>(
 
 /// Dynamic programming optimal line breaker with parshape support.
 /// Delegates to `hz_break_paragraph_three_pass` with Plain TeX defaults (pretolerance=100, tolerance=200, emergencystretch=0.0, looseness=0).
+#[allow(clippy::too_many_arguments)]
 pub fn hz_break_paragraph_optimal_shape<'a>(
     soa: &ParagraphSoA<'a>,
     measure: f32,
@@ -2956,6 +3083,7 @@ pub fn hz_break_paragraph_optimal_shape<'a>(
 }
 
 /// Optimal line breaker with custom looseness and parshape support (TeX by Topic Ch 19.2.2).
+#[allow(clippy::too_many_arguments)]
 pub fn hz_break_paragraph_looseness<'a>(
     soa: &ParagraphSoA<'a>,
     measure: f32,
@@ -2986,6 +3114,7 @@ pub fn hz_break_paragraph_looseness<'a>(
 }
 
 /// Optimal line breaker with parfillskip, looseness, and parshape support (TeX by Topic Ch 17.1 & 19.2.2).
+#[allow(clippy::too_many_arguments)]
 pub fn hz_break_paragraph_parfill<'a>(
     soa: &ParagraphSoA<'a>,
     measure: f32,
@@ -3227,7 +3356,6 @@ mod tests {
         let desc = HzLineDescriptor::new(
             12,    // start_word
             8,     // word_count
-            7,     // num_spaces
             true,  // justify
             -12,   // expansion_permille (-1.2%)
             420.5, // line_w
@@ -3237,7 +3365,6 @@ mod tests {
 
         assert_eq!(desc.start_word, 12);
         assert_eq!(desc.word_count, 8);
-        assert_eq!(desc.num_spaces, 7);
         assert!(desc.justify());
         assert_eq!(desc.expansion_permille, -12);
         assert!((desc.line_w - 420.5).abs() < 1e-4);
@@ -3839,7 +3966,6 @@ mod tests {
         assert!(ok);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].word_count, 5);
-        assert_eq!(lines[0].num_spaces, 2);
         assert!(!lines[0].justify());
 
         // 2. Exceeds measure (width = 80.0 > 70.0) -> returns false

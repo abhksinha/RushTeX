@@ -177,6 +177,7 @@ impl DelimiterSizingGovernor {
 
     /// Computes composite bounding box for a delimited formula.
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub fn compute_delimited_box(
         open_w: f32,
         open_h: f32,
@@ -185,11 +186,11 @@ impl DelimiterSizingGovernor {
         content_d: f32,
         close_w: f32,
         close_h: f32,
-        target_h: f32,
         axis_h: f32,
     ) -> MathBox {
         let total_w = open_w + content_w + close_w;
-        let actual_delim_h = open_h.max(close_h).max(target_h);
+        // The fence is as tall as the delimiters actually chosen, not the requested size.
+        let actual_delim_h = open_h.max(close_h);
         let half_h = (axis_h + actual_delim_h * 0.5).max(content_h);
         let half_d = (actual_delim_h * 0.5 - axis_h).max(content_d);
         MathBox::with_dims(total_w, half_h, half_d)
@@ -246,10 +247,10 @@ impl ExtensibleAssemblyEngine {
     /// Calculates the number of repeater pieces needed to cover target height.
     #[inline(always)]
     pub fn calculate_repeats(target_h: f32, piece_h: f32, fixed_h: f32) -> usize {
-        if target_h <= fixed_h || piece_h <= 0.0 {
+        if target_h <= fixed_h + DELIM_FIT_EPS || piece_h <= 0.0 {
             0
         } else {
-            let needed = target_h - fixed_h;
+            let needed = target_h - fixed_h - DELIM_FIT_EPS;
             (needed / piece_h).ceil() as usize
         }
     }
@@ -258,11 +259,11 @@ impl ExtensibleAssemblyEngine {
     /// correctly accounting for symmetric top/bottom expansion when a middle piece is present.
     #[inline(always)]
     pub fn calculate_repeats_mid(target_h: f32, piece_h: f32, fixed_h: f32, has_mid: bool) -> usize {
-        if target_h <= fixed_h || piece_h <= 0.0 {
+        if target_h <= fixed_h + DELIM_FIT_EPS || piece_h <= 0.0 {
             0
         } else {
             let denom = if has_mid { 2.0 * piece_h } else { piece_h };
-            ((target_h - fixed_h) / denom).ceil() as usize
+            ((target_h - fixed_h - DELIM_FIT_EPS) / denom).ceil() as usize
         }
     }
 
@@ -275,24 +276,24 @@ impl ExtensibleAssemblyEngine {
     ) -> ExtensibleAssemblyMetrics {
         let scale = font_size * 0.001;
         let m_rep = crate::math::math_tfm::cmex10_metric(recipe.rep);
-        let width = (m_rep.w as f32) * scale;
-        let piece_h = ((m_rep.h + m_rep.d) as f32) * scale;
+        let width = m_rep.w * scale;
+        let piece_h = (m_rep.h + m_rep.d) * scale;
 
         let h_top = if recipe.top != 0 {
             let m = crate::math::math_tfm::cmex10_metric(recipe.top);
-            ((m.h + m.d) as f32) * scale
+            (m.h + m.d) * scale
         } else {
             0.0
         };
         let h_bot = if recipe.bot != 0 {
             let m = crate::math::math_tfm::cmex10_metric(recipe.bot);
-            ((m.h + m.d) as f32) * scale
+            (m.h + m.d) * scale
         } else {
             0.0
         };
         let h_mid = if recipe.mid != 0 {
             let m = crate::math::math_tfm::cmex10_metric(recipe.mid);
-            ((m.h + m.d) as f32) * scale
+            (m.h + m.d) * scale
         } else {
             0.0
         };
@@ -336,10 +337,10 @@ impl ExtensibleAssemblyEngine {
         let mut emit_piece = |code: u8, top_y: &mut f32| {
             if code != 0 {
                 let m = crate::math::math_tfm::cmex10_metric(code);
-                let baseline_y = *top_y - (m.h as f32) * scale;
+                let baseline_y = *top_y - m.h * scale;
                 let s = byte_str(code);
                 ctx.emit_glyph_run(x, baseline_y, Face::Extension, font_size, s);
-                *top_y = baseline_y - (m.d as f32) * scale;
+                *top_y = baseline_y - m.d * scale;
             }
         };
 
@@ -423,6 +424,93 @@ pub static CMEX_CEIL_RIGHT_RECIPE: DelimiterRecipe = DelimiterRecipe { top: 0x33
 pub static CMEX_VERT_RECIPE: DelimiterRecipe = DelimiterRecipe { top: 0, mid: 0, bot: 0, rep: 0x0c };
 pub static CMEX_VERT_DOUBLE_RECIPE: DelimiterRecipe = DelimiterRecipe { top: 0, mid: 0, bot: 0, rep: 0x0d };
 
+/// cmex10 `charlist` successors from its TFM (0xFF ends a list), i.e. the next larger variant.
+static CMEX10_NEXT_LARGER: [u8; 128] = [
+    0x10, 0x11, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x44, 0x45, 0xFF, 0xFF, 0x2E, 0x2F, 0x12, 0x13, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0xFF, 0xFF, 0xFF, 0xFF, 0x1E, 0x1F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1C, 0x1D, 0x47, 0xFF, 0x49, 0xFF, 0x4B, 0xFF, 0x4D, 0xFF, 0x4F, 0xFF, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x61, 0xFF, 0x63, 0x64, 0xFF, 0x66, 0x67, 0xFF, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x71, 0x72, 0x73, 0x74, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+];
+
+/// cmex10 extensible recipes from its TFM, keyed by the character that carries them.
+static CMEX10_EXTENSIBLES: [(u8, DelimiterRecipe); 28] = [
+    (0x0C, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x00, rep: 0x0C }),
+    (0x0D, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x00, rep: 0x0D }),
+    (0x30, DelimiterRecipe { top: 0x30, mid: 0x00, bot: 0x40, rep: 0x42 }),
+    (0x31, DelimiterRecipe { top: 0x31, mid: 0x00, bot: 0x41, rep: 0x43 }),
+    (0x32, DelimiterRecipe { top: 0x32, mid: 0x00, bot: 0x34, rep: 0x36 }),
+    (0x33, DelimiterRecipe { top: 0x33, mid: 0x00, bot: 0x35, rep: 0x37 }),
+    (0x34, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x34, rep: 0x36 }),
+    (0x35, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x35, rep: 0x37 }),
+    (0x36, DelimiterRecipe { top: 0x32, mid: 0x00, bot: 0x00, rep: 0x36 }),
+    (0x37, DelimiterRecipe { top: 0x33, mid: 0x00, bot: 0x00, rep: 0x37 }),
+    (0x38, DelimiterRecipe { top: 0x38, mid: 0x3C, bot: 0x3A, rep: 0x3E }),
+    (0x39, DelimiterRecipe { top: 0x39, mid: 0x3D, bot: 0x3B, rep: 0x3E }),
+    (0x3A, DelimiterRecipe { top: 0x38, mid: 0x00, bot: 0x3A, rep: 0x3E }),
+    (0x3B, DelimiterRecipe { top: 0x39, mid: 0x00, bot: 0x3B, rep: 0x3E }),
+    (0x3C, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x00, rep: 0x3F }),
+    (0x3D, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x00, rep: 0x77 }),
+    (0x3E, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x00, rep: 0x3E }),
+    (0x3F, DelimiterRecipe { top: 0x78, mid: 0x00, bot: 0x79, rep: 0x3F }),
+    (0x40, DelimiterRecipe { top: 0x38, mid: 0x00, bot: 0x3B, rep: 0x3E }),
+    (0x41, DelimiterRecipe { top: 0x39, mid: 0x00, bot: 0x3A, rep: 0x3E }),
+    (0x42, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x00, rep: 0x42 }),
+    (0x43, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x00, rep: 0x43 }),
+    (0x74, DelimiterRecipe { top: 0x76, mid: 0x00, bot: 0x74, rep: 0x75 }),
+    (0x77, DelimiterRecipe { top: 0x7E, mid: 0x00, bot: 0x7F, rep: 0x77 }),
+    (0x78, DelimiterRecipe { top: 0x78, mid: 0x00, bot: 0x00, rep: 0x3F }),
+    (0x79, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x79, rep: 0x3F }),
+    (0x7E, DelimiterRecipe { top: 0x7E, mid: 0x00, bot: 0x00, rep: 0x77 }),
+    (0x7F, DelimiterRecipe { top: 0x00, mid: 0x00, bot: 0x7F, rep: 0x77 }),
+];
+
+/// The next larger cmex10 variant of `c` (its TFM `charlist` successor), if any.
+pub fn cmex10_next_larger(c: u8) -> Option<u8> {
+    CMEX10_NEXT_LARGER.get(c as usize).copied().filter(|&n| n != 0xFF)
+}
+
+/// Metric of `code` in the extension font `face` (cmex10, or cmex7 for script sizes).
+#[inline]
+pub fn cmex_face_metric(face: crate::backend::fonts::Face, code: u8) -> crate::math::math_tfm::GlyphMetric {
+    crate::math::math_tfm_faces::cm_face_metric(face, code).unwrap_or_else(|| crate::math::math_tfm::cmex10_metric(code))
+}
+
+/// A delimiter chosen by [`cmex_var_delimiter`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CmexDelimiterChoice {
+    Glyph(u8),
+    /// The character carrying the recipe (it sets the width, TeX §713) and the recipe.
+    Extensible(u8, DelimiterRecipe),
+}
+
+/// TeX compares scaled points exactly; float metrics and targets carry rounding noise, so a
+/// variant within this many points of the target counts as reaching it.
+pub const DELIM_FIT_EPS: f32 = 0.001;
+
+/// TeX's `var_delimiter` (§707) over cmex10: walks the successor list from `large`, taking
+/// the first variant at least `target_h` tall (height plus depth), building an extensible as
+/// soon as one is reached, and falling back to the tallest variant seen.
+pub fn cmex_var_delimiter(large: u8, target_h: f32, font_size: f32, face: crate::backend::fonts::Face) -> CmexDelimiterChoice {
+    let mut c = large;
+    let (mut best, mut best_hd) = (large, f32::MIN);
+    for _ in 0..16 {
+        if let Ok(i) = CMEX10_EXTENSIBLES.binary_search_by_key(&c, |e| e.0) {
+            return CmexDelimiterChoice::Extensible(c, CMEX10_EXTENSIBLES[i].1);
+        }
+        let m = cmex_face_metric(face, c);
+        let hd = (m.h + m.d) * 0.001 * font_size;
+        if hd > best_hd {
+            best = c;
+            best_hd = hd;
+        }
+        if hd >= target_h - DELIM_FIT_EPS {
+            return CmexDelimiterChoice::Glyph(c);
+        }
+        match CMEX10_NEXT_LARGER.get(c as usize) {
+            Some(&n) if n != 0xFF => c = n,
+            _ => break,
+        }
+    }
+    CmexDelimiterChoice::Glyph(best)
+}
+
 /// Resolves a mathematical delimiter into its CMEX10 variant chain and extensible assembly recipe.
 #[inline(always)]
 pub fn resolve_cmex_delimiter(delim: &str, is_left: bool) -> Option<(&'static [u8], Option<DelimiterRecipe>)> {
@@ -469,7 +557,7 @@ pub fn resolve_cmex_delimiter(delim: &str, is_left: bool) -> Option<(&'static [u
         "\\rangle" => (&CMEX_DELIMITER_TABLE.angle_right[..], None),
         "\\backslash" => (&CMEX_DELIMITER_TABLE.backslash[..], None),
         "\\vert" | "\\mid" => (&CMEX_DELIMITER_TABLE.vert[..], Some(CMEX_VERT_RECIPE)),
-        "\\|" | "\\Vert" | "\\parallel" => (&CMEX_DELIMITER_TABLE.vert_double[..], Some(CMEX_VERT_DOUBLE_RECIPE)),
+        "\\|" | "||" | "\\Vert" | "\\parallel" => (&CMEX_DELIMITER_TABLE.vert_double[..], Some(CMEX_VERT_DOUBLE_RECIPE)),
         _ => return None,
     };
     Some(res)
@@ -601,22 +689,17 @@ const _: () = assert!(core::mem::align_of::<ExtensibleArrowMetrics>() == 16);
 pub struct ExtensibleArrowEngine;
 
 impl ExtensibleArrowEngine {
-    /// Computes target width, shaft baseline, and rule coordinates in a single pass.
+    /// Computes shaft baseline and rule coordinates for an arrow stretched to `target_w`.
     #[inline(always)]
     pub fn compute_arrow_geometry(
         origin_x: f32,
         origin_y: f32,
         axis_h: f32,
-        sup_w: f32,
-        sub_w: f32,
+        target_w: f32,
         arrow_w: f32,
-        font_size: f32,
         is_left: bool,
         is_both: bool,
     ) -> (ExtensibleArrowMetrics, f32, f32) {
-        let pad = 0.5 * font_size;
-        let min_w = 1.4 * font_size;
-        let target_w = (sup_w.max(sub_w) + 2.0 * pad).max(min_w);
         let shaft_y = origin_y + axis_h;
         let left_x = origin_x;
         let right_x = origin_x + target_w - arrow_w;
@@ -787,15 +870,13 @@ mod tests {
             0.0,
             10.0,
             2.5,
-            20.0,
-            15.0,
+            30.0,
             5.0,
-            10.0,
             false,
             false,
         );
         assert_eq!(arrow_geom.shaft_y, 12.5);
-        assert_eq!(arrow_geom.target_w, 30.0); // 20 + 2 * 5.0
+        assert_eq!(arrow_geom.target_w, 30.0);
         assert_eq!(left_x, 0.0);
         assert_eq!(right_x, 25.0);
         assert_eq!(arrow_geom.rule_start_x, 0.0);

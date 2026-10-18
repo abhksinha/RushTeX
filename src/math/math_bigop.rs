@@ -76,6 +76,16 @@ impl OperatorLimitSwitch {
         limits && style.is_display()
     }
 
+    /// Whether an operator with `\limits` mode `mode` (`OP_LIMITS_*`) takes limits in `style`.
+    #[inline(always)]
+    pub fn takes_limits(mode: u8, style: MathStyle) -> bool {
+        match mode & crate::math::math_ast::OP_LIMITS_MODE_MASK {
+            crate::math::math_ast::OP_LIMITS_LIMITS => true,
+            crate::math::math_ast::OP_LIMITS_NOLIMITS => false,
+            _ => style.is_display(),
+        }
+    }
+
     /// Fast operator classification for standard text operators (lim, max, min, det, etc.).
     #[inline(always)]
     pub fn is_text_operator(op: &str) -> bool {
@@ -303,7 +313,6 @@ impl LimitClearanceGovernor {
         sub_y: f32,
         sub_d: f32,
         op_extra_pad: f32,
-        font_size: f32,
     ) -> MathBox {
         let total_h = if has_sup {
             (sup_y + sup_h) - origin_y + op_extra_pad
@@ -315,8 +324,8 @@ impl LimitClearanceGovernor {
         } else {
             origin_y - op_bot_y
         };
-        let op_padding = (0.35 * font_size).max(3.5);
-        MathBox::with_dims(max_w + op_padding, total_h, total_d)
+        // TeX §750: the limits box is exactly as wide as its widest component.
+        MathBox::with_dims(max_w, total_h, total_d)
     }
 }
 
@@ -419,81 +428,35 @@ impl BigOpShiftResolver {
             )
         }
     }
-
-    /// Computes horizontal and initial vertical shifts for BigOp side-scripts.
+    /// Places side scripts on an operator without limits (TeX §749, §756; mlist.c `make_op`).
+    ///
+    /// With a subscript the nucleus loses its italic correction `op_ic`, so the subscript is
+    /// tucked under the slant and the superscript sits `op_ic` to its right. Vertical shifts are
+    /// Rule 18 for a non-character nucleus (sup_drop/sub_drop apply).
     ///
     /// Returns `(sup_x_rel, sub_x_rel, sup_shift, sub_shift)`.
     #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     pub fn resolve_side_scripts(
-        op: &str,
-        is_integral: bool,
-        is_display: bool,
         op_w: f32,
-        op_h: f32,
-        op_d: f32,
         op_ic: f32,
-        delta_y: f32,
-        font_size: f32,
-        scale: f32,
-        is_cm: bool,
+        nuc_h: f32,
+        nuc_d: f32,
         has_sup: bool,
-        params: &MathFontParameters,
-    ) -> (f32, f32, f32, f32) {
-        if is_integral {
-            const INT_SUP_FACTORS: [f32; 2] = [0.55, 0.95];
-            const INT_SUB_FACTORS: [f32; 2] = [0.35, 0.75];
-            let disp_idx = is_display as usize;
-            let s_shift = (INT_SUP_FACTORS[disp_idx] * font_size).max((params.sup1 as f32) * scale);
-            let b_shift = (INT_SUB_FACTORS[disp_idx] * font_size).max((params.sub1 as f32) * scale);
-
-            let sx = op_w + (0.05 * font_size);
-            let bx = if matches!(op, "oint" | "oiint" | "oiiint") {
-                op_w + (0.02 * font_size)
-            } else if matches!(op, "iint" | "iiint") {
-                op_w - (0.12 * font_size)
-            } else {
-                op_w - (0.22 * font_size)
-            };
-            (sx, bx, s_shift, b_shift)
-        } else {
-            let sx = op_w + op_ic + 1.0;
-            let bx = op_w + 1.0;
-            let op_top_rel = delta_y + op_h;
-            let op_bot_rel = delta_y - op_d;
-            let s_shift = ((params.sup1 as f32) * scale)
-                .max(op_top_rel - (params.sup_drop as f32) * scale);
-            let mut b_shift = ((params.sub1 as f32) * scale)
-                .max(-op_bot_rel + (params.sub_drop as f32) * scale);
-            if has_sup && !is_cm {
-                b_shift = b_shift.max(-op_bot_rel + 1.0 * scale);
-            }
-            (sx, bx, s_shift, b_shift)
-        }
-    }
-
-    /// Enforces TeX Rule 18 vertical clearance between side-scripts.
-    #[inline(always)]
-    pub fn enforce_side_script_clearance(
-        mut sup_shift: f32,
-        mut sub_shift: f32,
+        has_sub: bool,
+        style: MathStyle,
         sup_d: f32,
         sub_h: f32,
-        sub_sup_gap: f32,
-        accent_base_height: f32,
-    ) -> (f32, f32) {
-        let gap = (sup_shift - sup_d) - (-sub_shift + sub_h);
-        if gap < sub_sup_gap {
-            let shortfall = sub_sup_gap - gap;
-            sub_shift += shortfall;
-            let min_sup_h = 0.8 * accent_base_height + sup_d;
-            if sup_shift < min_sup_h {
-                let push = min_sup_h - sup_shift;
-                sup_shift += push;
-                sub_shift -= push;
-            }
-        }
-        (sup_shift, sub_shift)
+        scale: f32,
+        params: &MathFontParameters,
+        drops: (f32, f32),
+    ) -> (f32, f32, f32, f32) {
+        let sub_x = if has_sub { op_w - op_ic } else { op_w };
+        let x_height = (params.accent_base_height as f32) * scale;
+        let m = crate::math::math_scripts::ScriptShiftResolver::resolve(
+            has_sup, has_sub, style, false, nuc_h, nuc_d, sup_d, sub_h, x_height, scale, params, drops,
+        );
+        (op_w, sub_x, m.sup_shift, m.sub_shift)
     }
 
     /// Computes composite bounding box for an operator with side scripts.

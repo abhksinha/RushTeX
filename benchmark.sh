@@ -13,11 +13,11 @@ echo "======================================================================"
 
 # Target TeX file
 TEX_FILE="${1:-docs/manual.tex}"
-RUNS="${9:-8}"
+RUNS="${2:-8}"
 
 if [ ! -f "$TEX_FILE" ]; then
     echo "Error: TeX file '$TEX_FILE' not found!"
-    echo "Usage: $0 <path_to_tex_file> [iterations (default: 3)]"
+    echo "Usage: $0 <path_to_tex_file> [iterations (default: 8)]"
     exit 1
 fi
 
@@ -27,7 +27,7 @@ if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || [ "$RUNS" -lt 1 ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUSH_BIN="$SCRIPT_DIR/target/release/rushtex"
+RUSH_BIN="${RUSHTEX_BIN:-$SCRIPT_DIR/target/release/rushtex}"
 
 # Check / build rushtex binary
 if [ ! -x "$RUSH_BIN" ]; then
@@ -40,6 +40,21 @@ if ! command -v pdflatex &>/dev/null; then
     echo "Error: 'pdflatex' command not found on PATH. Please install TeX Live."
     exit 1
 fi
+
+# Runs a command once and prints "<wall-clock ns> <peak RSS KB>". GNU `date +%N` and
+# `/usr/bin/time -v` are missing on macOS, so the child is timed and its rusage read
+# through os.wait4 (ru_maxrss is in KB on Linux and in bytes on macOS).
+measure() {
+    python3 - "$@" <<'PY'
+import os, subprocess, sys, time
+t0 = time.perf_counter_ns()
+p = subprocess.Popen(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+_, _, ru = os.wait4(p.pid, 0)
+t1 = time.perf_counter_ns()
+rss_kb = ru.ru_maxrss // 1024 if sys.platform == "darwin" else ru.ru_maxrss
+print(t1 - t0, rss_kb)
+PY
+}
 
 # Setup isolated temp directory
 TMP_DIR=$(mktemp -d /tmp/rushtex_bench_XXXXXX)
@@ -62,15 +77,8 @@ RUSH_PAGES=0
 RUSH_PDF="$TMP_DIR/rush_out.pdf"
 
 for ((i=1; i<=RUNS; i++)); do
-    TIME_FILE="$TMP_DIR/rush_time_$i.log"
-    START_NS=$(date +%s%N)
-    /usr/bin/time -v "$RUSH_BIN" -o "$RUSH_PDF" "$TEX_FILE" >/dev/null 2>"$TIME_FILE"
-    END_NS=$(date +%s%N)
-
-    ELAPSED_NS=$((END_NS - START_NS))
+    read -r ELAPSED_NS RSS_KB < <(measure "$RUSH_BIN" -o "$RUSH_PDF" "$TEX_FILE")
     TOTAL_RUSH_TIME_NS=$((TOTAL_RUSH_TIME_NS + ELAPSED_NS))
-
-    RSS_KB=$(grep "Maximum resident set size" "$TIME_FILE" | awk '{print $NF}')
     TOTAL_RUSH_RSS_KB=$((TOTAL_RUSH_RSS_KB + RSS_KB))
 done
 echo "done."
@@ -99,15 +107,8 @@ PDF_PAGES=0
 PDF_OUT_PDF="$TMP_DIR/${FILE_NAME%.tex}.pdf"
 
 for ((i=1; i<=RUNS; i++)); do
-    TIME_FILE="$TMP_DIR/pdf_time_$i.log"
-    START_NS=$(date +%s%N)
-    /usr/bin/time -v pdflatex -interaction=batchmode -output-directory="$TMP_DIR" "$TEX_FILE" >/dev/null 2>"$TIME_FILE" || true
-    END_NS=$(date +%s%N)
-
-    ELAPSED_NS=$((END_NS - START_NS))
+    read -r ELAPSED_NS RSS_KB < <(measure pdflatex -interaction=batchmode -output-directory="$TMP_DIR" "$TEX_FILE")
     TOTAL_PDF_TIME_NS=$((TOTAL_PDF_TIME_NS + ELAPSED_NS))
-
-    RSS_KB=$(grep "Maximum resident set size" "$TIME_FILE" | awk '{print $NF}')
     TOTAL_PDF_RSS_KB=$((TOTAL_PDF_RSS_KB + RSS_KB))
 done
 echo "done."

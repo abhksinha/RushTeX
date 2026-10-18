@@ -9,6 +9,9 @@
 //! filesystem overhead, and DVI intermediaries, executing a pure in-memory pipeline divided into
 //! decoupled modular domains:
 //!
+//! 0. **Expansion ([`expand`])**: Resolves user macros, environments, conditionals, counters,
+//!    cross-references, and citations into plain LaTeX. Documents that use none of these are
+//!    borrowed unchanged (zero copy).
 //! 1. **Frontend ([`frontend`])**: Lexes TeX tokens and builds an Abstract Syntax Tree ([`frontend::ast::Document`])
 //!    containing preamble configurations and structural blocks. Zero allocations for tokens
 //!    (string slices borrow directly from source text).
@@ -40,6 +43,8 @@ pub mod backend;
 pub mod config;
 #[path = "diagnostic/diagnostic_mod.rs"]
 pub mod diagnostic;
+#[path = "expand/expand_mod.rs"]
+pub mod expand;
 #[path = "frontend/frontend_mod.rs"]
 pub mod frontend;
 #[path = "index/index_mod.rs"]
@@ -121,6 +126,7 @@ pub fn compile_into(source_code: &str, destination_buffer: &mut Vec<u8>) -> Resu
 }
 
 /// Compiles a LaTeX source string into a sequence of laid-out pages.
+/// The source must already be expanded with [`expand::expand`] if it uses macros or references.
 /// Uses memory-conscious token-to-layout streaming when the document does not contain
 /// whole-document tables of contents or indices, dropping AST nodes immediately after layout.
 pub fn compile_source_to_pages(source_code: &str) -> Result<Vec<layout::Page<'_>>, Error> {
@@ -153,7 +159,7 @@ fn compile_streaming_into(
 ) -> Result<usize, Error> {
     let mut parser = tex::Parser::new(source_code);
     let has_doc_env = parser.parse_preamble_if_present()?;
-    let config = parser.preamble.config.clone();
+    let config = parser.preamble.config;
     let mut layouter = layout::Layouter::new(&config);
     layouter.enable_streaming();
 
@@ -183,6 +189,8 @@ pub fn compile_into_opts_counted(
     destination_buffer: &mut Vec<u8>,
     enable_compression: bool,
 ) -> Result<usize, Error> {
+    let expanded = expand::expand(source_code)?;
+    let source_code: &str = &expanded;
     let has_indices = source_code.contains("\\tableofcontents")
         || source_code.contains("\\listoffigures")
         || source_code.contains("\\listoftables");
@@ -339,7 +347,8 @@ mod tests {
         )
         .unwrap();
         let s_raw = String::from_utf8_lossy(&uncomp);
-        assert!(s_raw.contains("(word"));
+        // Times-Bold kerns `w`+`o` (AFM KPX w o -10), so the word is a kerned TJ array.
+        assert!(s_raw.contains("[(w)10(ord)] TJ"));
     }
 
     #[test]
@@ -357,7 +366,8 @@ mod tests {
         assert!(s.contains("(1.)"));
         assert!(s.contains("(2.)"));
         assert!(s.contains("(Alpha)"));
-        assert!(s.contains("(Bravo)"));
+        // Times-Roman kerns `a`+`v` and `v`+`o` (AFM KPX -20 each).
+        assert!(s.contains("[(Bra)20(v)20(o)] TJ"));
     }
 
     #[test]
@@ -393,6 +403,7 @@ A & \textbf{B} & C \\
     fn test_table_boundary_closure_and_multiline_wrapping() {
         let src = r#"
 \documentclass{article}
+\usepackage[margin=1in]{geometry}
 \begin{document}
 \begin{tabular}{|l|c|r|}
 \hline
@@ -442,17 +453,18 @@ Pipeline & High performance vector typesetting pipeline engine for technical doc
             );
         }
 
-        // Vertical rules: there must be rightmost rules drawn flush with origin_x + table_w
+        // Vertical rules: the rightmost rule is centred on origin_x + table_w, as pdfTeX
+        // draws it (half of \\arrayrulewidth past the end of \\hline).
         let origin_x = h_rules[0].0;
         let right_x = origin_x + table_w;
         let v_rules_right: Vec<_> = rules
             .iter()
-            .filter(|r| (r.0 - (right_x - 0.6)).abs() < 1e-2 && r.3 > 1.0)
+            .filter(|r| (r.0 - (right_x - 0.2)).abs() < 1e-2 && r.3 > 1.0)
             .collect();
         assert!(
             !v_rules_right.is_empty(),
-            "Rightmost vertical rule must be drawn flush with table_w ({})",
-            right_x - 0.6
+            "Rightmost vertical rule (\\arrayrulewidth 0.4pt) must be centred on the table edge ({})",
+            right_x
         );
 
         // Multi-line cell: verify that the row with long description has row_h > base_leading + 4.0
@@ -493,9 +505,10 @@ Extra garbage outside document
             doc.preamble.class.as_ref().unwrap().options,
             vec!["12pt", "letterpaper"]
         );
-        assert_eq!(doc.preamble.config.page_width, 612.0); // Letter paper
-        assert_eq!(doc.preamble.config.page_height, 792.0);
-        assert_eq!(doc.preamble.config.margin_left, 36.0); // 0.5 in = 36 pt
+        // Letter paper (8.5in x 11in) and margins in TeX points (1in = 72.27pt).
+        assert_eq!(doc.preamble.config.page_width, 614.295);
+        assert_eq!(doc.preamble.config.page_height, 794.97);
+        assert_eq!(doc.preamble.config.margin_left, 36.135);
         assert_eq!(doc.preamble.config.base_font_size, 12.0);
 
         let pdf = compile_str(src).unwrap();
@@ -518,7 +531,7 @@ Extra garbage outside document
         let src = "Just a raw paragraph without any preamble or document envelope.";
         let doc = tex::parse(src).unwrap();
         assert!(doc.preamble.class.is_none());
-        assert_eq!(doc.preamble.config.page_width, 595.0); // Default A4
+        assert_eq!(doc.preamble.config.page_width, 597.508); // Default A4 (210mm in pt)
         let pdf = compile_str(src).unwrap();
         let text = extract_pdftotext(&pdf);
         assert!(text.contains("Just a raw paragraph"));
@@ -932,7 +945,9 @@ Hello World without Page Number.
 \begin{document}
 "#,
         );
-        for i in 1..=29 {
+        // article 10pt: 46 baselines per page; after 42 one-line paragraphs the heading
+        // still fits but heading + afterskip + two body lines do not.
+        for i in 1..=42 {
             src.push_str(&format!("Paragraph item line number {i}.\n\n"));
         }
         src.push_str(
@@ -997,6 +1012,7 @@ The very last line of this paragraph will remain left-aligned without justificat
     fn test_paragraph_first_line_indent_and_noindent() {
         let src = r#"
 \documentclass{article}
+\usepackage[margin=1in]{geometry}
 \begin{document}
 \section{Intro}
 First paragraph after section heading has no indent.
@@ -1022,25 +1038,25 @@ Second paragraph in the section has standard first line indent.
             })
             .collect();
 
-        // Heading "Intro": x == 72.0
-        // "First": x == 72.0 (unindented after section)
-        // "Second": x == 72.0 + 15.0 = 87.0 (indented by 15.0pt)
-        // "Third": x == 72.0 (unindented due to \noindent)
+        // Heading "Intro": x == 1in
+        // "First": x == 1in (unindented after section)
+        // "Second": x == 1in + 15.0 = 87.0 (indented by 15.0pt)
+        // "Third": x == 1in (unindented due to \noindent)
         let first_run = glyph_runs.iter().find(|(_, t)| *t == "First").unwrap();
         assert_eq!(
-            first_run.0, 72.0,
+            first_run.0, crate::config::TEX_INCH,
             "First paragraph after heading should not be indented"
         );
 
         let second_run = glyph_runs.iter().find(|(_, t)| *t == "Second").unwrap();
         assert_eq!(
-            second_run.0, 87.0,
+            second_run.0, (crate::config::TEX_INCH + 15.0),
             "Second paragraph should be indented by par_indent (15.0pt)"
         );
 
         let third_run = glyph_runs.iter().find(|(_, t)| *t == "Third").unwrap();
         assert_eq!(
-            third_run.0, 72.0,
+            third_run.0, crate::config::TEX_INCH,
             "Third paragraph with noindent should not be indented"
         );
     }
@@ -1113,8 +1129,8 @@ Content on page 2 after explicit newpage.
         );
         let soa_size = std::mem::size_of::<crate::layout::ParagraphSoA>();
         assert_eq!(
-            soa_size, 96,
-            "ParagraphSoA struct size must be exactly 96 bytes (4 Vec pointers), got {soa_size}"
+            soa_size, 176,
+            "ParagraphSoA must be 176 bytes (5 per-word Vecs, 2 sparse style-run Vecs, class size), got {soa_size}"
         );
     }
 
@@ -1199,10 +1215,219 @@ Escaped symbols: \textbackslash{} \textasciitilde{} \textasciicircum{} \% \$ \& 
         assert!(text.contains("}"));
     }
 
+    /// First glyph run (x, y) of every run whose text is `word` on page 0.
+    fn runs_of(page: &layout::Page<'_>, word: &str) -> Vec<(f32, f32)> {
+        page.ops
+            .iter()
+            .filter_map(|op| match op {
+                layout::Paint::GlyphRun { x, y, part_start, .. } if page.text_pool[*part_start as usize] == word => {
+                    Some((*x, *y))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_center_flush_environments_and_declarations() {
+        let src = r#"
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+\begin{document}
+Lead paragraph.
+\begin{center}
+Mid
+\end{center}
+After env without a blank line.
+\begin{flushright}
+Right
+\end{flushright}
+
+{\raggedright Ragged\par}
+Plain paragraph.
+\end{document}
+"#;
+        let doc = tex::parse(src).unwrap();
+        let pages = layout::layout(&doc);
+        let page = &pages[0];
+        let left = crate::config::TEX_INCH;
+        let right = page.width - crate::config::TEX_INCH;
+        let (mid_x, mid_y) = runs_of(page, "Mid")[0];
+        let (lead_x, lead_y) = runs_of(page, "Lead")[0];
+        assert!(lead_x > left, "the lead paragraph is indented");
+        // Centered: equal space on both sides of the word.
+        let mid_w = 3.0 * 5.0;
+        assert!((mid_x - left) > 100.0 && (right - mid_x) > 100.0 && (mid_x - left - (right - mid_x - mid_w)).abs() < 20.0);
+        // \topsep (8pt) above a trivlist begun inside a paragraph.
+        assert!((lead_y - mid_y - 20.0).abs() < 0.01, "baselines {lead_y} -> {mid_y}");
+        // No blank line after \end{center}: the next paragraph is not indented.
+        assert_eq!(runs_of(page, "After")[0].0, left);
+        let (right_x, _) = runs_of(page, "Right")[0];
+        assert!(right_x > right - 40.0, "flushright sets the word at the right margin");
+        // A declaration that opens a group runs in vertical mode: no indent; the group ends
+        // after \par, so the next paragraph is justified and indented again.
+        assert_eq!(runs_of(page, "Ragged")[0].0, left);
+        assert!(runs_of(page, "Plain")[0].0 > left);
+    }
+
+    #[test]
+    fn test_xcolor_runs_and_scoping() {
+        use crate::frontend::ast::PackedColor;
+        let src = r#"
+\documentclass{article}
+\definecolor{mine}{HTML}{336699}
+\begin{document}
+A \textcolor{red}{B} C {\color{mine} D} E \textcolor{blue!50}{F}
+
+\color{green} G
+\end{document}
+"#;
+        let doc = tex::parse(src).unwrap();
+        let pages = layout::layout(&doc);
+        let page = &pages[0];
+        // Colour in force for every glyph run, in order.
+        let mut color = PackedColor::BLACK;
+        let mut seen = Vec::new();
+        for op in &page.ops {
+            match op {
+                layout::Paint::Color { color: c } => color = *c,
+                layout::Paint::GlyphRun { part_start, .. } => {
+                    seen.push((page.text_pool[*part_start as usize], color))
+                }
+                _ => {}
+            }
+        }
+        let of = |w: &str| seen.iter().find(|(t, _)| *t == w).map(|(_, c)| *c).unwrap();
+        assert_eq!(of("A"), PackedColor::BLACK);
+        assert_eq!(of("B"), PackedColor::named("red").unwrap());
+        assert_eq!(of("C"), PackedColor::BLACK);
+        assert_eq!(of("D"), PackedColor::from_model("HTML", "336699").unwrap());
+        assert_eq!(of("E"), PackedColor::BLACK);
+        assert_eq!(of("F"), PackedColor::from_rgb(0.5, 0.5, 1.0));
+        // A top-level \color holds for the rest of the document.
+        assert_eq!(of("G"), PackedColor::named("green").unwrap());
+        // Every line ends black, so the page number is black.
+        assert!(matches!(page.ops.iter().rev().find(|op| matches!(op, layout::Paint::Color { .. })), Some(layout::Paint::Color { color }) if *color == PackedColor::BLACK));
+    }
+
+    #[test]
+    fn test_xcolor_in_math_cells_and_headings() {
+        use crate::frontend::ast::PackedColor;
+        let src = r#"
+\documentclass{article}
+\usepackage{lmodern}
+\begin{document}
+\section{A \textcolor{blue}{B}}
+\color{orange} a $b + \textcolor{red}{c}$ e
+
+\color{black}
+\begin{tabular}{ll}
+\textcolor{red}{R} x & y \\
+\end{tabular}
+\end{document}
+"#;
+        let doc = tex::parse(src).unwrap();
+        let pages = layout::layout(&doc);
+        let page = &pages[0];
+        let mut color = PackedColor::BLACK;
+        let mut seen = Vec::new();
+        for op in &page.ops {
+            match op {
+                layout::Paint::Color { color: c } => color = *c,
+                layout::Paint::GlyphRun { part_start, x, .. } => {
+                    seen.push((page.text_pool[*part_start as usize], color, *x))
+                }
+                _ => {}
+            }
+        }
+        let of = |w: &str| seen.iter().find(|(t, _, _)| *t == w).map(|e| (e.1, e.2)).unwrap();
+        let red = PackedColor::named("red").unwrap();
+        let orange = PackedColor::named("orange").unwrap();
+        assert_eq!(of("A").0, PackedColor::BLACK);
+        assert_eq!(of("B").0, PackedColor::named("blue").unwrap());
+        assert_eq!(of("a").0, orange);
+        // `\textcolor` inside the formula, and the text after it back in the line's colour.
+        assert_eq!(of("c").0, red);
+        assert_eq!(of("e").0, orange);
+        assert_eq!(of("R").0, red);
+        assert_eq!(of("x").0, PackedColor::BLACK);
+        // The space after the coloured group is kept: R (7.36pt) + interword space.
+        assert!(of("x").1 - of("R").1 > 10.0);
+    }
+
+    #[test]
+    fn test_design_size_masters() {
+        let src = r#"
+\documentclass{article}
+\usepackage{lmodern}
+\begin{document}
+\section{Heading}
+Text {\LARGE Title} {\small small}
+\end{document}
+"#;
+        let pdf = compile_str(src).unwrap();
+        let has = |name: &str| pdf.windows(name.len()).any(|w| w == name.as_bytes());
+        // \section is \Large\bfseries (cmbx12 at 14.4pt); \LARGE is cmr17, \small cmr9.
+        assert!(has("/FontName /CMBX12"));
+        assert!(has("/FontName /CMR17"));
+        assert!(has("/FontName /CMR9"));
+        assert!(!has("/FontName /CMR12"));
+
+        let doc = tex::parse(src).unwrap();
+        let pages = layout::layout(&doc);
+        // The page number is centred on the text block (`\hfil\thepage\hfil`), not the page.
+        let x = pages[0].ops.iter().find_map(|op| match op {
+            layout::Paint::PageNumber { x, .. } => Some(*x),
+            _ => None,
+        });
+        assert!((x.unwrap() + 2.5 - 306.77).abs() < 0.05, "{x:?}");
+    }
+
+    #[test]
+    fn test_font_size_declarations() {
+        let src = r#"
+\documentclass{article}
+\begin{document}
+One {\Large Two} Three
+
+{\small Four\par}
+Five
+
+\footnotesize Six
+
+Seven
+\end{document}
+"#;
+        let doc = tex::parse(src).unwrap();
+        let pages = layout::layout(&doc);
+        let page = &pages[0];
+        let size_of = |w: &str| {
+            page.ops
+                .iter()
+                .find_map(|op| match op {
+                    layout::Paint::GlyphRun { size, y, part_start, .. } if page.text_pool[*part_start as usize] == w => Some((*size, *y)),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(size_of("One").0, 10.0);
+        assert_eq!(size_of("Two").0, 14.4);
+        assert_eq!(size_of("Three").0, 10.0);
+        assert_eq!(size_of("Four").0, 9.0);
+        assert_eq!(size_of("Five").0, 10.0);
+        // \small's \baselineskip (11pt) separates its line from the one above it.
+        assert!((size_of("One").1 - size_of("Four").1 - 11.0).abs() < 0.01);
+        // A top-level declaration persists into later paragraphs.
+        assert_eq!(size_of("Six").0, 8.0);
+        assert_eq!(size_of("Seven").0, 8.0);
+        assert!((size_of("Six").1 - size_of("Seven").1 - 9.5).abs() < 0.01);
+    }
+
     #[test]
     fn test_parindent_setlength_and_indent() {
         let src = r#"
 \documentclass{article}
+\usepackage[margin=1in]{geometry}
 \begin{document}
 \setlength{\parindent}{24pt}
 \section{Heading}
@@ -1235,7 +1460,7 @@ NormalSecondParagraph with parindent.
             .unwrap();
         assert_eq!(
             forced.0,
-            72.0 + 24.0,
+            crate::config::TEX_INCH + 24.0,
             "\\indent should force 24pt indent even after heading"
         );
 
@@ -1245,7 +1470,7 @@ NormalSecondParagraph with parindent.
             .unwrap();
         assert_eq!(
             second.0,
-            72.0 + 24.0,
+            crate::config::TEX_INCH + 24.0,
             "Normal paragraph should use 24pt parindent"
         );
 
@@ -1253,13 +1478,14 @@ NormalSecondParagraph with parindent.
             .iter()
             .find(|(_, t)| *t == "NoIndentParagraph.")
             .unwrap();
-        assert_eq!(noind.0, 72.0, "\\noindent should have 0pt indent");
+        assert_eq!(noind.0, crate::config::TEX_INCH, "\\noindent should have 0pt indent");
     }
 
     #[test]
     fn test_hangindent_and_hangafter() {
         let src = r#"
 \documentclass{article}
+\usepackage[margin=1in]{geometry}
 \begin{document}
 \noindent
 \hangindent 30pt
@@ -1287,11 +1513,11 @@ Alpha line one is quite long and we need enough words to ensure it wraps onto a 
             line_starts.len() >= 2,
             "Paragraph must break into at least 2 lines"
         );
-        // Line 1: hangafter = 1 means line 1 is unaffected (72.0)
-        assert_eq!(line_starts[0].0, 72.0, "Line 1 should be flush at 72.0");
-        // Line 2+: should be indented by hangindent (72.0 + 30.0 = 102.0)
+        // Line 1: hangafter = 1 means line 1 is unaffected (1in)
+        assert_eq!(line_starts[0].0, crate::config::TEX_INCH, "Line 1 should be flush at 72.0");
+        // Line 2+: should be indented by hangindent (1in + 30.0 = 102.0)
         assert_eq!(
-            line_starts[1].0, 102.0,
+            line_starts[1].0, (crate::config::TEX_INCH + 30.0),
             "Line 2 should have 30pt hanging indent (102.0)"
         );
     }
@@ -1300,6 +1526,7 @@ Alpha line one is quite long and we need enough words to ensure it wraps onto a 
     fn test_parshape_multiline_matrix() {
         let src = r#"
 \documentclass{article}
+\usepackage[margin=1in]{geometry}
 \begin{document}
 \noindent
 \parshape 3 20pt 300pt 0pt 400pt 10pt 350pt
@@ -1312,33 +1539,37 @@ Third line will continue and repeat the final shape specification if there are f
         let pages = layout::layout(&doc);
         assert!(!pages.is_empty());
 
-        let line_starts: Vec<f32> = pages[0]
-            .ops
-            .iter()
-            .filter_map(|op| match op {
-                layout::Paint::GlyphRun { x, .. } => Some(*x),
-                _ => None,
-            })
-            .collect();
+        // First glyph run of each line (a line may hold several runs, e.g. after sentence space).
+        let mut line_starts: Vec<f32> = Vec::new();
+        let mut last_y = f32::NAN;
+        for op in &pages[0].ops {
+            if let layout::Paint::GlyphRun { x, y, .. } = op {
+                if *y != last_y {
+                    line_starts.push(*x);
+                    last_y = *y;
+                }
+            }
+        }
 
         assert!(
             line_starts.len() >= 3,
             "Paragraph must break into at least 3 lines, got {}",
             line_starts.len()
         );
-        // Margin is 72.0.
-        // Line 0: indent 20pt -> 72.0 + 20.0 = 92.0
-        assert_eq!(line_starts[0], 92.0, "Line 0 should be indented by 20pt (92.0)");
-        // Line 1: indent 0pt -> 72.0 + 0.0 = 72.0
-        assert_eq!(line_starts[1], 72.0, "Line 1 should be flush at 72.0");
-        // Line 2: indent 10pt -> 72.0 + 10.0 = 82.0
-        assert_eq!(line_starts[2], 82.0, "Line 2 should be indented by 10pt (82.0)");
+        // Margin is 1in.
+        // Line 0: indent 20pt -> 1in + 20.0 = 92.0
+        assert_eq!(line_starts[0], (crate::config::TEX_INCH + 20.0), "Line 0 should be indented by 20pt (92.0)");
+        // Line 1: indent 0pt -> 1in + 0.0 = 1in
+        assert_eq!(line_starts[1], crate::config::TEX_INCH, "Line 1 should be flush at 72.0");
+        // Line 2: indent 10pt -> 1in + 10.0 = 82.0
+        assert_eq!(line_starts[2], (crate::config::TEX_INCH + 10.0), "Line 2 should be indented by 10pt (82.0)");
     }
 
     #[test]
     fn test_parshape_precedence_and_reset() {
         let src = r#"
 \documentclass{article}
+\usepackage[margin=1in]{geometry}
 \begin{document}
 \noindent
 \hangindent 40pt
@@ -1374,27 +1605,28 @@ It starts flush at the margin.
             line_starts.len()
         );
         // Paragraph 1:
-        // Line 0: parshape indent 15pt -> 72.0 + 15.0 = 87.0 (hangindent 40pt ignored!)
-        assert_eq!(line_starts[0].0, 87.0, "Line 0 must use parshape indent 15pt (87.0)");
-        // Line 1: parshape indent 25pt -> 72.0 + 25.0 = 97.0
-        assert_eq!(line_starts[1].0, 97.0, "Line 1 must use parshape indent 25pt (97.0)");
+        // Line 0: parshape indent 15pt -> 1in + 15.0 = 87.0 (hangindent 40pt ignored!)
+        assert_eq!(line_starts[0].0, (crate::config::TEX_INCH + 15.0), "Line 0 must use parshape indent 15pt (87.0)");
+        // Line 1: parshape indent 25pt -> 1in + 25.0 = 97.0
+        assert_eq!(line_starts[1].0, (crate::config::TEX_INCH + 25.0), "Line 1 must use parshape indent 25pt (97.0)");
 
         // Paragraph 2:
-        // First line of par 2: flush at margin (72.0) because parshape & hangindent reset!
+        // First line of par 2: flush at margin (1in) because parshape & hangindent reset!
         let par2 = line_starts
             .iter()
             .find(|(_, t)| t.starts_with("Second"))
             .expect("Paragraph 2 must exist");
-        assert_eq!(par2.0, 72.0, "Paragraph 2 must reset parshape back to margin 72.0");
+        assert_eq!(par2.0, crate::config::TEX_INCH, "Paragraph 2 must reset parshape back to margin 72.0");
     }
 
     #[test]
     fn test_list_indentation_and_labelsep() {
         let src = r#"
 \documentclass{article}
+\usepackage[margin=1in]{geometry}
 \begin{document}
 \begin{enumerate}[labelsep=15pt, leftmargin=35pt, itemindent=5pt]
-\item First line of item one which has enough text to comfortably wrap onto the second line for hanging test.
+\item First line of item one which has enough text to comfortably wrap onto the second line for hanging test, even at the ten point default size.
 \item Item two.
 \end{enumerate}
 \end{document}
@@ -1431,13 +1663,13 @@ It starts flush at the margin.
             })
             .expect("First word should exist");
 
-        // First line x = 72.0 (left margin) + 35.0 (leftmargin) + 5.0 (itemindent) = 112.0
-        assert_eq!(first_word, 112.0, "First word should be at 112.0");
+        // First line x = 1in (left margin) + 35.0 (leftmargin) + 5.0 (itemindent) = 112.0
+        assert_eq!(first_word, (crate::config::TEX_INCH + 40.0), "First word should be at 112.0");
 
-        // Marker width for "1." in Roman 11pt
-        let marker_w = metrics::width('1', metrics::Face::Roman, 11.0)
-            + metrics::width('.', metrics::Face::Roman, 11.0);
-        let expected_marker_x = 112.0 - 15.0 - marker_w;
+        // Marker width for "1." in Roman 10pt (default document size)
+        let marker_w = metrics::width('1', metrics::Face::Roman, 10.0)
+            + metrics::width('.', metrics::Face::Roman, 10.0);
+        let expected_marker_x = first_word - 15.0 - marker_w;
         assert!(
             (marker1 - expected_marker_x).abs() < 1e-3,
             "Marker x should be exactly first_line_x - labelsep - marker_w"
@@ -1465,9 +1697,9 @@ It starts flush at the margin.
             })
             .expect("Second line should exist");
 
-        // Hanging lines start at self.left = 72.0 + 35.0 = 107.0
+        // Hanging lines start at self.left = 1in + 35.0 = 107.0
         assert_eq!(
-            second_line_start, 107.0,
+            second_line_start, (crate::config::TEX_INCH + 35.0),
             "Hanging lines must align with leftmargin (107.0)"
         );
     }
@@ -1476,6 +1708,7 @@ It starts flush at the margin.
     fn test_itemize_bullet_labelsep_and_hang() {
         let src = r#"
 \documentclass{article}
+\usepackage[margin=1in]{geometry}
 \begin{document}
 \begin{itemize}[labelsep=12pt, leftmargin=28pt]
 \item Bullet item with enough continuous prose to wrap cleanly onto a second line of text so we can verify hanging alignment.
@@ -1512,10 +1745,10 @@ It starts flush at the margin.
             })
             .expect("First word should exist");
 
-        // leftmargin = 28.0, itemindent = 0.0 -> first_word = 72.0 + 28.0 = 100.0
-        assert_eq!(first_word, 100.0);
+        // leftmargin = 28.0, itemindent = 0.0 -> first_word = 1in + 28.0 = 100.0
+        assert_eq!(first_word, (crate::config::TEX_INCH + 28.0));
 
-        let bullet_w = metrics::width('\u{2022}', metrics::Face::Roman, 11.0);
+        let bullet_w = metrics::width('\u{2022}', metrics::Face::Roman, 10.0);
         let distance = first_word - (marker_bullet + bullet_w);
         assert!(
             (distance - 12.0).abs() < 1e-3,
@@ -2239,7 +2472,8 @@ Methodology details.
 
         assert!((normal_space - 2.5).abs() < 1e-3, "Normal space at 10pt Times should be 2.5pt");
         assert!(space_after_period > normal_space, "Space after sentence-ending period must be wider than normal space");
-        assert!((space_after_period - (2.5 + 0.83)).abs() < 1e-2, "Space after period should include extra space (fontdimen 7)");
+        // ptmr8t.tfm: \fontdimen7 (extra space) is 0.06em.
+        assert!((space_after_period - (2.5 + 0.6)).abs() < 1e-2, "Space after period should include extra space (fontdimen 7)");
         assert!((space_after_initials - normal_space).abs() < 1e-3, "Space after initials (NASA.) must NOT include extra space");
 
         // Now test under french_spacing = true

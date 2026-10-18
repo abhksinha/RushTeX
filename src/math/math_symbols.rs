@@ -98,7 +98,7 @@ impl MathSymbolRecord {
     }
 }
 
-pub static MATH_SYMBOLS_TABLE: [MathSymbolRecord; 184] = [
+pub static MATH_SYMBOLS_TABLE: [MathSymbolRecord; 185] = [
     MathSymbolRecord {
         cmd: "Delta",
         glyph: "D",
@@ -1958,6 +1958,18 @@ pub static MATH_SYMBOLS_TABLE: [MathSymbolRecord; 184] = [
         face: Face::Roman,
         flags: FLAG_NONE,
         tfm_code: 0xFF,
+    },
+    MathSymbolRecord {
+        cmd: "square",
+        glyph: "\u{3}",
+        unicode: 0x25A1,
+        width_mu: 7778,
+        height_mu: 6889,
+        depth_mu: 0,
+        kind: MathAtomKind::Ord,
+        face: Face::AmsA,
+        flags: FLAG_NONE,
+        tfm_code: 0x03,
     },
     MathSymbolRecord {
         cmd: "star",

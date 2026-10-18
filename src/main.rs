@@ -105,9 +105,12 @@ fn main() -> ExitCode {
 
     if dump_ast {
         match std::fs::read_to_string(&input_path) {
-            Ok(source_content) => match rushtex::tex::parse(&source_content) {
+            Ok(source_content) => match rushtex::expand::expand(&source_content)
+                .map_err(rushtex::Error::from)
+                .and_then(|src| rushtex::tex::parse(&src).map(|doc| format!("{doc:#?}")).map_err(rushtex::Error::from))
+            {
                 Ok(document_ast) => {
-                    println!("{document_ast:#?}");
+                    println!("{document_ast}");
                     return ExitCode::SUCCESS;
                 }
                 Err(err) => {

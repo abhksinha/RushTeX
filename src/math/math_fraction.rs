@@ -64,7 +64,14 @@ impl FractionShiftResolver {
 
             let num_shift = (num_param as f32) * scale;
             let den_shift = (den_param as f32) * scale;
-            let min_clr = (clr_param as f32) * scale;
+            // Rule 15d: φ is 3θ in display style and θ otherwise; the font's own value holds
+            // for its default rule, an explicit `\above` thickness scales it.
+            let default_t = (params.rule_thickness as f32) * scale;
+            let min_clr = if default_t > 0.0 && (rule_t - default_t).abs() > 1e-4 && rule_t > 0.0 {
+                [1.0, 3.0][disp_idx] * rule_t
+            } else {
+                (clr_param as f32) * scale
+            };
 
             let half_t = 0.5 * rule_t;
             let actual_num_shift = num_shift.max(axis_h + half_t + min_clr + num_d);

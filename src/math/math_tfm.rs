@@ -4,28 +4,54 @@
 //! extracted directly from canonical TeX TFM data.
 //!
 //! Designed with contiguous Array of Structures (AoS) packing:
-//! - 8 bytes per glyph (width, height, depth, italic correction)
-//! - Exactly 8 glyphs fit in a single 64-byte L1 CPU cache line
-//! - 100% L1 cache residency with zero heap allocations
+//! - 8 bytes per stored glyph (width, height, depth, italic correction), so exactly 8
+//!   glyphs fit in a single 64-byte L1 cache line
+//! - values are stored in 1/16384 em (TFM fix_words rounded to 2^-14), which keeps the
+//!   per-glyph error under 0.0004pt at 10pt so long formulas do not drift
+//! - zero heap allocations; lookups unpack to [`GlyphMetric`] in 1/1000 em
 
-/// TeX Appendix F 8-byte glyph metric entry.
-///
-/// Hardware aligned and packed so that exactly 8 glyphs fit inside a single
-/// 64-byte L1 CPU cache line.
+/// Stored glyph metric entry in units of 1/16384 em ([`PACKED_UNITS_PER_EM`]).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GlyphMetric {
-    /// Advance width in 1/1000 design units
+pub struct PackedGlyphMetric {
     pub w: u16,
-    /// Typographic ink height above baseline in 1/1000 design units
     pub h: u16,
-    /// Typographic ink depth below baseline in 1/1000 design units
     pub d: u16,
-    /// Italic correction in 1/1000 design units
     pub ic: u16,
 }
 
-const _: () = assert!(core::mem::size_of::<GlyphMetric>() == 8);
+/// Resolution of [`PackedGlyphMetric`] fields.
+pub const PACKED_UNITS_PER_EM: u32 = 16384;
+
+impl PackedGlyphMetric {
+    /// The metric in 1/1000 of the design size.
+    #[inline(always)]
+    pub const fn unpack(self) -> GlyphMetric {
+        const K: f32 = 1000.0 / PACKED_UNITS_PER_EM as f32;
+        GlyphMetric { w: self.w as f32 * K, h: self.h as f32 * K, d: self.d as f32 * K, ic: self.ic as f32 * K }
+    }
+
+    /// The width rounded to whole 1/1000 em (PDF `/Widths`).
+    #[inline(always)]
+    pub const fn width_units(self) -> u16 {
+        ((self.w as u32 * 1000 + PACKED_UNITS_PER_EM / 2) / PACKED_UNITS_PER_EM) as u16
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<PackedGlyphMetric>() == 8);
+
+/// TeX Appendix F glyph metric, in 1/1000 of the design size (unpacked on lookup).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlyphMetric {
+    /// Advance width in 1/1000 design units
+    pub w: f32,
+    /// Typographic ink height above baseline in 1/1000 design units
+    pub h: f32,
+    /// Typographic ink depth below baseline in 1/1000 design units
+    pub d: f32,
+    /// Italic correction in 1/1000 design units
+    pub ic: f32,
+}
 
 /// TeX Appendix F extensible delimiter assembly recipe.
 /// Packed into 4 bytes for zero cache pollution.
@@ -41,2317 +67,397 @@ pub struct DelimiterRecipe {
 const _: () = assert!(core::mem::size_of::<DelimiterRecipe>() == 4);
 
 /// CMSY10 (Math Symbols, Family 2) metric table
-pub static CMSY10_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric {
-        w: 778,
-        h: 583,
-        d: 83,
-        ic: 0,
-    }, // 0x00
-    GlyphMetric {
-        w: 278,
-        h: 444,
-        d: 0,
-        ic: 0,
-    }, // 0x01
-    GlyphMetric {
-        w: 778,
-        h: 583,
-        d: 83,
-        ic: 0,
-    }, // 0x02
-    GlyphMetric {
-        w: 500,
-        h: 465,
-        d: 0,
-        ic: 0,
-    }, // 0x03
-    GlyphMetric {
-        w: 778,
-        h: 583,
-        d: 83,
-        ic: 0,
-    }, // 0x04
-    GlyphMetric {
-        w: 500,
-        h: 444,
-        d: 0,
-        ic: 0,
-    }, // 0x05
-    GlyphMetric {
-        w: 778,
-        h: 583,
-        d: 83,
-        ic: 0,
-    }, // 0x06
-    GlyphMetric {
-        w: 778,
-        h: 583,
-        d: 83,
-        ic: 0,
-    }, // 0x07
-    GlyphMetric {
-        w: 778,
-        h: 583,
-        d: 83,
-        ic: 0,
-    }, // 0x08
-    GlyphMetric {
-        w: 778,
-        h: 583,
-        d: 83,
-        ic: 0,
-    }, // 0x09
-    GlyphMetric {
-        w: 778,
-        h: 583,
-        d: 83,
-        ic: 0,
-    }, // 0x0A
-    GlyphMetric {
-        w: 778,
-        h: 583,
-        d: 83,
-        ic: 0,
-    }, // 0x0B
-    GlyphMetric {
-        w: 778,
-        h: 583,
-        d: 83,
-        ic: 0,
-    }, // 0x0C
-    GlyphMetric {
-        w: 1000,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x0D
-    GlyphMetric {
-        w: 500,
-        h: 444,
-        d: 0,
-        ic: 0,
-    }, // 0x0E
-    GlyphMetric {
-        w: 500,
-        h: 444,
-        d: 0,
-        ic: 0,
-    }, // 0x0F
-    GlyphMetric {
-        w: 778,
-        h: 464,
-        d: 0,
-        ic: 0,
-    }, // 0x10
-    GlyphMetric {
-        w: 778,
-        h: 464,
-        d: 0,
-        ic: 0,
-    }, // 0x11
-    GlyphMetric {
-        w: 778,
-        h: 636,
-        d: 136,
-        ic: 0,
-    }, // 0x12
-    GlyphMetric {
-        w: 778,
-        h: 636,
-        d: 136,
-        ic: 0,
-    }, // 0x13
-    GlyphMetric {
-        w: 778,
-        h: 636,
-        d: 136,
-        ic: 0,
-    }, // 0x14
-    GlyphMetric {
-        w: 778,
-        h: 636,
-        d: 136,
-        ic: 0,
-    }, // 0x15
-    GlyphMetric {
-        w: 778,
-        h: 636,
-        d: 136,
-        ic: 0,
-    }, // 0x16
-    GlyphMetric {
-        w: 778,
-        h: 636,
-        d: 136,
-        ic: 0,
-    }, // 0x17
-    GlyphMetric {
-        w: 778,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x18
-    GlyphMetric {
-        w: 778,
-        h: 483,
-        d: 0,
-        ic: 0,
-    }, // 0x19
-    GlyphMetric {
-        w: 778,
-        h: 539,
-        d: 39,
-        ic: 0,
-    }, // 0x1A
-    GlyphMetric {
-        w: 778,
-        h: 539,
-        d: 39,
-        ic: 0,
-    }, // 0x1B
-    GlyphMetric {
-        w: 1000,
-        h: 539,
-        d: 39,
-        ic: 0,
-    }, // 0x1C
-    GlyphMetric {
-        w: 1000,
-        h: 539,
-        d: 39,
-        ic: 0,
-    }, // 0x1D
-    GlyphMetric {
-        w: 778,
-        h: 539,
-        d: 39,
-        ic: 0,
-    }, // 0x1E
-    GlyphMetric {
-        w: 778,
-        h: 539,
-        d: 39,
-        ic: 0,
-    }, // 0x1F
-    GlyphMetric {
-        w: 1000,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x20
-    GlyphMetric {
-        w: 1000,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x21
-    GlyphMetric {
-        w: 500,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x22
-    GlyphMetric {
-        w: 500,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x23
-    GlyphMetric {
-        w: 1000,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x24
-    GlyphMetric {
-        w: 1000,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x25
-    GlyphMetric {
-        w: 1000,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x26
-    GlyphMetric {
-        w: 778,
-        h: 464,
-        d: 0,
-        ic: 0,
-    }, // 0x27
-    GlyphMetric {
-        w: 1000,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x28
-    GlyphMetric {
-        w: 1000,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x29
-    GlyphMetric {
-        w: 611,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x2A
-    GlyphMetric {
-        w: 611,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x2B
-    GlyphMetric {
-        w: 1000,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x2C
-    GlyphMetric {
-        w: 1000,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x2D
-    GlyphMetric {
-        w: 1000,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x2E
-    GlyphMetric {
-        w: 778,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x2F
-    GlyphMetric {
-        w: 275,
-        h: 556,
-        d: 0,
-        ic: 0,
-    }, // 0x30
-    GlyphMetric {
-        w: 1000,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x31
-    GlyphMetric {
-        w: 667,
-        h: 539,
-        d: 39,
-        ic: 0,
-    }, // 0x32
-    GlyphMetric {
-        w: 667,
-        h: 539,
-        d: 39,
-        ic: 0,
-    }, // 0x33
-    GlyphMetric {
-        w: 889,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x34
-    GlyphMetric {
-        w: 889,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x35
-    GlyphMetric {
-        w: 0,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x36
-    GlyphMetric {
-        w: 0,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x37
-    GlyphMetric {
-        w: 556,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x38
-    GlyphMetric {
-        w: 556,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x39
-    GlyphMetric {
-        w: 667,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x3A
-    GlyphMetric {
-        w: 500,
-        h: 750,
-        d: 56,
-        ic: 0,
-    }, // 0x3B
-    GlyphMetric {
-        w: 722,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x3C
-    GlyphMetric {
-        w: 722,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x3D
-    GlyphMetric {
-        w: 778,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x3E
-    GlyphMetric {
-        w: 778,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x3F
-    GlyphMetric {
-        w: 611,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x40
-    GlyphMetric {
-        w: 798,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x41
-    GlyphMetric {
-        w: 657,
-        h: 683,
-        d: 0,
-        ic: 30,
-    }, // 0x42
-    GlyphMetric {
-        w: 527,
-        h: 683,
-        d: 0,
-        ic: 58,
-    }, // 0x43
-    GlyphMetric {
-        w: 771,
-        h: 683,
-        d: 0,
-        ic: 28,
-    }, // 0x44
-    GlyphMetric {
-        w: 528,
-        h: 683,
-        d: 0,
-        ic: 89,
-    }, // 0x45
-    GlyphMetric {
-        w: 719,
-        h: 683,
-        d: 0,
-        ic: 99,
-    }, // 0x46
-    GlyphMetric {
-        w: 595,
-        h: 683,
-        d: 97,
-        ic: 59,
-    }, // 0x47
-    GlyphMetric {
-        w: 845,
-        h: 683,
-        d: 0,
-        ic: 10,
-    }, // 0x48
-    GlyphMetric {
-        w: 545,
-        h: 683,
-        d: 0,
-        ic: 74,
-    }, // 0x49
-    GlyphMetric {
-        w: 678,
-        h: 683,
-        d: 97,
-        ic: 185,
-    }, // 0x4A
-    GlyphMetric {
-        w: 762,
-        h: 683,
-        d: 0,
-        ic: 14,
-    }, // 0x4B
-    GlyphMetric {
-        w: 690,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x4C
-    GlyphMetric {
-        w: 1201,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x4D
-    GlyphMetric {
-        w: 820,
-        h: 683,
-        d: 0,
-        ic: 147,
-    }, // 0x4E
-    GlyphMetric {
-        w: 796,
-        h: 683,
-        d: 0,
-        ic: 28,
-    }, // 0x4F
-    GlyphMetric {
-        w: 696,
-        h: 683,
-        d: 0,
-        ic: 82,
-    }, // 0x50
-    GlyphMetric {
-        w: 817,
-        h: 683,
-        d: 97,
-        ic: 0,
-    }, // 0x51
-    GlyphMetric {
-        w: 848,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x52
-    GlyphMetric {
-        w: 606,
-        h: 683,
-        d: 0,
-        ic: 75,
-    }, // 0x53
-    GlyphMetric {
-        w: 545,
-        h: 683,
-        d: 0,
-        ic: 254,
-    }, // 0x54
-    GlyphMetric {
-        w: 626,
-        h: 683,
-        d: 0,
-        ic: 99,
-    }, // 0x55
-    GlyphMetric {
-        w: 613,
-        h: 683,
-        d: 0,
-        ic: 82,
-    }, // 0x56
-    GlyphMetric {
-        w: 988,
-        h: 683,
-        d: 0,
-        ic: 82,
-    }, // 0x57
-    GlyphMetric {
-        w: 713,
-        h: 683,
-        d: 0,
-        ic: 146,
-    }, // 0x58
-    GlyphMetric {
-        w: 668,
-        h: 683,
-        d: 97,
-        ic: 82,
-    }, // 0x59
-    GlyphMetric {
-        w: 725,
-        h: 683,
-        d: 0,
-        ic: 79,
-    }, // 0x5A
-    GlyphMetric {
-        w: 667,
-        h: 556,
-        d: 0,
-        ic: 0,
-    }, // 0x5B
-    GlyphMetric {
-        w: 667,
-        h: 556,
-        d: 0,
-        ic: 0,
-    }, // 0x5C
-    GlyphMetric {
-        w: 667,
-        h: 556,
-        d: 0,
-        ic: 0,
-    }, // 0x5D
-    GlyphMetric {
-        w: 667,
-        h: 556,
-        d: 0,
-        ic: 0,
-    }, // 0x5E
-    GlyphMetric {
-        w: 667,
-        h: 556,
-        d: 0,
-        ic: 0,
-    }, // 0x5F
-    GlyphMetric {
-        w: 611,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x60
-    GlyphMetric {
-        w: 611,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x61
-    GlyphMetric {
-        w: 444,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x62
-    GlyphMetric {
-        w: 444,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x63
-    GlyphMetric {
-        w: 444,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x64
-    GlyphMetric {
-        w: 444,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x65
-    GlyphMetric {
-        w: 500,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x66
-    GlyphMetric {
-        w: 500,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x67
-    GlyphMetric {
-        w: 389,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x68
-    GlyphMetric {
-        w: 389,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x69
-    GlyphMetric {
-        w: 278,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x6A
-    GlyphMetric {
-        w: 500,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x6B
-    GlyphMetric {
-        w: 500,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x6C
-    GlyphMetric {
-        w: 611,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x6D
-    GlyphMetric {
-        w: 500,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x6E
-    GlyphMetric {
-        w: 278,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x6F
-    GlyphMetric {
-        w: 833,
-        h: 40,
-        d: 960,
-        ic: 0,
-    }, // 0x70
-    GlyphMetric {
-        w: 750,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x71
-    GlyphMetric {
-        w: 833,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x72
-    GlyphMetric {
-        w: 417,
-        h: 694,
-        d: 194,
-        ic: 111,
-    }, // 0x73
-    GlyphMetric {
-        w: 667,
-        h: 556,
-        d: 0,
-        ic: 0,
-    }, // 0x74
-    GlyphMetric {
-        w: 667,
-        h: 556,
-        d: 0,
-        ic: 0,
-    }, // 0x75
-    GlyphMetric {
-        w: 778,
-        h: 636,
-        d: 136,
-        ic: 0,
-    }, // 0x76
-    GlyphMetric {
-        w: 778,
-        h: 636,
-        d: 136,
-        ic: 0,
-    }, // 0x77
-    GlyphMetric {
-        w: 444,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x78
-    GlyphMetric {
-        w: 444,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x79
-    GlyphMetric {
-        w: 444,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x7A
-    GlyphMetric {
-        w: 611,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x7B
-    GlyphMetric {
-        w: 778,
-        h: 694,
-        d: 130,
-        ic: 0,
-    }, // 0x7C
-    GlyphMetric {
-        w: 778,
-        h: 694,
-        d: 130,
-        ic: 0,
-    }, // 0x7D
-    GlyphMetric {
-        w: 778,
-        h: 694,
-        d: 130,
-        ic: 0,
-    }, // 0x7E
-    GlyphMetric {
-        w: 778,
-        h: 694,
-        d: 130,
-        ic: 0,
-    }, // 0x7F
+pub static CMSY10_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x00
+    PackedGlyphMetric { w: 4551, h: 7282, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x02
+    PackedGlyphMetric { w: 8192, h: 7623, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x04
+    PackedGlyphMetric { w: 8192, h: 7282, d: 0, ic: 0 }, // 0x05
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x06
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x07
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x09
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x0A
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x0B
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x0C
+    PackedGlyphMetric { w: 16384, h: 11378, d: 3186, ic: 0 }, // 0x0D
+    PackedGlyphMetric { w: 8192, h: 7282, d: 0, ic: 0 }, // 0x0E
+    PackedGlyphMetric { w: 8192, h: 7282, d: 0, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 12743, h: 7598, d: 0, ic: 0 }, // 0x10
+    PackedGlyphMetric { w: 12743, h: 7598, d: 0, ic: 0 }, // 0x11
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 12743, h: 6011, d: 0, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 12743, h: 7915, d: 0, ic: 0 }, // 0x19
+    PackedGlyphMetric { w: 12743, h: 8833, d: 641, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 12743, h: 8833, d: 641, ic: 0 }, // 0x1B
+    PackedGlyphMetric { w: 16384, h: 8833, d: 641, ic: 0 }, // 0x1C
+    PackedGlyphMetric { w: 16384, h: 8833, d: 641, ic: 0 }, // 0x1D
+    PackedGlyphMetric { w: 12743, h: 8833, d: 641, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 12743, h: 8833, d: 641, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x21
+    PackedGlyphMetric { w: 8192, h: 11378, d: 3186, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 8192, h: 11378, d: 3186, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 16384, h: 11378, d: 3186, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 16384, h: 11378, d: 3186, ic: 0 }, // 0x26
+    PackedGlyphMetric { w: 12743, h: 7598, d: 0, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 10012, h: 11378, d: 3186, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 10012, h: 11378, d: 3186, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 16384, h: 11378, d: 3186, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 16384, h: 11378, d: 3186, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 12743, h: 7054, d: 0, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 4506, h: 9102, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 16384, h: 7054, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 10923, h: 8833, d: 641, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 10923, h: 8833, d: 641, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 14564, h: 11378, d: 3186, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 14564, h: 11378, d: 3186, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 0, h: 11378, d: 3186, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 0, h: 6011, d: 0, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 9102, h: 11378, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 9102, h: 11378, d: 0, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 10923, h: 7054, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 8192, h: 12288, d: 910, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 11833, h: 11378, d: 0, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 11833, h: 11378, d: 0, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 12743, h: 11378, d: 0, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 12743, h: 11378, d: 0, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 10012, h: 11378, d: 0, ic: 0 }, // 0x40
+    PackedGlyphMetric { w: 13082, h: 11196, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 10761, h: 11196, d: 0, ic: 498 }, // 0x42
+    PackedGlyphMetric { w: 8627, h: 11196, d: 0, ic: 956 }, // 0x43
+    PackedGlyphMetric { w: 12638, h: 11196, d: 0, ic: 455 }, // 0x44
+    PackedGlyphMetric { w: 8647, h: 11196, d: 0, ic: 1465 }, // 0x45
+    PackedGlyphMetric { w: 11776, h: 11196, d: 0, ic: 1627 }, // 0x46
+    PackedGlyphMetric { w: 9746, h: 11196, d: 1593, ic: 972 }, // 0x47
+    PackedGlyphMetric { w: 13837, h: 11196, d: 0, ic: 158 }, // 0x48
+    PackedGlyphMetric { w: 8921, h: 11196, d: 0, ic: 1210 }, // 0x49
+    PackedGlyphMetric { w: 11105, h: 11196, d: 1593, ic: 3026 }, // 0x4A
+    PackedGlyphMetric { w: 12484, h: 11196, d: 0, ic: 237 }, // 0x4B
+    PackedGlyphMetric { w: 11300, h: 11196, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 19676, h: 11196, d: 0, ic: 0 }, // 0x4D
+    PackedGlyphMetric { w: 13443, h: 11196, d: 0, ic: 2414 }, // 0x4E
+    PackedGlyphMetric { w: 13044, h: 11196, d: 0, ic: 455 }, // 0x4F
+    PackedGlyphMetric { w: 11396, h: 11196, d: 0, ic: 1347 }, // 0x50
+    PackedGlyphMetric { w: 13380, h: 11196, d: 1593, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 13886, h: 11196, d: 0, ic: 0 }, // 0x52
+    PackedGlyphMetric { w: 9921, h: 11196, d: 0, ic: 1229 }, // 0x53
+    PackedGlyphMetric { w: 8923, h: 11196, d: 0, ic: 4164 }, // 0x54
+    PackedGlyphMetric { w: 10254, h: 11196, d: 0, ic: 1627 }, // 0x55
+    PackedGlyphMetric { w: 10040, h: 11196, d: 0, ic: 1347 }, // 0x56
+    PackedGlyphMetric { w: 16184, h: 11196, d: 0, ic: 1347 }, // 0x57
+    PackedGlyphMetric { w: 11687, h: 11196, d: 0, ic: 2399 }, // 0x58
+    PackedGlyphMetric { w: 10950, h: 11196, d: 1593, ic: 1347 }, // 0x59
+    PackedGlyphMetric { w: 11874, h: 11196, d: 0, ic: 1302 }, // 0x5A
+    PackedGlyphMetric { w: 10923, h: 9102, d: 0, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 10923, h: 9102, d: 0, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 10923, h: 9102, d: 0, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 10923, h: 9102, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 10923, h: 9102, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 10012, h: 11378, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 10012, h: 11378, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 7282, h: 12288, d: 4096, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 7282, h: 12288, d: 4096, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 7282, h: 12288, d: 4096, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 7282, h: 12288, d: 4096, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 8192, h: 12288, d: 4096, ic: 0 }, // 0x66
+    PackedGlyphMetric { w: 8192, h: 12288, d: 4096, ic: 0 }, // 0x67
+    PackedGlyphMetric { w: 6372, h: 12288, d: 4096, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 6372, h: 12288, d: 4096, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 4551, h: 12288, d: 4096, ic: 0 }, // 0x6A
+    PackedGlyphMetric { w: 8192, h: 12288, d: 4096, ic: 0 }, // 0x6B
+    PackedGlyphMetric { w: 8192, h: 12288, d: 4096, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 10012, h: 12288, d: 4096, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 8192, h: 12288, d: 4096, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 4551, h: 11378, d: 3186, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 13653, h: 655, d: 15729, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 12288, h: 11196, d: 0, ic: 0 }, // 0x71
+    PackedGlyphMetric { w: 13653, h: 11196, d: 0, ic: 0 }, // 0x72
+    PackedGlyphMetric { w: 6827, h: 11378, d: 3186, ic: 1820 }, // 0x73
+    PackedGlyphMetric { w: 10923, h: 9102, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 10923, h: 9102, d: 0, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x76
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x77
+    PackedGlyphMetric { w: 7282, h: 11378, d: 3186, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 7282, h: 11378, d: 3186, ic: 0 }, // 0x79
+    PackedGlyphMetric { w: 7282, h: 11378, d: 3186, ic: 0 }, // 0x7A
+    PackedGlyphMetric { w: 10012, h: 11378, d: 3186, ic: 0 }, // 0x7B
+    PackedGlyphMetric { w: 12743, h: 11378, d: 2124, ic: 0 }, // 0x7C
+    PackedGlyphMetric { w: 12743, h: 11378, d: 2124, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 12743, h: 11378, d: 2124, ic: 0 }, // 0x7E
+    PackedGlyphMetric { w: 12743, h: 11378, d: 2124, ic: 0 }, // 0x7F
 ];
 /// CMEX10 (Math Extensions, Family 3) metric table
-pub static CMEX10_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric {
-        w: 458,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x00
-    GlyphMetric {
-        w: 458,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x01
-    GlyphMetric {
-        w: 417,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x02
-    GlyphMetric {
-        w: 417,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x03
-    GlyphMetric {
-        w: 472,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x04
-    GlyphMetric {
-        w: 472,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x05
-    GlyphMetric {
-        w: 472,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x06
-    GlyphMetric {
-        w: 472,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x07
-    GlyphMetric {
-        w: 583,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x08
-    GlyphMetric {
-        w: 583,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x09
-    GlyphMetric {
-        w: 472,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x0A
-    GlyphMetric {
-        w: 472,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x0B
-    GlyphMetric {
-        w: 333,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x0C
-    GlyphMetric {
-        w: 556,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x0D
-    GlyphMetric {
-        w: 578,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x0E
-    GlyphMetric {
-        w: 578,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x0F
-    GlyphMetric {
-        w: 597,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x10
-    GlyphMetric {
-        w: 597,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x11
-    GlyphMetric {
-        w: 736,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x12
-    GlyphMetric {
-        w: 736,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x13
-    GlyphMetric {
-        w: 528,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x14
-    GlyphMetric {
-        w: 528,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x15
-    GlyphMetric {
-        w: 583,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x16
-    GlyphMetric {
-        w: 583,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x17
-    GlyphMetric {
-        w: 583,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x18
-    GlyphMetric {
-        w: 583,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x19
-    GlyphMetric {
-        w: 750,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x1A
-    GlyphMetric {
-        w: 750,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x1B
-    GlyphMetric {
-        w: 750,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x1C
-    GlyphMetric {
-        w: 750,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x1D
-    GlyphMetric {
-        w: 1044,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x1E
-    GlyphMetric {
-        w: 1044,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x1F
-    GlyphMetric {
-        w: 792,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x20
-    GlyphMetric {
-        w: 792,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x21
-    GlyphMetric {
-        w: 583,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x22
-    GlyphMetric {
-        w: 583,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x23
-    GlyphMetric {
-        w: 639,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x24
-    GlyphMetric {
-        w: 639,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x25
-    GlyphMetric {
-        w: 639,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x26
-    GlyphMetric {
-        w: 639,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x27
-    GlyphMetric {
-        w: 806,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x28
-    GlyphMetric {
-        w: 806,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x29
-    GlyphMetric {
-        w: 806,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x2A
-    GlyphMetric {
-        w: 806,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x2B
-    GlyphMetric {
-        w: 1278,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x2C
-    GlyphMetric {
-        w: 1278,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x2D
-    GlyphMetric {
-        w: 811,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x2E
-    GlyphMetric {
-        w: 811,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x2F
-    GlyphMetric {
-        w: 875,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x30
-    GlyphMetric {
-        w: 875,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x31
-    GlyphMetric {
-        w: 667,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x32
-    GlyphMetric {
-        w: 667,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x33
-    GlyphMetric {
-        w: 667,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x34
-    GlyphMetric {
-        w: 667,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x35
-    GlyphMetric {
-        w: 667,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x36
-    GlyphMetric {
-        w: 667,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x37
-    GlyphMetric {
-        w: 889,
-        h: 0,
-        d: 900,
-        ic: 0,
-    }, // 0x38
-    GlyphMetric {
-        w: 889,
-        h: 0,
-        d: 900,
-        ic: 0,
-    }, // 0x39
-    GlyphMetric {
-        w: 889,
-        h: 0,
-        d: 900,
-        ic: 0,
-    }, // 0x3A
-    GlyphMetric {
-        w: 889,
-        h: 0,
-        d: 900,
-        ic: 0,
-    }, // 0x3B
-    GlyphMetric {
-        w: 889,
-        h: 0,
-        d: 1800,
-        ic: 0,
-    }, // 0x3C
-    GlyphMetric {
-        w: 889,
-        h: 0,
-        d: 1800,
-        ic: 0,
-    }, // 0x3D
-    GlyphMetric {
-        w: 889,
-        h: 0,
-        d: 300,
-        ic: 0,
-    }, // 0x3E
-    GlyphMetric {
-        w: 667,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x3F
-    GlyphMetric {
-        w: 875,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x40
-    GlyphMetric {
-        w: 875,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x41
-    GlyphMetric {
-        w: 875,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x42
-    GlyphMetric {
-        w: 875,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x43
-    GlyphMetric {
-        w: 611,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x44
-    GlyphMetric {
-        w: 611,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x45
-    GlyphMetric {
-        w: 833,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x46
-    GlyphMetric {
-        w: 1111,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x47
-    GlyphMetric {
-        w: 472,
-        h: 0,
-        d: 1111,
-        ic: 194,
-    }, // 0x48
-    GlyphMetric {
-        w: 556,
-        h: 0,
-        d: 2222,
-        ic: 444,
-    }, // 0x49
-    GlyphMetric {
-        w: 1111,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x4A
-    GlyphMetric {
-        w: 1511,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x4B
-    GlyphMetric {
-        w: 1111,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x4C
-    GlyphMetric {
-        w: 1511,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x4D
-    GlyphMetric {
-        w: 1111,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x4E
-    GlyphMetric {
-        w: 1511,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x4F
-    GlyphMetric {
-        w: 1056,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x50
-    GlyphMetric {
-        w: 944,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x51
-    GlyphMetric {
-        w: 472,
-        h: 0,
-        d: 1111,
-        ic: 195,
-    }, // 0x52
-    GlyphMetric {
-        w: 833,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x53
-    GlyphMetric {
-        w: 833,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x54
-    GlyphMetric {
-        w: 833,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x55
-    GlyphMetric {
-        w: 833,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x56
-    GlyphMetric {
-        w: 833,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x57
-    GlyphMetric {
-        w: 1444,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x58
-    GlyphMetric {
-        w: 1278,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x59
-    GlyphMetric {
-        w: 556,
-        h: 0,
-        d: 2222,
-        ic: 444,
-    }, // 0x5A
-    GlyphMetric {
-        w: 1111,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x5B
-    GlyphMetric {
-        w: 1111,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x5C
-    GlyphMetric {
-        w: 1111,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x5D
-    GlyphMetric {
-        w: 1111,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x5E
-    GlyphMetric {
-        w: 1111,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x5F
-    GlyphMetric {
-        w: 944,
-        h: 0,
-        d: 1000,
-        ic: 0,
-    }, // 0x60
-    GlyphMetric {
-        w: 1278,
-        h: 100,
-        d: 1500,
-        ic: 0,
-    }, // 0x61
-    GlyphMetric {
-        w: 556,
-        h: 722,
-        d: 0,
-        ic: 0,
-    }, // 0x62
-    GlyphMetric {
-        w: 1000,
-        h: 750,
-        d: 0,
-        ic: 0,
-    }, // 0x63
-    GlyphMetric {
-        w: 1444,
-        h: 750,
-        d: 0,
-        ic: 0,
-    }, // 0x64
-    GlyphMetric {
-        w: 556,
-        h: 722,
-        d: 0,
-        ic: 0,
-    }, // 0x65
-    GlyphMetric {
-        w: 1000,
-        h: 750,
-        d: 0,
-        ic: 0,
-    }, // 0x66
-    GlyphMetric {
-        w: 1444,
-        h: 750,
-        d: 0,
-        ic: 0,
-    }, // 0x67
-    GlyphMetric {
-        w: 472,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x68
-    GlyphMetric {
-        w: 472,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x69
-    GlyphMetric {
-        w: 528,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x6A
-    GlyphMetric {
-        w: 528,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x6B
-    GlyphMetric {
-        w: 528,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x6C
-    GlyphMetric {
-        w: 528,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x6D
-    GlyphMetric {
-        w: 667,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x6E
-    GlyphMetric {
-        w: 667,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x6F
-    GlyphMetric {
-        w: 1000,
-        h: 40,
-        d: 1160,
-        ic: 0,
-    }, // 0x70
-    GlyphMetric {
-        w: 1000,
-        h: 40,
-        d: 1760,
-        ic: 0,
-    }, // 0x71
-    GlyphMetric {
-        w: 1000,
-        h: 40,
-        d: 2360,
-        ic: 0,
-    }, // 0x72
-    GlyphMetric {
-        w: 1000,
-        h: 40,
-        d: 2960,
-        ic: 0,
-    }, // 0x73
-    GlyphMetric {
-        w: 1056,
-        h: 0,
-        d: 1800,
-        ic: 0,
-    }, // 0x74
-    GlyphMetric {
-        w: 1056,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x75
-    GlyphMetric {
-        w: 1056,
-        h: 40,
-        d: 560,
-        ic: 0,
-    }, // 0x76
-    GlyphMetric {
-        w: 778,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x77
-    GlyphMetric {
-        w: 667,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x78
-    GlyphMetric {
-        w: 667,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x79
-    GlyphMetric {
-        w: 450,
-        h: 120,
-        d: 0,
-        ic: 0,
-    }, // 0x7A
-    GlyphMetric {
-        w: 450,
-        h: 120,
-        d: 0,
-        ic: 0,
-    }, // 0x7B
-    GlyphMetric {
-        w: 450,
-        h: 120,
-        d: 0,
-        ic: 0,
-    }, // 0x7C
-    GlyphMetric {
-        w: 450,
-        h: 120,
-        d: 0,
-        ic: 0,
-    }, // 0x7D
-    GlyphMetric {
-        w: 778,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x7E
-    GlyphMetric {
-        w: 778,
-        h: 0,
-        d: 600,
-        ic: 0,
-    }, // 0x7F
+pub static CMEX10_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 7509, h: 655, d: 19006, ic: 0 }, // 0x00
+    PackedGlyphMetric { w: 7509, h: 655, d: 19006, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 6827, h: 655, d: 19006, ic: 0 }, // 0x02
+    PackedGlyphMetric { w: 6827, h: 655, d: 19006, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 7737, h: 655, d: 19006, ic: 0 }, // 0x04
+    PackedGlyphMetric { w: 7737, h: 655, d: 19006, ic: 0 }, // 0x05
+    PackedGlyphMetric { w: 7737, h: 655, d: 19006, ic: 0 }, // 0x06
+    PackedGlyphMetric { w: 7737, h: 655, d: 19006, ic: 0 }, // 0x07
+    PackedGlyphMetric { w: 9557, h: 655, d: 19006, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 9557, h: 655, d: 19006, ic: 0 }, // 0x09
+    PackedGlyphMetric { w: 7737, h: 655, d: 19006, ic: 0 }, // 0x0A
+    PackedGlyphMetric { w: 7737, h: 655, d: 19006, ic: 0 }, // 0x0B
+    PackedGlyphMetric { w: 5461, h: 0, d: 9830, ic: 0 }, // 0x0C
+    PackedGlyphMetric { w: 9102, h: 0, d: 9830, ic: 0 }, // 0x0D
+    PackedGlyphMetric { w: 9466, h: 655, d: 19006, ic: 0 }, // 0x0E
+    PackedGlyphMetric { w: 9466, h: 655, d: 19006, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 9785, h: 655, d: 28836, ic: 0 }, // 0x10
+    PackedGlyphMetric { w: 9785, h: 655, d: 28836, ic: 0 }, // 0x11
+    PackedGlyphMetric { w: 12060, h: 655, d: 38667, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 12060, h: 655, d: 38667, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 8647, h: 655, d: 38667, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 8647, h: 655, d: 38667, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 9557, h: 655, d: 38667, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 9557, h: 655, d: 38667, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 9557, h: 655, d: 38667, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 9557, h: 655, d: 38667, ic: 0 }, // 0x19
+    PackedGlyphMetric { w: 12288, h: 655, d: 38667, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 12288, h: 655, d: 38667, ic: 0 }, // 0x1B
+    PackedGlyphMetric { w: 12288, h: 655, d: 38667, ic: 0 }, // 0x1C
+    PackedGlyphMetric { w: 12288, h: 655, d: 38667, ic: 0 }, // 0x1D
+    PackedGlyphMetric { w: 17112, h: 655, d: 38667, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 17112, h: 655, d: 38667, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 12971, h: 655, d: 48497, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 12971, h: 655, d: 48497, ic: 0 }, // 0x21
+    PackedGlyphMetric { w: 9557, h: 655, d: 48497, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 9557, h: 655, d: 48497, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 10468, h: 655, d: 48497, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 10468, h: 655, d: 48497, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 10468, h: 655, d: 48497, ic: 0 }, // 0x26
+    PackedGlyphMetric { w: 10468, h: 655, d: 48497, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 13198, h: 655, d: 48497, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 13198, h: 655, d: 48497, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 13198, h: 655, d: 48497, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 13198, h: 655, d: 48497, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 20935, h: 655, d: 48497, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 20935, h: 655, d: 48497, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 13289, h: 655, d: 28836, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 13289, h: 655, d: 28836, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 14336, h: 655, d: 28836, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 14336, h: 655, d: 28836, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 10923, h: 655, d: 28836, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 10923, h: 655, d: 28836, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 10923, h: 655, d: 28836, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 10923, h: 655, d: 28836, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 10923, h: 0, d: 9830, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 10923, h: 0, d: 9830, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 14564, h: 0, d: 14746, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 14564, h: 0, d: 14746, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 14564, h: 0, d: 14746, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 14564, h: 0, d: 14746, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 14564, h: 0, d: 29492, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 14564, h: 0, d: 29492, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 14564, h: 0, d: 4915, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 10923, h: 0, d: 9830, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 14336, h: 655, d: 28836, ic: 0 }, // 0x40
+    PackedGlyphMetric { w: 14336, h: 655, d: 28836, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 14336, h: 0, d: 9830, ic: 0 }, // 0x42
+    PackedGlyphMetric { w: 14336, h: 0, d: 9830, ic: 0 }, // 0x43
+    PackedGlyphMetric { w: 10012, h: 655, d: 28836, ic: 0 }, // 0x44
+    PackedGlyphMetric { w: 10012, h: 655, d: 28836, ic: 0 }, // 0x45
+    PackedGlyphMetric { w: 13653, h: 0, d: 16384, ic: 0 }, // 0x46
+    PackedGlyphMetric { w: 18204, h: 1638, d: 24576, ic: 0 }, // 0x47
+    PackedGlyphMetric { w: 7737, h: 0, d: 18205, ic: 3186 }, // 0x48
+    PackedGlyphMetric { w: 9102, h: 0, d: 36409, ic: 7282 }, // 0x49
+    PackedGlyphMetric { w: 18204, h: 0, d: 16384, ic: 0 }, // 0x4A
+    PackedGlyphMetric { w: 24758, h: 1638, d: 24576, ic: 0 }, // 0x4B
+    PackedGlyphMetric { w: 18204, h: 0, d: 16384, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 24758, h: 1638, d: 24576, ic: 0 }, // 0x4D
+    PackedGlyphMetric { w: 18204, h: 0, d: 16384, ic: 0 }, // 0x4E
+    PackedGlyphMetric { w: 24758, h: 1638, d: 24576, ic: 0 }, // 0x4F
+    PackedGlyphMetric { w: 17294, h: 0, d: 16384, ic: 0 }, // 0x50
+    PackedGlyphMetric { w: 15474, h: 0, d: 16384, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 7737, h: 0, d: 18205, ic: 3186 }, // 0x52
+    PackedGlyphMetric { w: 13653, h: 0, d: 16384, ic: 0 }, // 0x53
+    PackedGlyphMetric { w: 13653, h: 0, d: 16384, ic: 0 }, // 0x54
+    PackedGlyphMetric { w: 13653, h: 0, d: 16384, ic: 0 }, // 0x55
+    PackedGlyphMetric { w: 13653, h: 0, d: 16384, ic: 0 }, // 0x56
+    PackedGlyphMetric { w: 13653, h: 0, d: 16384, ic: 0 }, // 0x57
+    PackedGlyphMetric { w: 23666, h: 1638, d: 24576, ic: 0 }, // 0x58
+    PackedGlyphMetric { w: 20935, h: 1638, d: 24576, ic: 0 }, // 0x59
+    PackedGlyphMetric { w: 9102, h: 0, d: 36409, ic: 7282 }, // 0x5A
+    PackedGlyphMetric { w: 18204, h: 1638, d: 24576, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 18204, h: 1638, d: 24576, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 18204, h: 1638, d: 24576, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 18204, h: 1638, d: 24576, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 18204, h: 1638, d: 24576, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 15474, h: 0, d: 16384, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 20935, h: 1638, d: 24576, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 9102, h: 11833, d: 0, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 16384, h: 12288, d: 0, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 23666, h: 12288, d: 0, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 9102, h: 11833, d: 0, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 16384, h: 12288, d: 0, ic: 0 }, // 0x66
+    PackedGlyphMetric { w: 23666, h: 12288, d: 0, ic: 0 }, // 0x67
+    PackedGlyphMetric { w: 7737, h: 655, d: 28836, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 7737, h: 655, d: 28836, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 8647, h: 655, d: 28836, ic: 0 }, // 0x6A
+    PackedGlyphMetric { w: 8647, h: 655, d: 28836, ic: 0 }, // 0x6B
+    PackedGlyphMetric { w: 8647, h: 655, d: 28836, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 8647, h: 655, d: 28836, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 10923, h: 655, d: 28836, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 10923, h: 655, d: 28836, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 16384, h: 655, d: 19006, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 16384, h: 655, d: 28836, ic: 0 }, // 0x71
+    PackedGlyphMetric { w: 16384, h: 655, d: 38667, ic: 0 }, // 0x72
+    PackedGlyphMetric { w: 16384, h: 655, d: 48497, ic: 0 }, // 0x73
+    PackedGlyphMetric { w: 17294, h: 0, d: 29492, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 17294, h: 0, d: 9830, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 17294, h: 655, d: 9175, ic: 0 }, // 0x76
+    PackedGlyphMetric { w: 12743, h: 0, d: 9830, ic: 0 }, // 0x77
+    PackedGlyphMetric { w: 10923, h: 0, d: 9830, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 10923, h: 0, d: 9830, ic: 0 }, // 0x79
+    PackedGlyphMetric { w: 7373, h: 1966, d: 0, ic: 0 }, // 0x7A
+    PackedGlyphMetric { w: 7373, h: 1966, d: 0, ic: 0 }, // 0x7B
+    PackedGlyphMetric { w: 7373, h: 1966, d: 0, ic: 0 }, // 0x7C
+    PackedGlyphMetric { w: 7373, h: 1966, d: 0, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 12743, h: 0, d: 9830, ic: 0 }, // 0x7E
+    PackedGlyphMetric { w: 12743, h: 0, d: 9830, ic: 0 }, // 0x7F
 ];
 /// CMMI10 (Math Italic, Family 1) metric table
-pub static CMMI10_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric {
-        w: 615,
-        h: 683,
-        d: 0,
-        ic: 139,
-    }, // 0x00
-    GlyphMetric {
-        w: 833,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x01
-    GlyphMetric {
-        w: 763,
-        h: 683,
-        d: 0,
-        ic: 28,
-    }, // 0x02
-    GlyphMetric {
-        w: 694,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x03
-    GlyphMetric {
-        w: 742,
-        h: 683,
-        d: 0,
-        ic: 76,
-    }, // 0x04
-    GlyphMetric {
-        w: 831,
-        h: 683,
-        d: 0,
-        ic: 81,
-    }, // 0x05
-    GlyphMetric {
-        w: 780,
-        h: 683,
-        d: 0,
-        ic: 58,
-    }, // 0x06
-    GlyphMetric {
-        w: 583,
-        h: 683,
-        d: 0,
-        ic: 139,
-    }, // 0x07
-    GlyphMetric {
-        w: 667,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x08
-    GlyphMetric {
-        w: 612,
-        h: 683,
-        d: 0,
-        ic: 110,
-    }, // 0x09
-    GlyphMetric {
-        w: 772,
-        h: 683,
-        d: 0,
-        ic: 50,
-    }, // 0x0A
-    GlyphMetric {
-        w: 640,
-        h: 431,
-        d: 0,
-        ic: 4,
-    }, // 0x0B
-    GlyphMetric {
-        w: 566,
-        h: 694,
-        d: 194,
-        ic: 53,
-    }, // 0x0C
-    GlyphMetric {
-        w: 518,
-        h: 431,
-        d: 194,
-        ic: 56,
-    }, // 0x0D
-    GlyphMetric {
-        w: 444,
-        h: 694,
-        d: 0,
-        ic: 38,
-    }, // 0x0E
-    GlyphMetric {
-        w: 406,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x0F
-    GlyphMetric {
-        w: 438,
-        h: 694,
-        d: 194,
-        ic: 74,
-    }, // 0x10
-    GlyphMetric {
-        w: 497,
-        h: 431,
-        d: 194,
-        ic: 36,
-    }, // 0x11
-    GlyphMetric {
-        w: 469,
-        h: 694,
-        d: 0,
-        ic: 28,
-    }, // 0x12
-    GlyphMetric {
-        w: 354,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x13
-    GlyphMetric {
-        w: 576,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x14
-    GlyphMetric {
-        w: 583,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x15
-    GlyphMetric {
-        w: 603,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x16
-    GlyphMetric {
-        w: 494,
-        h: 431,
-        d: 0,
-        ic: 64,
-    }, // 0x17
-    GlyphMetric {
-        w: 438,
-        h: 694,
-        d: 194,
-        ic: 46,
-    }, // 0x18
-    GlyphMetric {
-        w: 570,
-        h: 431,
-        d: 0,
-        ic: 36,
-    }, // 0x19
-    GlyphMetric {
-        w: 517,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x1A
-    GlyphMetric {
-        w: 571,
-        h: 431,
-        d: 0,
-        ic: 36,
-    }, // 0x1B
-    GlyphMetric {
-        w: 437,
-        h: 431,
-        d: 0,
-        ic: 113,
-    }, // 0x1C
-    GlyphMetric {
-        w: 540,
-        h: 431,
-        d: 0,
-        ic: 36,
-    }, // 0x1D
-    GlyphMetric {
-        w: 596,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x1E
-    GlyphMetric {
-        w: 626,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x1F
-    GlyphMetric {
-        w: 651,
-        h: 694,
-        d: 194,
-        ic: 36,
-    }, // 0x20
-    GlyphMetric {
-        w: 622,
-        h: 431,
-        d: 0,
-        ic: 36,
-    }, // 0x21
-    GlyphMetric {
-        w: 466,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x22
-    GlyphMetric {
-        w: 591,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x23
-    GlyphMetric {
-        w: 828,
-        h: 431,
-        d: 0,
-        ic: 28,
-    }, // 0x24
-    GlyphMetric {
-        w: 517,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x25
-    GlyphMetric {
-        w: 363,
-        h: 431,
-        d: 97,
-        ic: 80,
-    }, // 0x26
-    GlyphMetric {
-        w: 654,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x27
-    GlyphMetric {
-        w: 1000,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x28
-    GlyphMetric {
-        w: 1000,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x29
-    GlyphMetric {
-        w: 1000,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x2A
-    GlyphMetric {
-        w: 1000,
-        h: 367,
-        d: 0,
-        ic: 0,
-    }, // 0x2B
-    GlyphMetric {
-        w: 278,
-        h: 464,
-        d: 0,
-        ic: 0,
-    }, // 0x2C
-    GlyphMetric {
-        w: 278,
-        h: 464,
-        d: 0,
-        ic: 0,
-    }, // 0x2D
-    GlyphMetric {
-        w: 500,
-        h: 465,
-        d: 0,
-        ic: 0,
-    }, // 0x2E
-    GlyphMetric {
-        w: 500,
-        h: 465,
-        d: 0,
-        ic: 0,
-    }, // 0x2F
-    GlyphMetric {
-        w: 500,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x30
-    GlyphMetric {
-        w: 500,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x31
-    GlyphMetric {
-        w: 500,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x32
-    GlyphMetric {
-        w: 500,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x33
-    GlyphMetric {
-        w: 500,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x34
-    GlyphMetric {
-        w: 500,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x35
-    GlyphMetric {
-        w: 500,
-        h: 644,
-        d: 0,
-        ic: 0,
-    }, // 0x36
-    GlyphMetric {
-        w: 500,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x37
-    GlyphMetric {
-        w: 500,
-        h: 644,
-        d: 0,
-        ic: 0,
-    }, // 0x38
-    GlyphMetric {
-        w: 500,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x39
-    GlyphMetric {
-        w: 278,
-        h: 106,
-        d: 0,
-        ic: 0,
-    }, // 0x3A
-    GlyphMetric {
-        w: 278,
-        h: 106,
-        d: 194,
-        ic: 0,
-    }, // 0x3B
-    GlyphMetric {
-        w: 778,
-        h: 539,
-        d: 39,
-        ic: 0,
-    }, // 0x3C
-    GlyphMetric {
-        w: 500,
-        h: 750,
-        d: 250,
-        ic: 0,
-    }, // 0x3D
-    GlyphMetric {
-        w: 778,
-        h: 539,
-        d: 39,
-        ic: 0,
-    }, // 0x3E
-    GlyphMetric {
-        w: 500,
-        h: 465,
-        d: 0,
-        ic: 0,
-    }, // 0x3F
-    GlyphMetric {
-        w: 531,
-        h: 694,
-        d: 0,
-        ic: 56,
-    }, // 0x40
-    GlyphMetric {
-        w: 750,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x41
-    GlyphMetric {
-        w: 759,
-        h: 683,
-        d: 0,
-        ic: 50,
-    }, // 0x42
-    GlyphMetric {
-        w: 715,
-        h: 683,
-        d: 0,
-        ic: 72,
-    }, // 0x43
-    GlyphMetric {
-        w: 828,
-        h: 683,
-        d: 0,
-        ic: 28,
-    }, // 0x44
-    GlyphMetric {
-        w: 738,
-        h: 683,
-        d: 0,
-        ic: 58,
-    }, // 0x45
-    GlyphMetric {
-        w: 643,
-        h: 683,
-        d: 0,
-        ic: 139,
-    }, // 0x46
-    GlyphMetric {
-        w: 786,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x47
-    GlyphMetric {
-        w: 831,
-        h: 683,
-        d: 0,
-        ic: 81,
-    }, // 0x48
-    GlyphMetric {
-        w: 440,
-        h: 683,
-        d: 0,
-        ic: 78,
-    }, // 0x49
-    GlyphMetric {
-        w: 555,
-        h: 683,
-        d: 0,
-        ic: 96,
-    }, // 0x4A
-    GlyphMetric {
-        w: 849,
-        h: 683,
-        d: 0,
-        ic: 72,
-    }, // 0x4B
-    GlyphMetric {
-        w: 681,
-        h: 683,
-        d: 0,
-        ic: 0,
-    }, // 0x4C
-    GlyphMetric {
-        w: 970,
-        h: 683,
-        d: 0,
-        ic: 109,
-    }, // 0x4D
-    GlyphMetric {
-        w: 803,
-        h: 683,
-        d: 0,
-        ic: 109,
-    }, // 0x4E
-    GlyphMetric {
-        w: 763,
-        h: 683,
-        d: 0,
-        ic: 28,
-    }, // 0x4F
-    GlyphMetric {
-        w: 642,
-        h: 683,
-        d: 0,
-        ic: 139,
-    }, // 0x50
-    GlyphMetric {
-        w: 791,
-        h: 683,
-        d: 194,
-        ic: 0,
-    }, // 0x51
-    GlyphMetric {
-        w: 759,
-        h: 683,
-        d: 0,
-        ic: 8,
-    }, // 0x52
-    GlyphMetric {
-        w: 613,
-        h: 683,
-        d: 0,
-        ic: 58,
-    }, // 0x53
-    GlyphMetric {
-        w: 584,
-        h: 683,
-        d: 0,
-        ic: 139,
-    }, // 0x54
-    GlyphMetric {
-        w: 683,
-        h: 683,
-        d: 0,
-        ic: 109,
-    }, // 0x55
-    GlyphMetric {
-        w: 583,
-        h: 683,
-        d: 0,
-        ic: 222,
-    }, // 0x56
-    GlyphMetric {
-        w: 944,
-        h: 683,
-        d: 0,
-        ic: 139,
-    }, // 0x57
-    GlyphMetric {
-        w: 828,
-        h: 683,
-        d: 0,
-        ic: 78,
-    }, // 0x58
-    GlyphMetric {
-        w: 581,
-        h: 683,
-        d: 0,
-        ic: 222,
-    }, // 0x59
-    GlyphMetric {
-        w: 683,
-        h: 683,
-        d: 0,
-        ic: 72,
-    }, // 0x5A
-    GlyphMetric {
-        w: 389,
-        h: 750,
-        d: 0,
-        ic: 0,
-    }, // 0x5B
-    GlyphMetric {
-        w: 389,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x5C
-    GlyphMetric {
-        w: 389,
-        h: 694,
-        d: 194,
-        ic: 0,
-    }, // 0x5D
-    GlyphMetric {
-        w: 1000,
-        h: 358,
-        d: 0,
-        ic: 0,
-    }, // 0x5E
-    GlyphMetric {
-        w: 1000,
-        h: 358,
-        d: 0,
-        ic: 0,
-    }, // 0x5F
-    GlyphMetric {
-        w: 417,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x60
-    GlyphMetric {
-        w: 529,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x61
-    GlyphMetric {
-        w: 429,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x62
-    GlyphMetric {
-        w: 433,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x63
-    GlyphMetric {
-        w: 520,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x64
-    GlyphMetric {
-        w: 466,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x65
-    GlyphMetric {
-        w: 490,
-        h: 694,
-        d: 194,
-        ic: 108,
-    }, // 0x66
-    GlyphMetric {
-        w: 477,
-        h: 431,
-        d: 194,
-        ic: 36,
-    }, // 0x67
-    GlyphMetric {
-        w: 576,
-        h: 694,
-        d: 0,
-        ic: 0,
-    }, // 0x68
-    GlyphMetric {
-        w: 345,
-        h: 660,
-        d: 0,
-        ic: 0,
-    }, // 0x69
-    GlyphMetric {
-        w: 412,
-        h: 660,
-        d: 194,
-        ic: 57,
-    }, // 0x6A
-    GlyphMetric {
-        w: 521,
-        h: 694,
-        d: 0,
-        ic: 31,
-    }, // 0x6B
-    GlyphMetric {
-        w: 298,
-        h: 694,
-        d: 0,
-        ic: 20,
-    }, // 0x6C
-    GlyphMetric {
-        w: 878,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x6D
-    GlyphMetric {
-        w: 600,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x6E
-    GlyphMetric {
-        w: 485,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x6F
-    GlyphMetric {
-        w: 503,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x70
-    GlyphMetric {
-        w: 446,
-        h: 431,
-        d: 194,
-        ic: 36,
-    }, // 0x71
-    GlyphMetric {
-        w: 451,
-        h: 431,
-        d: 0,
-        ic: 28,
-    }, // 0x72
-    GlyphMetric {
-        w: 469,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x73
-    GlyphMetric {
-        w: 361,
-        h: 615,
-        d: 0,
-        ic: 0,
-    }, // 0x74
-    GlyphMetric {
-        w: 572,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x75
-    GlyphMetric {
-        w: 485,
-        h: 431,
-        d: 0,
-        ic: 36,
-    }, // 0x76
-    GlyphMetric {
-        w: 716,
-        h: 431,
-        d: 0,
-        ic: 27,
-    }, // 0x77
-    GlyphMetric {
-        w: 572,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x78
-    GlyphMetric {
-        w: 490,
-        h: 431,
-        d: 194,
-        ic: 36,
-    }, // 0x79
-    GlyphMetric {
-        w: 465,
-        h: 431,
-        d: 0,
-        ic: 44,
-    }, // 0x7A
-    GlyphMetric {
-        w: 322,
-        h: 431,
-        d: 0,
-        ic: 0,
-    }, // 0x7B
-    GlyphMetric {
-        w: 384,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x7C
-    GlyphMetric {
-        w: 636,
-        h: 431,
-        d: 194,
-        ic: 0,
-    }, // 0x7D
-    GlyphMetric {
-        w: 500,
-        h: 714,
-        d: 0,
-        ic: 154,
-    }, // 0x7E
-    GlyphMetric {
-        w: 278,
-        h: 694,
-        d: 0,
-        ic: 399,
-    }, // 0x7F
+pub static CMMI10_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 10081, h: 11196, d: 0, ic: 2276 }, // 0x00
+    PackedGlyphMetric { w: 13653, h: 11196, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 12497, h: 11196, d: 0, ic: 455 }, // 0x02
+    PackedGlyphMetric { w: 11378, h: 11196, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 12163, h: 11196, d: 0, ic: 1240 }, // 0x04
+    PackedGlyphMetric { w: 13619, h: 11196, d: 0, ic: 1331 }, // 0x05
+    PackedGlyphMetric { w: 12777, h: 11196, d: 0, ic: 944 }, // 0x06
+    PackedGlyphMetric { w: 9557, h: 11196, d: 0, ic: 2276 }, // 0x07
+    PackedGlyphMetric { w: 10923, h: 11196, d: 0, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 10031, h: 11196, d: 0, ic: 1802 }, // 0x09
+    PackedGlyphMetric { w: 12655, h: 11196, d: 0, ic: 822 }, // 0x0A
+    PackedGlyphMetric { w: 10481, h: 7054, d: 0, ic: 61 }, // 0x0B
+    PackedGlyphMetric { w: 9267, h: 11378, d: 3186, ic: 865 }, // 0x0C
+    PackedGlyphMetric { w: 8482, h: 7054, d: 3186, ic: 910 }, // 0x0D
+    PackedGlyphMetric { w: 7282, h: 11378, d: 0, ic: 620 }, // 0x0E
+    PackedGlyphMetric { w: 6650, h: 7054, d: 0, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 7168, h: 11378, d: 3186, ic: 1209 }, // 0x10
+    PackedGlyphMetric { w: 8135, h: 7054, d: 3186, ic: 588 }, // 0x11
+    PackedGlyphMetric { w: 7691, h: 11378, d: 0, ic: 455 }, // 0x12
+    PackedGlyphMetric { w: 5799, h: 7054, d: 0, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 9440, h: 7054, d: 0, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 9557, h: 11378, d: 0, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 9872, h: 7054, d: 3186, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 8093, h: 7054, d: 0, ic: 1043 }, // 0x17
+    PackedGlyphMetric { w: 7168, h: 11378, d: 3186, ic: 754 }, // 0x18
+    PackedGlyphMetric { w: 9339, h: 7054, d: 0, ic: 588 }, // 0x19
+    PackedGlyphMetric { w: 8471, h: 7054, d: 3186, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 9362, h: 7054, d: 0, ic: 588 }, // 0x1B
+    PackedGlyphMetric { w: 7162, h: 7054, d: 0, ic: 1855 }, // 0x1C
+    PackedGlyphMetric { w: 8852, h: 7054, d: 0, ic: 588 }, // 0x1D
+    PackedGlyphMetric { w: 9762, h: 11378, d: 3186, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 10251, h: 7054, d: 3186, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 10672, h: 11378, d: 3186, ic: 588 }, // 0x20
+    PackedGlyphMetric { w: 10198, h: 7054, d: 0, ic: 588 }, // 0x21
+    PackedGlyphMetric { w: 7640, h: 7054, d: 0, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 9690, h: 11378, d: 0, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 13568, h: 7054, d: 0, ic: 455 }, // 0x24
+    PackedGlyphMetric { w: 8471, h: 7054, d: 3186, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 5945, h: 7054, d: 1593, ic: 1308 }, // 0x26
+    PackedGlyphMetric { w: 10718, h: 7054, d: 3186, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 4551, h: 7598, d: 0, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 4551, h: 7598, d: 0, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 8192, h: 7623, d: 0, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 8192, h: 7623, d: 0, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 8192, h: 7054, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 8192, h: 7054, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 8192, h: 7054, d: 0, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 8192, h: 7054, d: 3186, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 8192, h: 7054, d: 3186, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 8192, h: 7054, d: 3186, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 8192, h: 7054, d: 3186, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 8192, h: 7054, d: 3186, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 4551, h: 1729, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 4551, h: 1729, d: 3186, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 12743, h: 8833, d: 641, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 8192, h: 12288, d: 4096, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 12743, h: 8833, d: 641, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 8192, h: 7623, d: 0, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 8698, h: 11378, d: 0, ic: 910 }, // 0x40
+    PackedGlyphMetric { w: 12288, h: 11196, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 12427, h: 11196, d: 0, ic: 822 }, // 0x42
+    PackedGlyphMetric { w: 11710, h: 11196, d: 0, ic: 1172 }, // 0x43
+    PackedGlyphMetric { w: 13565, h: 11196, d: 0, ic: 455 }, // 0x44
+    PackedGlyphMetric { w: 12095, h: 11196, d: 0, ic: 944 }, // 0x45
+    PackedGlyphMetric { w: 10536, h: 11196, d: 0, ic: 2276 }, // 0x46
+    PackedGlyphMetric { w: 12882, h: 11196, d: 0, ic: 0 }, // 0x47
+    PackedGlyphMetric { w: 13619, h: 11196, d: 0, ic: 1331 }, // 0x48
+    PackedGlyphMetric { w: 7202, h: 11196, d: 0, ic: 1286 }, // 0x49
+    PackedGlyphMetric { w: 9085, h: 11196, d: 0, ic: 1576 }, // 0x4A
+    PackedGlyphMetric { w: 13915, h: 11196, d: 0, ic: 1172 }, // 0x4B
+    PackedGlyphMetric { w: 11150, h: 11196, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 15895, h: 11196, d: 0, ic: 1786 }, // 0x4D
+    PackedGlyphMetric { w: 13164, h: 11196, d: 0, ic: 1786 }, // 0x4E
+    PackedGlyphMetric { w: 12497, h: 11196, d: 0, ic: 455 }, // 0x4F
+    PackedGlyphMetric { w: 10519, h: 11196, d: 0, ic: 2276 }, // 0x50
+    PackedGlyphMetric { w: 12952, h: 11196, d: 3186, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 12440, h: 11196, d: 0, ic: 127 }, // 0x52
+    PackedGlyphMetric { w: 10047, h: 11196, d: 0, ic: 944 }, // 0x53
+    PackedGlyphMetric { w: 9574, h: 11196, d: 0, ic: 2276 }, // 0x54
+    PackedGlyphMetric { w: 11187, h: 11196, d: 0, ic: 1786 }, // 0x55
+    PackedGlyphMetric { w: 9557, h: 11196, d: 0, ic: 3641 }, // 0x56
+    PackedGlyphMetric { w: 15474, h: 11196, d: 0, ic: 2276 }, // 0x57
+    PackedGlyphMetric { w: 13574, h: 11196, d: 0, ic: 1286 }, // 0x58
+    PackedGlyphMetric { w: 9512, h: 11196, d: 0, ic: 3641 }, // 0x59
+    PackedGlyphMetric { w: 11184, h: 11196, d: 0, ic: 1172 }, // 0x5A
+    PackedGlyphMetric { w: 6372, h: 12288, d: 0, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 6372, h: 11378, d: 3186, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 6372, h: 11378, d: 3186, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 16384, h: 5860, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 16384, h: 5860, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 6827, h: 11378, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 8660, h: 7054, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 7031, h: 11378, d: 0, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 7090, h: 7054, d: 0, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 8528, h: 11378, d: 0, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 7629, h: 7054, d: 0, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 8021, h: 11378, d: 3186, ic: 1764 }, // 0x66
+    PackedGlyphMetric { w: 7815, h: 7054, d: 3186, ic: 588 }, // 0x67
+    PackedGlyphMetric { w: 9440, h: 11378, d: 0, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 5644, h: 10806, d: 0, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 6747, h: 10806, d: 3186, ic: 938 }, // 0x6A
+    PackedGlyphMetric { w: 8530, h: 11378, d: 0, ic: 516 }, // 0x6B
+    PackedGlyphMetric { w: 4889, h: 11378, d: 0, ic: 322 }, // 0x6C
+    PackedGlyphMetric { w: 14385, h: 7054, d: 0, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 9834, h: 7054, d: 0, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 7942, h: 7054, d: 0, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 8243, h: 7054, d: 3186, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 7314, h: 7054, d: 3186, ic: 588 }, // 0x71
+    PackedGlyphMetric { w: 7392, h: 7054, d: 0, ic: 455 }, // 0x72
+    PackedGlyphMetric { w: 7680, h: 7054, d: 0, ic: 0 }, // 0x73
+    PackedGlyphMetric { w: 5916, h: 10077, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 9379, h: 7054, d: 0, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 7942, h: 7054, d: 0, ic: 588 }, // 0x76
+    PackedGlyphMetric { w: 11730, h: 7054, d: 0, ic: 441 }, // 0x77
+    PackedGlyphMetric { w: 9364, h: 7054, d: 0, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 8033, h: 7054, d: 3186, ic: 588 }, // 0x79
+    PackedGlyphMetric { w: 7619, h: 7054, d: 0, ic: 721 }, // 0x7A
+    PackedGlyphMetric { w: 5283, h: 7054, d: 0, ic: 0 }, // 0x7B
+    PackedGlyphMetric { w: 6292, h: 7054, d: 3186, ic: 0 }, // 0x7C
+    PackedGlyphMetric { w: 10428, h: 7054, d: 3186, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 8192, h: 11705, d: 0, ic: 2520 }, // 0x7E
+    PackedGlyphMetric { w: 4551, h: 11378, d: 0, ic: 6545 }, // 0x7F
 ];
 
 /// CMEX radical variant heights and depths in 1/1000 design units.
@@ -2374,14 +480,9 @@ pub static RADICAL_RECIPE_CMEX: DelimiterRecipe = DelimiterRecipe {
 #[inline(always)]
 pub fn cmsy10_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMSY10_METRICS[code as usize]
+        CMSY10_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric {
-            w: 0,
-            h: 0,
-            d: 0,
-            ic: 0,
-        }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -2389,14 +490,9 @@ pub fn cmsy10_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn cmex10_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMEX10_METRICS[code as usize]
+        CMEX10_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric {
-            w: 0,
-            h: 0,
-            d: 0,
-            ic: 0,
-        }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -2404,14 +500,9 @@ pub fn cmex10_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn cmmi10_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMMI10_METRICS[code as usize]
+        CMMI10_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric {
-            w: 0,
-            h: 0,
-            d: 0,
-            ic: 0,
-        }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -2490,266 +581,266 @@ pub fn cmmi_pair_kern(c1: char, c2: char, tier: u8, font_size: f32) -> f32 {
     }
 }
 
-pub static CMBX10_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 692, h: 686, d: 0, ic: 0 }, // 0x00
-    GlyphMetric { w: 958, h: 686, d: 0, ic: 0 }, // 0x01
-    GlyphMetric { w: 894, h: 686, d: 0, ic: 0 }, // 0x02
-    GlyphMetric { w: 806, h: 686, d: 0, ic: 0 }, // 0x03
-    GlyphMetric { w: 767, h: 686, d: 0, ic: 0 }, // 0x04
-    GlyphMetric { w: 900, h: 686, d: 0, ic: 0 }, // 0x05
-    GlyphMetric { w: 831, h: 686, d: 0, ic: 0 }, // 0x06
-    GlyphMetric { w: 894, h: 686, d: 0, ic: 0 }, // 0x07
-    GlyphMetric { w: 831, h: 686, d: 0, ic: 0 }, // 0x08
-    GlyphMetric { w: 894, h: 686, d: 0, ic: 0 }, // 0x09
-    GlyphMetric { w: 831, h: 686, d: 0, ic: 0 }, // 0x0A
-    GlyphMetric { w: 671, h: 694, d: 0, ic: 109 }, // 0x0B
-    GlyphMetric { w: 639, h: 694, d: 0, ic: 0 }, // 0x0C
-    GlyphMetric { w: 639, h: 694, d: 0, ic: 0 }, // 0x0D
-    GlyphMetric { w: 958, h: 694, d: 0, ic: 0 }, // 0x0E
-    GlyphMetric { w: 958, h: 694, d: 0, ic: 0 }, // 0x0F
-    GlyphMetric { w: 319, h: 444, d: 0, ic: 0 }, // 0x10
-    GlyphMetric { w: 351, h: 444, d: 194, ic: 0 }, // 0x11
-    GlyphMetric { w: 575, h: 694, d: 0, ic: 0 }, // 0x12
-    GlyphMetric { w: 575, h: 694, d: 0, ic: 0 }, // 0x13
-    GlyphMetric { w: 575, h: 632, d: 0, ic: 0 }, // 0x14
-    GlyphMetric { w: 575, h: 694, d: 0, ic: 0 }, // 0x15
-    GlyphMetric { w: 575, h: 596, d: 0, ic: 0 }, // 0x16
-    GlyphMetric { w: 869, h: 694, d: 0, ic: 0 }, // 0x17
-    GlyphMetric { w: 511, h: 0, d: 170, ic: 0 }, // 0x18
-    GlyphMetric { w: 597, h: 694, d: 0, ic: 0 }, // 0x19
-    GlyphMetric { w: 831, h: 444, d: 0, ic: 0 }, // 0x1A
-    GlyphMetric { w: 894, h: 444, d: 0, ic: 0 }, // 0x1B
-    GlyphMetric { w: 575, h: 542, d: 97, ic: 0 }, // 0x1C
-    GlyphMetric { w: 1042, h: 686, d: 0, ic: 0 }, // 0x1D
-    GlyphMetric { w: 1169, h: 686, d: 0, ic: 0 }, // 0x1E
-    GlyphMetric { w: 894, h: 735, d: 49, ic: 0 }, // 0x1F
-    GlyphMetric { w: 319, h: 444, d: 0, ic: 0 }, // 0x20
-    GlyphMetric { w: 350, h: 694, d: 0, ic: 0 }, // 0x21
-    GlyphMetric { w: 603, h: 694, d: 0, ic: 0 }, // 0x22
-    GlyphMetric { w: 958, h: 694, d: 194, ic: 0 }, // 0x23
-    GlyphMetric { w: 575, h: 750, d: 56, ic: 0 }, // 0x24
-    GlyphMetric { w: 958, h: 750, d: 56, ic: 0 }, // 0x25
-    GlyphMetric { w: 894, h: 694, d: 0, ic: 0 }, // 0x26
-    GlyphMetric { w: 319, h: 694, d: 0, ic: 0 }, // 0x27
-    GlyphMetric { w: 447, h: 750, d: 250, ic: 0 }, // 0x28
-    GlyphMetric { w: 447, h: 750, d: 250, ic: 0 }, // 0x29
-    GlyphMetric { w: 575, h: 750, d: 0, ic: 0 }, // 0x2A
-    GlyphMetric { w: 894, h: 633, d: 133, ic: 0 }, // 0x2B
-    GlyphMetric { w: 319, h: 156, d: 194, ic: 0 }, // 0x2C
-    GlyphMetric { w: 383, h: 444, d: 0, ic: 0 }, // 0x2D
-    GlyphMetric { w: 319, h: 156, d: 0, ic: 0 }, // 0x2E
-    GlyphMetric { w: 575, h: 750, d: 250, ic: 0 }, // 0x2F
-    GlyphMetric { w: 575, h: 644, d: 0, ic: 0 }, // 0x30
-    GlyphMetric { w: 575, h: 644, d: 0, ic: 0 }, // 0x31
-    GlyphMetric { w: 575, h: 644, d: 0, ic: 0 }, // 0x32
-    GlyphMetric { w: 575, h: 644, d: 0, ic: 0 }, // 0x33
-    GlyphMetric { w: 575, h: 644, d: 0, ic: 0 }, // 0x34
-    GlyphMetric { w: 575, h: 644, d: 0, ic: 0 }, // 0x35
-    GlyphMetric { w: 575, h: 644, d: 0, ic: 0 }, // 0x36
-    GlyphMetric { w: 575, h: 644, d: 0, ic: 0 }, // 0x37
-    GlyphMetric { w: 575, h: 644, d: 0, ic: 0 }, // 0x38
-    GlyphMetric { w: 575, h: 644, d: 0, ic: 0 }, // 0x39
-    GlyphMetric { w: 319, h: 444, d: 0, ic: 0 }, // 0x3A
-    GlyphMetric { w: 319, h: 444, d: 194, ic: 0 }, // 0x3B
-    GlyphMetric { w: 350, h: 500, d: 194, ic: 0 }, // 0x3C
-    GlyphMetric { w: 894, h: 391, d: 0, ic: 0 }, // 0x3D
-    GlyphMetric { w: 543, h: 500, d: 194, ic: 0 }, // 0x3E
-    GlyphMetric { w: 543, h: 694, d: 0, ic: 0 }, // 0x3F
-    GlyphMetric { w: 894, h: 694, d: 0, ic: 0 }, // 0x40
-    GlyphMetric { w: 869, h: 686, d: 0, ic: 0 }, // 0x41
-    GlyphMetric { w: 818, h: 686, d: 0, ic: 0 }, // 0x42
-    GlyphMetric { w: 831, h: 686, d: 0, ic: 0 }, // 0x43
-    GlyphMetric { w: 882, h: 686, d: 0, ic: 0 }, // 0x44
-    GlyphMetric { w: 756, h: 686, d: 0, ic: 0 }, // 0x45
-    GlyphMetric { w: 724, h: 686, d: 0, ic: 0 }, // 0x46
-    GlyphMetric { w: 904, h: 686, d: 0, ic: 0 }, // 0x47
-    GlyphMetric { w: 900, h: 686, d: 0, ic: 0 }, // 0x48
-    GlyphMetric { w: 436, h: 686, d: 0, ic: 0 }, // 0x49
-    GlyphMetric { w: 594, h: 686, d: 0, ic: 0 }, // 0x4A
-    GlyphMetric { w: 901, h: 686, d: 0, ic: 0 }, // 0x4B
-    GlyphMetric { w: 692, h: 686, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 1092, h: 686, d: 0, ic: 0 }, // 0x4D
-    GlyphMetric { w: 900, h: 686, d: 0, ic: 0 }, // 0x4E
-    GlyphMetric { w: 864, h: 686, d: 0, ic: 0 }, // 0x4F
-    GlyphMetric { w: 786, h: 686, d: 0, ic: 0 }, // 0x50
-    GlyphMetric { w: 864, h: 686, d: 194, ic: 0 }, // 0x51
-    GlyphMetric { w: 862, h: 686, d: 0, ic: 0 }, // 0x52
-    GlyphMetric { w: 639, h: 686, d: 0, ic: 0 }, // 0x53
-    GlyphMetric { w: 800, h: 686, d: 0, ic: 0 }, // 0x54
-    GlyphMetric { w: 885, h: 686, d: 0, ic: 0 }, // 0x55
-    GlyphMetric { w: 869, h: 686, d: 0, ic: 16 }, // 0x56
-    GlyphMetric { w: 1189, h: 686, d: 0, ic: 16 }, // 0x57
-    GlyphMetric { w: 869, h: 686, d: 0, ic: 0 }, // 0x58
-    GlyphMetric { w: 869, h: 686, d: 0, ic: 29 }, // 0x59
-    GlyphMetric { w: 703, h: 686, d: 0, ic: 0 }, // 0x5A
-    GlyphMetric { w: 319, h: 750, d: 250, ic: 0 }, // 0x5B
-    GlyphMetric { w: 603, h: 694, d: 0, ic: 0 }, // 0x5C
-    GlyphMetric { w: 319, h: 750, d: 250, ic: 0 }, // 0x5D
-    GlyphMetric { w: 575, h: 694, d: 0, ic: 0 }, // 0x5E
-    GlyphMetric { w: 319, h: 694, d: 0, ic: 0 }, // 0x5F
-    GlyphMetric { w: 319, h: 694, d: 0, ic: 0 }, // 0x60
-    GlyphMetric { w: 559, h: 444, d: 0, ic: 0 }, // 0x61
-    GlyphMetric { w: 639, h: 694, d: 0, ic: 0 }, // 0x62
-    GlyphMetric { w: 511, h: 444, d: 0, ic: 0 }, // 0x63
-    GlyphMetric { w: 639, h: 694, d: 0, ic: 0 }, // 0x64
-    GlyphMetric { w: 527, h: 444, d: 0, ic: 0 }, // 0x65
-    GlyphMetric { w: 351, h: 694, d: 0, ic: 109 }, // 0x66
-    GlyphMetric { w: 575, h: 444, d: 194, ic: 16 }, // 0x67
-    GlyphMetric { w: 639, h: 694, d: 0, ic: 0 }, // 0x68
-    GlyphMetric { w: 319, h: 694, d: 0, ic: 0 }, // 0x69
-    GlyphMetric { w: 351, h: 694, d: 194, ic: 0 }, // 0x6A
-    GlyphMetric { w: 607, h: 694, d: 0, ic: 0 }, // 0x6B
-    GlyphMetric { w: 319, h: 694, d: 0, ic: 0 }, // 0x6C
-    GlyphMetric { w: 958, h: 444, d: 0, ic: 0 }, // 0x6D
-    GlyphMetric { w: 639, h: 444, d: 0, ic: 0 }, // 0x6E
-    GlyphMetric { w: 575, h: 444, d: 0, ic: 0 }, // 0x6F
-    GlyphMetric { w: 639, h: 444, d: 194, ic: 0 }, // 0x70
-    GlyphMetric { w: 607, h: 444, d: 194, ic: 0 }, // 0x71
-    GlyphMetric { w: 474, h: 444, d: 0, ic: 0 }, // 0x72
-    GlyphMetric { w: 454, h: 444, d: 0, ic: 0 }, // 0x73
-    GlyphMetric { w: 447, h: 635, d: 0, ic: 0 }, // 0x74
-    GlyphMetric { w: 639, h: 444, d: 0, ic: 0 }, // 0x75
-    GlyphMetric { w: 607, h: 444, d: 0, ic: 16 }, // 0x76
-    GlyphMetric { w: 831, h: 444, d: 0, ic: 16 }, // 0x77
-    GlyphMetric { w: 607, h: 444, d: 0, ic: 0 }, // 0x78
-    GlyphMetric { w: 607, h: 444, d: 194, ic: 16 }, // 0x79
-    GlyphMetric { w: 511, h: 444, d: 0, ic: 0 }, // 0x7A
-    GlyphMetric { w: 575, h: 444, d: 0, ic: 32 }, // 0x7B
-    GlyphMetric { w: 1150, h: 444, d: 0, ic: 32 }, // 0x7C
-    GlyphMetric { w: 575, h: 694, d: 0, ic: 0 }, // 0x7D
-    GlyphMetric { w: 575, h: 694, d: 0, ic: 0 }, // 0x7E
-    GlyphMetric { w: 575, h: 694, d: 0, ic: 0 }, // 0x7F
+pub static CMBX10_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 11332, h: 11241, d: 0, ic: 0 }, // 0x00
+    PackedGlyphMetric { w: 15701, h: 11241, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 14654, h: 11241, d: 0, ic: 0 }, // 0x02
+    PackedGlyphMetric { w: 13198, h: 11241, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 12561, h: 11241, d: 0, ic: 0 }, // 0x04
+    PackedGlyphMetric { w: 14746, h: 11241, d: 0, ic: 0 }, // 0x05
+    PackedGlyphMetric { w: 13608, h: 11241, d: 0, ic: 0 }, // 0x06
+    PackedGlyphMetric { w: 14654, h: 11241, d: 0, ic: 0 }, // 0x07
+    PackedGlyphMetric { w: 13608, h: 11241, d: 0, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 14654, h: 11241, d: 0, ic: 0 }, // 0x09
+    PackedGlyphMetric { w: 13608, h: 11241, d: 0, ic: 0 }, // 0x0A
+    PackedGlyphMetric { w: 10991, h: 11378, d: 0, ic: 1786 }, // 0x0B
+    PackedGlyphMetric { w: 10468, h: 11378, d: 0, ic: 0 }, // 0x0C
+    PackedGlyphMetric { w: 10468, h: 11378, d: 0, ic: 0 }, // 0x0D
+    PackedGlyphMetric { w: 15701, h: 11378, d: 0, ic: 0 }, // 0x0E
+    PackedGlyphMetric { w: 15701, h: 11378, d: 0, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 5234, h: 7282, d: 0, ic: 0 }, // 0x10
+    PackedGlyphMetric { w: 5757, h: 7282, d: 3186, ic: 0 }, // 0x11
+    PackedGlyphMetric { w: 9421, h: 11378, d: 0, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 9421, h: 11378, d: 0, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 9421, h: 10354, d: 0, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 9421, h: 11378, d: 0, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 9421, h: 9767, d: 0, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 14245, h: 11378, d: 0, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 8374, h: 0, d: 2788, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 9785, h: 11378, d: 0, ic: 0 }, // 0x19
+    PackedGlyphMetric { w: 13608, h: 7282, d: 0, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 14654, h: 7282, d: 0, ic: 0 }, // 0x1B
+    PackedGlyphMetric { w: 9421, h: 8875, d: 1593, ic: 0 }, // 0x1C
+    PackedGlyphMetric { w: 17067, h: 11241, d: 0, ic: 0 }, // 0x1D
+    PackedGlyphMetric { w: 19160, h: 11241, d: 0, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 14654, h: 12038, d: 796, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 5234, h: 7282, d: 0, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 5734, h: 11378, d: 0, ic: 0 }, // 0x21
+    PackedGlyphMetric { w: 9876, h: 11378, d: 0, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 15701, h: 11378, d: 3186, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 9421, h: 12288, d: 910, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 15701, h: 12288, d: 910, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 14654, h: 11378, d: 0, ic: 0 }, // 0x26
+    PackedGlyphMetric { w: 5234, h: 11378, d: 0, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 7327, h: 12288, d: 4096, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 7327, h: 12288, d: 4096, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 9421, h: 12288, d: 0, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 14654, h: 10376, d: 2184, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 5234, h: 2549, d: 3186, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 6280, h: 7282, d: 0, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 5234, h: 2549, d: 0, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 9421, h: 12288, d: 4096, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 9421, h: 10559, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 9421, h: 10559, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 9421, h: 10559, d: 0, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 9421, h: 10559, d: 0, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 9421, h: 10559, d: 0, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 9421, h: 10559, d: 0, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 9421, h: 10559, d: 0, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 9421, h: 10559, d: 0, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 9421, h: 10559, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 9421, h: 10559, d: 0, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 5234, h: 7282, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 5234, h: 7282, d: 3186, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 5734, h: 8192, d: 3186, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 14654, h: 6408, d: 0, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 8897, h: 8192, d: 3186, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 8897, h: 11378, d: 0, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 14654, h: 11378, d: 0, ic: 0 }, // 0x40
+    PackedGlyphMetric { w: 14245, h: 11241, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 13403, h: 11241, d: 0, ic: 0 }, // 0x42
+    PackedGlyphMetric { w: 13608, h: 11241, d: 0, ic: 0 }, // 0x43
+    PackedGlyphMetric { w: 14450, h: 11241, d: 0, ic: 0 }, // 0x44
+    PackedGlyphMetric { w: 12379, h: 11241, d: 0, ic: 0 }, // 0x45
+    PackedGlyphMetric { w: 11856, h: 11241, d: 0, ic: 0 }, // 0x46
+    PackedGlyphMetric { w: 14814, h: 11241, d: 0, ic: 0 }, // 0x47
+    PackedGlyphMetric { w: 14746, h: 11241, d: 0, ic: 0 }, // 0x48
+    PackedGlyphMetric { w: 7145, h: 11241, d: 0, ic: 0 }, // 0x49
+    PackedGlyphMetric { w: 9739, h: 11241, d: 0, ic: 0 }, // 0x4A
+    PackedGlyphMetric { w: 14768, h: 11241, d: 0, ic: 0 }, // 0x4B
+    PackedGlyphMetric { w: 11332, h: 11241, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 17886, h: 11241, d: 0, ic: 0 }, // 0x4D
+    PackedGlyphMetric { w: 14746, h: 11241, d: 0, ic: 0 }, // 0x4E
+    PackedGlyphMetric { w: 14154, h: 11241, d: 0, ic: 0 }, // 0x4F
+    PackedGlyphMetric { w: 12880, h: 11241, d: 0, ic: 0 }, // 0x50
+    PackedGlyphMetric { w: 14154, h: 11241, d: 3186, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 14131, h: 11241, d: 0, ic: 0 }, // 0x52
+    PackedGlyphMetric { w: 10468, h: 11241, d: 0, ic: 0 }, // 0x53
+    PackedGlyphMetric { w: 13107, h: 11241, d: 0, ic: 0 }, // 0x54
+    PackedGlyphMetric { w: 14495, h: 11241, d: 0, ic: 0 }, // 0x55
+    PackedGlyphMetric { w: 14245, h: 11241, d: 0, ic: 262 }, // 0x56
+    PackedGlyphMetric { w: 19479, h: 11241, d: 0, ic: 262 }, // 0x57
+    PackedGlyphMetric { w: 14245, h: 11241, d: 0, ic: 0 }, // 0x58
+    PackedGlyphMetric { w: 14245, h: 11241, d: 0, ic: 471 }, // 0x59
+    PackedGlyphMetric { w: 11514, h: 11241, d: 0, ic: 0 }, // 0x5A
+    PackedGlyphMetric { w: 5234, h: 12288, d: 4096, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 9876, h: 11378, d: 0, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 5234, h: 12288, d: 4096, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 9421, h: 11378, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 5234, h: 11378, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 5234, h: 11378, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 9159, h: 7282, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 10468, h: 11378, d: 0, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 8374, h: 7282, d: 0, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 10468, h: 11378, d: 0, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 8636, h: 7282, d: 0, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 5757, h: 11378, d: 0, ic: 1786 }, // 0x66
+    PackedGlyphMetric { w: 9421, h: 7282, d: 3186, ic: 262 }, // 0x67
+    PackedGlyphMetric { w: 10468, h: 11378, d: 0, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 5234, h: 11378, d: 0, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 5757, h: 11378, d: 3186, ic: 0 }, // 0x6A
+    PackedGlyphMetric { w: 9944, h: 11378, d: 0, ic: 0 }, // 0x6B
+    PackedGlyphMetric { w: 5234, h: 11378, d: 0, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 15701, h: 7282, d: 0, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 10468, h: 7282, d: 0, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 9421, h: 7282, d: 0, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 10468, h: 7282, d: 3186, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 9944, h: 7282, d: 3186, ic: 0 }, // 0x71
+    PackedGlyphMetric { w: 7760, h: 7282, d: 0, ic: 0 }, // 0x72
+    PackedGlyphMetric { w: 7432, h: 7282, d: 0, ic: 0 }, // 0x73
+    PackedGlyphMetric { w: 7327, h: 10403, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 10468, h: 7282, d: 0, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 9944, h: 7282, d: 0, ic: 262 }, // 0x76
+    PackedGlyphMetric { w: 13608, h: 7282, d: 0, ic: 262 }, // 0x77
+    PackedGlyphMetric { w: 9944, h: 7282, d: 0, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 9944, h: 7282, d: 3186, ic: 262 }, // 0x79
+    PackedGlyphMetric { w: 8374, h: 7282, d: 0, ic: 0 }, // 0x7A
+    PackedGlyphMetric { w: 9421, h: 7282, d: 0, ic: 523 }, // 0x7B
+    PackedGlyphMetric { w: 18842, h: 7282, d: 0, ic: 523 }, // 0x7C
+    PackedGlyphMetric { w: 9421, h: 11378, d: 0, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 9421, h: 11378, d: 0, ic: 0 }, // 0x7E
+    PackedGlyphMetric { w: 9421, h: 11378, d: 0, ic: 0 }, // 0x7F
 ];
 
-pub static CMTI10_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 627, h: 683, d: 0, ic: 133 }, // 0x00
-    GlyphMetric { w: 818, h: 683, d: 0, ic: 0 }, // 0x01
-    GlyphMetric { w: 767, h: 683, d: 0, ic: 94 }, // 0x02
-    GlyphMetric { w: 692, h: 683, d: 0, ic: 0 }, // 0x03
-    GlyphMetric { w: 664, h: 683, d: 0, ic: 153 }, // 0x04
-    GlyphMetric { w: 743, h: 683, d: 0, ic: 164 }, // 0x05
-    GlyphMetric { w: 716, h: 683, d: 0, ic: 120 }, // 0x06
-    GlyphMetric { w: 767, h: 683, d: 0, ic: 111 }, // 0x07
-    GlyphMetric { w: 716, h: 683, d: 0, ic: 60 }, // 0x08
-    GlyphMetric { w: 767, h: 683, d: 0, ic: 111 }, // 0x09
-    GlyphMetric { w: 716, h: 683, d: 0, ic: 103 }, // 0x0A
-    GlyphMetric { w: 613, h: 694, d: 194, ic: 212 }, // 0x0B
-    GlyphMetric { w: 562, h: 694, d: 194, ic: 103 }, // 0x0C
-    GlyphMetric { w: 588, h: 694, d: 194, ic: 103 }, // 0x0D
-    GlyphMetric { w: 882, h: 694, d: 194, ic: 103 }, // 0x0E
-    GlyphMetric { w: 894, h: 694, d: 194, ic: 103 }, // 0x0F
-    GlyphMetric { w: 307, h: 431, d: 0, ic: 77 }, // 0x10
-    GlyphMetric { w: 332, h: 431, d: 194, ic: 37 }, // 0x11
-    GlyphMetric { w: 511, h: 694, d: 0, ic: 0 }, // 0x12
-    GlyphMetric { w: 511, h: 694, d: 0, ic: 97 }, // 0x13
-    GlyphMetric { w: 511, h: 628, d: 0, ic: 83 }, // 0x14
-    GlyphMetric { w: 511, h: 694, d: 0, ic: 108 }, // 0x15
-    GlyphMetric { w: 511, h: 562, d: 0, ic: 103 }, // 0x16
-    GlyphMetric { w: 831, h: 694, d: 0, ic: 0 }, // 0x17
-    GlyphMetric { w: 460, h: 0, d: 170, ic: 0 }, // 0x18
-    GlyphMetric { w: 537, h: 694, d: 194, ic: 105 }, // 0x19
-    GlyphMetric { w: 716, h: 431, d: 0, ic: 75 }, // 0x1A
-    GlyphMetric { w: 716, h: 431, d: 0, ic: 75 }, // 0x1B
-    GlyphMetric { w: 511, h: 528, d: 97, ic: 92 }, // 0x1C
-    GlyphMetric { w: 883, h: 683, d: 0, ic: 120 }, // 0x1D
-    GlyphMetric { w: 985, h: 683, d: 0, ic: 120 }, // 0x1E
-    GlyphMetric { w: 767, h: 732, d: 49, ic: 94 }, // 0x1F
-    GlyphMetric { w: 256, h: 431, d: 0, ic: 0 }, // 0x20
-    GlyphMetric { w: 307, h: 694, d: 0, ic: 124 }, // 0x21
-    GlyphMetric { w: 514, h: 694, d: 0, ic: 70 }, // 0x22
-    GlyphMetric { w: 818, h: 694, d: 194, ic: 66 }, // 0x23
-    GlyphMetric { w: 769, h: 694, d: 0, ic: 0 }, // 0x24
-    GlyphMetric { w: 818, h: 750, d: 56, ic: 136 }, // 0x25
-    GlyphMetric { w: 767, h: 694, d: 0, ic: 97 }, // 0x26
-    GlyphMetric { w: 307, h: 694, d: 0, ic: 124 }, // 0x27
-    GlyphMetric { w: 409, h: 750, d: 250, ic: 162 }, // 0x28
-    GlyphMetric { w: 409, h: 750, d: 250, ic: 37 }, // 0x29
-    GlyphMetric { w: 511, h: 750, d: 0, ic: 149 }, // 0x2A
-    GlyphMetric { w: 767, h: 562, d: 57, ic: 37 }, // 0x2B
-    GlyphMetric { w: 307, h: 106, d: 194, ic: 0 }, // 0x2C
-    GlyphMetric { w: 358, h: 431, d: 0, ic: 28 }, // 0x2D
-    GlyphMetric { w: 307, h: 106, d: 0, ic: 0 }, // 0x2E
-    GlyphMetric { w: 511, h: 750, d: 250, ic: 162 }, // 0x2F
-    GlyphMetric { w: 511, h: 644, d: 0, ic: 136 }, // 0x30
-    GlyphMetric { w: 511, h: 644, d: 0, ic: 136 }, // 0x31
-    GlyphMetric { w: 511, h: 644, d: 0, ic: 136 }, // 0x32
-    GlyphMetric { w: 511, h: 644, d: 0, ic: 136 }, // 0x33
-    GlyphMetric { w: 511, h: 644, d: 194, ic: 136 }, // 0x34
-    GlyphMetric { w: 511, h: 644, d: 0, ic: 136 }, // 0x35
-    GlyphMetric { w: 511, h: 644, d: 0, ic: 136 }, // 0x36
-    GlyphMetric { w: 511, h: 644, d: 194, ic: 136 }, // 0x37
-    GlyphMetric { w: 511, h: 644, d: 0, ic: 136 }, // 0x38
-    GlyphMetric { w: 511, h: 644, d: 0, ic: 136 }, // 0x39
-    GlyphMetric { w: 307, h: 431, d: 0, ic: 58 }, // 0x3A
-    GlyphMetric { w: 307, h: 431, d: 194, ic: 58 }, // 0x3B
-    GlyphMetric { w: 307, h: 500, d: 194, ic: 76 }, // 0x3C
-    GlyphMetric { w: 767, h: 367, d: 0, ic: 66 }, // 0x3D
-    GlyphMetric { w: 511, h: 500, d: 194, ic: 0 }, // 0x3E
-    GlyphMetric { w: 511, h: 694, d: 0, ic: 123 }, // 0x3F
-    GlyphMetric { w: 767, h: 694, d: 0, ic: 96 }, // 0x40
-    GlyphMetric { w: 743, h: 683, d: 0, ic: 0 }, // 0x41
-    GlyphMetric { w: 704, h: 683, d: 0, ic: 103 }, // 0x42
-    GlyphMetric { w: 716, h: 683, d: 0, ic: 145 }, // 0x43
-    GlyphMetric { w: 755, h: 683, d: 0, ic: 94 }, // 0x44
-    GlyphMetric { w: 678, h: 683, d: 0, ic: 120 }, // 0x45
-    GlyphMetric { w: 653, h: 683, d: 0, ic: 133 }, // 0x46
-    GlyphMetric { w: 774, h: 683, d: 0, ic: 87 }, // 0x47
-    GlyphMetric { w: 743, h: 683, d: 0, ic: 164 }, // 0x48
-    GlyphMetric { w: 386, h: 683, d: 0, ic: 158 }, // 0x49
-    GlyphMetric { w: 525, h: 683, d: 0, ic: 140 }, // 0x4A
-    GlyphMetric { w: 769, h: 683, d: 0, ic: 145 }, // 0x4B
-    GlyphMetric { w: 627, h: 683, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 897, h: 683, d: 0, ic: 164 }, // 0x4D
-    GlyphMetric { w: 743, h: 683, d: 0, ic: 164 }, // 0x4E
-    GlyphMetric { w: 767, h: 683, d: 0, ic: 94 }, // 0x4F
-    GlyphMetric { w: 678, h: 683, d: 0, ic: 103 }, // 0x50
-    GlyphMetric { w: 767, h: 683, d: 194, ic: 94 }, // 0x51
-    GlyphMetric { w: 729, h: 683, d: 0, ic: 39 }, // 0x52
-    GlyphMetric { w: 562, h: 683, d: 0, ic: 120 }, // 0x53
-    GlyphMetric { w: 716, h: 683, d: 0, ic: 133 }, // 0x54
-    GlyphMetric { w: 743, h: 683, d: 0, ic: 164 }, // 0x55
-    GlyphMetric { w: 743, h: 683, d: 0, ic: 184 }, // 0x56
-    GlyphMetric { w: 999, h: 683, d: 0, ic: 184 }, // 0x57
-    GlyphMetric { w: 743, h: 683, d: 0, ic: 158 }, // 0x58
-    GlyphMetric { w: 743, h: 683, d: 0, ic: 194 }, // 0x59
-    GlyphMetric { w: 613, h: 683, d: 0, ic: 145 }, // 0x5A
-    GlyphMetric { w: 307, h: 750, d: 250, ic: 188 }, // 0x5B
-    GlyphMetric { w: 514, h: 694, d: 0, ic: 168 }, // 0x5C
-    GlyphMetric { w: 307, h: 750, d: 250, ic: 105 }, // 0x5D
-    GlyphMetric { w: 511, h: 694, d: 0, ic: 66 }, // 0x5E
-    GlyphMetric { w: 307, h: 668, d: 0, ic: 118 }, // 0x5F
-    GlyphMetric { w: 307, h: 694, d: 0, ic: 124 }, // 0x60
-    GlyphMetric { w: 511, h: 431, d: 0, ic: 77 }, // 0x61
-    GlyphMetric { w: 460, h: 694, d: 0, ic: 63 }, // 0x62
-    GlyphMetric { w: 460, h: 431, d: 0, ic: 57 }, // 0x63
-    GlyphMetric { w: 511, h: 694, d: 0, ic: 103 }, // 0x64
-    GlyphMetric { w: 460, h: 431, d: 0, ic: 75 }, // 0x65
-    GlyphMetric { w: 307, h: 694, d: 194, ic: 212 }, // 0x66
-    GlyphMetric { w: 460, h: 431, d: 194, ic: 88 }, // 0x67
-    GlyphMetric { w: 511, h: 694, d: 0, ic: 77 }, // 0x68
-    GlyphMetric { w: 307, h: 655, d: 0, ic: 102 }, // 0x69
-    GlyphMetric { w: 307, h: 655, d: 194, ic: 145 }, // 0x6A
-    GlyphMetric { w: 460, h: 694, d: 0, ic: 108 }, // 0x6B
-    GlyphMetric { w: 256, h: 694, d: 0, ic: 103 }, // 0x6C
-    GlyphMetric { w: 818, h: 431, d: 0, ic: 77 }, // 0x6D
-    GlyphMetric { w: 562, h: 431, d: 0, ic: 77 }, // 0x6E
-    GlyphMetric { w: 511, h: 431, d: 0, ic: 63 }, // 0x6F
-    GlyphMetric { w: 511, h: 431, d: 194, ic: 63 }, // 0x70
-    GlyphMetric { w: 460, h: 431, d: 194, ic: 88 }, // 0x71
-    GlyphMetric { w: 422, h: 431, d: 0, ic: 108 }, // 0x72
-    GlyphMetric { w: 409, h: 431, d: 0, ic: 82 }, // 0x73
-    GlyphMetric { w: 332, h: 615, d: 0, ic: 95 }, // 0x74
-    GlyphMetric { w: 537, h: 431, d: 0, ic: 77 }, // 0x75
-    GlyphMetric { w: 460, h: 431, d: 0, ic: 108 }, // 0x76
-    GlyphMetric { w: 664, h: 431, d: 0, ic: 108 }, // 0x77
-    GlyphMetric { w: 464, h: 431, d: 0, ic: 120 }, // 0x78
-    GlyphMetric { w: 486, h: 431, d: 194, ic: 88 }, // 0x79
-    GlyphMetric { w: 409, h: 431, d: 0, ic: 123 }, // 0x7A
-    GlyphMetric { w: 511, h: 431, d: 0, ic: 92 }, // 0x7B
-    GlyphMetric { w: 1022, h: 431, d: 0, ic: 92 }, // 0x7C
-    GlyphMetric { w: 511, h: 694, d: 0, ic: 123 }, // 0x7D
-    GlyphMetric { w: 511, h: 668, d: 0, ic: 116 }, // 0x7E
-    GlyphMetric { w: 511, h: 668, d: 0, ic: 105 }, // 0x7F
+pub static CMTI10_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 10276, h: 11196, d: 0, ic: 2180 }, // 0x00
+    PackedGlyphMetric { w: 13398, h: 11196, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 12561, h: 11196, d: 0, ic: 1541 }, // 0x02
+    PackedGlyphMetric { w: 11341, h: 11196, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 10886, h: 11196, d: 0, ic: 2506 }, // 0x04
+    PackedGlyphMetric { w: 12179, h: 11196, d: 0, ic: 2685 }, // 0x05
+    PackedGlyphMetric { w: 11724, h: 11196, d: 0, ic: 1971 }, // 0x06
+    PackedGlyphMetric { w: 12561, h: 11196, d: 0, ic: 1820 }, // 0x07
+    PackedGlyphMetric { w: 11724, h: 11196, d: 0, ic: 981 }, // 0x08
+    PackedGlyphMetric { w: 12561, h: 11196, d: 0, ic: 1820 }, // 0x09
+    PackedGlyphMetric { w: 11724, h: 11196, d: 0, ic: 1680 }, // 0x0A
+    PackedGlyphMetric { w: 10049, h: 11378, d: 3186, ic: 3472 }, // 0x0B
+    PackedGlyphMetric { w: 9211, h: 11378, d: 3186, ic: 1693 }, // 0x0C
+    PackedGlyphMetric { w: 9630, h: 11378, d: 3186, ic: 1693 }, // 0x0D
+    PackedGlyphMetric { w: 14445, h: 11378, d: 3186, ic: 1693 }, // 0x0E
+    PackedGlyphMetric { w: 14654, h: 11378, d: 3186, ic: 1693 }, // 0x0F
+    PackedGlyphMetric { w: 5024, h: 7054, d: 0, ic: 1257 }, // 0x10
+    PackedGlyphMetric { w: 5443, h: 7054, d: 3186, ic: 612 }, // 0x11
+    PackedGlyphMetric { w: 8374, h: 11378, d: 0, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 8374, h: 11378, d: 0, ic: 1588 }, // 0x13
+    PackedGlyphMetric { w: 8374, h: 10297, d: 0, ic: 1359 }, // 0x14
+    PackedGlyphMetric { w: 8374, h: 11378, d: 0, ic: 1770 }, // 0x15
+    PackedGlyphMetric { w: 8374, h: 9202, d: 0, ic: 1693 }, // 0x16
+    PackedGlyphMetric { w: 13620, h: 11378, d: 0, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 7537, h: 0, d: 2788, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 8793, h: 11378, d: 3186, ic: 1723 }, // 0x19
+    PackedGlyphMetric { w: 11724, h: 7054, d: 0, ic: 1231 }, // 0x1A
+    PackedGlyphMetric { w: 11724, h: 7054, d: 0, ic: 1231 }, // 0x1B
+    PackedGlyphMetric { w: 8374, h: 8647, d: 1593, ic: 1506 }, // 0x1C
+    PackedGlyphMetric { w: 14463, h: 11196, d: 0, ic: 1971 }, // 0x1D
+    PackedGlyphMetric { w: 16138, h: 11196, d: 0, ic: 1971 }, // 0x1E
+    PackedGlyphMetric { w: 12561, h: 11992, d: 796, ic: 1541 }, // 0x1F
+    PackedGlyphMetric { w: 4187, h: 7054, d: 0, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 5024, h: 11378, d: 0, ic: 2034 }, // 0x21
+    PackedGlyphMetric { w: 8429, h: 11378, d: 0, ic: 1141 }, // 0x22
+    PackedGlyphMetric { w: 13398, h: 11378, d: 3186, ic: 1084 }, // 0x23
+    PackedGlyphMetric { w: 12601, h: 11378, d: 0, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 13398, h: 12288, d: 910, ic: 2235 }, // 0x25
+    PackedGlyphMetric { w: 12561, h: 11378, d: 0, ic: 1588 }, // 0x26
+    PackedGlyphMetric { w: 5024, h: 11378, d: 0, ic: 2034 }, // 0x27
+    PackedGlyphMetric { w: 6699, h: 12288, d: 4096, ic: 2653 }, // 0x28
+    PackedGlyphMetric { w: 6699, h: 12288, d: 4096, ic: 605 }, // 0x29
+    PackedGlyphMetric { w: 8374, h: 12288, d: 0, ic: 2444 }, // 0x2A
+    PackedGlyphMetric { w: 12561, h: 9202, d: 928, ic: 605 }, // 0x2B
+    PackedGlyphMetric { w: 5024, h: 1729, d: 3186, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 5862, h: 7054, d: 0, ic: 463 }, // 0x2D
+    PackedGlyphMetric { w: 5024, h: 1729, d: 0, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 8374, h: 12288, d: 4096, ic: 2653 }, // 0x2F
+    PackedGlyphMetric { w: 8374, h: 10559, d: 0, ic: 2221 }, // 0x30
+    PackedGlyphMetric { w: 8374, h: 10559, d: 0, ic: 2221 }, // 0x31
+    PackedGlyphMetric { w: 8374, h: 10559, d: 0, ic: 2221 }, // 0x32
+    PackedGlyphMetric { w: 8374, h: 10559, d: 0, ic: 2221 }, // 0x33
+    PackedGlyphMetric { w: 8374, h: 10559, d: 3186, ic: 2221 }, // 0x34
+    PackedGlyphMetric { w: 8374, h: 10559, d: 0, ic: 2221 }, // 0x35
+    PackedGlyphMetric { w: 8374, h: 10559, d: 0, ic: 2221 }, // 0x36
+    PackedGlyphMetric { w: 8374, h: 10559, d: 3186, ic: 2221 }, // 0x37
+    PackedGlyphMetric { w: 8374, h: 10559, d: 0, ic: 2221 }, // 0x38
+    PackedGlyphMetric { w: 8374, h: 10559, d: 0, ic: 2221 }, // 0x39
+    PackedGlyphMetric { w: 5024, h: 7054, d: 0, ic: 953 }, // 0x3A
+    PackedGlyphMetric { w: 5024, h: 7054, d: 3186, ic: 953 }, // 0x3B
+    PackedGlyphMetric { w: 5024, h: 8192, d: 3186, ic: 1238 }, // 0x3C
+    PackedGlyphMetric { w: 12561, h: 6011, d: 0, ic: 1084 }, // 0x3D
+    PackedGlyphMetric { w: 8374, h: 8192, d: 3186, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 8374, h: 11378, d: 0, ic: 2007 }, // 0x3F
+    PackedGlyphMetric { w: 12561, h: 11378, d: 0, ic: 1572 }, // 0x40
+    PackedGlyphMetric { w: 12179, h: 11196, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 11532, h: 11196, d: 0, ic: 1680 }, // 0x42
+    PackedGlyphMetric { w: 11724, h: 11196, d: 0, ic: 2380 }, // 0x43
+    PackedGlyphMetric { w: 12370, h: 11196, d: 0, ic: 1541 }, // 0x44
+    PackedGlyphMetric { w: 11114, h: 11196, d: 0, ic: 1971 }, // 0x45
+    PackedGlyphMetric { w: 10695, h: 11196, d: 0, ic: 2180 }, // 0x46
+    PackedGlyphMetric { w: 12675, h: 11196, d: 0, ic: 1429 }, // 0x47
+    PackedGlyphMetric { w: 12179, h: 11196, d: 0, ic: 2685 }, // 0x48
+    PackedGlyphMetric { w: 6317, h: 11196, d: 0, ic: 2590 }, // 0x49
+    PackedGlyphMetric { w: 8602, h: 11196, d: 0, ic: 2298 }, // 0x4A
+    PackedGlyphMetric { w: 12597, h: 11196, d: 0, ic: 2380 }, // 0x4B
+    PackedGlyphMetric { w: 10276, h: 11196, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 14691, h: 11196, d: 0, ic: 2685 }, // 0x4D
+    PackedGlyphMetric { w: 12179, h: 11196, d: 0, ic: 2685 }, // 0x4E
+    PackedGlyphMetric { w: 12561, h: 11196, d: 0, ic: 1541 }, // 0x4F
+    PackedGlyphMetric { w: 11114, h: 11196, d: 0, ic: 1680 }, // 0x50
+    PackedGlyphMetric { w: 12561, h: 11196, d: 3186, ic: 1541 }, // 0x51
+    PackedGlyphMetric { w: 11951, h: 11196, d: 0, ic: 634 }, // 0x52
+    PackedGlyphMetric { w: 9211, h: 11196, d: 0, ic: 1962 }, // 0x53
+    PackedGlyphMetric { w: 11724, h: 11196, d: 0, ic: 2180 }, // 0x54
+    PackedGlyphMetric { w: 12179, h: 11196, d: 0, ic: 2685 }, // 0x55
+    PackedGlyphMetric { w: 12179, h: 11196, d: 0, ic: 3008 }, // 0x56
+    PackedGlyphMetric { w: 16366, h: 11196, d: 0, ic: 3008 }, // 0x57
+    PackedGlyphMetric { w: 12179, h: 11196, d: 0, ic: 2590 }, // 0x58
+    PackedGlyphMetric { w: 12179, h: 11196, d: 0, ic: 3176 }, // 0x59
+    PackedGlyphMetric { w: 10049, h: 11196, d: 0, ic: 2380 }, // 0x5A
+    PackedGlyphMetric { w: 5024, h: 12288, d: 4096, ic: 3072 }, // 0x5B
+    PackedGlyphMetric { w: 8429, h: 11378, d: 0, ic: 2761 }, // 0x5C
+    PackedGlyphMetric { w: 5024, h: 12288, d: 4096, ic: 1725 }, // 0x5D
+    PackedGlyphMetric { w: 8374, h: 11378, d: 0, ic: 1089 }, // 0x5E
+    PackedGlyphMetric { w: 5024, h: 10942, d: 0, ic: 1925 }, // 0x5F
+    PackedGlyphMetric { w: 5024, h: 11378, d: 0, ic: 2034 }, // 0x60
+    PackedGlyphMetric { w: 8374, h: 7054, d: 0, ic: 1257 }, // 0x61
+    PackedGlyphMetric { w: 7537, h: 11378, d: 0, ic: 1034 }, // 0x62
+    PackedGlyphMetric { w: 7537, h: 7054, d: 0, ic: 926 }, // 0x63
+    PackedGlyphMetric { w: 8374, h: 11378, d: 0, ic: 1693 }, // 0x64
+    PackedGlyphMetric { w: 7537, h: 7054, d: 0, ic: 1231 }, // 0x65
+    PackedGlyphMetric { w: 5024, h: 11378, d: 3186, ic: 3472 }, // 0x66
+    PackedGlyphMetric { w: 7537, h: 7054, d: 3186, ic: 1450 }, // 0x67
+    PackedGlyphMetric { w: 8374, h: 11378, d: 0, ic: 1257 }, // 0x68
+    PackedGlyphMetric { w: 5024, h: 10737, d: 0, ic: 1669 }, // 0x69
+    PackedGlyphMetric { w: 5024, h: 10737, d: 3186, ic: 2370 }, // 0x6A
+    PackedGlyphMetric { w: 7537, h: 11378, d: 0, ic: 1764 }, // 0x6B
+    PackedGlyphMetric { w: 4187, h: 11378, d: 0, ic: 1693 }, // 0x6C
+    PackedGlyphMetric { w: 13398, h: 7054, d: 0, ic: 1257 }, // 0x6D
+    PackedGlyphMetric { w: 9211, h: 7054, d: 0, ic: 1257 }, // 0x6E
+    PackedGlyphMetric { w: 8374, h: 7054, d: 0, ic: 1034 }, // 0x6F
+    PackedGlyphMetric { w: 8374, h: 7054, d: 3186, ic: 1034 }, // 0x70
+    PackedGlyphMetric { w: 7537, h: 7054, d: 3186, ic: 1450 }, // 0x71
+    PackedGlyphMetric { w: 6909, h: 7054, d: 0, ic: 1764 }, // 0x72
+    PackedGlyphMetric { w: 6699, h: 7054, d: 0, ic: 1345 }, // 0x73
+    PackedGlyphMetric { w: 5443, h: 10077, d: 0, ic: 1554 }, // 0x74
+    PackedGlyphMetric { w: 8793, h: 7054, d: 0, ic: 1257 }, // 0x75
+    PackedGlyphMetric { w: 7537, h: 7054, d: 0, ic: 1764 }, // 0x76
+    PackedGlyphMetric { w: 10886, h: 7054, d: 0, ic: 1764 }, // 0x77
+    PackedGlyphMetric { w: 7600, h: 7054, d: 0, ic: 1973 }, // 0x78
+    PackedGlyphMetric { w: 7955, h: 7054, d: 3186, ic: 1450 }, // 0x79
+    PackedGlyphMetric { w: 6699, h: 7054, d: 0, ic: 2014 }, // 0x7A
+    PackedGlyphMetric { w: 8374, h: 7054, d: 0, ic: 1509 }, // 0x7B
+    PackedGlyphMetric { w: 16748, h: 7054, d: 0, ic: 1509 }, // 0x7C
+    PackedGlyphMetric { w: 8374, h: 11378, d: 0, ic: 2007 }, // 0x7D
+    PackedGlyphMetric { w: 8374, h: 10942, d: 0, ic: 1898 }, // 0x7E
+    PackedGlyphMetric { w: 8374, h: 10942, d: 0, ic: 1716 }, // 0x7F
 ];
 
 
@@ -2758,14 +849,9 @@ pub static CMTI10_METRICS: [GlyphMetric; 128] = [
 #[inline(always)]
 pub fn cmbx10_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMBX10_METRICS[code as usize]
+        CMBX10_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric {
-            w: 0,
-            h: 0,
-            d: 0,
-            ic: 0,
-        }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -2773,1195 +859,1190 @@ pub fn cmbx10_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn cmti10_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMTI10_METRICS[code as usize]
+        CMTI10_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric {
-            w: 0,
-            h: 0,
-            d: 0,
-            ic: 0,
-        }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
 
-pub static CMR10_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 625, h: 683, d: 0, ic: 0 }, // 0x00
-    GlyphMetric { w: 833, h: 683, d: 0, ic: 0 }, // 0x01
-    GlyphMetric { w: 778, h: 683, d: 0, ic: 0 }, // 0x02
-    GlyphMetric { w: 694, h: 683, d: 0, ic: 0 }, // 0x03
-    GlyphMetric { w: 667, h: 683, d: 0, ic: 0 }, // 0x04
-    GlyphMetric { w: 750, h: 683, d: 0, ic: 0 }, // 0x05
-    GlyphMetric { w: 722, h: 683, d: 0, ic: 0 }, // 0x06
-    GlyphMetric { w: 778, h: 683, d: 0, ic: 0 }, // 0x07
-    GlyphMetric { w: 722, h: 683, d: 0, ic: 0 }, // 0x08
-    GlyphMetric { w: 778, h: 683, d: 0, ic: 0 }, // 0x09
-    GlyphMetric { w: 722, h: 683, d: 0, ic: 0 }, // 0x0A
-    GlyphMetric { w: 583, h: 694, d: 0, ic: 78 }, // 0x0B
-    GlyphMetric { w: 556, h: 694, d: 0, ic: 0 }, // 0x0C
-    GlyphMetric { w: 556, h: 694, d: 0, ic: 0 }, // 0x0D
-    GlyphMetric { w: 833, h: 694, d: 0, ic: 0 }, // 0x0E
-    GlyphMetric { w: 833, h: 694, d: 0, ic: 0 }, // 0x0F
-    GlyphMetric { w: 278, h: 431, d: 0, ic: 0 }, // 0x10
-    GlyphMetric { w: 306, h: 431, d: 194, ic: 0 }, // 0x11
-    GlyphMetric { w: 500, h: 694, d: 0, ic: 0 }, // 0x12
-    GlyphMetric { w: 500, h: 694, d: 0, ic: 0 }, // 0x13
-    GlyphMetric { w: 500, h: 628, d: 0, ic: 0 }, // 0x14
-    GlyphMetric { w: 500, h: 694, d: 0, ic: 0 }, // 0x15
-    GlyphMetric { w: 500, h: 568, d: 0, ic: 0 }, // 0x16
-    GlyphMetric { w: 750, h: 694, d: 0, ic: 0 }, // 0x17
-    GlyphMetric { w: 444, h: 0, d: 170, ic: 0 }, // 0x18
-    GlyphMetric { w: 500, h: 694, d: 0, ic: 0 }, // 0x19
-    GlyphMetric { w: 722, h: 431, d: 0, ic: 0 }, // 0x1A
-    GlyphMetric { w: 778, h: 431, d: 0, ic: 0 }, // 0x1B
-    GlyphMetric { w: 500, h: 528, d: 97, ic: 0 }, // 0x1C
-    GlyphMetric { w: 903, h: 683, d: 0, ic: 0 }, // 0x1D
-    GlyphMetric { w: 1014, h: 683, d: 0, ic: 0 }, // 0x1E
-    GlyphMetric { w: 778, h: 732, d: 49, ic: 0 }, // 0x1F
-    GlyphMetric { w: 278, h: 431, d: 0, ic: 0 }, // 0x20
-    GlyphMetric { w: 278, h: 694, d: 0, ic: 0 }, // 0x21
-    GlyphMetric { w: 500, h: 694, d: 0, ic: 0 }, // 0x22
-    GlyphMetric { w: 833, h: 694, d: 194, ic: 0 }, // 0x23
-    GlyphMetric { w: 500, h: 750, d: 56, ic: 0 }, // 0x24
-    GlyphMetric { w: 833, h: 750, d: 56, ic: 0 }, // 0x25
-    GlyphMetric { w: 778, h: 694, d: 0, ic: 0 }, // 0x26
-    GlyphMetric { w: 278, h: 694, d: 0, ic: 0 }, // 0x27
-    GlyphMetric { w: 389, h: 750, d: 250, ic: 0 }, // 0x28
-    GlyphMetric { w: 389, h: 750, d: 250, ic: 0 }, // 0x29
-    GlyphMetric { w: 500, h: 750, d: 0, ic: 0 }, // 0x2A
-    GlyphMetric { w: 778, h: 583, d: 83, ic: 0 }, // 0x2B
-    GlyphMetric { w: 278, h: 106, d: 194, ic: 0 }, // 0x2C
-    GlyphMetric { w: 333, h: 431, d: 0, ic: 0 }, // 0x2D
-    GlyphMetric { w: 278, h: 106, d: 0, ic: 0 }, // 0x2E
-    GlyphMetric { w: 500, h: 750, d: 250, ic: 0 }, // 0x2F
-    GlyphMetric { w: 500, h: 644, d: 0, ic: 0 }, // 0x30
-    GlyphMetric { w: 500, h: 644, d: 0, ic: 0 }, // 0x31
-    GlyphMetric { w: 500, h: 644, d: 0, ic: 0 }, // 0x32
-    GlyphMetric { w: 500, h: 644, d: 0, ic: 0 }, // 0x33
-    GlyphMetric { w: 500, h: 644, d: 0, ic: 0 }, // 0x34
-    GlyphMetric { w: 500, h: 644, d: 0, ic: 0 }, // 0x35
-    GlyphMetric { w: 500, h: 644, d: 0, ic: 0 }, // 0x36
-    GlyphMetric { w: 500, h: 644, d: 0, ic: 0 }, // 0x37
-    GlyphMetric { w: 500, h: 644, d: 0, ic: 0 }, // 0x38
-    GlyphMetric { w: 500, h: 644, d: 0, ic: 0 }, // 0x39
-    GlyphMetric { w: 278, h: 431, d: 0, ic: 0 }, // 0x3A
-    GlyphMetric { w: 278, h: 431, d: 194, ic: 0 }, // 0x3B
-    GlyphMetric { w: 278, h: 500, d: 194, ic: 0 }, // 0x3C
-    GlyphMetric { w: 778, h: 367, d: 0, ic: 0 }, // 0x3D
-    GlyphMetric { w: 472, h: 500, d: 194, ic: 0 }, // 0x3E
-    GlyphMetric { w: 472, h: 694, d: 0, ic: 0 }, // 0x3F
-    GlyphMetric { w: 778, h: 694, d: 0, ic: 0 }, // 0x40
-    GlyphMetric { w: 750, h: 683, d: 0, ic: 0 }, // 0x41
-    GlyphMetric { w: 708, h: 683, d: 0, ic: 0 }, // 0x42
-    GlyphMetric { w: 722, h: 683, d: 0, ic: 0 }, // 0x43
-    GlyphMetric { w: 764, h: 683, d: 0, ic: 0 }, // 0x44
-    GlyphMetric { w: 681, h: 683, d: 0, ic: 0 }, // 0x45
-    GlyphMetric { w: 653, h: 683, d: 0, ic: 0 }, // 0x46
-    GlyphMetric { w: 785, h: 683, d: 0, ic: 0 }, // 0x47
-    GlyphMetric { w: 750, h: 683, d: 0, ic: 0 }, // 0x48
-    GlyphMetric { w: 361, h: 683, d: 0, ic: 0 }, // 0x49
-    GlyphMetric { w: 514, h: 683, d: 0, ic: 0 }, // 0x4A
-    GlyphMetric { w: 778, h: 683, d: 0, ic: 0 }, // 0x4B
-    GlyphMetric { w: 625, h: 683, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 917, h: 683, d: 0, ic: 0 }, // 0x4D
-    GlyphMetric { w: 750, h: 683, d: 0, ic: 0 }, // 0x4E
-    GlyphMetric { w: 778, h: 683, d: 0, ic: 0 }, // 0x4F
-    GlyphMetric { w: 681, h: 683, d: 0, ic: 0 }, // 0x50
-    GlyphMetric { w: 778, h: 683, d: 194, ic: 0 }, // 0x51
-    GlyphMetric { w: 736, h: 683, d: 0, ic: 0 }, // 0x52
-    GlyphMetric { w: 556, h: 683, d: 0, ic: 0 }, // 0x53
-    GlyphMetric { w: 722, h: 683, d: 0, ic: 0 }, // 0x54
-    GlyphMetric { w: 750, h: 683, d: 0, ic: 0 }, // 0x55
-    GlyphMetric { w: 750, h: 683, d: 0, ic: 14 }, // 0x56
-    GlyphMetric { w: 1028, h: 683, d: 0, ic: 14 }, // 0x57
-    GlyphMetric { w: 750, h: 683, d: 0, ic: 0 }, // 0x58
-    GlyphMetric { w: 750, h: 683, d: 0, ic: 25 }, // 0x59
-    GlyphMetric { w: 611, h: 683, d: 0, ic: 0 }, // 0x5A
-    GlyphMetric { w: 278, h: 750, d: 250, ic: 0 }, // 0x5B
-    GlyphMetric { w: 500, h: 694, d: 0, ic: 0 }, // 0x5C
-    GlyphMetric { w: 278, h: 750, d: 250, ic: 0 }, // 0x5D
-    GlyphMetric { w: 500, h: 694, d: 0, ic: 0 }, // 0x5E
-    GlyphMetric { w: 278, h: 668, d: 0, ic: 0 }, // 0x5F
-    GlyphMetric { w: 278, h: 694, d: 0, ic: 0 }, // 0x60
-    GlyphMetric { w: 500, h: 431, d: 0, ic: 0 }, // 0x61
-    GlyphMetric { w: 556, h: 694, d: 0, ic: 0 }, // 0x62
-    GlyphMetric { w: 444, h: 431, d: 0, ic: 0 }, // 0x63
-    GlyphMetric { w: 556, h: 694, d: 0, ic: 0 }, // 0x64
-    GlyphMetric { w: 444, h: 431, d: 0, ic: 0 }, // 0x65
-    GlyphMetric { w: 306, h: 694, d: 0, ic: 78 }, // 0x66
-    GlyphMetric { w: 500, h: 431, d: 194, ic: 14 }, // 0x67
-    GlyphMetric { w: 556, h: 694, d: 0, ic: 0 }, // 0x68
-    GlyphMetric { w: 278, h: 668, d: 0, ic: 0 }, // 0x69
-    GlyphMetric { w: 306, h: 668, d: 194, ic: 0 }, // 0x6A
-    GlyphMetric { w: 528, h: 694, d: 0, ic: 0 }, // 0x6B
-    GlyphMetric { w: 278, h: 694, d: 0, ic: 0 }, // 0x6C
-    GlyphMetric { w: 833, h: 431, d: 0, ic: 0 }, // 0x6D
-    GlyphMetric { w: 556, h: 431, d: 0, ic: 0 }, // 0x6E
-    GlyphMetric { w: 500, h: 431, d: 0, ic: 0 }, // 0x6F
-    GlyphMetric { w: 556, h: 431, d: 194, ic: 0 }, // 0x70
-    GlyphMetric { w: 528, h: 431, d: 194, ic: 0 }, // 0x71
-    GlyphMetric { w: 392, h: 431, d: 0, ic: 0 }, // 0x72
-    GlyphMetric { w: 394, h: 431, d: 0, ic: 0 }, // 0x73
-    GlyphMetric { w: 389, h: 615, d: 0, ic: 0 }, // 0x74
-    GlyphMetric { w: 556, h: 431, d: 0, ic: 0 }, // 0x75
-    GlyphMetric { w: 528, h: 431, d: 0, ic: 14 }, // 0x76
-    GlyphMetric { w: 722, h: 431, d: 0, ic: 14 }, // 0x77
-    GlyphMetric { w: 528, h: 431, d: 0, ic: 0 }, // 0x78
-    GlyphMetric { w: 528, h: 431, d: 194, ic: 14 }, // 0x79
-    GlyphMetric { w: 444, h: 431, d: 0, ic: 0 }, // 0x7A
-    GlyphMetric { w: 500, h: 431, d: 0, ic: 28 }, // 0x7B
-    GlyphMetric { w: 1000, h: 431, d: 0, ic: 28 }, // 0x7C
-    GlyphMetric { w: 500, h: 694, d: 0, ic: 0 }, // 0x7D
-    GlyphMetric { w: 500, h: 668, d: 0, ic: 0 }, // 0x7E
-    GlyphMetric { w: 500, h: 668, d: 0, ic: 0 }, // 0x7F
+pub static CMR10_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 10240, h: 11196, d: 0, ic: 0 }, // 0x00
+    PackedGlyphMetric { w: 13653, h: 11196, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 12743, h: 11196, d: 0, ic: 0 }, // 0x02
+    PackedGlyphMetric { w: 11378, h: 11196, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 10923, h: 11196, d: 0, ic: 0 }, // 0x04
+    PackedGlyphMetric { w: 12288, h: 11196, d: 0, ic: 0 }, // 0x05
+    PackedGlyphMetric { w: 11833, h: 11196, d: 0, ic: 0 }, // 0x06
+    PackedGlyphMetric { w: 12743, h: 11196, d: 0, ic: 0 }, // 0x07
+    PackedGlyphMetric { w: 11833, h: 11196, d: 0, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 12743, h: 11196, d: 0, ic: 0 }, // 0x09
+    PackedGlyphMetric { w: 11833, h: 11196, d: 0, ic: 0 }, // 0x0A
+    PackedGlyphMetric { w: 9557, h: 11378, d: 0, ic: 1274 }, // 0x0B
+    PackedGlyphMetric { w: 9102, h: 11378, d: 0, ic: 0 }, // 0x0C
+    PackedGlyphMetric { w: 9102, h: 11378, d: 0, ic: 0 }, // 0x0D
+    PackedGlyphMetric { w: 13653, h: 11378, d: 0, ic: 0 }, // 0x0E
+    PackedGlyphMetric { w: 13653, h: 11378, d: 0, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 4551, h: 7054, d: 0, ic: 0 }, // 0x10
+    PackedGlyphMetric { w: 5006, h: 7054, d: 3186, ic: 0 }, // 0x11
+    PackedGlyphMetric { w: 8192, h: 11378, d: 0, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 8192, h: 11378, d: 0, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 8192, h: 10297, d: 0, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 8192, h: 11378, d: 0, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 8192, h: 9302, d: 0, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 12288, h: 11378, d: 0, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 7282, h: 0, d: 2788, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 8192, h: 11378, d: 0, ic: 0 }, // 0x19
+    PackedGlyphMetric { w: 11833, h: 7054, d: 0, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 12743, h: 7054, d: 0, ic: 0 }, // 0x1B
+    PackedGlyphMetric { w: 8192, h: 8647, d: 1593, ic: 0 }, // 0x1C
+    PackedGlyphMetric { w: 14791, h: 11196, d: 0, ic: 0 }, // 0x1D
+    PackedGlyphMetric { w: 16612, h: 11196, d: 0, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 12743, h: 11992, d: 796, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 4551, h: 7054, d: 0, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 4551, h: 11378, d: 0, ic: 0 }, // 0x21
+    PackedGlyphMetric { w: 8192, h: 11378, d: 0, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 13653, h: 11378, d: 3186, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 8192, h: 12288, d: 910, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 13653, h: 12288, d: 910, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 12743, h: 11378, d: 0, ic: 0 }, // 0x26
+    PackedGlyphMetric { w: 4551, h: 11378, d: 0, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 6372, h: 12288, d: 4096, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 6372, h: 12288, d: 4096, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 8192, h: 12288, d: 0, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 12743, h: 9557, d: 1365, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 4551, h: 1729, d: 3186, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 5461, h: 7054, d: 0, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 4551, h: 1729, d: 0, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 8192, h: 12288, d: 4096, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 8192, h: 10559, d: 0, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 4551, h: 7054, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 4551, h: 7054, d: 3186, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 4551, h: 8192, d: 3186, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 12743, h: 6011, d: 0, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 7737, h: 8192, d: 3186, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 7737, h: 11378, d: 0, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 12743, h: 11378, d: 0, ic: 0 }, // 0x40
+    PackedGlyphMetric { w: 12288, h: 11196, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 11605, h: 11196, d: 0, ic: 0 }, // 0x42
+    PackedGlyphMetric { w: 11833, h: 11196, d: 0, ic: 0 }, // 0x43
+    PackedGlyphMetric { w: 12516, h: 11196, d: 0, ic: 0 }, // 0x44
+    PackedGlyphMetric { w: 11150, h: 11196, d: 0, ic: 0 }, // 0x45
+    PackedGlyphMetric { w: 10695, h: 11196, d: 0, ic: 0 }, // 0x46
+    PackedGlyphMetric { w: 12857, h: 11196, d: 0, ic: 0 }, // 0x47
+    PackedGlyphMetric { w: 12288, h: 11196, d: 0, ic: 0 }, // 0x48
+    PackedGlyphMetric { w: 5916, h: 11196, d: 0, ic: 0 }, // 0x49
+    PackedGlyphMetric { w: 8420, h: 11196, d: 0, ic: 0 }, // 0x4A
+    PackedGlyphMetric { w: 12743, h: 11196, d: 0, ic: 0 }, // 0x4B
+    PackedGlyphMetric { w: 10240, h: 11196, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 15019, h: 11196, d: 0, ic: 0 }, // 0x4D
+    PackedGlyphMetric { w: 12288, h: 11196, d: 0, ic: 0 }, // 0x4E
+    PackedGlyphMetric { w: 12743, h: 11196, d: 0, ic: 0 }, // 0x4F
+    PackedGlyphMetric { w: 11150, h: 11196, d: 0, ic: 0 }, // 0x50
+    PackedGlyphMetric { w: 12743, h: 11196, d: 3186, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 12060, h: 11196, d: 0, ic: 0 }, // 0x52
+    PackedGlyphMetric { w: 9102, h: 11196, d: 0, ic: 0 }, // 0x53
+    PackedGlyphMetric { w: 11833, h: 11196, d: 0, ic: 0 }, // 0x54
+    PackedGlyphMetric { w: 12288, h: 11196, d: 0, ic: 0 }, // 0x55
+    PackedGlyphMetric { w: 12288, h: 11196, d: 0, ic: 228 }, // 0x56
+    PackedGlyphMetric { w: 16839, h: 11196, d: 0, ic: 228 }, // 0x57
+    PackedGlyphMetric { w: 12288, h: 11196, d: 0, ic: 0 }, // 0x58
+    PackedGlyphMetric { w: 12288, h: 11196, d: 0, ic: 410 }, // 0x59
+    PackedGlyphMetric { w: 10012, h: 11196, d: 0, ic: 0 }, // 0x5A
+    PackedGlyphMetric { w: 4551, h: 12288, d: 4096, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 8192, h: 11378, d: 0, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 4551, h: 12288, d: 4096, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 8192, h: 11378, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 4551, h: 10942, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 4551, h: 11378, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 8192, h: 7054, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 9102, h: 11378, d: 0, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 7282, h: 7054, d: 0, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 9102, h: 11378, d: 0, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 7282, h: 7054, d: 0, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 5006, h: 11378, d: 0, ic: 1274 }, // 0x66
+    PackedGlyphMetric { w: 8192, h: 7054, d: 3186, ic: 228 }, // 0x67
+    PackedGlyphMetric { w: 9102, h: 11378, d: 0, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 4551, h: 10942, d: 0, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 5006, h: 10942, d: 3186, ic: 0 }, // 0x6A
+    PackedGlyphMetric { w: 8647, h: 11378, d: 0, ic: 0 }, // 0x6B
+    PackedGlyphMetric { w: 4551, h: 11378, d: 0, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 13653, h: 7054, d: 0, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 9102, h: 7054, d: 0, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 8192, h: 7054, d: 0, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 9102, h: 7054, d: 3186, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 8647, h: 7054, d: 3186, ic: 0 }, // 0x71
+    PackedGlyphMetric { w: 6417, h: 7054, d: 0, ic: 0 }, // 0x72
+    PackedGlyphMetric { w: 6463, h: 7054, d: 0, ic: 0 }, // 0x73
+    PackedGlyphMetric { w: 6372, h: 10077, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 9102, h: 7054, d: 0, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 8647, h: 7054, d: 0, ic: 228 }, // 0x76
+    PackedGlyphMetric { w: 11833, h: 7054, d: 0, ic: 228 }, // 0x77
+    PackedGlyphMetric { w: 8647, h: 7054, d: 0, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 8647, h: 7054, d: 3186, ic: 228 }, // 0x79
+    PackedGlyphMetric { w: 7282, h: 7054, d: 0, ic: 0 }, // 0x7A
+    PackedGlyphMetric { w: 8192, h: 7054, d: 0, ic: 455 }, // 0x7B
+    PackedGlyphMetric { w: 16384, h: 7054, d: 0, ic: 455 }, // 0x7C
+    PackedGlyphMetric { w: 8192, h: 11378, d: 0, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 8192, h: 10942, d: 0, ic: 0 }, // 0x7E
+    PackedGlyphMetric { w: 8192, h: 10942, d: 0, ic: 0 }, // 0x7F
 ];
 
-pub static CMR7_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 706, h: 683, d: 0, ic: 0 }, // 0x00
-    GlyphMetric { w: 938, h: 683, d: 0, ic: 0 }, // 0x01
-    GlyphMetric { w: 877, h: 683, d: 0, ic: 0 }, // 0x02
-    GlyphMetric { w: 782, h: 683, d: 0, ic: 0 }, // 0x03
-    GlyphMetric { w: 754, h: 683, d: 0, ic: 0 }, // 0x04
-    GlyphMetric { w: 843, h: 683, d: 0, ic: 0 }, // 0x05
-    GlyphMetric { w: 815, h: 683, d: 0, ic: 0 }, // 0x06
-    GlyphMetric { w: 877, h: 683, d: 0, ic: 0 }, // 0x07
-    GlyphMetric { w: 815, h: 683, d: 0, ic: 0 }, // 0x08
-    GlyphMetric { w: 877, h: 683, d: 0, ic: 0 }, // 0x09
-    GlyphMetric { w: 815, h: 683, d: 0, ic: 0 }, // 0x0A
-    GlyphMetric { w: 678, h: 694, d: 0, ic: 80 }, // 0x0B
-    GlyphMetric { w: 647, h: 694, d: 0, ic: 0 }, // 0x0C
-    GlyphMetric { w: 647, h: 694, d: 0, ic: 0 }, // 0x0D
-    GlyphMetric { w: 970, h: 694, d: 0, ic: 0 }, // 0x0E
-    GlyphMetric { w: 970, h: 694, d: 0, ic: 0 }, // 0x0F
-    GlyphMetric { w: 323, h: 431, d: 0, ic: 0 }, // 0x10
-    GlyphMetric { w: 354, h: 431, d: 194, ic: 0 }, // 0x11
-    GlyphMetric { w: 569, h: 694, d: 0, ic: 0 }, // 0x12
-    GlyphMetric { w: 569, h: 694, d: 0, ic: 0 }, // 0x13
-    GlyphMetric { w: 569, h: 628, d: 0, ic: 0 }, // 0x14
-    GlyphMetric { w: 569, h: 694, d: 0, ic: 0 }, // 0x15
-    GlyphMetric { w: 569, h: 574, d: 0, ic: 0 }, // 0x16
-    GlyphMetric { w: 843, h: 694, d: 0, ic: 0 }, // 0x17
-    GlyphMetric { w: 508, h: 0, d: 170, ic: 0 }, // 0x18
-    GlyphMetric { w: 569, h: 694, d: 0, ic: 0 }, // 0x19
-    GlyphMetric { w: 815, h: 431, d: 0, ic: 0 }, // 0x1A
-    GlyphMetric { w: 877, h: 431, d: 0, ic: 0 }, // 0x1B
-    GlyphMetric { w: 569, h: 528, d: 97, ic: 0 }, // 0x1C
-    GlyphMetric { w: 1014, h: 683, d: 0, ic: 0 }, // 0x1D
-    GlyphMetric { w: 1137, h: 683, d: 0, ic: 0 }, // 0x1E
-    GlyphMetric { w: 877, h: 732, d: 49, ic: 0 }, // 0x1F
-    GlyphMetric { w: 323, h: 431, d: 0, ic: 0 }, // 0x20
-    GlyphMetric { w: 323, h: 694, d: 0, ic: 0 }, // 0x21
-    GlyphMetric { w: 569, h: 694, d: 0, ic: 0 }, // 0x22
-    GlyphMetric { w: 938, h: 694, d: 194, ic: 0 }, // 0x23
-    GlyphMetric { w: 569, h: 750, d: 56, ic: 0 }, // 0x24
-    GlyphMetric { w: 938, h: 750, d: 56, ic: 0 }, // 0x25
-    GlyphMetric { w: 877, h: 694, d: 0, ic: 0 }, // 0x26
-    GlyphMetric { w: 323, h: 694, d: 0, ic: 0 }, // 0x27
-    GlyphMetric { w: 446, h: 750, d: 250, ic: 0 }, // 0x28
-    GlyphMetric { w: 446, h: 750, d: 250, ic: 0 }, // 0x29
-    GlyphMetric { w: 569, h: 750, d: 0, ic: 0 }, // 0x2A
-    GlyphMetric { w: 877, h: 619, d: 119, ic: 0 }, // 0x2B
-    GlyphMetric { w: 323, h: 115, d: 194, ic: 0 }, // 0x2C
-    GlyphMetric { w: 385, h: 431, d: 0, ic: 0 }, // 0x2D
-    GlyphMetric { w: 323, h: 115, d: 0, ic: 0 }, // 0x2E
-    GlyphMetric { w: 569, h: 750, d: 250, ic: 0 }, // 0x2F
-    GlyphMetric { w: 569, h: 644, d: 0, ic: 0 }, // 0x30
-    GlyphMetric { w: 569, h: 644, d: 0, ic: 0 }, // 0x31
-    GlyphMetric { w: 569, h: 644, d: 0, ic: 0 }, // 0x32
-    GlyphMetric { w: 569, h: 644, d: 0, ic: 0 }, // 0x33
-    GlyphMetric { w: 569, h: 644, d: 0, ic: 0 }, // 0x34
-    GlyphMetric { w: 569, h: 644, d: 0, ic: 0 }, // 0x35
-    GlyphMetric { w: 569, h: 644, d: 0, ic: 0 }, // 0x36
-    GlyphMetric { w: 569, h: 644, d: 0, ic: 0 }, // 0x37
-    GlyphMetric { w: 569, h: 644, d: 0, ic: 0 }, // 0x38
-    GlyphMetric { w: 569, h: 644, d: 0, ic: 0 }, // 0x39
-    GlyphMetric { w: 323, h: 431, d: 0, ic: 0 }, // 0x3A
-    GlyphMetric { w: 323, h: 431, d: 194, ic: 0 }, // 0x3B
-    GlyphMetric { w: 323, h: 500, d: 194, ic: 0 }, // 0x3C
-    GlyphMetric { w: 877, h: 384, d: 0, ic: 0 }, // 0x3D
-    GlyphMetric { w: 539, h: 500, d: 194, ic: 0 }, // 0x3E
-    GlyphMetric { w: 539, h: 694, d: 0, ic: 0 }, // 0x3F
-    GlyphMetric { w: 877, h: 694, d: 0, ic: 0 }, // 0x40
-    GlyphMetric { w: 843, h: 683, d: 0, ic: 0 }, // 0x41
-    GlyphMetric { w: 799, h: 683, d: 0, ic: 0 }, // 0x42
-    GlyphMetric { w: 815, h: 683, d: 0, ic: 0 }, // 0x43
-    GlyphMetric { w: 860, h: 683, d: 0, ic: 0 }, // 0x44
-    GlyphMetric { w: 768, h: 683, d: 0, ic: 0 }, // 0x45
-    GlyphMetric { w: 737, h: 683, d: 0, ic: 0 }, // 0x46
-    GlyphMetric { w: 884, h: 683, d: 0, ic: 0 }, // 0x47
-    GlyphMetric { w: 843, h: 683, d: 0, ic: 0 }, // 0x48
-    GlyphMetric { w: 413, h: 683, d: 0, ic: 0 }, // 0x49
-    GlyphMetric { w: 583, h: 683, d: 0, ic: 0 }, // 0x4A
-    GlyphMetric { w: 874, h: 683, d: 0, ic: 0 }, // 0x4B
-    GlyphMetric { w: 706, h: 683, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 1028, h: 683, d: 0, ic: 0 }, // 0x4D
-    GlyphMetric { w: 843, h: 683, d: 0, ic: 0 }, // 0x4E
-    GlyphMetric { w: 877, h: 683, d: 0, ic: 0 }, // 0x4F
-    GlyphMetric { w: 768, h: 683, d: 0, ic: 0 }, // 0x50
-    GlyphMetric { w: 877, h: 683, d: 194, ic: 0 }, // 0x51
-    GlyphMetric { w: 829, h: 683, d: 0, ic: 0 }, // 0x52
-    GlyphMetric { w: 631, h: 683, d: 0, ic: 0 }, // 0x53
-    GlyphMetric { w: 815, h: 683, d: 0, ic: 0 }, // 0x54
-    GlyphMetric { w: 843, h: 683, d: 0, ic: 0 }, // 0x55
-    GlyphMetric { w: 843, h: 683, d: 0, ic: 15 }, // 0x56
-    GlyphMetric { w: 1151, h: 683, d: 0, ic: 15 }, // 0x57
-    GlyphMetric { w: 843, h: 683, d: 0, ic: 0 }, // 0x58
-    GlyphMetric { w: 843, h: 683, d: 0, ic: 28 }, // 0x59
-    GlyphMetric { w: 692, h: 683, d: 0, ic: 0 }, // 0x5A
-    GlyphMetric { w: 323, h: 750, d: 250, ic: 0 }, // 0x5B
-    GlyphMetric { w: 569, h: 694, d: 0, ic: 0 }, // 0x5C
-    GlyphMetric { w: 323, h: 750, d: 250, ic: 0 }, // 0x5D
-    GlyphMetric { w: 569, h: 694, d: 0, ic: 0 }, // 0x5E
-    GlyphMetric { w: 323, h: 673, d: 0, ic: 0 }, // 0x5F
-    GlyphMetric { w: 323, h: 694, d: 0, ic: 0 }, // 0x60
-    GlyphMetric { w: 569, h: 431, d: 0, ic: 0 }, // 0x61
-    GlyphMetric { w: 631, h: 694, d: 0, ic: 0 }, // 0x62
-    GlyphMetric { w: 508, h: 431, d: 0, ic: 0 }, // 0x63
-    GlyphMetric { w: 631, h: 694, d: 0, ic: 0 }, // 0x64
-    GlyphMetric { w: 508, h: 431, d: 0, ic: 0 }, // 0x65
-    GlyphMetric { w: 354, h: 694, d: 0, ic: 80 }, // 0x66
-    GlyphMetric { w: 569, h: 431, d: 194, ic: 15 }, // 0x67
-    GlyphMetric { w: 631, h: 694, d: 0, ic: 0 }, // 0x68
-    GlyphMetric { w: 323, h: 673, d: 0, ic: 0 }, // 0x69
-    GlyphMetric { w: 354, h: 673, d: 194, ic: 0 }, // 0x6A
-    GlyphMetric { w: 600, h: 694, d: 0, ic: 0 }, // 0x6B
-    GlyphMetric { w: 323, h: 694, d: 0, ic: 0 }, // 0x6C
-    GlyphMetric { w: 938, h: 431, d: 0, ic: 0 }, // 0x6D
-    GlyphMetric { w: 631, h: 431, d: 0, ic: 0 }, // 0x6E
-    GlyphMetric { w: 569, h: 431, d: 0, ic: 0 }, // 0x6F
-    GlyphMetric { w: 631, h: 431, d: 194, ic: 0 }, // 0x70
-    GlyphMetric { w: 600, h: 431, d: 194, ic: 0 }, // 0x71
-    GlyphMetric { w: 446, h: 431, d: 0, ic: 0 }, // 0x72
-    GlyphMetric { w: 453, h: 431, d: 0, ic: 0 }, // 0x73
-    GlyphMetric { w: 446, h: 615, d: 0, ic: 0 }, // 0x74
-    GlyphMetric { w: 631, h: 431, d: 0, ic: 0 }, // 0x75
-    GlyphMetric { w: 600, h: 431, d: 0, ic: 15 }, // 0x76
-    GlyphMetric { w: 815, h: 431, d: 0, ic: 15 }, // 0x77
-    GlyphMetric { w: 600, h: 431, d: 0, ic: 0 }, // 0x78
-    GlyphMetric { w: 600, h: 431, d: 194, ic: 15 }, // 0x79
-    GlyphMetric { w: 508, h: 431, d: 0, ic: 0 }, // 0x7A
-    GlyphMetric { w: 569, h: 431, d: 0, ic: 31 }, // 0x7B
-    GlyphMetric { w: 1139, h: 431, d: 0, ic: 31 }, // 0x7C
-    GlyphMetric { w: 569, h: 694, d: 0, ic: 0 }, // 0x7D
-    GlyphMetric { w: 569, h: 673, d: 0, ic: 0 }, // 0x7E
-    GlyphMetric { w: 569, h: 673, d: 0, ic: 0 }, // 0x7F
+pub static CMR7_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 11573, h: 11196, d: 0, ic: 0 }, // 0x00
+    PackedGlyphMetric { w: 15376, h: 11196, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 14369, h: 11196, d: 0, ic: 0 }, // 0x02
+    PackedGlyphMetric { w: 12808, h: 11196, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 12353, h: 11196, d: 0, ic: 0 }, // 0x04
+    PackedGlyphMetric { w: 13816, h: 11196, d: 0, ic: 0 }, // 0x05
+    PackedGlyphMetric { w: 13361, h: 11196, d: 0, ic: 0 }, // 0x06
+    PackedGlyphMetric { w: 14369, h: 11196, d: 0, ic: 0 }, // 0x07
+    PackedGlyphMetric { w: 13361, h: 11196, d: 0, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 14369, h: 11196, d: 0, ic: 0 }, // 0x09
+    PackedGlyphMetric { w: 13361, h: 11196, d: 0, ic: 0 }, // 0x0A
+    PackedGlyphMetric { w: 11102, h: 11378, d: 0, ic: 1308 }, // 0x0B
+    PackedGlyphMetric { w: 10598, h: 11378, d: 0, ic: 0 }, // 0x0C
+    PackedGlyphMetric { w: 10598, h: 11378, d: 0, ic: 0 }, // 0x0D
+    PackedGlyphMetric { w: 15896, h: 11378, d: 0, ic: 0 }, // 0x0E
+    PackedGlyphMetric { w: 15896, h: 11378, d: 0, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 5299, h: 7054, d: 0, ic: 0 }, // 0x10
+    PackedGlyphMetric { w: 5803, h: 7054, d: 3186, ic: 0 }, // 0x11
+    PackedGlyphMetric { w: 9330, h: 11378, d: 0, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 9330, h: 11378, d: 0, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 9330, h: 10297, d: 0, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 9330, h: 11378, d: 0, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 9330, h: 9408, d: 0, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 13816, h: 11378, d: 0, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 8322, h: 0, d: 2788, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 9330, h: 11378, d: 0, ic: 0 }, // 0x19
+    PackedGlyphMetric { w: 13361, h: 7054, d: 0, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 14369, h: 7054, d: 0, ic: 0 }, // 0x1B
+    PackedGlyphMetric { w: 9330, h: 8647, d: 1593, ic: 0 }, // 0x1C
+    PackedGlyphMetric { w: 16612, h: 11196, d: 0, ic: 0 }, // 0x1D
+    PackedGlyphMetric { w: 18627, h: 11196, d: 0, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 14369, h: 11992, d: 796, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 5299, h: 7054, d: 0, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 5299, h: 11378, d: 0, ic: 0 }, // 0x21
+    PackedGlyphMetric { w: 9330, h: 11378, d: 0, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 15376, h: 11378, d: 3186, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 9330, h: 12288, d: 910, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 15376, h: 12288, d: 910, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 14369, h: 11378, d: 0, ic: 0 }, // 0x26
+    PackedGlyphMetric { w: 5299, h: 11378, d: 0, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 7314, h: 12288, d: 4096, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 7314, h: 12288, d: 4096, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 9330, h: 12288, d: 0, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 14369, h: 10142, d: 1950, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 5299, h: 1885, d: 3186, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 6307, h: 7054, d: 0, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 5299, h: 1885, d: 0, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 9330, h: 12288, d: 4096, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 9330, h: 10559, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 9330, h: 10559, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 9330, h: 10559, d: 0, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 9330, h: 10559, d: 0, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 9330, h: 10559, d: 0, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 9330, h: 10559, d: 0, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 9330, h: 10559, d: 0, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 9330, h: 10559, d: 0, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 9330, h: 10559, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 9330, h: 10559, d: 0, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 5299, h: 7054, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 5299, h: 7054, d: 3186, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 5299, h: 8192, d: 3186, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 14369, h: 6293, d: 0, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 8826, h: 8192, d: 3186, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 8826, h: 11378, d: 0, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 14369, h: 11378, d: 0, ic: 0 }, // 0x40
+    PackedGlyphMetric { w: 13816, h: 11196, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 13085, h: 11196, d: 0, ic: 0 }, // 0x42
+    PackedGlyphMetric { w: 13361, h: 11196, d: 0, ic: 0 }, // 0x43
+    PackedGlyphMetric { w: 14092, h: 11196, d: 0, ic: 0 }, // 0x44
+    PackedGlyphMetric { w: 12581, h: 11196, d: 0, ic: 0 }, // 0x45
+    PackedGlyphMetric { w: 12077, h: 11196, d: 0, ic: 0 }, // 0x46
+    PackedGlyphMetric { w: 14482, h: 11196, d: 0, ic: 0 }, // 0x47
+    PackedGlyphMetric { w: 13816, h: 11196, d: 0, ic: 0 }, // 0x48
+    PackedGlyphMetric { w: 6762, h: 11196, d: 0, ic: 0 }, // 0x49
+    PackedGlyphMetric { w: 9557, h: 11196, d: 0, ic: 0 }, // 0x4A
+    PackedGlyphMetric { w: 14320, h: 11196, d: 0, ic: 0 }, // 0x4B
+    PackedGlyphMetric { w: 11573, h: 11196, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 16839, h: 11196, d: 0, ic: 0 }, // 0x4D
+    PackedGlyphMetric { w: 13816, h: 11196, d: 0, ic: 0 }, // 0x4E
+    PackedGlyphMetric { w: 14369, h: 11196, d: 0, ic: 0 }, // 0x4F
+    PackedGlyphMetric { w: 12581, h: 11196, d: 0, ic: 0 }, // 0x50
+    PackedGlyphMetric { w: 14369, h: 11196, d: 3186, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 13588, h: 11196, d: 0, ic: 0 }, // 0x52
+    PackedGlyphMetric { w: 10338, h: 11196, d: 0, ic: 0 }, // 0x53
+    PackedGlyphMetric { w: 13361, h: 11196, d: 0, ic: 0 }, // 0x54
+    PackedGlyphMetric { w: 13816, h: 11196, d: 0, ic: 0 }, // 0x55
+    PackedGlyphMetric { w: 13816, h: 11196, d: 0, ic: 252 }, // 0x56
+    PackedGlyphMetric { w: 18855, h: 11196, d: 0, ic: 252 }, // 0x57
+    PackedGlyphMetric { w: 13816, h: 11196, d: 0, ic: 0 }, // 0x58
+    PackedGlyphMetric { w: 13816, h: 11196, d: 0, ic: 454 }, // 0x59
+    PackedGlyphMetric { w: 11345, h: 11196, d: 0, ic: 0 }, // 0x5A
+    PackedGlyphMetric { w: 5299, h: 12288, d: 4096, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 9330, h: 11378, d: 0, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 5299, h: 12288, d: 4096, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 9330, h: 11378, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 5299, h: 11020, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 5299, h: 11378, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 9330, h: 7054, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 10338, h: 11378, d: 0, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 8322, h: 7054, d: 0, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 10338, h: 11378, d: 0, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 8322, h: 7054, d: 0, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 5803, h: 11378, d: 0, ic: 1308 }, // 0x66
+    PackedGlyphMetric { w: 9330, h: 7054, d: 3186, ic: 252 }, // 0x67
+    PackedGlyphMetric { w: 10338, h: 11378, d: 0, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 5299, h: 11020, d: 0, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 5803, h: 11020, d: 3186, ic: 0 }, // 0x6A
+    PackedGlyphMetric { w: 9834, h: 11378, d: 0, ic: 0 }, // 0x6B
+    PackedGlyphMetric { w: 5299, h: 11378, d: 0, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 15376, h: 7054, d: 0, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 10338, h: 7054, d: 0, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 9330, h: 7054, d: 0, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 10338, h: 7054, d: 3186, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 9834, h: 7054, d: 3186, ic: 0 }, // 0x71
+    PackedGlyphMetric { w: 7314, h: 7054, d: 0, ic: 0 }, // 0x72
+    PackedGlyphMetric { w: 7415, h: 7054, d: 0, ic: 0 }, // 0x73
+    PackedGlyphMetric { w: 7314, h: 10077, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 10338, h: 7054, d: 0, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 9834, h: 7054, d: 0, ic: 252 }, // 0x76
+    PackedGlyphMetric { w: 13361, h: 7054, d: 0, ic: 252 }, // 0x77
+    PackedGlyphMetric { w: 9834, h: 7054, d: 0, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 9834, h: 7054, d: 3186, ic: 252 }, // 0x79
+    PackedGlyphMetric { w: 8322, h: 7054, d: 0, ic: 0 }, // 0x7A
+    PackedGlyphMetric { w: 9330, h: 7054, d: 0, ic: 504 }, // 0x7B
+    PackedGlyphMetric { w: 18660, h: 7054, d: 0, ic: 504 }, // 0x7C
+    PackedGlyphMetric { w: 9330, h: 11378, d: 0, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 9330, h: 11020, d: 0, ic: 0 }, // 0x7E
+    PackedGlyphMetric { w: 9330, h: 11020, d: 0, ic: 0 }, // 0x7F
 ];
 
-pub static CMR5_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 831, h: 680, d: 0, ic: 0 }, // 0x00
-    GlyphMetric { w: 1097, h: 680, d: 0, ic: 0 }, // 0x01
-    GlyphMetric { w: 1028, h: 680, d: 0, ic: 0 }, // 0x02
-    GlyphMetric { w: 911, h: 680, d: 0, ic: 0 }, // 0x03
-    GlyphMetric { w: 889, h: 680, d: 0, ic: 0 }, // 0x04
-    GlyphMetric { w: 981, h: 680, d: 0, ic: 0 }, // 0x05
-    GlyphMetric { w: 958, h: 680, d: 0, ic: 0 }, // 0x06
-    GlyphMetric { w: 1028, h: 680, d: 0, ic: 0 }, // 0x07
-    GlyphMetric { w: 958, h: 680, d: 0, ic: 0 }, // 0x08
-    GlyphMetric { w: 1028, h: 680, d: 0, ic: 0 }, // 0x09
-    GlyphMetric { w: 958, h: 680, d: 0, ic: 0 }, // 0x0A
-    GlyphMetric { w: 681, h: 694, d: 194, ic: 0 }, // 0x0B
-    GlyphMetric { w: 681, h: 694, d: 194, ic: 0 }, // 0x0C
-    GlyphMetric { w: 403, h: 694, d: 0, ic: 0 }, // 0x0D
-    GlyphMetric { w: 403, h: 500, d: 194, ic: 0 }, // 0x0E
-    GlyphMetric { w: 646, h: 500, d: 194, ic: 0 }, // 0x0F
-    GlyphMetric { w: 403, h: 431, d: 0, ic: 0 }, // 0x10
-    GlyphMetric { w: 438, h: 431, d: 194, ic: 0 }, // 0x11
-    GlyphMetric { w: 681, h: 694, d: 0, ic: 0 }, // 0x12
-    GlyphMetric { w: 681, h: 694, d: 0, ic: 0 }, // 0x13
-    GlyphMetric { w: 681, h: 628, d: 0, ic: 0 }, // 0x14
-    GlyphMetric { w: 681, h: 694, d: 0, ic: 0 }, // 0x15
-    GlyphMetric { w: 681, h: 581, d: 0, ic: 0 }, // 0x16
-    GlyphMetric { w: 981, h: 694, d: 0, ic: 0 }, // 0x17
-    GlyphMetric { w: 611, h: 0, d: 170, ic: 0 }, // 0x18
-    GlyphMetric { w: 681, h: 694, d: 0, ic: 0 }, // 0x19
-    GlyphMetric { w: 958, h: 431, d: 0, ic: 0 }, // 0x1A
-    GlyphMetric { w: 1028, h: 431, d: 0, ic: 0 }, // 0x1B
-    GlyphMetric { w: 681, h: 528, d: 97, ic: 0 }, // 0x1C
-    GlyphMetric { w: 1178, h: 680, d: 0, ic: 0 }, // 0x1D
-    GlyphMetric { w: 1317, h: 680, d: 0, ic: 0 }, // 0x1E
-    GlyphMetric { w: 1028, h: 732, d: 49, ic: 0 }, // 0x1F
-    GlyphMetric { w: 403, h: 431, d: 0, ic: 0 }, // 0x20
-    GlyphMetric { w: 403, h: 694, d: 0, ic: 0 }, // 0x21
-    GlyphMetric { w: 681, h: 694, d: 0, ic: 0 }, // 0x22
-    GlyphMetric { w: 1097, h: 694, d: 194, ic: 0 }, // 0x23
-    GlyphMetric { w: 681, h: 750, d: 56, ic: 0 }, // 0x24
-    GlyphMetric { w: 1097, h: 750, d: 56, ic: 0 }, // 0x25
-    GlyphMetric { w: 1028, h: 694, d: 0, ic: 0 }, // 0x26
-    GlyphMetric { w: 403, h: 694, d: 0, ic: 0 }, // 0x27
-    GlyphMetric { w: 542, h: 750, d: 250, ic: 0 }, // 0x28
-    GlyphMetric { w: 542, h: 750, d: 250, ic: 0 }, // 0x29
-    GlyphMetric { w: 681, h: 750, d: 0, ic: 0 }, // 0x2A
-    GlyphMetric { w: 1028, h: 667, d: 167, ic: 0 }, // 0x2B
-    GlyphMetric { w: 403, h: 122, d: 194, ic: 0 }, // 0x2C
-    GlyphMetric { w: 472, h: 431, d: 0, ic: 0 }, // 0x2D
-    GlyphMetric { w: 403, h: 122, d: 0, ic: 0 }, // 0x2E
-    GlyphMetric { w: 681, h: 750, d: 250, ic: 0 }, // 0x2F
-    GlyphMetric { w: 681, h: 644, d: 0, ic: 0 }, // 0x30
-    GlyphMetric { w: 681, h: 644, d: 0, ic: 0 }, // 0x31
-    GlyphMetric { w: 681, h: 644, d: 0, ic: 0 }, // 0x32
-    GlyphMetric { w: 681, h: 644, d: 0, ic: 0 }, // 0x33
-    GlyphMetric { w: 681, h: 644, d: 0, ic: 0 }, // 0x34
-    GlyphMetric { w: 681, h: 644, d: 0, ic: 0 }, // 0x35
-    GlyphMetric { w: 681, h: 644, d: 0, ic: 0 }, // 0x36
-    GlyphMetric { w: 681, h: 644, d: 0, ic: 0 }, // 0x37
-    GlyphMetric { w: 681, h: 644, d: 0, ic: 0 }, // 0x38
-    GlyphMetric { w: 681, h: 644, d: 0, ic: 0 }, // 0x39
-    GlyphMetric { w: 403, h: 431, d: 0, ic: 0 }, // 0x3A
-    GlyphMetric { w: 403, h: 431, d: 194, ic: 0 }, // 0x3B
-    GlyphMetric { w: 1028, h: 601, d: 101, ic: 0 }, // 0x3C
-    GlyphMetric { w: 1028, h: 396, d: 0, ic: 0 }, // 0x3D
-    GlyphMetric { w: 1028, h: 601, d: 101, ic: 0 }, // 0x3E
-    GlyphMetric { w: 646, h: 694, d: 0, ic: 0 }, // 0x3F
-    GlyphMetric { w: 1028, h: 694, d: 0, ic: 0 }, // 0x40
-    GlyphMetric { w: 981, h: 680, d: 0, ic: 0 }, // 0x41
-    GlyphMetric { w: 935, h: 680, d: 0, ic: 0 }, // 0x42
-    GlyphMetric { w: 958, h: 680, d: 0, ic: 0 }, // 0x43
-    GlyphMetric { w: 1004, h: 680, d: 0, ic: 0 }, // 0x44
-    GlyphMetric { w: 900, h: 680, d: 0, ic: 0 }, // 0x45
-    GlyphMetric { w: 865, h: 680, d: 0, ic: 0 }, // 0x46
-    GlyphMetric { w: 1033, h: 680, d: 0, ic: 0 }, // 0x47
-    GlyphMetric { w: 981, h: 680, d: 0, ic: 0 }, // 0x48
-    GlyphMetric { w: 494, h: 680, d: 0, ic: 0 }, // 0x49
-    GlyphMetric { w: 692, h: 680, d: 0, ic: 0 }, // 0x4A
-    GlyphMetric { w: 1015, h: 680, d: 0, ic: 0 }, // 0x4B
-    GlyphMetric { w: 831, h: 680, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 1189, h: 680, d: 0, ic: 0 }, // 0x4D
-    GlyphMetric { w: 981, h: 680, d: 0, ic: 0 }, // 0x4E
-    GlyphMetric { w: 1028, h: 680, d: 0, ic: 0 }, // 0x4F
-    GlyphMetric { w: 900, h: 680, d: 0, ic: 0 }, // 0x50
-    GlyphMetric { w: 1028, h: 680, d: 194, ic: 0 }, // 0x51
-    GlyphMetric { w: 969, h: 680, d: 0, ic: 0 }, // 0x52
-    GlyphMetric { w: 750, h: 680, d: 0, ic: 0 }, // 0x53
-    GlyphMetric { w: 958, h: 680, d: 0, ic: 0 }, // 0x54
-    GlyphMetric { w: 981, h: 680, d: 0, ic: 0 }, // 0x55
-    GlyphMetric { w: 981, h: 680, d: 0, ic: 17 }, // 0x56
-    GlyphMetric { w: 1328, h: 680, d: 0, ic: 17 }, // 0x57
-    GlyphMetric { w: 981, h: 680, d: 0, ic: 0 }, // 0x58
-    GlyphMetric { w: 981, h: 680, d: 0, ic: 31 }, // 0x59
-    GlyphMetric { w: 819, h: 680, d: 0, ic: 0 }, // 0x5A
-    GlyphMetric { w: 403, h: 750, d: 250, ic: 0 }, // 0x5B
-    GlyphMetric { w: 681, h: 694, d: 0, ic: 0 }, // 0x5C
-    GlyphMetric { w: 403, h: 750, d: 250, ic: 0 }, // 0x5D
-    GlyphMetric { w: 681, h: 694, d: 0, ic: 0 }, // 0x5E
-    GlyphMetric { w: 403, h: 680, d: 0, ic: 0 }, // 0x5F
-    GlyphMetric { w: 403, h: 694, d: 0, ic: 0 }, // 0x60
-    GlyphMetric { w: 681, h: 431, d: 0, ic: 0 }, // 0x61
-    GlyphMetric { w: 750, h: 694, d: 0, ic: 0 }, // 0x62
-    GlyphMetric { w: 611, h: 431, d: 0, ic: 0 }, // 0x63
-    GlyphMetric { w: 750, h: 694, d: 0, ic: 0 }, // 0x64
-    GlyphMetric { w: 611, h: 431, d: 0, ic: 0 }, // 0x65
-    GlyphMetric { w: 438, h: 694, d: 0, ic: 88 }, // 0x66
-    GlyphMetric { w: 681, h: 431, d: 194, ic: 17 }, // 0x67
-    GlyphMetric { w: 750, h: 694, d: 0, ic: 0 }, // 0x68
-    GlyphMetric { w: 403, h: 680, d: 0, ic: 0 }, // 0x69
-    GlyphMetric { w: 438, h: 680, d: 194, ic: 0 }, // 0x6A
-    GlyphMetric { w: 715, h: 694, d: 0, ic: 0 }, // 0x6B
-    GlyphMetric { w: 403, h: 694, d: 0, ic: 0 }, // 0x6C
-    GlyphMetric { w: 1097, h: 431, d: 0, ic: 0 }, // 0x6D
-    GlyphMetric { w: 750, h: 431, d: 0, ic: 0 }, // 0x6E
-    GlyphMetric { w: 681, h: 431, d: 0, ic: 0 }, // 0x6F
-    GlyphMetric { w: 750, h: 431, d: 194, ic: 0 }, // 0x70
-    GlyphMetric { w: 715, h: 431, d: 194, ic: 0 }, // 0x71
-    GlyphMetric { w: 542, h: 431, d: 0, ic: 0 }, // 0x72
-    GlyphMetric { w: 549, h: 431, d: 0, ic: 0 }, // 0x73
-    GlyphMetric { w: 542, h: 615, d: 0, ic: 0 }, // 0x74
-    GlyphMetric { w: 750, h: 431, d: 0, ic: 0 }, // 0x75
-    GlyphMetric { w: 715, h: 431, d: 0, ic: 17 }, // 0x76
-    GlyphMetric { w: 958, h: 431, d: 0, ic: 17 }, // 0x77
-    GlyphMetric { w: 715, h: 431, d: 0, ic: 0 }, // 0x78
-    GlyphMetric { w: 715, h: 431, d: 194, ic: 17 }, // 0x79
-    GlyphMetric { w: 611, h: 431, d: 0, ic: 0 }, // 0x7A
-    GlyphMetric { w: 681, h: 431, d: 0, ic: 35 }, // 0x7B
-    GlyphMetric { w: 1361, h: 431, d: 0, ic: 35 }, // 0x7C
-    GlyphMetric { w: 681, h: 694, d: 0, ic: 0 }, // 0x7D
-    GlyphMetric { w: 681, h: 680, d: 0, ic: 0 }, // 0x7E
-    GlyphMetric { w: 681, h: 680, d: 0, ic: 0 }, // 0x7F
+pub static CMR5_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 13608, h: 11137, d: 0, ic: 0 }, // 0x00
+    PackedGlyphMetric { w: 17977, h: 11137, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 16839, h: 11137, d: 0, ic: 0 }, // 0x02
+    PackedGlyphMetric { w: 14928, h: 11137, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 14564, h: 11137, d: 0, ic: 0 }, // 0x04
+    PackedGlyphMetric { w: 16066, h: 11137, d: 0, ic: 0 }, // 0x05
+    PackedGlyphMetric { w: 15702, h: 11137, d: 0, ic: 0 }, // 0x06
+    PackedGlyphMetric { w: 16839, h: 11137, d: 0, ic: 0 }, // 0x07
+    PackedGlyphMetric { w: 15702, h: 11137, d: 0, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 16839, h: 11137, d: 0, ic: 0 }, // 0x09
+    PackedGlyphMetric { w: 15702, h: 11137, d: 0, ic: 0 }, // 0x0A
+    PackedGlyphMetric { w: 11150, h: 11378, d: 3186, ic: 0 }, // 0x0B
+    PackedGlyphMetric { w: 11150, h: 11378, d: 3186, ic: 0 }, // 0x0C
+    PackedGlyphMetric { w: 6599, h: 11378, d: 0, ic: 0 }, // 0x0D
+    PackedGlyphMetric { w: 6599, h: 8192, d: 3186, ic: 0 }, // 0x0E
+    PackedGlyphMetric { w: 10582, h: 8192, d: 3186, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 6599, h: 7054, d: 0, ic: 0 }, // 0x10
+    PackedGlyphMetric { w: 7168, h: 7054, d: 3186, ic: 0 }, // 0x11
+    PackedGlyphMetric { w: 11150, h: 11378, d: 0, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 11150, h: 11378, d: 0, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 11150, h: 10297, d: 0, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 11150, h: 11378, d: 0, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 11150, h: 9512, d: 0, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 16066, h: 11378, d: 0, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 10013, h: 0, d: 2788, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 11150, h: 11378, d: 0, ic: 0 }, // 0x19
+    PackedGlyphMetric { w: 15702, h: 7054, d: 0, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 16839, h: 7054, d: 0, ic: 0 }, // 0x1B
+    PackedGlyphMetric { w: 11150, h: 8647, d: 1593, ic: 0 }, // 0x1C
+    PackedGlyphMetric { w: 19297, h: 11137, d: 0, ic: 0 }, // 0x1D
+    PackedGlyphMetric { w: 21573, h: 11137, d: 0, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 16839, h: 11992, d: 796, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 6599, h: 7054, d: 0, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 6599, h: 11378, d: 0, ic: 0 }, // 0x21
+    PackedGlyphMetric { w: 11150, h: 11378, d: 0, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 17977, h: 11378, d: 3186, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 11150, h: 12288, d: 910, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 17977, h: 12288, d: 910, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 16839, h: 11378, d: 0, ic: 0 }, // 0x26
+    PackedGlyphMetric { w: 6599, h: 11378, d: 0, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 8875, h: 12288, d: 4096, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 8875, h: 12288, d: 4096, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 11150, h: 12288, d: 0, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 16839, h: 10923, d: 2731, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 6599, h: 2002, d: 3186, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 7737, h: 7054, d: 0, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 6599, h: 2002, d: 0, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 11150, h: 12288, d: 4096, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 11150, h: 10559, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 11150, h: 10559, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 11150, h: 10559, d: 0, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 11150, h: 10559, d: 0, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 11150, h: 10559, d: 0, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 11150, h: 10559, d: 0, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 11150, h: 10559, d: 0, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 11150, h: 10559, d: 0, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 11150, h: 10559, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 11150, h: 10559, d: 0, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 6599, h: 7054, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 6599, h: 7054, d: 3186, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 16839, h: 9845, d: 1653, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 16839, h: 6495, d: 0, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 16839, h: 9845, d: 1653, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 10582, h: 11378, d: 0, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 16839, h: 11378, d: 0, ic: 0 }, // 0x40
+    PackedGlyphMetric { w: 16066, h: 11137, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 15315, h: 11137, d: 0, ic: 0 }, // 0x42
+    PackedGlyphMetric { w: 15702, h: 11137, d: 0, ic: 0 }, // 0x43
+    PackedGlyphMetric { w: 16453, h: 11137, d: 0, ic: 0 }, // 0x44
+    PackedGlyphMetric { w: 14746, h: 11137, d: 0, ic: 0 }, // 0x45
+    PackedGlyphMetric { w: 14177, h: 11137, d: 0, ic: 0 }, // 0x46
+    PackedGlyphMetric { w: 16930, h: 11137, d: 0, ic: 0 }, // 0x47
+    PackedGlyphMetric { w: 16066, h: 11137, d: 0, ic: 0 }, // 0x48
+    PackedGlyphMetric { w: 8101, h: 11137, d: 0, ic: 0 }, // 0x49
+    PackedGlyphMetric { w: 11332, h: 11137, d: 0, ic: 0 }, // 0x4A
+    PackedGlyphMetric { w: 16635, h: 11137, d: 0, ic: 0 }, // 0x4B
+    PackedGlyphMetric { w: 13608, h: 11137, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 19479, h: 11137, d: 0, ic: 0 }, // 0x4D
+    PackedGlyphMetric { w: 16066, h: 11137, d: 0, ic: 0 }, // 0x4E
+    PackedGlyphMetric { w: 16839, h: 11137, d: 0, ic: 0 }, // 0x4F
+    PackedGlyphMetric { w: 14746, h: 11137, d: 0, ic: 0 }, // 0x50
+    PackedGlyphMetric { w: 16839, h: 11137, d: 3186, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 15884, h: 11137, d: 0, ic: 0 }, // 0x52
+    PackedGlyphMetric { w: 12288, h: 11137, d: 0, ic: 0 }, // 0x53
+    PackedGlyphMetric { w: 15702, h: 11137, d: 0, ic: 0 }, // 0x54
+    PackedGlyphMetric { w: 16066, h: 11137, d: 0, ic: 0 }, // 0x55
+    PackedGlyphMetric { w: 16066, h: 11137, d: 0, ic: 284 }, // 0x56
+    PackedGlyphMetric { w: 21755, h: 11137, d: 0, ic: 284 }, // 0x57
+    PackedGlyphMetric { w: 16066, h: 11137, d: 0, ic: 0 }, // 0x58
+    PackedGlyphMetric { w: 16066, h: 11137, d: 0, ic: 512 }, // 0x59
+    PackedGlyphMetric { w: 13426, h: 11137, d: 0, ic: 0 }, // 0x5A
+    PackedGlyphMetric { w: 6599, h: 12288, d: 4096, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 11150, h: 11378, d: 0, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 6599, h: 12288, d: 4096, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 11150, h: 11378, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 6599, h: 11137, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 6599, h: 11378, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 11150, h: 7054, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 12288, h: 11378, d: 0, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 10013, h: 7054, d: 0, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 12288, h: 11378, d: 0, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 10013, h: 7054, d: 0, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 7168, h: 11378, d: 0, ic: 1445 }, // 0x66
+    PackedGlyphMetric { w: 11150, h: 7054, d: 3186, ic: 284 }, // 0x67
+    PackedGlyphMetric { w: 12288, h: 11378, d: 0, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 6599, h: 11137, d: 0, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 7168, h: 11137, d: 3186, ic: 0 }, // 0x6A
+    PackedGlyphMetric { w: 11719, h: 11378, d: 0, ic: 0 }, // 0x6B
+    PackedGlyphMetric { w: 6599, h: 11378, d: 0, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 17977, h: 7054, d: 0, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 12288, h: 7054, d: 0, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 11150, h: 7054, d: 0, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 12288, h: 7054, d: 3186, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 11719, h: 7054, d: 3186, ic: 0 }, // 0x71
+    PackedGlyphMetric { w: 8875, h: 7054, d: 0, ic: 0 }, // 0x72
+    PackedGlyphMetric { w: 8989, h: 7054, d: 0, ic: 0 }, // 0x73
+    PackedGlyphMetric { w: 8875, h: 10077, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 12288, h: 7054, d: 0, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 11719, h: 7054, d: 0, ic: 284 }, // 0x76
+    PackedGlyphMetric { w: 15702, h: 7054, d: 0, ic: 284 }, // 0x77
+    PackedGlyphMetric { w: 11719, h: 7054, d: 0, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 11719, h: 7054, d: 3186, ic: 284 }, // 0x79
+    PackedGlyphMetric { w: 10013, h: 7054, d: 0, ic: 0 }, // 0x7A
+    PackedGlyphMetric { w: 11150, h: 7054, d: 0, ic: 569 }, // 0x7B
+    PackedGlyphMetric { w: 22301, h: 7054, d: 0, ic: 569 }, // 0x7C
+    PackedGlyphMetric { w: 11150, h: 11378, d: 0, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 11150, h: 11137, d: 0, ic: 0 }, // 0x7E
+    PackedGlyphMetric { w: 11150, h: 11137, d: 0, ic: 0 }, // 0x7F
 ];
 
-pub static CMMI7_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 694, h: 683, d: 0, ic: 154 }, // 0x00
-    GlyphMetric { w: 954, h: 683, d: 0, ic: 0 }, // 0x01
-    GlyphMetric { w: 869, h: 683, d: 0, ic: 31 }, // 0x02
-    GlyphMetric { w: 798, h: 683, d: 0, ic: 0 }, // 0x03
-    GlyphMetric { w: 844, h: 683, d: 0, ic: 75 }, // 0x04
-    GlyphMetric { w: 936, h: 683, d: 0, ic: 76 }, // 0x05
-    GlyphMetric { w: 886, h: 683, d: 0, ic: 55 }, // 0x06
-    GlyphMetric { w: 678, h: 683, d: 0, ic: 154 }, // 0x07
-    GlyphMetric { w: 770, h: 683, d: 0, ic: 0 }, // 0x08
-    GlyphMetric { w: 717, h: 683, d: 0, ic: 114 }, // 0x09
-    GlyphMetric { w: 880, h: 683, d: 0, ic: 49 }, // 0x0A
-    GlyphMetric { w: 743, h: 431, d: 0, ic: 0 }, // 0x0B
-    GlyphMetric { w: 648, h: 694, d: 194, ic: 51 }, // 0x0C
-    GlyphMetric { w: 600, h: 431, d: 194, ic: 62 }, // 0x0D
-    GlyphMetric { w: 519, h: 694, d: 0, ic: 36 }, // 0x0E
-    GlyphMetric { w: 476, h: 431, d: 0, ic: 0 }, // 0x0F
-    GlyphMetric { w: 520, h: 694, d: 194, ic: 65 }, // 0x10
-    GlyphMetric { w: 589, h: 431, d: 194, ic: 36 }, // 0x11
-    GlyphMetric { w: 544, h: 694, d: 0, ic: 31 }, // 0x12
-    GlyphMetric { w: 423, h: 431, d: 0, ic: 0 }, // 0x13
-    GlyphMetric { w: 669, h: 431, d: 0, ic: 0 }, // 0x14
-    GlyphMetric { w: 678, h: 694, d: 0, ic: 0 }, // 0x15
-    GlyphMetric { w: 695, h: 431, d: 194, ic: 0 }, // 0x16
-    GlyphMetric { w: 573, h: 431, d: 0, ic: 67 }, // 0x17
-    GlyphMetric { w: 520, h: 694, d: 194, ic: 34 }, // 0x18
-    GlyphMetric { w: 668, h: 431, d: 0, ic: 36 }, // 0x19
-    GlyphMetric { w: 593, h: 431, d: 194, ic: 0 }, // 0x1A
-    GlyphMetric { w: 662, h: 431, d: 0, ic: 36 }, // 0x1B
-    GlyphMetric { w: 527, h: 431, d: 0, ic: 116 }, // 0x1C
-    GlyphMetric { w: 633, h: 431, d: 0, ic: 36 }, // 0x1D
-    GlyphMetric { w: 687, h: 694, d: 194, ic: 0 }, // 0x1E
-    GlyphMetric { w: 714, h: 431, d: 194, ic: 0 }, // 0x1F
-    GlyphMetric { w: 756, h: 694, d: 194, ic: 36 }, // 0x20
-    GlyphMetric { w: 720, h: 431, d: 0, ic: 36 }, // 0x21
-    GlyphMetric { w: 540, h: 431, d: 0, ic: 0 }, // 0x22
-    GlyphMetric { w: 690, h: 694, d: 0, ic: 0 }, // 0x23
-    GlyphMetric { w: 950, h: 431, d: 0, ic: 31 }, // 0x24
-    GlyphMetric { w: 593, h: 431, d: 194, ic: 0 }, // 0x25
-    GlyphMetric { w: 439, h: 431, d: 97, ic: 77 }, // 0x26
-    GlyphMetric { w: 751, h: 431, d: 194, ic: 0 }, // 0x27
-    GlyphMetric { w: 1139, h: 384, d: 0, ic: 0 }, // 0x28
-    GlyphMetric { w: 1139, h: 384, d: 0, ic: 0 }, // 0x29
-    GlyphMetric { w: 1139, h: 384, d: 0, ic: 0 }, // 0x2A
-    GlyphMetric { w: 1139, h: 384, d: 0, ic: 0 }, // 0x2B
-    GlyphMetric { w: 339, h: 494, d: 0, ic: 0 }, // 0x2C
-    GlyphMetric { w: 339, h: 494, d: 0, ic: 0 }, // 0x2D
-    GlyphMetric { w: 585, h: 465, d: 0, ic: 0 }, // 0x2E
-    GlyphMetric { w: 585, h: 465, d: 0, ic: 0 }, // 0x2F
-    GlyphMetric { w: 585, h: 431, d: 0, ic: 0 }, // 0x30
-    GlyphMetric { w: 585, h: 431, d: 0, ic: 0 }, // 0x31
-    GlyphMetric { w: 585, h: 431, d: 0, ic: 0 }, // 0x32
-    GlyphMetric { w: 585, h: 431, d: 194, ic: 0 }, // 0x33
-    GlyphMetric { w: 585, h: 431, d: 194, ic: 0 }, // 0x34
-    GlyphMetric { w: 585, h: 431, d: 194, ic: 0 }, // 0x35
-    GlyphMetric { w: 585, h: 644, d: 0, ic: 0 }, // 0x36
-    GlyphMetric { w: 585, h: 431, d: 194, ic: 0 }, // 0x37
-    GlyphMetric { w: 585, h: 644, d: 0, ic: 0 }, // 0x38
-    GlyphMetric { w: 585, h: 431, d: 194, ic: 0 }, // 0x39
-    GlyphMetric { w: 339, h: 115, d: 0, ic: 0 }, // 0x3A
-    GlyphMetric { w: 339, h: 115, d: 194, ic: 0 }, // 0x3B
-    GlyphMetric { w: 893, h: 576, d: 76, ic: 0 }, // 0x3C
-    GlyphMetric { w: 585, h: 750, d: 250, ic: 0 }, // 0x3D
-    GlyphMetric { w: 893, h: 576, d: 76, ic: 0 }, // 0x3E
-    GlyphMetric { w: 585, h: 465, d: 0, ic: 0 }, // 0x3F
-    GlyphMetric { w: 610, h: 694, d: 0, ic: 62 }, // 0x40
-    GlyphMetric { w: 859, h: 683, d: 0, ic: 0 }, // 0x41
-    GlyphMetric { w: 863, h: 683, d: 0, ic: 49 }, // 0x42
-    GlyphMetric { w: 819, h: 683, d: 0, ic: 70 }, // 0x43
-    GlyphMetric { w: 934, h: 683, d: 0, ic: 31 }, // 0x44
-    GlyphMetric { w: 839, h: 683, d: 0, ic: 55 }, // 0x45
-    GlyphMetric { w: 725, h: 683, d: 0, ic: 154 }, // 0x46
-    GlyphMetric { w: 889, h: 683, d: 0, ic: 0 }, // 0x47
-    GlyphMetric { w: 936, h: 683, d: 0, ic: 76 }, // 0x48
-    GlyphMetric { w: 506, h: 683, d: 0, ic: 78 }, // 0x49
-    GlyphMetric { w: 632, h: 683, d: 0, ic: 94 }, // 0x4A
-    GlyphMetric { w: 960, h: 683, d: 0, ic: 70 }, // 0x4B
-    GlyphMetric { w: 784, h: 683, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 1089, h: 683, d: 0, ic: 107 }, // 0x4D
-    GlyphMetric { w: 905, h: 683, d: 0, ic: 107 }, // 0x4E
-    GlyphMetric { w: 869, h: 683, d: 0, ic: 31 }, // 0x4F
-    GlyphMetric { w: 727, h: 683, d: 0, ic: 154 }, // 0x50
-    GlyphMetric { w: 900, h: 683, d: 194, ic: 0 }, // 0x51
-    GlyphMetric { w: 861, h: 683, d: 0, ic: 5 }, // 0x52
-    GlyphMetric { w: 701, h: 683, d: 0, ic: 55 }, // 0x53
-    GlyphMetric { w: 675, h: 683, d: 0, ic: 154 }, // 0x54
-    GlyphMetric { w: 778, h: 683, d: 0, ic: 107 }, // 0x55
-    GlyphMetric { w: 675, h: 683, d: 0, ic: 246 }, // 0x56
-    GlyphMetric { w: 1074, h: 683, d: 0, ic: 154 }, // 0x57
-    GlyphMetric { w: 937, h: 683, d: 0, ic: 78 }, // 0x58
-    GlyphMetric { w: 672, h: 683, d: 0, ic: 246 }, // 0x59
-    GlyphMetric { w: 778, h: 683, d: 0, ic: 70 }, // 0x5A
-    GlyphMetric { w: 462, h: 750, d: 0, ic: 0 }, // 0x5B
-    GlyphMetric { w: 462, h: 694, d: 194, ic: 0 }, // 0x5C
-    GlyphMetric { w: 462, h: 694, d: 194, ic: 0 }, // 0x5D
-    GlyphMetric { w: 1139, h: 358, d: 0, ic: 0 }, // 0x5E
-    GlyphMetric { w: 1139, h: 358, d: 0, ic: 0 }, // 0x5F
-    GlyphMetric { w: 478, h: 694, d: 0, ic: 0 }, // 0x60
-    GlyphMetric { w: 620, h: 431, d: 0, ic: 0 }, // 0x61
-    GlyphMetric { w: 502, h: 694, d: 0, ic: 0 }, // 0x62
-    GlyphMetric { w: 511, h: 431, d: 0, ic: 0 }, // 0x63
-    GlyphMetric { w: 595, h: 694, d: 0, ic: 0 }, // 0x64
-    GlyphMetric { w: 542, h: 431, d: 0, ic: 0 }, // 0x65
-    GlyphMetric { w: 557, h: 694, d: 194, ic: 112 }, // 0x66
-    GlyphMetric { w: 557, h: 431, d: 194, ic: 36 }, // 0x67
-    GlyphMetric { w: 669, h: 694, d: 0, ic: 0 }, // 0x68
-    GlyphMetric { w: 404, h: 662, d: 0, ic: 0 }, // 0x69
-    GlyphMetric { w: 473, h: 662, d: 194, ic: 58 }, // 0x6A
-    GlyphMetric { w: 607, h: 694, d: 0, ic: 24 }, // 0x6B
-    GlyphMetric { w: 361, h: 694, d: 0, ic: 6 }, // 0x6C
-    GlyphMetric { w: 1014, h: 431, d: 0, ic: 0 }, // 0x6D
-    GlyphMetric { w: 706, h: 431, d: 0, ic: 0 }, // 0x6E
-    GlyphMetric { w: 564, h: 431, d: 0, ic: 0 }, // 0x6F
-    GlyphMetric { w: 589, h: 431, d: 194, ic: 0 }, // 0x70
-    GlyphMetric { w: 524, h: 431, d: 194, ic: 36 }, // 0x71
-    GlyphMetric { w: 530, h: 431, d: 0, ic: 31 }, // 0x72
-    GlyphMetric { w: 539, h: 431, d: 0, ic: 0 }, // 0x73
-    GlyphMetric { w: 432, h: 615, d: 0, ic: 0 }, // 0x74
-    GlyphMetric { w: 675, h: 431, d: 0, ic: 0 }, // 0x75
-    GlyphMetric { w: 571, h: 431, d: 0, ic: 36 }, // 0x76
-    GlyphMetric { w: 826, h: 431, d: 0, ic: 27 }, // 0x77
-    GlyphMetric { w: 648, h: 431, d: 0, ic: 0 }, // 0x78
-    GlyphMetric { w: 579, h: 431, d: 194, ic: 36 }, // 0x79
-    GlyphMetric { w: 546, h: 431, d: 0, ic: 41 }, // 0x7A
-    GlyphMetric { w: 399, h: 431, d: 0, ic: 0 }, // 0x7B
-    GlyphMetric { w: 442, h: 431, d: 194, ic: 0 }, // 0x7C
-    GlyphMetric { w: 730, h: 431, d: 194, ic: 0 }, // 0x7D
-    GlyphMetric { w: 585, h: 719, d: 0, ic: 154 }, // 0x7E
-    GlyphMetric { w: 339, h: 694, d: 0, ic: 462 }, // 0x7F
+pub static CMMI7_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 11366, h: 11196, d: 0, ic: 2519 }, // 0x00
+    PackedGlyphMetric { w: 15636, h: 11196, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 14237, h: 11196, d: 0, ic: 504 }, // 0x02
+    PackedGlyphMetric { w: 13068, h: 11196, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 13836, h: 11196, d: 0, ic: 1223 }, // 0x04
+    PackedGlyphMetric { w: 15329, h: 11196, d: 0, ic: 1253 }, // 0x05
+    PackedGlyphMetric { w: 14521, h: 11196, d: 0, ic: 900 }, // 0x06
+    PackedGlyphMetric { w: 11101, h: 11196, d: 0, ic: 2519 }, // 0x07
+    PackedGlyphMetric { w: 12613, h: 11196, d: 0, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 11745, h: 11196, d: 0, ic: 1875 }, // 0x09
+    PackedGlyphMetric { w: 14419, h: 11196, d: 0, ic: 798 }, // 0x0A
+    PackedGlyphMetric { w: 12168, h: 7054, d: 0, ic: 0 }, // 0x0B
+    PackedGlyphMetric { w: 10613, h: 11378, d: 3186, ic: 842 }, // 0x0C
+    PackedGlyphMetric { w: 9832, h: 7054, d: 3186, ic: 1008 }, // 0x0D
+    PackedGlyphMetric { w: 8507, h: 11378, d: 0, ic: 594 }, // 0x0E
+    PackedGlyphMetric { w: 7801, h: 7054, d: 0, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 8517, h: 11378, d: 3186, ic: 1063 }, // 0x10
+    PackedGlyphMetric { w: 9644, h: 7054, d: 3186, ic: 588 }, // 0x11
+    PackedGlyphMetric { w: 8915, h: 11378, d: 0, ic: 504 }, // 0x12
+    PackedGlyphMetric { w: 6927, h: 7054, d: 0, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 10958, h: 7054, d: 0, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 11102, h: 11378, d: 0, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 11381, h: 7054, d: 3186, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 9384, h: 7054, d: 0, ic: 1092 }, // 0x17
+    PackedGlyphMetric { w: 8517, h: 11378, d: 3186, ic: 559 }, // 0x18
+    PackedGlyphMetric { w: 10945, h: 7054, d: 0, ic: 588 }, // 0x19
+    PackedGlyphMetric { w: 9711, h: 7054, d: 3186, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 10846, h: 7054, d: 0, ic: 588 }, // 0x1B
+    PackedGlyphMetric { w: 8632, h: 7054, d: 0, ic: 1894 }, // 0x1C
+    PackedGlyphMetric { w: 10370, h: 7054, d: 0, ic: 588 }, // 0x1D
+    PackedGlyphMetric { w: 11254, h: 11378, d: 3186, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 11695, h: 7054, d: 3186, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 12386, h: 11378, d: 3186, ic: 588 }, // 0x20
+    PackedGlyphMetric { w: 11791, h: 7054, d: 0, ic: 588 }, // 0x21
+    PackedGlyphMetric { w: 8843, h: 7054, d: 0, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 11303, h: 11378, d: 0, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 15564, h: 7054, d: 0, ic: 504 }, // 0x24
+    PackedGlyphMetric { w: 9711, h: 7054, d: 3186, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 7196, h: 7054, d: 1593, ic: 1260 }, // 0x26
+    PackedGlyphMetric { w: 12311, h: 7054, d: 3186, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 18660, h: 6293, d: 0, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 18660, h: 6293, d: 0, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 18660, h: 6293, d: 0, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 18660, h: 6293, d: 0, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 5559, h: 8092, d: 0, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 5559, h: 8092, d: 0, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 9590, h: 7623, d: 0, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 9590, h: 7623, d: 0, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 9590, h: 7054, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 9590, h: 7054, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 9590, h: 7054, d: 0, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 9590, h: 7054, d: 3186, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 9590, h: 7054, d: 3186, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 9590, h: 7054, d: 3186, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 9590, h: 10559, d: 0, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 9590, h: 7054, d: 3186, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 9590, h: 10559, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 9590, h: 7054, d: 3186, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 5559, h: 1885, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 5559, h: 1885, d: 3186, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 14629, h: 9432, d: 1240, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 9590, h: 12288, d: 4096, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 14629, h: 9432, d: 1240, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 9590, h: 7623, d: 0, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 9995, h: 11378, d: 0, ic: 1008 }, // 0x40
+    PackedGlyphMetric { w: 14076, h: 11196, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 14142, h: 11196, d: 0, ic: 798 }, // 0x42
+    PackedGlyphMetric { w: 13425, h: 11196, d: 0, ic: 1148 }, // 0x43
+    PackedGlyphMetric { w: 15304, h: 11196, d: 0, ic: 504 }, // 0x44
+    PackedGlyphMetric { w: 13741, h: 11196, d: 0, ic: 900 }, // 0x45
+    PackedGlyphMetric { w: 11870, h: 11196, d: 0, ic: 2519 }, // 0x46
+    PackedGlyphMetric { w: 14572, h: 11196, d: 0, ic: 0 }, // 0x47
+    PackedGlyphMetric { w: 15329, h: 11196, d: 0, ic: 1253 }, // 0x48
+    PackedGlyphMetric { w: 8295, h: 11196, d: 0, ic: 1274 }, // 0x49
+    PackedGlyphMetric { w: 10355, h: 11196, d: 0, ic: 1546 }, // 0x4A
+    PackedGlyphMetric { w: 15727, h: 11196, d: 0, ic: 1148 }, // 0x4B
+    PackedGlyphMetric { w: 12841, h: 11196, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 17849, h: 11196, d: 0, ic: 1757 }, // 0x4D
+    PackedGlyphMetric { w: 14825, h: 11196, d: 0, ic: 1757 }, // 0x4E
+    PackedGlyphMetric { w: 14237, h: 11196, d: 0, ic: 504 }, // 0x4F
+    PackedGlyphMetric { w: 11917, h: 11196, d: 0, ic: 2519 }, // 0x50
+    PackedGlyphMetric { w: 14740, h: 11196, d: 3186, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 14100, h: 11196, d: 0, ic: 84 }, // 0x52
+    PackedGlyphMetric { w: 11493, h: 11196, d: 0, ic: 896 }, // 0x53
+    PackedGlyphMetric { w: 11055, h: 11196, d: 0, ic: 2519 }, // 0x54
+    PackedGlyphMetric { w: 12750, h: 11196, d: 0, ic: 1757 }, // 0x55
+    PackedGlyphMetric { w: 11053, h: 11196, d: 0, ic: 4031 }, // 0x56
+    PackedGlyphMetric { w: 17603, h: 11196, d: 0, ic: 2519 }, // 0x57
+    PackedGlyphMetric { w: 15350, h: 11196, d: 0, ic: 1274 }, // 0x58
+    PackedGlyphMetric { w: 11002, h: 11196, d: 0, ic: 4031 }, // 0x59
+    PackedGlyphMetric { w: 12753, h: 11196, d: 0, ic: 1148 }, // 0x5A
+    PackedGlyphMetric { w: 7574, h: 12288, d: 0, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 7574, h: 11378, d: 3186, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 7574, h: 11378, d: 3186, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 18660, h: 5860, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 18660, h: 5860, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 7834, h: 11378, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 10153, h: 7054, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 8231, h: 11378, d: 0, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 8365, h: 7054, d: 0, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 9744, h: 11378, d: 0, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 8880, h: 7054, d: 0, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 9127, h: 11378, d: 3186, ic: 1837 }, // 0x66
+    PackedGlyphMetric { w: 9131, h: 7054, d: 3186, ic: 588 }, // 0x67
+    PackedGlyphMetric { w: 10958, h: 11378, d: 0, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 6622, h: 10841, d: 0, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 7745, h: 10841, d: 3186, ic: 947 }, // 0x6A
+    PackedGlyphMetric { w: 9950, h: 11378, d: 0, ic: 396 }, // 0x6B
+    PackedGlyphMetric { w: 5919, h: 11378, d: 0, ic: 95 }, // 0x6C
+    PackedGlyphMetric { w: 16609, h: 7054, d: 0, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 11570, h: 7054, d: 0, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 9239, h: 7054, d: 0, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 9649, h: 7054, d: 3186, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 8579, h: 7054, d: 3186, ic: 588 }, // 0x71
+    PackedGlyphMetric { w: 8691, h: 7054, d: 0, ic: 504 }, // 0x72
+    PackedGlyphMetric { w: 8834, h: 7054, d: 0, ic: 0 }, // 0x73
+    PackedGlyphMetric { w: 7071, h: 10077, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 11066, h: 7054, d: 0, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 9362, h: 7054, d: 0, ic: 588 }, // 0x76
+    PackedGlyphMetric { w: 13540, h: 7054, d: 0, ic: 441 }, // 0x77
+    PackedGlyphMetric { w: 10614, h: 7054, d: 0, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 9492, h: 7054, d: 3186, ic: 588 }, // 0x79
+    PackedGlyphMetric { w: 8942, h: 7054, d: 0, ic: 672 }, // 0x7A
+    PackedGlyphMetric { w: 6531, h: 7054, d: 0, ic: 0 }, // 0x7B
+    PackedGlyphMetric { w: 7241, h: 7054, d: 3186, ic: 0 }, // 0x7C
+    PackedGlyphMetric { w: 11962, h: 7054, d: 3186, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 9590, h: 11776, d: 0, ic: 2520 }, // 0x7E
+    PackedGlyphMetric { w: 5559, h: 11378, d: 0, ic: 7575 }, // 0x7F
 ];
 
-pub static CMMI5_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 833, h: 683, d: 0, ic: 174 }, // 0x00
-    GlyphMetric { w: 1153, h: 683, d: 0, ic: 0 }, // 0x01
-    GlyphMetric { w: 1048, h: 683, d: 0, ic: 35 }, // 0x02
-    GlyphMetric { w: 967, h: 683, d: 0, ic: 0 }, // 0x03
-    GlyphMetric { w: 1018, h: 683, d: 0, ic: 73 }, // 0x04
-    GlyphMetric { w: 1110, h: 683, d: 0, ic: 74 }, // 0x05
-    GlyphMetric { w: 1065, h: 683, d: 0, ic: 51 }, // 0x06
-    GlyphMetric { w: 840, h: 683, d: 0, ic: 174 }, // 0x07
-    GlyphMetric { w: 944, h: 683, d: 0, ic: 0 }, // 0x08
-    GlyphMetric { w: 893, h: 683, d: 0, ic: 120 }, // 0x09
-    GlyphMetric { w: 1061, h: 683, d: 0, ic: 47 }, // 0x0A
-    GlyphMetric { w: 913, h: 431, d: 0, ic: 0 }, // 0x0B
-    GlyphMetric { w: 791, h: 694, d: 194, ic: 51 }, // 0x0C
-    GlyphMetric { w: 747, h: 431, d: 194, ic: 69 }, // 0x0D
-    GlyphMetric { w: 654, h: 694, d: 0, ic: 32 }, // 0x0E
-    GlyphMetric { w: 614, h: 431, d: 0, ic: 0 }, // 0x0F
-    GlyphMetric { w: 667, h: 694, d: 194, ic: 53 }, // 0x10
-    GlyphMetric { w: 744, h: 431, d: 194, ic: 36 }, // 0x11
-    GlyphMetric { w: 677, h: 694, d: 0, ic: 35 }, // 0x12
-    GlyphMetric { w: 550, h: 431, d: 0, ic: 0 }, // 0x13
-    GlyphMetric { w: 828, h: 431, d: 0, ic: 0 }, // 0x14
-    GlyphMetric { w: 840, h: 694, d: 0, ic: 0 }, // 0x15
-    GlyphMetric { w: 850, h: 431, d: 194, ic: 0 }, // 0x16
-    GlyphMetric { w: 712, h: 431, d: 0, ic: 71 }, // 0x17
-    GlyphMetric { w: 667, h: 694, d: 194, ic: 18 }, // 0x18
-    GlyphMetric { w: 831, h: 431, d: 0, ic: 36 }, // 0x19
-    GlyphMetric { w: 726, h: 431, d: 194, ic: 0 }, // 0x1A
-    GlyphMetric { w: 815, h: 431, d: 0, ic: 36 }, // 0x1B
-    GlyphMetric { w: 682, h: 431, d: 0, ic: 116 }, // 0x1C
-    GlyphMetric { w: 792, h: 431, d: 0, ic: 36 }, // 0x1D
-    GlyphMetric { w: 842, h: 694, d: 194, ic: 0 }, // 0x1E
-    GlyphMetric { w: 865, h: 431, d: 194, ic: 0 }, // 0x1F
-    GlyphMetric { w: 931, h: 694, d: 194, ic: 36 }, // 0x20
-    GlyphMetric { w: 886, h: 431, d: 0, ic: 36 }, // 0x21
-    GlyphMetric { w: 675, h: 431, d: 0, ic: 0 }, // 0x22
-    GlyphMetric { w: 855, h: 694, d: 0, ic: 0 }, // 0x23
-    GlyphMetric { w: 1145, h: 431, d: 0, ic: 35 }, // 0x24
-    GlyphMetric { w: 726, h: 431, d: 194, ic: 0 }, // 0x25
-    GlyphMetric { w: 578, h: 431, d: 97, ic: 73 }, // 0x26
-    GlyphMetric { w: 918, h: 431, d: 194, ic: 0 }, // 0x27
-    GlyphMetric { w: 1361, h: 396, d: 0, ic: 0 }, // 0x28
-    GlyphMetric { w: 1361, h: 396, d: 0, ic: 0 }, // 0x29
-    GlyphMetric { w: 1361, h: 396, d: 0, ic: 0 }, // 0x2A
-    GlyphMetric { w: 1361, h: 396, d: 0, ic: 0 }, // 0x2B
-    GlyphMetric { w: 458, h: 515, d: 15, ic: 0 }, // 0x2C
-    GlyphMetric { w: 458, h: 515, d: 15, ic: 0 }, // 0x2D
-    GlyphMetric { w: 736, h: 465, d: 0, ic: 0 }, // 0x2E
-    GlyphMetric { w: 736, h: 465, d: 0, ic: 0 }, // 0x2F
-    GlyphMetric { w: 736, h: 431, d: 0, ic: 0 }, // 0x30
-    GlyphMetric { w: 736, h: 431, d: 0, ic: 0 }, // 0x31
-    GlyphMetric { w: 736, h: 431, d: 0, ic: 0 }, // 0x32
-    GlyphMetric { w: 736, h: 431, d: 194, ic: 0 }, // 0x33
-    GlyphMetric { w: 736, h: 431, d: 194, ic: 0 }, // 0x34
-    GlyphMetric { w: 736, h: 431, d: 194, ic: 0 }, // 0x35
-    GlyphMetric { w: 736, h: 644, d: 0, ic: 0 }, // 0x36
-    GlyphMetric { w: 736, h: 431, d: 194, ic: 0 }, // 0x37
-    GlyphMetric { w: 736, h: 644, d: 0, ic: 0 }, // 0x38
-    GlyphMetric { w: 736, h: 431, d: 194, ic: 0 }, // 0x39
-    GlyphMetric { w: 458, h: 122, d: 0, ic: 0 }, // 0x3A
-    GlyphMetric { w: 458, h: 122, d: 194, ic: 0 }, // 0x3B
-    GlyphMetric { w: 1083, h: 601, d: 101, ic: 0 }, // 0x3C
-    GlyphMetric { w: 736, h: 750, d: 250, ic: 0 }, // 0x3D
-    GlyphMetric { w: 1083, h: 601, d: 101, ic: 0 }, // 0x3E
-    GlyphMetric { w: 736, h: 465, d: 0, ic: 0 }, // 0x3F
-    GlyphMetric { w: 749, h: 694, d: 0, ic: 69 }, // 0x40
-    GlyphMetric { w: 1036, h: 683, d: 0, ic: 0 }, // 0x41
-    GlyphMetric { w: 1037, h: 683, d: 0, ic: 47 }, // 0x42
-    GlyphMetric { w: 996, h: 683, d: 0, ic: 68 }, // 0x43
-    GlyphMetric { w: 1110, h: 683, d: 0, ic: 35 }, // 0x44
-    GlyphMetric { w: 1007, h: 683, d: 0, ic: 51 }, // 0x45
-    GlyphMetric { w: 867, h: 683, d: 0, ic: 174 }, // 0x46
-    GlyphMetric { w: 1064, h: 683, d: 0, ic: 0 }, // 0x47
-    GlyphMetric { w: 1110, h: 683, d: 0, ic: 74 }, // 0x48
-    GlyphMetric { w: 627, h: 683, d: 0, ic: 77 }, // 0x49
-    GlyphMetric { w: 773, h: 683, d: 0, ic: 95 }, // 0x4A
-    GlyphMetric { w: 1139, h: 683, d: 0, ic: 68 }, // 0x4B
-    GlyphMetric { w: 956, h: 683, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 1284, h: 683, d: 0, ic: 109 }, // 0x4D
-    GlyphMetric { w: 1076, h: 683, d: 0, ic: 109 }, // 0x4E
-    GlyphMetric { w: 1048, h: 683, d: 0, ic: 35 }, // 0x4F
-    GlyphMetric { w: 875, h: 683, d: 0, ic: 174 }, // 0x50
-    GlyphMetric { w: 1082, h: 683, d: 194, ic: 0 }, // 0x51
-    GlyphMetric { w: 1030, h: 683, d: 0, ic: 2 }, // 0x52
-    GlyphMetric { w: 856, h: 683, d: 0, ic: 51 }, // 0x53
-    GlyphMetric { w: 832, h: 683, d: 0, ic: 174 }, // 0x54
-    GlyphMetric { w: 944, h: 683, d: 0, ic: 109 }, // 0x55
-    GlyphMetric { w: 828, h: 683, d: 0, ic: 278 }, // 0x56
-    GlyphMetric { w: 1279, h: 683, d: 0, ic: 174 }, // 0x57
-    GlyphMetric { w: 1113, h: 683, d: 0, ic: 77 }, // 0x58
-    GlyphMetric { w: 824, h: 683, d: 0, ic: 278 }, // 0x59
-    GlyphMetric { w: 943, h: 683, d: 0, ic: 68 }, // 0x5A
-    GlyphMetric { w: 597, h: 750, d: 0, ic: 0 }, // 0x5B
-    GlyphMetric { w: 597, h: 694, d: 194, ic: 0 }, // 0x5C
-    GlyphMetric { w: 597, h: 694, d: 194, ic: 0 }, // 0x5D
-    GlyphMetric { w: 1361, h: 358, d: 0, ic: 0 }, // 0x5E
-    GlyphMetric { w: 1361, h: 358, d: 0, ic: 0 }, // 0x5F
-    GlyphMetric { w: 597, h: 694, d: 0, ic: 0 }, // 0x60
-    GlyphMetric { w: 774, h: 431, d: 0, ic: 0 }, // 0x61
-    GlyphMetric { w: 633, h: 694, d: 0, ic: 0 }, // 0x62
-    GlyphMetric { w: 649, h: 431, d: 0, ic: 0 }, // 0x63
-    GlyphMetric { w: 740, h: 694, d: 0, ic: 0 }, // 0x64
-    GlyphMetric { w: 677, h: 431, d: 0, ic: 0 }, // 0x65
-    GlyphMetric { w: 684, h: 694, d: 194, ic: 118 }, // 0x66
-    GlyphMetric { w: 701, h: 431, d: 194, ic: 36 }, // 0x67
-    GlyphMetric { w: 828, h: 694, d: 0, ic: 0 }, // 0x68
-    GlyphMetric { w: 534, h: 666, d: 0, ic: 0 }, // 0x69
-    GlyphMetric { w: 588, h: 666, d: 194, ic: 59 }, // 0x6A
-    GlyphMetric { w: 758, h: 694, d: 0, ic: 16 }, // 0x6B
-    GlyphMetric { w: 480, h: 694, d: 0, ic: 0 }, // 0x6C
-    GlyphMetric { w: 1228, h: 431, d: 0, ic: 0 }, // 0x6D
-    GlyphMetric { w: 881, h: 431, d: 0, ic: 0 }, // 0x6E
-    GlyphMetric { w: 703, h: 431, d: 0, ic: 0 }, // 0x6F
-    GlyphMetric { w: 740, h: 431, d: 194, ic: 0 }, // 0x70
-    GlyphMetric { w: 659, h: 431, d: 194, ic: 36 }, // 0x71
-    GlyphMetric { w: 671, h: 431, d: 0, ic: 35 }, // 0x72
-    GlyphMetric { w: 670, h: 431, d: 0, ic: 0 }, // 0x73
-    GlyphMetric { w: 564, h: 615, d: 0, ic: 0 }, // 0x74
-    GlyphMetric { w: 846, h: 431, d: 0, ic: 0 }, // 0x75
-    GlyphMetric { w: 722, h: 431, d: 0, ic: 36 }, // 0x76
-    GlyphMetric { w: 1009, h: 431, d: 0, ic: 27 }, // 0x77
-    GlyphMetric { w: 792, h: 431, d: 0, ic: 0 }, // 0x78
-    GlyphMetric { w: 731, h: 431, d: 194, ic: 36 }, // 0x79
-    GlyphMetric { w: 689, h: 431, d: 0, ic: 37 }, // 0x7A
-    GlyphMetric { w: 534, h: 431, d: 0, ic: 0 }, // 0x7B
-    GlyphMetric { w: 553, h: 431, d: 194, ic: 0 }, // 0x7C
-    GlyphMetric { w: 889, h: 431, d: 194, ic: 0 }, // 0x7D
-    GlyphMetric { w: 736, h: 722, d: 0, ic: 154 }, // 0x7E
-    GlyphMetric { w: 458, h: 694, d: 0, ic: 581 }, // 0x7F
+pub static CMMI5_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 13642, h: 11196, d: 0, ic: 2844 }, // 0x00
+    PackedGlyphMetric { w: 18887, h: 11196, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 17162, h: 11196, d: 0, ic: 569 }, // 0x02
+    PackedGlyphMetric { w: 15838, h: 11196, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 16674, h: 11196, d: 0, ic: 1200 }, // 0x04
+    PackedGlyphMetric { w: 18193, h: 11196, d: 0, ic: 1217 }, // 0x05
+    PackedGlyphMetric { w: 17454, h: 11196, d: 0, ic: 842 }, // 0x06
+    PackedGlyphMetric { w: 13767, h: 11196, d: 0, ic: 2844 }, // 0x07
+    PackedGlyphMetric { w: 15474, h: 11196, d: 0, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 14639, h: 11196, d: 0, ic: 1973 }, // 0x09
+    PackedGlyphMetric { w: 17377, h: 11196, d: 0, ic: 765 }, // 0x0A
+    PackedGlyphMetric { w: 14964, h: 7054, d: 0, ic: 0 }, // 0x0B
+    PackedGlyphMetric { w: 12954, h: 11378, d: 3186, ic: 842 }, // 0x0C
+    PackedGlyphMetric { w: 12237, h: 7054, d: 3186, ic: 1138 }, // 0x0D
+    PackedGlyphMetric { w: 10718, h: 11378, d: 0, ic: 529 }, // 0x0E
+    PackedGlyphMetric { w: 10052, h: 7054, d: 0, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 10923, h: 11378, d: 3186, ic: 868 }, // 0x10
+    PackedGlyphMetric { w: 12186, h: 7054, d: 3186, ic: 588 }, // 0x11
+    PackedGlyphMetric { w: 11093, h: 11378, d: 0, ic: 569 }, // 0x12
+    PackedGlyphMetric { w: 9008, h: 7054, d: 0, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 13559, h: 7054, d: 0, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 13767, h: 11378, d: 0, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 13923, h: 7054, d: 3186, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 11666, h: 7054, d: 0, ic: 1157 }, // 0x17
+    PackedGlyphMetric { w: 10923, h: 11378, d: 3186, ic: 299 }, // 0x18
+    PackedGlyphMetric { w: 13618, h: 7054, d: 0, ic: 588 }, // 0x19
+    PackedGlyphMetric { w: 11896, h: 7054, d: 3186, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 13356, h: 7054, d: 0, ic: 588 }, // 0x1B
+    PackedGlyphMetric { w: 11167, h: 7054, d: 0, ic: 1900 }, // 0x1C
+    PackedGlyphMetric { w: 12971, h: 7054, d: 0, ic: 588 }, // 0x1D
+    PackedGlyphMetric { w: 13790, h: 11378, d: 3186, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 14166, h: 7054, d: 3186, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 15246, h: 11378, d: 3186, ic: 588 }, // 0x20
+    PackedGlyphMetric { w: 14522, h: 7054, d: 0, ic: 588 }, // 0x21
+    PackedGlyphMetric { w: 11054, h: 7054, d: 0, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 14014, h: 11378, d: 0, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 18757, h: 7054, d: 0, ic: 569 }, // 0x24
+    PackedGlyphMetric { w: 11896, h: 7054, d: 3186, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 9472, h: 7054, d: 1593, ic: 1195 }, // 0x26
+    PackedGlyphMetric { w: 15042, h: 7054, d: 3186, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 22301, h: 6495, d: 0, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 22301, h: 6495, d: 0, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 22301, h: 6495, d: 0, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 22301, h: 6495, d: 0, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 7509, h: 8435, d: 243, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 7509, h: 8435, d: 243, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 12061, h: 7623, d: 0, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 12061, h: 7623, d: 0, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 12061, h: 7054, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 12061, h: 7054, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 12061, h: 7054, d: 0, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 12061, h: 7054, d: 3186, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 12061, h: 7054, d: 3186, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 12061, h: 7054, d: 3186, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 12061, h: 10559, d: 0, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 12061, h: 7054, d: 3186, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 12061, h: 10559, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 12061, h: 7054, d: 3186, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 7509, h: 2002, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 7509, h: 2002, d: 3186, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 17750, h: 9845, d: 1653, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 12061, h: 12288, d: 4096, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 17750, h: 9845, d: 1653, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 12061, h: 7623, d: 0, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 12271, h: 11378, d: 0, ic: 1138 }, // 0x40
+    PackedGlyphMetric { w: 16976, h: 11196, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 16990, h: 11196, d: 0, ic: 765 }, // 0x42
+    PackedGlyphMetric { w: 16318, h: 11196, d: 0, ic: 1115 }, // 0x43
+    PackedGlyphMetric { w: 18184, h: 11196, d: 0, ic: 569 }, // 0x44
+    PackedGlyphMetric { w: 16498, h: 11196, d: 0, ic: 842 }, // 0x45
+    PackedGlyphMetric { w: 14211, h: 11196, d: 0, ic: 2844 }, // 0x46
+    PackedGlyphMetric { w: 17433, h: 11196, d: 0, ic: 0 }, // 0x47
+    PackedGlyphMetric { w: 18193, h: 11196, d: 0, ic: 1217 }, // 0x48
+    PackedGlyphMetric { w: 10269, h: 11196, d: 0, ic: 1257 }, // 0x49
+    PackedGlyphMetric { w: 12664, h: 11196, d: 0, ic: 1559 }, // 0x4A
+    PackedGlyphMetric { w: 18660, h: 11196, d: 0, ic: 1115 }, // 0x4B
+    PackedGlyphMetric { w: 15656, h: 11196, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 21038, h: 11196, d: 0, ic: 1786 }, // 0x4D
+    PackedGlyphMetric { w: 17624, h: 11196, d: 0, ic: 1786 }, // 0x4E
+    PackedGlyphMetric { w: 17162, h: 11196, d: 0, ic: 569 }, // 0x4F
+    PackedGlyphMetric { w: 14342, h: 11196, d: 0, ic: 2844 }, // 0x50
+    PackedGlyphMetric { w: 17731, h: 11196, d: 3186, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 16875, h: 11196, d: 0, ic: 27 }, // 0x52
+    PackedGlyphMetric { w: 14029, h: 11196, d: 0, ic: 831 }, // 0x53
+    PackedGlyphMetric { w: 13636, h: 11196, d: 0, ic: 2844 }, // 0x54
+    PackedGlyphMetric { w: 15465, h: 11196, d: 0, ic: 1786 }, // 0x55
+    PackedGlyphMetric { w: 13562, h: 11196, d: 0, ic: 4551 }, // 0x56
+    PackedGlyphMetric { w: 20958, h: 11196, d: 0, ic: 2844 }, // 0x57
+    PackedGlyphMetric { w: 18233, h: 11196, d: 0, ic: 1257 }, // 0x58
+    PackedGlyphMetric { w: 13506, h: 11196, d: 0, ic: 4551 }, // 0x59
+    PackedGlyphMetric { w: 15451, h: 11196, d: 0, ic: 1115 }, // 0x5A
+    PackedGlyphMetric { w: 9785, h: 12288, d: 0, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 9785, h: 11378, d: 3186, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 9785, h: 11378, d: 3186, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 22301, h: 5860, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 22301, h: 5860, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 9785, h: 11378, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 12688, h: 7054, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 10377, h: 11378, d: 0, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 10640, h: 7054, d: 0, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 12119, h: 11378, d: 0, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 11092, h: 7054, d: 0, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 11207, h: 11378, d: 3186, ic: 1934 }, // 0x66
+    PackedGlyphMetric { w: 11478, h: 7054, d: 3186, ic: 588 }, // 0x67
+    PackedGlyphMetric { w: 13559, h: 11378, d: 0, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 8742, h: 10919, d: 0, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 9637, h: 10919, d: 3186, ic: 966 }, // 0x6A
+    PackedGlyphMetric { w: 12421, h: 11378, d: 0, ic: 265 }, // 0x6B
+    PackedGlyphMetric { w: 7870, h: 11378, d: 0, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 20120, h: 7054, d: 0, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 14431, h: 7054, d: 0, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 11514, h: 7054, d: 0, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 12119, h: 7054, d: 3186, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 10796, h: 7054, d: 3186, ic: 588 }, // 0x71
+    PackedGlyphMetric { w: 10999, h: 7054, d: 0, ic: 569 }, // 0x72
+    PackedGlyphMetric { w: 10980, h: 7054, d: 0, ic: 0 }, // 0x73
+    PackedGlyphMetric { w: 9235, h: 10077, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 13862, h: 7054, d: 0, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 11833, h: 7054, d: 0, ic: 588 }, // 0x76
+    PackedGlyphMetric { w: 16531, h: 7054, d: 0, ic: 441 }, // 0x77
+    PackedGlyphMetric { w: 12971, h: 7054, d: 0, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 11970, h: 7054, d: 3186, ic: 588 }, // 0x79
+    PackedGlyphMetric { w: 11283, h: 7054, d: 0, ic: 607 }, // 0x7A
+    PackedGlyphMetric { w: 8742, h: 7054, d: 0, ic: 0 }, // 0x7B
+    PackedGlyphMetric { w: 9068, h: 7054, d: 3186, ic: 0 }, // 0x7C
+    PackedGlyphMetric { w: 14569, h: 7054, d: 3186, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 12061, h: 11837, d: 0, ic: 2520 }, // 0x7E
+    PackedGlyphMetric { w: 7509, h: 11378, d: 0, ic: 9526 }, // 0x7F
 ];
 
-pub static CMSY7_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 893, h: 619, d: 119, ic: 0 }, // 0x00
-    GlyphMetric { w: 339, h: 465, d: 0, ic: 0 }, // 0x01
-    GlyphMetric { w: 893, h: 619, d: 119, ic: 0 }, // 0x02
-    GlyphMetric { w: 585, h: 465, d: 0, ic: 0 }, // 0x03
-    GlyphMetric { w: 893, h: 619, d: 119, ic: 0 }, // 0x04
-    GlyphMetric { w: 585, h: 465, d: 0, ic: 0 }, // 0x05
-    GlyphMetric { w: 893, h: 619, d: 119, ic: 0 }, // 0x06
-    GlyphMetric { w: 893, h: 619, d: 119, ic: 0 }, // 0x07
-    GlyphMetric { w: 893, h: 619, d: 119, ic: 0 }, // 0x08
-    GlyphMetric { w: 893, h: 619, d: 119, ic: 0 }, // 0x09
-    GlyphMetric { w: 893, h: 619, d: 119, ic: 0 }, // 0x0A
-    GlyphMetric { w: 893, h: 619, d: 119, ic: 0 }, // 0x0B
-    GlyphMetric { w: 893, h: 619, d: 119, ic: 0 }, // 0x0C
-    GlyphMetric { w: 1139, h: 694, d: 194, ic: 0 }, // 0x0D
-    GlyphMetric { w: 585, h: 465, d: 0, ic: 0 }, // 0x0E
-    GlyphMetric { w: 585, h: 465, d: 0, ic: 0 }, // 0x0F
-    GlyphMetric { w: 893, h: 494, d: 0, ic: 0 }, // 0x10
-    GlyphMetric { w: 893, h: 494, d: 0, ic: 0 }, // 0x11
-    GlyphMetric { w: 893, h: 685, d: 185, ic: 0 }, // 0x12
-    GlyphMetric { w: 893, h: 685, d: 185, ic: 0 }, // 0x13
-    GlyphMetric { w: 893, h: 685, d: 185, ic: 0 }, // 0x14
-    GlyphMetric { w: 893, h: 685, d: 185, ic: 0 }, // 0x15
-    GlyphMetric { w: 893, h: 685, d: 185, ic: 0 }, // 0x16
-    GlyphMetric { w: 893, h: 685, d: 185, ic: 0 }, // 0x17
-    GlyphMetric { w: 893, h: 384, d: 0, ic: 0 }, // 0x18
-    GlyphMetric { w: 893, h: 516, d: 16, ic: 0 }, // 0x19
-    GlyphMetric { w: 893, h: 576, d: 76, ic: 0 }, // 0x1A
-    GlyphMetric { w: 893, h: 576, d: 76, ic: 0 }, // 0x1B
-    GlyphMetric { w: 1139, h: 576, d: 76, ic: 0 }, // 0x1C
-    GlyphMetric { w: 1139, h: 576, d: 76, ic: 0 }, // 0x1D
-    GlyphMetric { w: 893, h: 576, d: 76, ic: 0 }, // 0x1E
-    GlyphMetric { w: 893, h: 576, d: 76, ic: 0 }, // 0x1F
-    GlyphMetric { w: 1139, h: 384, d: 0, ic: 0 }, // 0x20
-    GlyphMetric { w: 1139, h: 384, d: 0, ic: 0 }, // 0x21
-    GlyphMetric { w: 585, h: 694, d: 194, ic: 0 }, // 0x22
-    GlyphMetric { w: 585, h: 694, d: 194, ic: 0 }, // 0x23
-    GlyphMetric { w: 1139, h: 384, d: 0, ic: 0 }, // 0x24
-    GlyphMetric { w: 1139, h: 694, d: 194, ic: 0 }, // 0x25
-    GlyphMetric { w: 1139, h: 694, d: 194, ic: 0 }, // 0x26
-    GlyphMetric { w: 893, h: 494, d: 0, ic: 0 }, // 0x27
-    GlyphMetric { w: 1139, h: 384, d: 0, ic: 0 }, // 0x28
-    GlyphMetric { w: 1139, h: 384, d: 0, ic: 0 }, // 0x29
-    GlyphMetric { w: 708, h: 694, d: 194, ic: 0 }, // 0x2A
-    GlyphMetric { w: 708, h: 694, d: 194, ic: 0 }, // 0x2B
-    GlyphMetric { w: 1139, h: 384, d: 0, ic: 0 }, // 0x2C
-    GlyphMetric { w: 1139, h: 694, d: 194, ic: 0 }, // 0x2D
-    GlyphMetric { w: 1139, h: 694, d: 194, ic: 0 }, // 0x2E
-    GlyphMetric { w: 893, h: 431, d: 0, ic: 0 }, // 0x2F
-    GlyphMetric { w: 329, h: 556, d: 0, ic: 0 }, // 0x30
-    GlyphMetric { w: 1139, h: 431, d: 0, ic: 0 }, // 0x31
-    GlyphMetric { w: 770, h: 576, d: 76, ic: 0 }, // 0x32
-    GlyphMetric { w: 770, h: 576, d: 76, ic: 0 }, // 0x33
-    GlyphMetric { w: 1016, h: 694, d: 194, ic: 0 }, // 0x34
-    GlyphMetric { w: 1016, h: 694, d: 194, ic: 0 }, // 0x35
-    GlyphMetric { w: 0, h: 694, d: 194, ic: 0 }, // 0x36
-    GlyphMetric { w: 0, h: 384, d: 0, ic: 0 }, // 0x37
-    GlyphMetric { w: 647, h: 694, d: 0, ic: 0 }, // 0x38
-    GlyphMetric { w: 647, h: 694, d: 0, ic: 0 }, // 0x39
-    GlyphMetric { w: 770, h: 431, d: 0, ic: 0 }, // 0x3A
-    GlyphMetric { w: 585, h: 750, d: 56, ic: 0 }, // 0x3B
-    GlyphMetric { w: 831, h: 694, d: 0, ic: 0 }, // 0x3C
-    GlyphMetric { w: 831, h: 694, d: 0, ic: 0 }, // 0x3D
-    GlyphMetric { w: 893, h: 694, d: 0, ic: 0 }, // 0x3E
-    GlyphMetric { w: 893, h: 694, d: 0, ic: 0 }, // 0x3F
-    GlyphMetric { w: 708, h: 694, d: 0, ic: 0 }, // 0x40
-    GlyphMetric { w: 918, h: 683, d: 0, ic: 0 }, // 0x41
-    GlyphMetric { w: 753, h: 683, d: 0, ic: 25 }, // 0x42
-    GlyphMetric { w: 620, h: 683, d: 0, ic: 50 }, // 0x43
-    GlyphMetric { w: 889, h: 683, d: 0, ic: 31 }, // 0x44
-    GlyphMetric { w: 616, h: 683, d: 0, ic: 84 }, // 0x45
-    GlyphMetric { w: 818, h: 683, d: 0, ic: 101 }, // 0x46
-    GlyphMetric { w: 689, h: 683, d: 97, ic: 57 }, // 0x47
-    GlyphMetric { w: 979, h: 683, d: 0, ic: 0 }, // 0x48
-    GlyphMetric { w: 647, h: 683, d: 0, ic: 65 }, // 0x49
-    GlyphMetric { w: 782, h: 683, d: 97, ic: 186 }, // 0x4A
-    GlyphMetric { w: 872, h: 683, d: 0, ic: 1 }, // 0x4B
-    GlyphMetric { w: 792, h: 683, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 1343, h: 683, d: 0, ic: 0 }, // 0x4D
-    GlyphMetric { w: 936, h: 683, d: 0, ic: 150 }, // 0x4E
-    GlyphMetric { w: 906, h: 683, d: 0, ic: 31 }, // 0x4F
-    GlyphMetric { w: 809, h: 683, d: 0, ic: 84 }, // 0x50
-    GlyphMetric { w: 936, h: 683, d: 97, ic: 0 }, // 0x51
-    GlyphMetric { w: 981, h: 683, d: 0, ic: 0 }, // 0x52
-    GlyphMetric { w: 702, h: 683, d: 0, ic: 72 }, // 0x53
-    GlyphMetric { w: 648, h: 683, d: 0, ic: 263 }, // 0x54
-    GlyphMetric { w: 718, h: 683, d: 0, ic: 101 }, // 0x55
-    GlyphMetric { w: 720, h: 683, d: 0, ic: 84 }, // 0x56
-    GlyphMetric { w: 1135, h: 683, d: 0, ic: 84 }, // 0x57
-    GlyphMetric { w: 819, h: 683, d: 0, ic: 146 }, // 0x58
-    GlyphMetric { w: 764, h: 683, d: 97, ic: 84 }, // 0x59
-    GlyphMetric { w: 823, h: 683, d: 0, ic: 81 }, // 0x5A
-    GlyphMetric { w: 770, h: 556, d: 0, ic: 0 }, // 0x5B
-    GlyphMetric { w: 770, h: 556, d: 0, ic: 0 }, // 0x5C
-    GlyphMetric { w: 770, h: 556, d: 0, ic: 0 }, // 0x5D
-    GlyphMetric { w: 770, h: 556, d: 0, ic: 0 }, // 0x5E
-    GlyphMetric { w: 770, h: 556, d: 0, ic: 0 }, // 0x5F
-    GlyphMetric { w: 708, h: 694, d: 0, ic: 0 }, // 0x60
-    GlyphMetric { w: 708, h: 694, d: 0, ic: 0 }, // 0x61
-    GlyphMetric { w: 524, h: 750, d: 250, ic: 0 }, // 0x62
-    GlyphMetric { w: 524, h: 750, d: 250, ic: 0 }, // 0x63
-    GlyphMetric { w: 524, h: 750, d: 250, ic: 0 }, // 0x64
-    GlyphMetric { w: 524, h: 750, d: 250, ic: 0 }, // 0x65
-    GlyphMetric { w: 585, h: 750, d: 250, ic: 0 }, // 0x66
-    GlyphMetric { w: 585, h: 750, d: 250, ic: 0 }, // 0x67
-    GlyphMetric { w: 462, h: 750, d: 250, ic: 0 }, // 0x68
-    GlyphMetric { w: 462, h: 750, d: 250, ic: 0 }, // 0x69
-    GlyphMetric { w: 339, h: 750, d: 250, ic: 0 }, // 0x6A
-    GlyphMetric { w: 585, h: 750, d: 250, ic: 0 }, // 0x6B
-    GlyphMetric { w: 585, h: 750, d: 250, ic: 0 }, // 0x6C
-    GlyphMetric { w: 708, h: 750, d: 250, ic: 0 }, // 0x6D
-    GlyphMetric { w: 585, h: 750, d: 250, ic: 0 }, // 0x6E
-    GlyphMetric { w: 339, h: 694, d: 194, ic: 0 }, // 0x6F
-    GlyphMetric { w: 938, h: 49, d: 951, ic: 0 }, // 0x70
-    GlyphMetric { w: 859, h: 683, d: 0, ic: 0 }, // 0x71
-    GlyphMetric { w: 954, h: 683, d: 0, ic: 0 }, // 0x72
-    GlyphMetric { w: 494, h: 694, d: 194, ic: 123 }, // 0x73
-    GlyphMetric { w: 770, h: 556, d: 0, ic: 0 }, // 0x74
-    GlyphMetric { w: 770, h: 556, d: 0, ic: 0 }, // 0x75
-    GlyphMetric { w: 893, h: 685, d: 185, ic: 0 }, // 0x76
-    GlyphMetric { w: 893, h: 685, d: 185, ic: 0 }, // 0x77
-    GlyphMetric { w: 524, h: 694, d: 194, ic: 0 }, // 0x78
-    GlyphMetric { w: 524, h: 694, d: 194, ic: 0 }, // 0x79
-    GlyphMetric { w: 524, h: 694, d: 194, ic: 0 }, // 0x7A
-    GlyphMetric { w: 708, h: 694, d: 194, ic: 0 }, // 0x7B
-    GlyphMetric { w: 893, h: 694, d: 130, ic: 0 }, // 0x7C
-    GlyphMetric { w: 893, h: 694, d: 130, ic: 0 }, // 0x7D
-    GlyphMetric { w: 893, h: 694, d: 130, ic: 0 }, // 0x7E
-    GlyphMetric { w: 893, h: 694, d: 130, ic: 0 }, // 0x7F
+pub static CMSY7_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 14629, h: 10142, d: 1950, ic: 0 }, // 0x00
+    PackedGlyphMetric { w: 5559, h: 7623, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 14629, h: 10142, d: 1950, ic: 0 }, // 0x02
+    PackedGlyphMetric { w: 9590, h: 7623, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 14629, h: 10142, d: 1950, ic: 0 }, // 0x04
+    PackedGlyphMetric { w: 9590, h: 7623, d: 0, ic: 0 }, // 0x05
+    PackedGlyphMetric { w: 14629, h: 10142, d: 1950, ic: 0 }, // 0x06
+    PackedGlyphMetric { w: 14629, h: 10142, d: 1950, ic: 0 }, // 0x07
+    PackedGlyphMetric { w: 14629, h: 10142, d: 1950, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 14629, h: 10142, d: 1950, ic: 0 }, // 0x09
+    PackedGlyphMetric { w: 14629, h: 10142, d: 1950, ic: 0 }, // 0x0A
+    PackedGlyphMetric { w: 14629, h: 10142, d: 1950, ic: 0 }, // 0x0B
+    PackedGlyphMetric { w: 14629, h: 10142, d: 1950, ic: 0 }, // 0x0C
+    PackedGlyphMetric { w: 18660, h: 11378, d: 3186, ic: 0 }, // 0x0D
+    PackedGlyphMetric { w: 9590, h: 7623, d: 0, ic: 0 }, // 0x0E
+    PackedGlyphMetric { w: 9590, h: 7623, d: 0, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 14629, h: 8092, d: 0, ic: 0 }, // 0x10
+    PackedGlyphMetric { w: 14629, h: 8092, d: 0, ic: 0 }, // 0x11
+    PackedGlyphMetric { w: 14629, h: 11231, d: 3039, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 14629, h: 11231, d: 3039, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 14629, h: 11231, d: 3039, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 14629, h: 11231, d: 3039, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 14629, h: 11231, d: 3039, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 14629, h: 11231, d: 3039, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 14629, h: 6293, d: 0, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 14629, h: 8451, d: 259, ic: 0 }, // 0x19
+    PackedGlyphMetric { w: 14629, h: 9432, d: 1240, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 14629, h: 9432, d: 1240, ic: 0 }, // 0x1B
+    PackedGlyphMetric { w: 18660, h: 9432, d: 1240, ic: 0 }, // 0x1C
+    PackedGlyphMetric { w: 18660, h: 9432, d: 1240, ic: 0 }, // 0x1D
+    PackedGlyphMetric { w: 14629, h: 9432, d: 1240, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 14629, h: 9432, d: 1240, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 18660, h: 6293, d: 0, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 18660, h: 6293, d: 0, ic: 0 }, // 0x21
+    PackedGlyphMetric { w: 9590, h: 11378, d: 3186, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 9590, h: 11378, d: 3186, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 18660, h: 6293, d: 0, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 18660, h: 11378, d: 3186, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 18660, h: 11378, d: 3186, ic: 0 }, // 0x26
+    PackedGlyphMetric { w: 14629, h: 8092, d: 0, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 18660, h: 6293, d: 0, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 18660, h: 6293, d: 0, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 11605, h: 11378, d: 3186, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 11605, h: 11378, d: 3186, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 18660, h: 6293, d: 0, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 18660, h: 11378, d: 3186, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 18660, h: 11378, d: 3186, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 14629, h: 7054, d: 0, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 5396, h: 9102, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 18660, h: 7054, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 12613, h: 9432, d: 1240, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 12613, h: 9432, d: 1240, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 16644, h: 11378, d: 3186, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 16644, h: 11378, d: 3186, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 0, h: 11378, d: 3186, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 0, h: 6293, d: 0, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 10598, h: 11378, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 10598, h: 11378, d: 0, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 12613, h: 7054, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 9590, h: 12288, d: 910, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 13621, h: 11378, d: 0, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 13621, h: 11378, d: 0, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 14629, h: 11378, d: 0, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 14629, h: 11378, d: 0, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 11605, h: 11378, d: 0, ic: 0 }, // 0x40
+    PackedGlyphMetric { w: 15034, h: 11196, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 12344, h: 11196, d: 0, ic: 402 }, // 0x42
+    PackedGlyphMetric { w: 10161, h: 11196, d: 0, ic: 818 }, // 0x43
+    PackedGlyphMetric { w: 14573, h: 11196, d: 0, ic: 504 }, // 0x44
+    PackedGlyphMetric { w: 10094, h: 11196, d: 0, ic: 1382 }, // 0x45
+    PackedGlyphMetric { w: 13408, h: 11196, d: 0, ic: 1651 }, // 0x46
+    PackedGlyphMetric { w: 11281, h: 11196, d: 1593, ic: 926 }, // 0x47
+    PackedGlyphMetric { w: 16034, h: 11196, d: 0, ic: 0 }, // 0x48
+    PackedGlyphMetric { w: 10592, h: 11196, d: 0, ic: 1064 }, // 0x49
+    PackedGlyphMetric { w: 12815, h: 11196, d: 1593, ic: 3051 }, // 0x4A
+    PackedGlyphMetric { w: 14282, h: 11196, d: 0, ic: 22 }, // 0x4B
+    PackedGlyphMetric { w: 12971, h: 11196, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 21999, h: 11196, d: 0, ic: 0 }, // 0x4D
+    PackedGlyphMetric { w: 15328, h: 11196, d: 0, ic: 2463 }, // 0x4E
+    PackedGlyphMetric { w: 14841, h: 11196, d: 0, ic: 504 }, // 0x4F
+    PackedGlyphMetric { w: 13257, h: 11196, d: 0, ic: 1372 }, // 0x50
+    PackedGlyphMetric { w: 15334, h: 11196, d: 1593, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 16073, h: 11196, d: 0, ic: 0 }, // 0x52
+    PackedGlyphMetric { w: 11505, h: 11196, d: 0, ic: 1180 }, // 0x53
+    PackedGlyphMetric { w: 10614, h: 11196, d: 0, ic: 4311 }, // 0x54
+    PackedGlyphMetric { w: 11760, h: 11196, d: 0, ic: 1651 }, // 0x55
+    PackedGlyphMetric { w: 11795, h: 11196, d: 0, ic: 1372 }, // 0x56
+    PackedGlyphMetric { w: 18598, h: 11196, d: 0, ic: 1372 }, // 0x57
+    PackedGlyphMetric { w: 13416, h: 11196, d: 0, ic: 2399 }, // 0x58
+    PackedGlyphMetric { w: 12523, h: 11196, d: 1593, ic: 1372 }, // 0x59
+    PackedGlyphMetric { w: 13486, h: 11196, d: 0, ic: 1321 }, // 0x5A
+    PackedGlyphMetric { w: 12613, h: 9102, d: 0, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 12613, h: 9102, d: 0, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 12613, h: 9102, d: 0, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 12613, h: 9102, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 12613, h: 9102, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 11605, h: 11378, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 11605, h: 11378, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 8582, h: 12288, d: 4096, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 8582, h: 12288, d: 4096, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 8582, h: 12288, d: 4096, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 8582, h: 12288, d: 4096, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 9590, h: 12288, d: 4096, ic: 0 }, // 0x66
+    PackedGlyphMetric { w: 9590, h: 12288, d: 4096, ic: 0 }, // 0x67
+    PackedGlyphMetric { w: 7574, h: 12288, d: 4096, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 7574, h: 12288, d: 4096, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 5559, h: 12288, d: 4096, ic: 0 }, // 0x6A
+    PackedGlyphMetric { w: 9590, h: 12288, d: 4096, ic: 0 }, // 0x6B
+    PackedGlyphMetric { w: 9590, h: 12288, d: 4096, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 11605, h: 12288, d: 4096, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 9590, h: 12288, d: 4096, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 5559, h: 11378, d: 3186, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 15376, h: 796, d: 15588, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 14076, h: 11196, d: 0, ic: 0 }, // 0x71
+    PackedGlyphMetric { w: 15636, h: 11196, d: 0, ic: 0 }, // 0x72
+    PackedGlyphMetric { w: 8086, h: 11378, d: 3186, ic: 2016 }, // 0x73
+    PackedGlyphMetric { w: 12613, h: 9102, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 12613, h: 9102, d: 0, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 14629, h: 11231, d: 3039, ic: 0 }, // 0x76
+    PackedGlyphMetric { w: 14629, h: 11231, d: 3039, ic: 0 }, // 0x77
+    PackedGlyphMetric { w: 8582, h: 11378, d: 3186, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 8582, h: 11378, d: 3186, ic: 0 }, // 0x79
+    PackedGlyphMetric { w: 8582, h: 11378, d: 3186, ic: 0 }, // 0x7A
+    PackedGlyphMetric { w: 11605, h: 11378, d: 3186, ic: 0 }, // 0x7B
+    PackedGlyphMetric { w: 14629, h: 11378, d: 2124, ic: 0 }, // 0x7C
+    PackedGlyphMetric { w: 14629, h: 11378, d: 2124, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 14629, h: 11378, d: 2124, ic: 0 }, // 0x7E
+    PackedGlyphMetric { w: 14629, h: 11378, d: 2124, ic: 0 }, // 0x7F
 ];
 
-pub static CMSY5_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 1083, h: 667, d: 167, ic: 0 }, // 0x00
-    GlyphMetric { w: 458, h: 493, d: 0, ic: 0 }, // 0x01
-    GlyphMetric { w: 1083, h: 667, d: 167, ic: 0 }, // 0x02
-    GlyphMetric { w: 736, h: 465, d: 0, ic: 0 }, // 0x03
-    GlyphMetric { w: 1083, h: 667, d: 167, ic: 0 }, // 0x04
-    GlyphMetric { w: 736, h: 493, d: 0, ic: 0 }, // 0x05
-    GlyphMetric { w: 1083, h: 667, d: 167, ic: 0 }, // 0x06
-    GlyphMetric { w: 1083, h: 667, d: 167, ic: 0 }, // 0x07
-    GlyphMetric { w: 1083, h: 667, d: 167, ic: 0 }, // 0x08
-    GlyphMetric { w: 1083, h: 667, d: 167, ic: 0 }, // 0x09
-    GlyphMetric { w: 1083, h: 667, d: 167, ic: 0 }, // 0x0A
-    GlyphMetric { w: 1083, h: 667, d: 167, ic: 0 }, // 0x0B
-    GlyphMetric { w: 1083, h: 667, d: 167, ic: 0 }, // 0x0C
-    GlyphMetric { w: 1361, h: 694, d: 194, ic: 0 }, // 0x0D
-    GlyphMetric { w: 736, h: 493, d: 0, ic: 0 }, // 0x0E
-    GlyphMetric { w: 736, h: 493, d: 0, ic: 0 }, // 0x0F
-    GlyphMetric { w: 1083, h: 515, d: 15, ic: 0 }, // 0x10
-    GlyphMetric { w: 1083, h: 515, d: 15, ic: 0 }, // 0x11
-    GlyphMetric { w: 1083, h: 719, d: 219, ic: 0 }, // 0x12
-    GlyphMetric { w: 1083, h: 719, d: 219, ic: 0 }, // 0x13
-    GlyphMetric { w: 1083, h: 719, d: 219, ic: 0 }, // 0x14
-    GlyphMetric { w: 1083, h: 719, d: 219, ic: 0 }, // 0x15
-    GlyphMetric { w: 1083, h: 719, d: 219, ic: 0 }, // 0x16
-    GlyphMetric { w: 1083, h: 719, d: 219, ic: 0 }, // 0x17
-    GlyphMetric { w: 1083, h: 396, d: 0, ic: 0 }, // 0x18
-    GlyphMetric { w: 1083, h: 538, d: 38, ic: 0 }, // 0x19
-    GlyphMetric { w: 1083, h: 601, d: 101, ic: 0 }, // 0x1A
-    GlyphMetric { w: 1083, h: 601, d: 101, ic: 0 }, // 0x1B
-    GlyphMetric { w: 1361, h: 601, d: 101, ic: 0 }, // 0x1C
-    GlyphMetric { w: 1361, h: 601, d: 101, ic: 0 }, // 0x1D
-    GlyphMetric { w: 1083, h: 601, d: 101, ic: 0 }, // 0x1E
-    GlyphMetric { w: 1083, h: 601, d: 101, ic: 0 }, // 0x1F
-    GlyphMetric { w: 1361, h: 396, d: 0, ic: 0 }, // 0x20
-    GlyphMetric { w: 1361, h: 396, d: 0, ic: 0 }, // 0x21
-    GlyphMetric { w: 736, h: 694, d: 194, ic: 0 }, // 0x22
-    GlyphMetric { w: 736, h: 694, d: 194, ic: 0 }, // 0x23
-    GlyphMetric { w: 1361, h: 396, d: 0, ic: 0 }, // 0x24
-    GlyphMetric { w: 1361, h: 694, d: 194, ic: 0 }, // 0x25
-    GlyphMetric { w: 1361, h: 694, d: 194, ic: 0 }, // 0x26
-    GlyphMetric { w: 1083, h: 515, d: 15, ic: 0 }, // 0x27
-    GlyphMetric { w: 1361, h: 396, d: 0, ic: 0 }, // 0x28
-    GlyphMetric { w: 1361, h: 396, d: 0, ic: 0 }, // 0x29
-    GlyphMetric { w: 875, h: 694, d: 194, ic: 0 }, // 0x2A
-    GlyphMetric { w: 875, h: 694, d: 194, ic: 0 }, // 0x2B
-    GlyphMetric { w: 1361, h: 396, d: 0, ic: 0 }, // 0x2C
-    GlyphMetric { w: 1361, h: 694, d: 194, ic: 0 }, // 0x2D
-    GlyphMetric { w: 1361, h: 694, d: 194, ic: 0 }, // 0x2E
-    GlyphMetric { w: 1083, h: 431, d: 0, ic: 0 }, // 0x2F
-    GlyphMetric { w: 441, h: 556, d: 0, ic: 0 }, // 0x30
-    GlyphMetric { w: 1361, h: 431, d: 0, ic: 0 }, // 0x31
-    GlyphMetric { w: 944, h: 601, d: 101, ic: 0 }, // 0x32
-    GlyphMetric { w: 944, h: 601, d: 101, ic: 0 }, // 0x33
-    GlyphMetric { w: 1222, h: 694, d: 194, ic: 0 }, // 0x34
-    GlyphMetric { w: 1222, h: 694, d: 194, ic: 0 }, // 0x35
-    GlyphMetric { w: 0, h: 694, d: 194, ic: 0 }, // 0x36
-    GlyphMetric { w: 0, h: 396, d: 0, ic: 0 }, // 0x37
-    GlyphMetric { w: 806, h: 694, d: 0, ic: 0 }, // 0x38
-    GlyphMetric { w: 806, h: 694, d: 0, ic: 0 }, // 0x39
-    GlyphMetric { w: 944, h: 431, d: 0, ic: 0 }, // 0x3A
-    GlyphMetric { w: 736, h: 750, d: 56, ic: 0 }, // 0x3B
-    GlyphMetric { w: 1014, h: 694, d: 0, ic: 0 }, // 0x3C
-    GlyphMetric { w: 1014, h: 694, d: 0, ic: 0 }, // 0x3D
-    GlyphMetric { w: 1083, h: 694, d: 0, ic: 0 }, // 0x3E
-    GlyphMetric { w: 1083, h: 694, d: 0, ic: 0 }, // 0x3F
-    GlyphMetric { w: 875, h: 694, d: 0, ic: 0 }, // 0x40
-    GlyphMetric { w: 1113, h: 683, d: 0, ic: 0 }, // 0x41
-    GlyphMetric { w: 919, h: 683, d: 0, ic: 17 }, // 0x42
-    GlyphMetric { w: 782, h: 683, d: 0, ic: 39 }, // 0x43
-    GlyphMetric { w: 1084, h: 683, d: 0, ic: 35 }, // 0x44
-    GlyphMetric { w: 771, h: 683, d: 0, ic: 78 }, // 0x45
-    GlyphMetric { w: 988, h: 683, d: 0, ic: 103 }, // 0x46
-    GlyphMetric { w: 850, h: 683, d: 97, ic: 53 }, // 0x47
-    GlyphMetric { w: 1195, h: 683, d: 0, ic: 0 }, // 0x48
-    GlyphMetric { w: 820, h: 683, d: 0, ic: 52 }, // 0x49
-    GlyphMetric { w: 958, h: 683, d: 97, ic: 188 }, // 0x4A
-    GlyphMetric { w: 1055, h: 683, d: 0, ic: 0 }, // 0x4B
-    GlyphMetric { w: 965, h: 683, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 1568, h: 683, d: 0, ic: 0 }, // 0x4D
-    GlyphMetric { w: 1126, h: 683, d: 0, ic: 154 }, // 0x4E
-    GlyphMetric { w: 1089, h: 683, d: 0, ic: 35 }, // 0x4F
-    GlyphMetric { w: 998, h: 683, d: 0, ic: 86 }, // 0x50
-    GlyphMetric { w: 1132, h: 683, d: 97, ic: 0 }, // 0x51
-    GlyphMetric { w: 1196, h: 683, d: 0, ic: 0 }, // 0x52
-    GlyphMetric { w: 868, h: 683, d: 0, ic: 68 }, // 0x53
-    GlyphMetric { w: 822, h: 683, d: 0, ic: 275 }, // 0x54
-    GlyphMetric { w: 874, h: 683, d: 0, ic: 103 }, // 0x55
-    GlyphMetric { w: 899, h: 683, d: 0, ic: 86 }, // 0x56
-    GlyphMetric { w: 1368, h: 683, d: 0, ic: 86 }, // 0x57
-    GlyphMetric { w: 997, h: 683, d: 0, ic: 146 }, // 0x58
-    GlyphMetric { w: 929, h: 683, d: 97, ic: 86 }, // 0x59
-    GlyphMetric { w: 991, h: 683, d: 0, ic: 82 }, // 0x5A
-    GlyphMetric { w: 944, h: 556, d: 0, ic: 0 }, // 0x5B
-    GlyphMetric { w: 944, h: 556, d: 0, ic: 0 }, // 0x5C
-    GlyphMetric { w: 944, h: 556, d: 0, ic: 0 }, // 0x5D
-    GlyphMetric { w: 944, h: 556, d: 0, ic: 0 }, // 0x5E
-    GlyphMetric { w: 944, h: 556, d: 0, ic: 0 }, // 0x5F
-    GlyphMetric { w: 875, h: 694, d: 0, ic: 0 }, // 0x60
-    GlyphMetric { w: 875, h: 694, d: 0, ic: 0 }, // 0x61
-    GlyphMetric { w: 667, h: 750, d: 250, ic: 0 }, // 0x62
-    GlyphMetric { w: 667, h: 750, d: 250, ic: 0 }, // 0x63
-    GlyphMetric { w: 667, h: 750, d: 250, ic: 0 }, // 0x64
-    GlyphMetric { w: 667, h: 750, d: 250, ic: 0 }, // 0x65
-    GlyphMetric { w: 736, h: 750, d: 250, ic: 0 }, // 0x66
-    GlyphMetric { w: 736, h: 750, d: 250, ic: 0 }, // 0x67
-    GlyphMetric { w: 597, h: 750, d: 250, ic: 0 }, // 0x68
-    GlyphMetric { w: 597, h: 750, d: 250, ic: 0 }, // 0x69
-    GlyphMetric { w: 458, h: 750, d: 250, ic: 0 }, // 0x6A
-    GlyphMetric { w: 736, h: 750, d: 250, ic: 0 }, // 0x6B
-    GlyphMetric { w: 736, h: 750, d: 250, ic: 0 }, // 0x6C
-    GlyphMetric { w: 875, h: 750, d: 250, ic: 0 }, // 0x6D
-    GlyphMetric { w: 736, h: 750, d: 250, ic: 0 }, // 0x6E
-    GlyphMetric { w: 458, h: 694, d: 194, ic: 0 }, // 0x6F
-    GlyphMetric { w: 1097, h: 56, d: 944, ic: 0 }, // 0x70
-    GlyphMetric { w: 1036, h: 683, d: 0, ic: 0 }, // 0x71
-    GlyphMetric { w: 1153, h: 683, d: 0, ic: 0 }, // 0x72
-    GlyphMetric { w: 632, h: 694, d: 194, ic: 139 }, // 0x73
-    GlyphMetric { w: 944, h: 556, d: 0, ic: 0 }, // 0x74
-    GlyphMetric { w: 944, h: 556, d: 0, ic: 0 }, // 0x75
-    GlyphMetric { w: 1083, h: 719, d: 219, ic: 0 }, // 0x76
-    GlyphMetric { w: 1083, h: 719, d: 219, ic: 0 }, // 0x77
-    GlyphMetric { w: 667, h: 694, d: 194, ic: 0 }, // 0x78
-    GlyphMetric { w: 667, h: 694, d: 194, ic: 0 }, // 0x79
-    GlyphMetric { w: 667, h: 694, d: 194, ic: 0 }, // 0x7A
-    GlyphMetric { w: 875, h: 694, d: 194, ic: 0 }, // 0x7B
-    GlyphMetric { w: 1083, h: 694, d: 130, ic: 0 }, // 0x7C
-    GlyphMetric { w: 1083, h: 694, d: 130, ic: 0 }, // 0x7D
-    GlyphMetric { w: 1083, h: 694, d: 130, ic: 0 }, // 0x7E
-    GlyphMetric { w: 1083, h: 694, d: 130, ic: 0 }, // 0x7F
+pub static CMSY5_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 17750, h: 10923, d: 2731, ic: 0 }, // 0x00
+    PackedGlyphMetric { w: 7509, h: 8078, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 17750, h: 10923, d: 2731, ic: 0 }, // 0x02
+    PackedGlyphMetric { w: 12061, h: 7623, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 17750, h: 10923, d: 2731, ic: 0 }, // 0x04
+    PackedGlyphMetric { w: 12061, h: 8078, d: 0, ic: 0 }, // 0x05
+    PackedGlyphMetric { w: 17750, h: 10923, d: 2731, ic: 0 }, // 0x06
+    PackedGlyphMetric { w: 17750, h: 10923, d: 2731, ic: 0 }, // 0x07
+    PackedGlyphMetric { w: 17750, h: 10923, d: 2731, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 17750, h: 10923, d: 2731, ic: 0 }, // 0x09
+    PackedGlyphMetric { w: 17750, h: 10923, d: 2731, ic: 0 }, // 0x0A
+    PackedGlyphMetric { w: 17750, h: 10923, d: 2731, ic: 0 }, // 0x0B
+    PackedGlyphMetric { w: 17750, h: 10923, d: 2731, ic: 0 }, // 0x0C
+    PackedGlyphMetric { w: 22301, h: 11378, d: 3186, ic: 0 }, // 0x0D
+    PackedGlyphMetric { w: 12061, h: 8078, d: 0, ic: 0 }, // 0x0E
+    PackedGlyphMetric { w: 12061, h: 8078, d: 0, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 17750, h: 8435, d: 243, ic: 0 }, // 0x10
+    PackedGlyphMetric { w: 17750, h: 8435, d: 243, ic: 0 }, // 0x11
+    PackedGlyphMetric { w: 17750, h: 11785, d: 3593, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 17750, h: 11785, d: 3593, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 17750, h: 11785, d: 3593, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 17750, h: 11785, d: 3593, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 17750, h: 11785, d: 3593, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 17750, h: 11785, d: 3593, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 17750, h: 6495, d: 0, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 17750, h: 8823, d: 631, ic: 0 }, // 0x19
+    PackedGlyphMetric { w: 17750, h: 9845, d: 1653, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 17750, h: 9845, d: 1653, ic: 0 }, // 0x1B
+    PackedGlyphMetric { w: 22301, h: 9845, d: 1653, ic: 0 }, // 0x1C
+    PackedGlyphMetric { w: 22301, h: 9845, d: 1653, ic: 0 }, // 0x1D
+    PackedGlyphMetric { w: 17750, h: 9845, d: 1653, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 17750, h: 9845, d: 1653, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 22301, h: 6495, d: 0, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 22301, h: 6495, d: 0, ic: 0 }, // 0x21
+    PackedGlyphMetric { w: 12061, h: 11378, d: 3186, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 12061, h: 11378, d: 3186, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 22301, h: 6495, d: 0, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 22301, h: 11378, d: 3186, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 22301, h: 11378, d: 3186, ic: 0 }, // 0x26
+    PackedGlyphMetric { w: 17750, h: 8435, d: 243, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 22301, h: 6495, d: 0, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 22301, h: 6495, d: 0, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 14336, h: 11378, d: 3186, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 14336, h: 11378, d: 3186, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 22301, h: 6495, d: 0, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 22301, h: 11378, d: 3186, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 22301, h: 11378, d: 3186, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 17750, h: 7054, d: 0, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 7225, h: 9102, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 22301, h: 7054, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 15474, h: 9845, d: 1653, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 15474, h: 9845, d: 1653, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 20025, h: 11378, d: 3186, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 20025, h: 11378, d: 3186, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 0, h: 11378, d: 3186, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 0, h: 6495, d: 0, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 13198, h: 11378, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 13198, h: 11378, d: 0, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 15474, h: 7054, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 12061, h: 12288, d: 910, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 16612, h: 11378, d: 0, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 16612, h: 11378, d: 0, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 17750, h: 11378, d: 0, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 17750, h: 11378, d: 0, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 14336, h: 11378, d: 0, ic: 0 }, // 0x40
+    PackedGlyphMetric { w: 18243, h: 11196, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 15062, h: 11196, d: 0, ic: 273 }, // 0x42
+    PackedGlyphMetric { w: 12814, h: 11196, d: 0, ic: 635 }, // 0x43
+    PackedGlyphMetric { w: 17759, h: 11196, d: 0, ic: 569 }, // 0x44
+    PackedGlyphMetric { w: 12630, h: 11196, d: 0, ic: 1272 }, // 0x45
+    PackedGlyphMetric { w: 16191, h: 11196, d: 0, ic: 1684 }, // 0x46
+    PackedGlyphMetric { w: 13933, h: 11196, d: 1593, ic: 865 }, // 0x47
+    PackedGlyphMetric { w: 19571, h: 11196, d: 0, ic: 0 }, // 0x48
+    PackedGlyphMetric { w: 13427, h: 11196, d: 0, ic: 854 }, // 0x49
+    PackedGlyphMetric { w: 15702, h: 11196, d: 1593, ic: 3083 }, // 0x4A
+    PackedGlyphMetric { w: 17285, h: 11196, d: 0, ic: 0 }, // 0x4B
+    PackedGlyphMetric { w: 15806, h: 11196, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 25688, h: 11196, d: 0, ic: 0 }, // 0x4D
+    PackedGlyphMetric { w: 18449, h: 11196, d: 0, ic: 2528 }, // 0x4E
+    PackedGlyphMetric { w: 17845, h: 11196, d: 0, ic: 569 }, // 0x4F
+    PackedGlyphMetric { w: 16346, h: 11196, d: 0, ic: 1404 }, // 0x50
+    PackedGlyphMetric { w: 18546, h: 11196, d: 1593, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 19597, h: 11196, d: 0, ic: 0 }, // 0x52
+    PackedGlyphMetric { w: 14222, h: 11196, d: 0, ic: 1116 }, // 0x53
+    PackedGlyphMetric { w: 13475, h: 11196, d: 0, ic: 4506 }, // 0x54
+    PackedGlyphMetric { w: 14316, h: 11196, d: 0, ic: 1684 }, // 0x55
+    PackedGlyphMetric { w: 14728, h: 11196, d: 0, ic: 1404 }, // 0x56
+    PackedGlyphMetric { w: 22408, h: 11196, d: 0, ic: 1404 }, // 0x57
+    PackedGlyphMetric { w: 16329, h: 11196, d: 0, ic: 2399 }, // 0x58
+    PackedGlyphMetric { w: 15228, h: 11196, d: 1593, ic: 1404 }, // 0x59
+    PackedGlyphMetric { w: 16243, h: 11196, d: 0, ic: 1347 }, // 0x5A
+    PackedGlyphMetric { w: 15474, h: 9102, d: 0, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 15474, h: 9102, d: 0, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 15474, h: 9102, d: 0, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 15474, h: 9102, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 15474, h: 9102, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 14336, h: 11378, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 14336, h: 11378, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 10923, h: 12288, d: 4096, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 10923, h: 12288, d: 4096, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 10923, h: 12288, d: 4096, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 10923, h: 12288, d: 4096, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 12061, h: 12288, d: 4096, ic: 0 }, // 0x66
+    PackedGlyphMetric { w: 12061, h: 12288, d: 4096, ic: 0 }, // 0x67
+    PackedGlyphMetric { w: 9785, h: 12288, d: 4096, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 9785, h: 12288, d: 4096, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 7509, h: 12288, d: 4096, ic: 0 }, // 0x6A
+    PackedGlyphMetric { w: 12061, h: 12288, d: 4096, ic: 0 }, // 0x6B
+    PackedGlyphMetric { w: 12061, h: 12288, d: 4096, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 14336, h: 12288, d: 4096, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 12061, h: 12288, d: 4096, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 7509, h: 11378, d: 3186, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 17977, h: 918, d: 15466, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 16976, h: 11196, d: 0, ic: 0 }, // 0x71
+    PackedGlyphMetric { w: 18887, h: 11196, d: 0, ic: 0 }, // 0x72
+    PackedGlyphMetric { w: 10354, h: 11378, d: 3186, ic: 2276 }, // 0x73
+    PackedGlyphMetric { w: 15474, h: 9102, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 15474, h: 9102, d: 0, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 17750, h: 11785, d: 3593, ic: 0 }, // 0x76
+    PackedGlyphMetric { w: 17750, h: 11785, d: 3593, ic: 0 }, // 0x77
+    PackedGlyphMetric { w: 10923, h: 11378, d: 3186, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 10923, h: 11378, d: 3186, ic: 0 }, // 0x79
+    PackedGlyphMetric { w: 10923, h: 11378, d: 3186, ic: 0 }, // 0x7A
+    PackedGlyphMetric { w: 14336, h: 11378, d: 3186, ic: 0 }, // 0x7B
+    PackedGlyphMetric { w: 17750, h: 11378, d: 2124, ic: 0 }, // 0x7C
+    PackedGlyphMetric { w: 17750, h: 11378, d: 2124, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 17750, h: 11378, d: 2124, ic: 0 }, // 0x7E
+    PackedGlyphMetric { w: 17750, h: 11378, d: 2124, ic: 0 }, // 0x7F
 ];
 
-pub static MSAM10_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 778, h: 675, d: 0, ic: 0 }, // 0x00
-    GlyphMetric { w: 778, h: 675, d: 0, ic: 0 }, // 0x01
-    GlyphMetric { w: 778, h: 675, d: 0, ic: 0 }, // 0x02
-    GlyphMetric { w: 778, h: 675, d: 0, ic: 0 }, // 0x03
-    GlyphMetric { w: 778, h: 675, d: 0, ic: 0 }, // 0x04
-    GlyphMetric { w: 278, h: 550, d: 0, ic: 0 }, // 0x05
-    GlyphMetric { w: 667, h: 692, d: 111, ic: 0 }, // 0x06
-    GlyphMetric { w: 667, h: 692, d: 111, ic: 0 }, // 0x07
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x08
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x09
-    GlyphMetric { w: 1000, h: 522, d: 14, ic: 0 }, // 0x0A
-    GlyphMetric { w: 1000, h: 522, d: 14, ic: 0 }, // 0x0B
-    GlyphMetric { w: 778, h: 675, d: 0, ic: 0 }, // 0x0C
-    GlyphMetric { w: 722, h: 692, d: 0, ic: 0 }, // 0x0D
-    GlyphMetric { w: 889, h: 692, d: 0, ic: 0 }, // 0x0E
-    GlyphMetric { w: 611, h: 692, d: 0, ic: 0 }, // 0x0F
-    GlyphMetric { w: 1000, h: 522, d: 14, ic: 0 }, // 0x10
-    GlyphMetric { w: 1000, h: 522, d: 14, ic: 0 }, // 0x11
-    GlyphMetric { w: 1000, h: 675, d: 181, ic: 0 }, // 0x12
-    GlyphMetric { w: 1000, h: 675, d: 181, ic: 0 }, // 0x13
-    GlyphMetric { w: 833, h: 692, d: 194, ic: 0 }, // 0x14
-    GlyphMetric { w: 833, h: 692, d: 194, ic: 0 }, // 0x15
-    GlyphMetric { w: 417, h: 692, d: 194, ic: 0 }, // 0x16
-    GlyphMetric { w: 417, h: 692, d: 194, ic: 0 }, // 0x17
-    GlyphMetric { w: 417, h: 692, d: 194, ic: 0 }, // 0x18
-    GlyphMetric { w: 417, h: 692, d: 194, ic: 0 }, // 0x19
-    GlyphMetric { w: 1111, h: 522, d: 14, ic: 0 }, // 0x1A
-    GlyphMetric { w: 1111, h: 522, d: 14, ic: 0 }, // 0x1B
-    GlyphMetric { w: 1000, h: 675, d: 181, ic: 0 }, // 0x1C
-    GlyphMetric { w: 1000, h: 675, d: 181, ic: 0 }, // 0x1D
-    GlyphMetric { w: 500, h: 692, d: 0, ic: 0 }, // 0x1E
-    GlyphMetric { w: 500, h: 692, d: 0, ic: 0 }, // 0x1F
-    GlyphMetric { w: 1000, h: 378, d: 0, ic: 0 }, // 0x20
-    GlyphMetric { w: 1389, h: 378, d: 0, ic: 0 }, // 0x21
-    GlyphMetric { w: 1000, h: 550, d: 0, ic: 0 }, // 0x22
-    GlyphMetric { w: 1000, h: 550, d: 0, ic: 0 }, // 0x23
-    GlyphMetric { w: 778, h: 730, d: 230, ic: 0 }, // 0x24
-    GlyphMetric { w: 778, h: 730, d: 230, ic: 0 }, // 0x25
-    GlyphMetric { w: 778, h: 730, d: 230, ic: 0 }, // 0x26
-    GlyphMetric { w: 778, h: 756, d: 256, ic: 0 }, // 0x27
-    GlyphMetric { w: 1111, h: 550, d: 0, ic: 0 }, // 0x28
-    GlyphMetric { w: 667, h: 692, d: 0, ic: 0 }, // 0x29
-    GlyphMetric { w: 667, h: 692, d: 0, ic: 0 }, // 0x2A
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x2B
-    GlyphMetric { w: 778, h: 917, d: 82, ic: 0 }, // 0x2C
-    GlyphMetric { w: 778, h: 730, d: 230, ic: 0 }, // 0x2D
-    GlyphMetric { w: 778, h: 730, d: 230, ic: 0 }, // 0x2E
-    GlyphMetric { w: 778, h: 756, d: 256, ic: 0 }, // 0x2F
-    GlyphMetric { w: 778, h: 637, d: 137, ic: 0 }, // 0x30
-    GlyphMetric { w: 778, h: 637, d: 137, ic: 0 }, // 0x31
-    GlyphMetric { w: 778, h: 637, d: 137, ic: 0 }, // 0x32
-    GlyphMetric { w: 778, h: 637, d: 137, ic: 0 }, // 0x33
-    GlyphMetric { w: 778, h: 637, d: 137, ic: 0 }, // 0x34
-    GlyphMetric { w: 778, h: 756, d: 256, ic: 0 }, // 0x35
-    GlyphMetric { w: 778, h: 637, d: 137, ic: 0 }, // 0x36
-    GlyphMetric { w: 778, h: 675, d: 181, ic: 0 }, // 0x37
-    GlyphMetric { w: 275, h: 550, d: 0, ic: 0 }, // 0x38
-    GlyphMetric { w: 500, h: 464, d: 0, ic: 0 }, // 0x39
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x3A
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x3B
-    GlyphMetric { w: 778, h: 637, d: 137, ic: 0 }, // 0x3C
-    GlyphMetric { w: 778, h: 756, d: 256, ic: 0 }, // 0x3D
-    GlyphMetric { w: 778, h: 637, d: 137, ic: 0 }, // 0x3E
-    GlyphMetric { w: 778, h: 675, d: 181, ic: 0 }, // 0x3F
-    GlyphMetric { w: 778, h: 550, d: 35, ic: 0 }, // 0x40
-    GlyphMetric { w: 778, h: 550, d: 35, ic: 0 }, // 0x41
-    GlyphMetric { w: 778, h: 550, d: 35, ic: 0 }, // 0x42
-    GlyphMetric { w: 778, h: 550, d: 35, ic: 0 }, // 0x43
-    GlyphMetric { w: 778, h: 637, d: 137, ic: 0 }, // 0x44
-    GlyphMetric { w: 778, h: 637, d: 137, ic: 0 }, // 0x45
-    GlyphMetric { w: 944, h: 692, d: 194, ic: 0 }, // 0x46
-    GlyphMetric { w: 500, h: 756, d: 256, ic: 0 }, // 0x47
-    GlyphMetric { w: 722, h: 550, d: 0, ic: 0 }, // 0x48
-    GlyphMetric { w: 778, h: 550, d: 35, ic: 0 }, // 0x49
-    GlyphMetric { w: 778, h: 550, d: 35, ic: 0 }, // 0x4A
-    GlyphMetric { w: 500, h: 464, d: 0, ic: 0 }, // 0x4B
-    GlyphMetric { w: 500, h: 464, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 722, h: 550, d: 0, ic: 0 }, // 0x4D
-    GlyphMetric { w: 722, h: 550, d: 0, ic: 0 }, // 0x4E
-    GlyphMetric { w: 722, h: 550, d: 0, ic: 0 }, // 0x4F
-    GlyphMetric { w: 778, h: 692, d: 0, ic: 0 }, // 0x50
-    GlyphMetric { w: 778, h: 886, d: 386, ic: 0 }, // 0x51
-    GlyphMetric { w: 778, h: 886, d: 386, ic: 0 }, // 0x52
-    GlyphMetric { w: 778, h: 983, d: 483, ic: 0 }, // 0x53
-    GlyphMetric { w: 778, h: 983, d: 483, ic: 0 }, // 0x54
-    GlyphMetric { w: 750, h: 675, d: 0, ic: 25 }, // 0x55
-    GlyphMetric { w: 1000, h: 637, d: 137, ic: 0 }, // 0x56
-    GlyphMetric { w: 1000, h: 637, d: 137, ic: 0 }, // 0x57
-    GlyphMetric { w: 833, h: 692, d: 0, ic: 0 }, // 0x58
-    GlyphMetric { w: 611, h: 692, d: 194, ic: 0 }, // 0x59
-    GlyphMetric { w: 611, h: 692, d: 194, ic: 0 }, // 0x5A
-    GlyphMetric { w: 611, h: 756, d: 194, ic: 0 }, // 0x5B
-    GlyphMetric { w: 722, h: 692, d: 0, ic: 0 }, // 0x5C
-    GlyphMetric { w: 722, h: 692, d: 0, ic: 0 }, // 0x5D
-    GlyphMetric { w: 722, h: 522, d: 35, ic: 0 }, // 0x5E
-    GlyphMetric { w: 778, h: 692, d: 0, ic: 0 }, // 0x5F
-    GlyphMetric { w: 778, h: 692, d: 194, ic: 0 }, // 0x60
-    GlyphMetric { w: 778, h: 692, d: 194, ic: 0 }, // 0x61
-    GlyphMetric { w: 778, h: 550, d: 35, ic: 0 }, // 0x62
-    GlyphMetric { w: 778, h: 550, d: 35, ic: 0 }, // 0x63
-    GlyphMetric { w: 667, h: 550, d: 0, ic: 0 }, // 0x64
-    GlyphMetric { w: 667, h: 550, d: 0, ic: 0 }, // 0x65
-    GlyphMetric { w: 760, h: 550, d: 0, ic: 0 }, // 0x66
-    GlyphMetric { w: 760, h: 550, d: 0, ic: 0 }, // 0x67
-    GlyphMetric { w: 778, h: 692, d: 0, ic: 0 }, // 0x68
-    GlyphMetric { w: 778, h: 692, d: 0, ic: 0 }, // 0x69
-    GlyphMetric { w: 778, h: 756, d: 256, ic: 0 }, // 0x6A
-    GlyphMetric { w: 778, h: 756, d: 256, ic: 0 }, // 0x6B
-    GlyphMetric { w: 778, h: 550, d: 61, ic: 0 }, // 0x6C
-    GlyphMetric { w: 778, h: 550, d: 61, ic: 0 }, // 0x6D
-    GlyphMetric { w: 1333, h: 550, d: 35, ic: 0 }, // 0x6E
-    GlyphMetric { w: 1333, h: 550, d: 35, ic: 0 }, // 0x6F
-    GlyphMetric { w: 500, h: 692, d: 0, ic: 0 }, // 0x70
-    GlyphMetric { w: 500, h: 692, d: 0, ic: 0 }, // 0x71
-    GlyphMetric { w: 947, h: 692, d: 156, ic: 0 }, // 0x72
-    GlyphMetric { w: 902, h: 692, d: 156, ic: 0 }, // 0x73
-    GlyphMetric { w: 667, h: 692, d: 0, ic: 0 }, // 0x74
-    GlyphMetric { w: 778, h: 692, d: 82, ic: 0 }, // 0x75
-    GlyphMetric { w: 778, h: 378, d: 0, ic: 0 }, // 0x76
-    GlyphMetric { w: 778, h: 464, d: 0, ic: 0 }, // 0x77
-    GlyphMetric { w: 500, h: 378, d: 0, ic: 0 }, // 0x78
-    GlyphMetric { w: 500, h: 378, d: 0, ic: 0 }, // 0x79
-    GlyphMetric { w: 833, h: 692, d: 0, ic: 0 }, // 0x7A
-    GlyphMetric { w: 500, h: 825, d: 0, ic: 0 }, // 0x7B
-    GlyphMetric { w: 556, h: 431, d: 194, ic: 0 }, // 0x7C
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x7D
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x7E
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x7F
+pub static MSAM10_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 12743, h: 11059, d: 0, ic: 0 }, // 0x00
+    PackedGlyphMetric { w: 12743, h: 11059, d: 0, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 12743, h: 11059, d: 0, ic: 0 }, // 0x02
+    PackedGlyphMetric { w: 12743, h: 11059, d: 0, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 12743, h: 11059, d: 0, ic: 0 }, // 0x04
+    PackedGlyphMetric { w: 4551, h: 9009, d: 0, ic: 0 }, // 0x05
+    PackedGlyphMetric { w: 10923, h: 11342, d: 1820, ic: 0 }, // 0x06
+    PackedGlyphMetric { w: 10923, h: 11342, d: 1820, ic: 0 }, // 0x07
+    PackedGlyphMetric { w: 12743, h: 9535, d: 1343, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 12743, h: 9535, d: 1343, ic: 0 }, // 0x09
+    PackedGlyphMetric { w: 16384, h: 8559, d: 222, ic: 0 }, // 0x0A
+    PackedGlyphMetric { w: 16384, h: 8559, d: 222, ic: 0 }, // 0x0B
+    PackedGlyphMetric { w: 12743, h: 11059, d: 0, ic: 0 }, // 0x0C
+    PackedGlyphMetric { w: 11833, h: 11342, d: 0, ic: 0 }, // 0x0D
+    PackedGlyphMetric { w: 14564, h: 11342, d: 0, ic: 0 }, // 0x0E
+    PackedGlyphMetric { w: 10012, h: 11342, d: 0, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 16384, h: 8559, d: 222, ic: 0 }, // 0x10
+    PackedGlyphMetric { w: 16384, h: 8559, d: 222, ic: 0 }, // 0x11
+    PackedGlyphMetric { w: 16384, h: 11059, d: 2962, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 16384, h: 11059, d: 2962, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 13653, h: 11342, d: 3186, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 13653, h: 11342, d: 3186, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 6827, h: 11342, d: 3186, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 6827, h: 11342, d: 3186, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 6827, h: 11342, d: 3186, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 6827, h: 11342, d: 3186, ic: 0 }, // 0x19
+    PackedGlyphMetric { w: 18204, h: 8559, d: 222, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 18204, h: 8559, d: 222, ic: 0 }, // 0x1B
+    PackedGlyphMetric { w: 16384, h: 11059, d: 2962, ic: 0 }, // 0x1C
+    PackedGlyphMetric { w: 16384, h: 11059, d: 2962, ic: 0 }, // 0x1D
+    PackedGlyphMetric { w: 8192, h: 11342, d: 0, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 8192, h: 11342, d: 0, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 16384, h: 6191, d: 0, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 22756, h: 6191, d: 0, ic: 0 }, // 0x21
+    PackedGlyphMetric { w: 16384, h: 9009, d: 0, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 16384, h: 9009, d: 0, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 12743, h: 11953, d: 3761, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 12743, h: 11953, d: 3761, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 12743, h: 11953, d: 3761, ic: 0 }, // 0x26
+    PackedGlyphMetric { w: 12743, h: 12384, d: 4192, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 18204, h: 9009, d: 0, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 10923, h: 11342, d: 0, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 10923, h: 11342, d: 0, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 12743, h: 9535, d: 1343, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 12743, h: 15019, d: 1343, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 12743, h: 11953, d: 3761, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 12743, h: 11953, d: 3761, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 12743, h: 12384, d: 4192, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 12743, h: 10431, d: 2239, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 12743, h: 10431, d: 2239, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 12743, h: 10431, d: 2239, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 12743, h: 10431, d: 2239, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 12743, h: 10431, d: 2239, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 12743, h: 12384, d: 4192, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 12743, h: 10431, d: 2239, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 12743, h: 11059, d: 2962, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 4506, h: 9009, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 8192, h: 7602, d: 0, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 12743, h: 9535, d: 1343, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 12743, h: 9535, d: 1343, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 12743, h: 10431, d: 2239, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 12743, h: 12384, d: 4192, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 12743, h: 10431, d: 2239, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 12743, h: 11059, d: 2962, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 12743, h: 9009, d: 576, ic: 0 }, // 0x40
+    PackedGlyphMetric { w: 12743, h: 9009, d: 576, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 12743, h: 9009, d: 576, ic: 0 }, // 0x42
+    PackedGlyphMetric { w: 12743, h: 9009, d: 576, ic: 0 }, // 0x43
+    PackedGlyphMetric { w: 12743, h: 10431, d: 2239, ic: 0 }, // 0x44
+    PackedGlyphMetric { w: 12743, h: 10431, d: 2239, ic: 0 }, // 0x45
+    PackedGlyphMetric { w: 15474, h: 11342, d: 3186, ic: 0 }, // 0x46
+    PackedGlyphMetric { w: 8192, h: 12384, d: 4192, ic: 0 }, // 0x47
+    PackedGlyphMetric { w: 11833, h: 9009, d: 0, ic: 0 }, // 0x48
+    PackedGlyphMetric { w: 12743, h: 9009, d: 576, ic: 0 }, // 0x49
+    PackedGlyphMetric { w: 12743, h: 9009, d: 576, ic: 0 }, // 0x4A
+    PackedGlyphMetric { w: 8192, h: 7602, d: 0, ic: 0 }, // 0x4B
+    PackedGlyphMetric { w: 8192, h: 7602, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 11833, h: 9009, d: 0, ic: 0 }, // 0x4D
+    PackedGlyphMetric { w: 11833, h: 9009, d: 0, ic: 0 }, // 0x4E
+    PackedGlyphMetric { w: 11833, h: 9009, d: 0, ic: 0 }, // 0x4F
+    PackedGlyphMetric { w: 12743, h: 11342, d: 0, ic: 0 }, // 0x50
+    PackedGlyphMetric { w: 12743, h: 14511, d: 6319, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 12743, h: 14511, d: 6319, ic: 0 }, // 0x52
+    PackedGlyphMetric { w: 12743, h: 16098, d: 7906, ic: 0 }, // 0x53
+    PackedGlyphMetric { w: 12743, h: 16098, d: 7906, ic: 0 }, // 0x54
+    PackedGlyphMetric { w: 12288, h: 11059, d: 0, ic: 410 }, // 0x55
+    PackedGlyphMetric { w: 16384, h: 10431, d: 2239, ic: 0 }, // 0x56
+    PackedGlyphMetric { w: 16384, h: 10431, d: 2239, ic: 0 }, // 0x57
+    PackedGlyphMetric { w: 13653, h: 11342, d: 0, ic: 0 }, // 0x58
+    PackedGlyphMetric { w: 10012, h: 11342, d: 3186, ic: 0 }, // 0x59
+    PackedGlyphMetric { w: 10012, h: 11342, d: 3186, ic: 0 }, // 0x5A
+    PackedGlyphMetric { w: 10012, h: 12384, d: 3186, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 11833, h: 11342, d: 0, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 11833, h: 11342, d: 0, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 11833, h: 8559, d: 576, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 12743, h: 11342, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 12743, h: 11342, d: 3186, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 12743, h: 11342, d: 3186, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 12743, h: 9009, d: 576, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 12743, h: 9009, d: 576, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 10923, h: 9009, d: 0, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 10923, h: 9009, d: 0, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 12459, h: 9009, d: 0, ic: 0 }, // 0x66
+    PackedGlyphMetric { w: 12459, h: 9009, d: 0, ic: 0 }, // 0x67
+    PackedGlyphMetric { w: 12743, h: 11342, d: 0, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 12743, h: 11342, d: 0, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 12743, h: 12384, d: 4192, ic: 0 }, // 0x6A
+    PackedGlyphMetric { w: 12743, h: 12384, d: 4192, ic: 0 }, // 0x6B
+    PackedGlyphMetric { w: 12743, h: 9009, d: 993, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 12743, h: 9009, d: 993, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 21845, h: 9009, d: 576, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 21845, h: 9009, d: 576, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 8192, h: 11342, d: 0, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 8192, h: 11342, d: 0, ic: 0 }, // 0x71
+    PackedGlyphMetric { w: 15510, h: 11342, d: 2549, ic: 0 }, // 0x72
+    PackedGlyphMetric { w: 14782, h: 11342, d: 2549, ic: 0 }, // 0x73
+    PackedGlyphMetric { w: 10923, h: 11342, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 12743, h: 11342, d: 1343, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 12743, h: 6191, d: 0, ic: 0 }, // 0x76
+    PackedGlyphMetric { w: 12743, h: 7602, d: 0, ic: 0 }, // 0x77
+    PackedGlyphMetric { w: 8192, h: 6191, d: 0, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 8192, h: 6191, d: 0, ic: 0 }, // 0x79
+    PackedGlyphMetric { w: 13653, h: 11342, d: 0, ic: 0 }, // 0x7A
+    PackedGlyphMetric { w: 8192, h: 13517, d: 0, ic: 0 }, // 0x7B
+    PackedGlyphMetric { w: 9102, h: 7054, d: 3186, ic: 0 }, // 0x7C
+    PackedGlyphMetric { w: 12743, h: 9535, d: 1343, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 12743, h: 9535, d: 1343, ic: 0 }, // 0x7E
+    PackedGlyphMetric { w: 12743, h: 9535, d: 1343, ic: 0 }, // 0x7F
 ];
 
-pub static MSBM10_METRICS: [GlyphMetric; 128] = [
-    GlyphMetric { w: 778, h: 757, d: 251, ic: 0 }, // 0x00
-    GlyphMetric { w: 778, h: 757, d: 251, ic: 0 }, // 0x01
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x02
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x03
-    GlyphMetric { w: 778, h: 706, d: 206, ic: 0 }, // 0x04
-    GlyphMetric { w: 778, h: 706, d: 206, ic: 0 }, // 0x05
-    GlyphMetric { w: 778, h: 706, d: 206, ic: 0 }, // 0x06
-    GlyphMetric { w: 778, h: 706, d: 206, ic: 0 }, // 0x07
-    GlyphMetric { w: 778, h: 757, d: 251, ic: 0 }, // 0x08
-    GlyphMetric { w: 778, h: 757, d: 251, ic: 0 }, // 0x09
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x0A
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x0B
-    GlyphMetric { w: 778, h: 636, d: 136, ic: 0 }, // 0x0C
-    GlyphMetric { w: 778, h: 636, d: 136, ic: 0 }, // 0x0D
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x0E
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x0F
-    GlyphMetric { w: 778, h: 741, d: 232, ic: 0 }, // 0x10
-    GlyphMetric { w: 778, h: 741, d: 232, ic: 0 }, // 0x11
-    GlyphMetric { w: 778, h: 741, d: 232, ic: 0 }, // 0x12
-    GlyphMetric { w: 778, h: 741, d: 232, ic: 0 }, // 0x13
-    GlyphMetric { w: 778, h: 920, d: 420, ic: 0 }, // 0x14
-    GlyphMetric { w: 778, h: 920, d: 420, ic: 0 }, // 0x15
-    GlyphMetric { w: 778, h: 757, d: 251, ic: 0 }, // 0x16
-    GlyphMetric { w: 778, h: 757, d: 251, ic: 0 }, // 0x17
-    GlyphMetric { w: 778, h: 757, d: 262, ic: 0 }, // 0x18
-    GlyphMetric { w: 778, h: 757, d: 262, ic: 0 }, // 0x19
-    GlyphMetric { w: 778, h: 757, d: 262, ic: 0 }, // 0x1A
-    GlyphMetric { w: 778, h: 757, d: 262, ic: 0 }, // 0x1B
-    GlyphMetric { w: 778, h: 367, d: 0, ic: 0 }, // 0x1C
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x1D
-    GlyphMetric { w: 889, h: 689, d: 194, ic: 0 }, // 0x1E
-    GlyphMetric { w: 889, h: 741, d: 194, ic: 0 }, // 0x1F
-    GlyphMetric { w: 778, h: 636, d: 136, ic: 0 }, // 0x20
-    GlyphMetric { w: 778, h: 636, d: 136, ic: 0 }, // 0x21
-    GlyphMetric { w: 778, h: 757, d: 251, ic: 0 }, // 0x22
-    GlyphMetric { w: 778, h: 757, d: 251, ic: 0 }, // 0x23
-    GlyphMetric { w: 778, h: 794, d: 285, ic: 0 }, // 0x24
-    GlyphMetric { w: 778, h: 794, d: 285, ic: 0 }, // 0x25
-    GlyphMetric { w: 778, h: 757, d: 251, ic: 0 }, // 0x26
-    GlyphMetric { w: 778, h: 757, d: 251, ic: 0 }, // 0x27
-    GlyphMetric { w: 778, h: 636, d: 136, ic: 0 }, // 0x28
-    GlyphMetric { w: 778, h: 636, d: 136, ic: 0 }, // 0x29
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x2A
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x2B
-    GlyphMetric { w: 500, h: 741, d: 251, ic: 0 }, // 0x2C
-    GlyphMetric { w: 278, h: 741, d: 251, ic: 0 }, // 0x2D
-    GlyphMetric { w: 222, h: 582, d: 82, ic: 0 }, // 0x2E
-    GlyphMetric { w: 389, h: 582, d: 82, ic: 0 }, // 0x2F
-    GlyphMetric { w: 611, h: 689, d: 0, ic: 0 }, // 0x30
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x31
-    GlyphMetric { w: 611, h: 689, d: 0, ic: 0 }, // 0x32
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x33
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x34
-    GlyphMetric { w: 778, h: 794, d: 303, ic: 0 }, // 0x35
-    GlyphMetric { w: 778, h: 706, d: 206, ic: 0 }, // 0x36
-    GlyphMetric { w: 778, h: 706, d: 206, ic: 0 }, // 0x37
-    GlyphMetric { w: 1000, h: 367, d: 0, ic: 0 }, // 0x38
-    GlyphMetric { w: 1000, h: 367, d: 0, ic: 0 }, // 0x39
-    GlyphMetric { w: 1000, h: 367, d: 0, ic: 0 }, // 0x3A
-    GlyphMetric { w: 1000, h: 367, d: 0, ic: 0 }, // 0x3B
-    GlyphMetric { w: 1000, h: 367, d: 0, ic: 0 }, // 0x3C
-    GlyphMetric { w: 1000, h: 367, d: 0, ic: 0 }, // 0x3D
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x3E
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x3F
-    GlyphMetric { w: 556, h: 689, d: 0, ic: 0 }, // 0x40
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x41
-    GlyphMetric { w: 667, h: 689, d: 0, ic: 0 }, // 0x42
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x43
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x44
-    GlyphMetric { w: 667, h: 689, d: 0, ic: 0 }, // 0x45
-    GlyphMetric { w: 611, h: 689, d: 0, ic: 0 }, // 0x46
-    GlyphMetric { w: 778, h: 689, d: 0, ic: 0 }, // 0x47
-    GlyphMetric { w: 778, h: 689, d: 0, ic: 0 }, // 0x48
-    GlyphMetric { w: 389, h: 689, d: 0, ic: 0 }, // 0x49
-    GlyphMetric { w: 500, h: 689, d: 167, ic: 0 }, // 0x4A
-    GlyphMetric { w: 778, h: 689, d: 0, ic: 0 }, // 0x4B
-    GlyphMetric { w: 667, h: 689, d: 0, ic: 0 }, // 0x4C
-    GlyphMetric { w: 944, h: 689, d: 0, ic: 0 }, // 0x4D
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x4E
-    GlyphMetric { w: 778, h: 689, d: 167, ic: 0 }, // 0x4F
-    GlyphMetric { w: 611, h: 689, d: 0, ic: 0 }, // 0x50
-    GlyphMetric { w: 778, h: 689, d: 167, ic: 0 }, // 0x51
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x52
-    GlyphMetric { w: 556, h: 689, d: 0, ic: 0 }, // 0x53
-    GlyphMetric { w: 667, h: 689, d: 0, ic: 0 }, // 0x54
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x55
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x56
-    GlyphMetric { w: 1000, h: 689, d: 0, ic: 0 }, // 0x57
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x58
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x59
-    GlyphMetric { w: 667, h: 689, d: 0, ic: 0 }, // 0x5A
-    GlyphMetric { w: 1889, h: 825, d: 0, ic: 0 }, // 0x5B
-    GlyphMetric { w: 2333, h: 825, d: 0, ic: 0 }, // 0x5C
-    GlyphMetric { w: 1889, h: 825, d: 0, ic: 0 }, // 0x5D
-    GlyphMetric { w: 2333, h: 900, d: 0, ic: 0 }, // 0x5E
-    GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }, // 0x5F
-    GlyphMetric { w: 556, h: 689, d: 0, ic: 0 }, // 0x60
-    GlyphMetric { w: 639, h: 689, d: 0, ic: 0 }, // 0x61
-    GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }, // 0x62
-    GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }, // 0x63
-    GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }, // 0x64
-    GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }, // 0x65
-    GlyphMetric { w: 722, h: 689, d: 0, ic: 0 }, // 0x66
-    GlyphMetric { w: 556, h: 689, d: 0, ic: 0 }, // 0x67
-    GlyphMetric { w: 778, h: 464, d: 0, ic: 0 }, // 0x68
-    GlyphMetric { w: 667, h: 689, d: 0, ic: 0 }, // 0x69
-    GlyphMetric { w: 444, h: 689, d: 0, ic: 0 }, // 0x6A
-    GlyphMetric { w: 667, h: 689, d: 0, ic: 0 }, // 0x6B
-    GlyphMetric { w: 778, h: 539, d: 39, ic: 0 }, // 0x6C
-    GlyphMetric { w: 778, h: 539, d: 39, ic: 0 }, // 0x6D
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x6E
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x6F
-    GlyphMetric { w: 222, h: 582, d: 82, ic: 0 }, // 0x70
-    GlyphMetric { w: 389, h: 582, d: 82, ic: 0 }, // 0x71
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x72
-    GlyphMetric { w: 778, h: 367, d: 0, ic: 0 }, // 0x73
-    GlyphMetric { w: 778, h: 483, d: 0, ic: 0 }, // 0x74
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x75
-    GlyphMetric { w: 778, h: 757, d: 262, ic: 0 }, // 0x76
-    GlyphMetric { w: 778, h: 757, d: 262, ic: 0 }, // 0x77
-    GlyphMetric { w: 1000, h: 431, d: 0, ic: 0 }, // 0x78
-    GlyphMetric { w: 1000, h: 431, d: 0, ic: 0 }, // 0x79
-    GlyphMetric { w: 778, h: 582, d: 82, ic: 0 }, // 0x7A
-    GlyphMetric { w: 667, h: 431, d: 0, ic: 40 }, // 0x7B
-    GlyphMetric { w: 556, h: 689, d: 0, ic: 0 }, // 0x7C
-    GlyphMetric { w: 540, h: 689, d: 0, ic: 0 }, // 0x7D
-    GlyphMetric { w: 540, h: 689, d: 0, ic: 0 }, // 0x7E
-    GlyphMetric { w: 429, h: 431, d: 0, ic: 0 }, // 0x7F
+pub static MSBM10_METRICS: [PackedGlyphMetric; 128] = [
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4119, ic: 0 }, // 0x00
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4119, ic: 0 }, // 0x01
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x02
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x03
+    PackedGlyphMetric { w: 12743, h: 11563, d: 3371, ic: 0 }, // 0x04
+    PackedGlyphMetric { w: 12743, h: 11563, d: 3371, ic: 0 }, // 0x05
+    PackedGlyphMetric { w: 12743, h: 11563, d: 3371, ic: 0 }, // 0x06
+    PackedGlyphMetric { w: 12743, h: 11563, d: 3371, ic: 0 }, // 0x07
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4119, ic: 0 }, // 0x08
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4119, ic: 0 }, // 0x09
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x0A
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x0B
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x0C
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x0D
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x0E
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x0F
+    PackedGlyphMetric { w: 12743, h: 12142, d: 3805, ic: 0 }, // 0x10
+    PackedGlyphMetric { w: 12743, h: 12142, d: 3805, ic: 0 }, // 0x11
+    PackedGlyphMetric { w: 12743, h: 12142, d: 3805, ic: 0 }, // 0x12
+    PackedGlyphMetric { w: 12743, h: 12142, d: 3805, ic: 0 }, // 0x13
+    PackedGlyphMetric { w: 12743, h: 15065, d: 6873, ic: 0 }, // 0x14
+    PackedGlyphMetric { w: 12743, h: 15065, d: 6873, ic: 0 }, // 0x15
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4119, ic: 0 }, // 0x16
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4119, ic: 0 }, // 0x17
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4287, ic: 0 }, // 0x18
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4287, ic: 0 }, // 0x19
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4287, ic: 0 }, // 0x1A
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4287, ic: 0 }, // 0x1B
+    PackedGlyphMetric { w: 12743, h: 6011, d: 0, ic: 0 }, // 0x1C
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x1D
+    PackedGlyphMetric { w: 14564, h: 11287, d: 3186, ic: 0 }, // 0x1E
+    PackedGlyphMetric { w: 14564, h: 12142, d: 3186, ic: 0 }, // 0x1F
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x20
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x21
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4119, ic: 0 }, // 0x22
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4119, ic: 0 }, // 0x23
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4666, ic: 0 }, // 0x24
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4666, ic: 0 }, // 0x25
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4119, ic: 0 }, // 0x26
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4119, ic: 0 }, // 0x27
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x28
+    PackedGlyphMetric { w: 12743, h: 10420, d: 2228, ic: 0 }, // 0x29
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x2A
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x2B
+    PackedGlyphMetric { w: 8192, h: 12142, d: 4119, ic: 0 }, // 0x2C
+    PackedGlyphMetric { w: 4551, h: 12142, d: 4119, ic: 0 }, // 0x2D
+    PackedGlyphMetric { w: 3641, h: 9530, d: 1338, ic: 0 }, // 0x2E
+    PackedGlyphMetric { w: 6372, h: 9530, d: 1338, ic: 0 }, // 0x2F
+    PackedGlyphMetric { w: 10012, h: 11287, d: 0, ic: 0 }, // 0x30
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x31
+    PackedGlyphMetric { w: 10012, h: 11287, d: 0, ic: 0 }, // 0x32
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x33
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x34
+    PackedGlyphMetric { w: 12743, h: 13006, d: 4960, ic: 0 }, // 0x35
+    PackedGlyphMetric { w: 12743, h: 11563, d: 3371, ic: 0 }, // 0x36
+    PackedGlyphMetric { w: 12743, h: 11563, d: 3371, ic: 0 }, // 0x37
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x38
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x39
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x3A
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x3B
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x3C
+    PackedGlyphMetric { w: 16384, h: 6011, d: 0, ic: 0 }, // 0x3D
+    PackedGlyphMetric { w: 12743, h: 9530, d: 1338, ic: 0 }, // 0x3E
+    PackedGlyphMetric { w: 12743, h: 9530, d: 1338, ic: 0 }, // 0x3F
+    PackedGlyphMetric { w: 9102, h: 11287, d: 0, ic: 0 }, // 0x40
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x41
+    PackedGlyphMetric { w: 10923, h: 11287, d: 0, ic: 0 }, // 0x42
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x43
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x44
+    PackedGlyphMetric { w: 10923, h: 11287, d: 0, ic: 0 }, // 0x45
+    PackedGlyphMetric { w: 10012, h: 11287, d: 0, ic: 0 }, // 0x46
+    PackedGlyphMetric { w: 12743, h: 11287, d: 0, ic: 0 }, // 0x47
+    PackedGlyphMetric { w: 12743, h: 11287, d: 0, ic: 0 }, // 0x48
+    PackedGlyphMetric { w: 6372, h: 11287, d: 0, ic: 0 }, // 0x49
+    PackedGlyphMetric { w: 8192, h: 11287, d: 2731, ic: 0 }, // 0x4A
+    PackedGlyphMetric { w: 12743, h: 11287, d: 0, ic: 0 }, // 0x4B
+    PackedGlyphMetric { w: 10923, h: 11287, d: 0, ic: 0 }, // 0x4C
+    PackedGlyphMetric { w: 15474, h: 11287, d: 0, ic: 0 }, // 0x4D
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x4E
+    PackedGlyphMetric { w: 12743, h: 11287, d: 2731, ic: 0 }, // 0x4F
+    PackedGlyphMetric { w: 10012, h: 11287, d: 0, ic: 0 }, // 0x50
+    PackedGlyphMetric { w: 12743, h: 11287, d: 2731, ic: 0 }, // 0x51
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x52
+    PackedGlyphMetric { w: 9102, h: 11287, d: 0, ic: 0 }, // 0x53
+    PackedGlyphMetric { w: 10923, h: 11287, d: 0, ic: 0 }, // 0x54
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x55
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x56
+    PackedGlyphMetric { w: 16384, h: 11287, d: 0, ic: 0 }, // 0x57
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x58
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x59
+    PackedGlyphMetric { w: 10923, h: 11287, d: 0, ic: 0 }, // 0x5A
+    PackedGlyphMetric { w: 30948, h: 13517, d: 0, ic: 0 }, // 0x5B
+    PackedGlyphMetric { w: 38229, h: 13517, d: 0, ic: 0 }, // 0x5C
+    PackedGlyphMetric { w: 30948, h: 13517, d: 0, ic: 0 }, // 0x5D
+    PackedGlyphMetric { w: 38229, h: 14746, d: 0, ic: 0 }, // 0x5E
+    PackedGlyphMetric { w: 0, h: 0, d: 0, ic: 0 }, // 0x5F
+    PackedGlyphMetric { w: 9102, h: 11287, d: 0, ic: 0 }, // 0x60
+    PackedGlyphMetric { w: 10468, h: 11287, d: 0, ic: 0 }, // 0x61
+    PackedGlyphMetric { w: 0, h: 0, d: 0, ic: 0 }, // 0x62
+    PackedGlyphMetric { w: 0, h: 0, d: 0, ic: 0 }, // 0x63
+    PackedGlyphMetric { w: 0, h: 0, d: 0, ic: 0 }, // 0x64
+    PackedGlyphMetric { w: 0, h: 0, d: 0, ic: 0 }, // 0x65
+    PackedGlyphMetric { w: 11833, h: 11287, d: 0, ic: 0 }, // 0x66
+    PackedGlyphMetric { w: 9102, h: 11287, d: 0, ic: 0 }, // 0x67
+    PackedGlyphMetric { w: 12743, h: 7598, d: 0, ic: 0 }, // 0x68
+    PackedGlyphMetric { w: 10923, h: 11287, d: 0, ic: 0 }, // 0x69
+    PackedGlyphMetric { w: 7282, h: 11287, d: 0, ic: 0 }, // 0x6A
+    PackedGlyphMetric { w: 10923, h: 11287, d: 0, ic: 0 }, // 0x6B
+    PackedGlyphMetric { w: 12743, h: 8833, d: 641, ic: 0 }, // 0x6C
+    PackedGlyphMetric { w: 12743, h: 8833, d: 641, ic: 0 }, // 0x6D
+    PackedGlyphMetric { w: 12743, h: 9530, d: 1338, ic: 0 }, // 0x6E
+    PackedGlyphMetric { w: 12743, h: 9530, d: 1338, ic: 0 }, // 0x6F
+    PackedGlyphMetric { w: 3641, h: 9530, d: 1338, ic: 0 }, // 0x70
+    PackedGlyphMetric { w: 6372, h: 9530, d: 1338, ic: 0 }, // 0x71
+    PackedGlyphMetric { w: 12743, h: 9530, d: 1338, ic: 0 }, // 0x72
+    PackedGlyphMetric { w: 12743, h: 6011, d: 0, ic: 0 }, // 0x73
+    PackedGlyphMetric { w: 12743, h: 7915, d: 0, ic: 0 }, // 0x74
+    PackedGlyphMetric { w: 12743, h: 9530, d: 1338, ic: 0 }, // 0x75
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4287, ic: 0 }, // 0x76
+    PackedGlyphMetric { w: 12743, h: 12407, d: 4287, ic: 0 }, // 0x77
+    PackedGlyphMetric { w: 16384, h: 7054, d: 0, ic: 0 }, // 0x78
+    PackedGlyphMetric { w: 16384, h: 7054, d: 0, ic: 0 }, // 0x79
+    PackedGlyphMetric { w: 12743, h: 9530, d: 1338, ic: 0 }, // 0x7A
+    PackedGlyphMetric { w: 10923, h: 7054, d: 0, ic: 660 }, // 0x7B
+    PackedGlyphMetric { w: 9102, h: 11287, d: 0, ic: 0 }, // 0x7C
+    PackedGlyphMetric { w: 8852, h: 11287, d: 0, ic: 0 }, // 0x7D
+    PackedGlyphMetric { w: 8852, h: 11287, d: 0, ic: 0 }, // 0x7E
+    PackedGlyphMetric { w: 7032, h: 7054, d: 0, ic: 0 }, // 0x7F
 ];
 
 
@@ -3971,9 +2052,9 @@ pub static MSBM10_METRICS: [GlyphMetric; 128] = [
 #[inline(always)]
 pub fn cmr10_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMR10_METRICS[code as usize]
+        CMR10_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -3981,9 +2062,9 @@ pub fn cmr10_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn cmr7_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMR7_METRICS[code as usize]
+        CMR7_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -3991,9 +2072,9 @@ pub fn cmr7_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn cmr5_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMR5_METRICS[code as usize]
+        CMR5_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -4001,9 +2082,9 @@ pub fn cmr5_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn cmmi7_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMMI7_METRICS[code as usize]
+        CMMI7_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -4011,9 +2092,9 @@ pub fn cmmi7_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn cmmi5_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMMI5_METRICS[code as usize]
+        CMMI5_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -4021,9 +2102,9 @@ pub fn cmmi5_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn cmsy7_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMSY7_METRICS[code as usize]
+        CMSY7_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -4031,9 +2112,9 @@ pub fn cmsy7_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn cmsy5_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        CMSY5_METRICS[code as usize]
+        CMSY5_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -4041,9 +2122,9 @@ pub fn cmsy5_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn msam10_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        MSAM10_METRICS[code as usize]
+        MSAM10_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }
 
@@ -4051,8 +2132,8 @@ pub fn msam10_metric(code: u8) -> GlyphMetric {
 #[inline(always)]
 pub fn msbm10_metric(code: u8) -> GlyphMetric {
     if code < 128 {
-        MSBM10_METRICS[code as usize]
+        MSBM10_METRICS[code as usize].unpack()
     } else {
-        GlyphMetric { w: 0, h: 0, d: 0, ic: 0 }
+        GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
 }

@@ -66,6 +66,34 @@ pub enum Face {
     Symbol5 = 15,
     AmsA = 16,
     AmsB = 17,
+    /// `\mathsf` (cmss10)
+    MathSans = 18,
+    /// `\mathsf` at script sizes (cmss8, LaTeX `<5-8>`)
+    MathSans8 = 19,
+    /// `\mathtt` at script sizes (cmtt8)
+    MathMono8 = 20,
+    /// `\mathfrak` (eufm10)
+    Fraktur = 21,
+    /// `\mathfrak` script (eufm7)
+    Fraktur7 = 22,
+    /// `\mathfrak` scriptscript (eufm5)
+    Fraktur5 = 23,
+    /// `\boldsymbol` letters (cmmib10)
+    BoldMathItalic = 24,
+    /// cmmib7
+    BoldMathItalic7 = 25,
+    /// cmmib5
+    BoldMathItalic5 = 26,
+    /// `\boldsymbol` symbols (cmbsy10)
+    BoldSymbol = 27,
+    /// cmbsy7
+    BoldSymbol7 = 28,
+    /// cmbsy5
+    BoldSymbol5 = 29,
+    /// amsmath script-size extension font (cmex7, also used at 5pt)
+    Extension7 = 30,
+    /// `\scshape` / `\textsc` (cmcsc10)
+    SmallCaps = 31,
 }
 
 impl Face {
@@ -73,7 +101,11 @@ impl Face {
     pub const ITALIC_MASK: u8 = 2;
     pub const MONO_MASK: u8 = 4;
 
-    pub const ALL: [Face; 18] = [
+    /// Number of faces; `used_faces` bit masks are `u32` and `PackedWordAttr` stores 5 bits,
+    /// so this must stay <= 32.
+    pub const COUNT: usize = 32;
+
+    pub const ALL: [Face; Face::COUNT] = [
         Face::Roman,
         Face::Bold,
         Face::Italic,
@@ -92,6 +124,20 @@ impl Face {
         Face::Symbol5,
         Face::AmsA,
         Face::AmsB,
+        Face::MathSans,
+        Face::MathSans8,
+        Face::MathMono8,
+        Face::Fraktur,
+        Face::Fraktur7,
+        Face::Fraktur5,
+        Face::BoldMathItalic,
+        Face::BoldMathItalic7,
+        Face::BoldMathItalic5,
+        Face::BoldSymbol,
+        Face::BoldSymbol7,
+        Face::BoldSymbol5,
+        Face::Extension7,
+        Face::SmallCaps,
     ];
 
     #[inline(always)]
@@ -115,6 +161,20 @@ impl Face {
             15 => Face::Symbol5,
             16 => Face::AmsA,
             17 => Face::AmsB,
+            18 => Face::MathSans,
+            19 => Face::MathSans8,
+            20 => Face::MathMono8,
+            21 => Face::Fraktur,
+            22 => Face::Fraktur7,
+            23 => Face::Fraktur5,
+            24 => Face::BoldMathItalic,
+            25 => Face::BoldMathItalic7,
+            26 => Face::BoldMathItalic5,
+            27 => Face::BoldSymbol,
+            28 => Face::BoldSymbol7,
+            29 => Face::BoldSymbol5,
+            30 => Face::Extension7,
+            31 => Face::SmallCaps,
             _ => Face::Roman,
         }
     }
@@ -165,6 +225,13 @@ impl Face {
         if self == Face::AmsB {
             return "MSBM10";
         }
+        if (self as u8) >= 18 {
+            const EXTRA_NAMES: [&str; Face::COUNT - 18] = [
+                "CMSS10", "CMSS8", "CMTT8", "EUFM10", "EUFM7", "EUFM5", "CMMIB10", "CMMIB7", "CMMIB5", "CMBSY10", "CMBSY7", "CMBSY5", "CMEX7",
+                "CMCSC10",
+            ];
+            return EXTRA_NAMES[self as usize - 18];
+        }
         match family {
             FontFamily::Times => {
                 const TIMES_NAMES: [&str; 6] = [
@@ -209,9 +276,11 @@ impl Face {
 
     #[inline(always)]
     pub fn resource(self) -> &'static str {
-        const RES: [&str; 18] = [
+        const RES: [&str; Face::COUNT] = [
             "/Fr", "/Fb", "/Fi", "/Fbi", "/Fc", "/Fcb", "/Fs", "/Fz", "/Fe", "/Fmi",
             "/Fr7", "/Fr5", "/Fmi7", "/Fmi5", "/Fs7", "/Fs5", "/Fmsa", "/Fmsb",
+            "/Fss", "/Fss8", "/Ftt8", "/Fk", "/Fk7", "/Fk5", "/Fmb", "/Fmb7", "/Fmb5", "/Fsb", "/Fsb7", "/Fsb5", "/Fe7",
+            "/Fsc",
         ];
         RES[self as usize]
     }
@@ -279,17 +348,19 @@ impl Face {
 
     #[inline(always)]
     pub fn is_bold(self) -> bool {
-        (self as u8 & Self::BOLD_MASK) != 0
+        // The masks only describe the six body faces; the faces past them are numbered
+        // sequentially and must not alias their bits.
+        (self as u8) < 6 && (self as u8 & Self::BOLD_MASK) != 0
     }
 
     #[inline(always)]
     pub fn is_italic(self) -> bool {
-        (self as u8 & Self::ITALIC_MASK) != 0
+        (self as u8) < 6 && (self as u8 & Self::ITALIC_MASK) != 0
     }
 
     #[inline(always)]
     pub fn is_mono(self) -> bool {
-        (self as u8 & Self::MONO_MASK) != 0
+        matches!(self, Face::Mono | Face::MonoBold | Face::MathMono8)
     }
 
     #[inline(always)]
@@ -311,7 +382,50 @@ impl Face {
     pub fn is_math_italic(self) -> bool {
         self == Face::MathItalic
     }
+
+    /// Bit of this face in a `used_faces` mask.
+    #[inline(always)]
+    pub const fn bit(self) -> u32 {
+        1 << (self as u8)
+    }
+
+    /// Computer Modern faces whose glyphs use OT1-style (text) ToUnicode.
+    pub const OT1_MASK: u32 = Face::Roman.bit()
+        | Face::Bold.bit()
+        | Face::Italic.bit()
+        | Face::Roman7.bit()
+        | Face::Roman5.bit()
+        | Face::Mono.bit()
+        | Face::MonoBold.bit()
+        | Face::MathSans.bit()
+        | Face::MathSans8.bit()
+        | Face::MathMono8.bit()
+        | Face::Fraktur.bit()
+        | Face::Fraktur7.bit()
+        | Face::Fraktur5.bit()
+        | Face::SmallCaps.bit();
+    /// Computer Modern faces in the OML (math italic) encoding.
+    pub const OML_MASK: u32 = Face::MathItalic.bit()
+        | Face::MathItalic7.bit()
+        | Face::MathItalic5.bit()
+        | Face::BoldMathItalic.bit()
+        | Face::BoldMathItalic7.bit()
+        | Face::BoldMathItalic5.bit();
+    /// Computer Modern faces in the OMS (math symbol) encoding.
+    pub const OMS_MASK: u32 = Face::Symbol.bit()
+        | Face::Symbol7.bit()
+        | Face::Symbol5.bit()
+        | Face::BoldSymbol.bit()
+        | Face::BoldSymbol7.bit()
+        | Face::BoldSymbol5.bit();
+    /// Faces in the OMX (math extension) encoding.
+    pub const OMX_MASK: u32 = Face::Extension.bit() | Face::Extension7.bit();
+
+    /// Typewriter faces (cmtt), whose OT1 layout differs from cmr's in the ASCII range.
+    pub const OT1TT_MASK: u32 = Face::Mono.bit() | Face::MonoBold.bit() | Face::MathMono8.bit();
 }
+
+const _: () = assert!(Face::COUNT <= 32 && Face::ALL.len() == Face::COUNT);
 
 /// 64-byte hardware cache-line aligned font metric table.
 /// Ensures 100% L1 cache-line locality and zero cache-line boundary crossings.
@@ -406,7 +520,7 @@ pub static HELVETICA_ROMAN_WIDTHS: AlignedTable<128> = AlignedTable([
     // 64 ('@') ..= 79 ('O')
     1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,
     // 80 ('P') ..= 95 ('_')
-    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 500,
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,
     // 96 ('`') ..= 111 ('o')
     333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
     // 112 ('p') ..= 127 (DEL)
@@ -477,7 +591,8 @@ pub static PALATINO_BOLD_ITALIC_WIDTHS: AlignedTable<128> = AlignedTable([
 
 // Computer Modern STEM Family (cmr10, cmmi10, cmsy10, cmex10, cmtt10)
 pub static CMR10_WIDTHS: AlignedTable<128> = AlignedTable([
-    625, 833, 778, 694, 667, 750, 722, 778, 722, 278, 278, 583, 556, 278, 833, 833, 278, 306, 500,
+    // Slots 0x09/0x0A/0x0D are the Psi/Omega/fl glyphs (cmr10.tfm), not whitespace.
+    625, 833, 778, 694, 667, 750, 722, 778, 722, 778, 722, 583, 556, 556, 833, 833, 278, 306, 500,
     500, 500, 500, 500, 750, 444, 500, 722, 778, 500, 903, 1014, 778, 278, 278, 500, 833, 500, 833,
     778, 278, 389, 389, 500, 778, 278, 333, 278, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
     500, 278, 278, 278, 778, 472, 472, 778, 750, 708, 722, 764, 681, 653, 785, 750, 361, 514, 778,
@@ -851,14 +966,87 @@ pub static WIDTH_TABLE_MAP: [&AlignedTable<128>; 72] = [
     &MSAM10_WIDTHS, &MSBM10_WIDTHS,
 ];
 
+const fn widths_from_metrics(m: &[crate::math::math_tfm::PackedGlyphMetric; 128]) -> AlignedTable<128> {
+    let mut w = [0u16; 128];
+    let mut i = 0;
+    while i < 128 {
+        w[i] = m[i].width_units();
+        i += 1;
+    }
+    AlignedTable(w)
+}
+
+/// PDF `/Widths` (1000 units per em of the design size) for the faces past `Face::AmsB`,
+/// derived at compile time from their TFM metric tables (`math_tfm_faces`).
+pub static EXTRA_FACE_WIDTHS: [AlignedTable<128>; Face::COUNT - 18] = {
+    use crate::math::math_tfm_faces as t;
+    [
+        widths_from_metrics(&t::CMSS10_METRICS),
+        widths_from_metrics(&t::CMSS8_METRICS),
+        widths_from_metrics(&t::CMTT8_METRICS),
+        widths_from_metrics(&t::EUFM10_METRICS),
+        widths_from_metrics(&t::EUFM7_METRICS),
+        widths_from_metrics(&t::EUFM5_METRICS),
+        widths_from_metrics(&t::CMMIB10_METRICS),
+        widths_from_metrics(&t::CMMIB7_METRICS),
+        widths_from_metrics(&t::CMMIB5_METRICS),
+        widths_from_metrics(&t::CMBSY10_METRICS),
+        widths_from_metrics(&t::CMBSY7_METRICS),
+        widths_from_metrics(&t::CMBSY5_METRICS),
+        widths_from_metrics(&t::CMEX7_METRICS),
+        widths_from_metrics(&t::CMCSC10_METRICS),
+    ]
+};
+
 /// Resolves the 64-byte aligned ASCII font width table for a given family and face in O(1) branchless time.
 #[inline(always)]
 pub fn resolve_width_table(family: FontFamily, font_face: Face) -> &'static [u16; 128] {
+    if (font_face as usize) >= 18 {
+        return &EXTRA_FACE_WIDTHS[font_face as usize - 18].0;
+    }
     let idx = (family as usize) * 18 + (font_face as usize);
     if idx < WIDTH_TABLE_MAP.len() {
         &WIDTH_TABLE_MAP[idx].0
     } else {
         &TIMES_ROMAN_WIDTHS.0
+    }
+}
+
+/// [`resolve_width_table`] for `face` at `size` pt: the design-size master's widths when
+/// one applies ([`crate::backend::optical::OpticalMaster::select`]).
+#[inline]
+pub fn resolve_width_table_at(family: FontFamily, font_face: Face, size: f32) -> &'static [u16; 128] {
+    match crate::backend::optical::OpticalMaster::select(family, font_face, size) {
+        Some(m) => m.widths(),
+        None => resolve_width_table(family, font_face),
+    }
+}
+
+/// [`resolve_space_units`] for `face` at `size` pt (fontdimen 2 of the design-size master).
+#[inline]
+pub fn resolve_space_units_at(family: FontFamily, font_face: Face, size: f32) -> f32 {
+    match crate::backend::optical::OpticalMaster::select(family, font_face, size) {
+        Some(m) => m.glue()[0],
+        None => resolve_space_units(family, font_face) as f32,
+    }
+}
+
+/// [`resolve_extra_space_units`] for `face` at `size` pt (fontdimen 7 of the master).
+#[inline]
+pub fn resolve_extra_space_units_at(family: FontFamily, font_face: Face, size: f32) -> f32 {
+    match crate::backend::optical::OpticalMaster::select(family, font_face, size) {
+        Some(m) if !font_face.is_mono() => m.glue()[4],
+        Some(_) => 0.0,
+        None => resolve_extra_space_units(family, font_face) as f32,
+    }
+}
+
+/// [`resolve_digit_units`] for `face` at `size` pt.
+#[inline]
+pub fn resolve_digit_units_at(family: FontFamily, font_face: Face, size: f32) -> u32 {
+    match crate::backend::optical::OpticalMaster::select(family, font_face, size) {
+        Some(m) => m.widths()[b'0' as usize] as u32,
+        None => resolve_digit_units(family, font_face),
     }
 }
 
@@ -873,11 +1061,30 @@ pub fn resolve_space_units(family: FontFamily, font_face: Face) -> u32 {
     }
     match family {
         FontFamily::Times | FontFamily::Palatino => 250,
-        FontFamily::Helvetica | FontFamily::ComputerModern => 278,
+        FontFamily::Helvetica => 278,
+        // fontdimen 2 of cmr10, cmbx10, cmti10 and cmcsc10.
+        FontFamily::ComputerModern if font_face == Face::SmallCaps => 378,
+        FontFamily::ComputerModern if font_face.is_bold() => 383,
+        FontFamily::ComputerModern if font_face.is_italic() => 358,
+        FontFamily::ComputerModern => 333,
     }
 }
 
 /// Resolves extra space (fontdimen 7) in 1000-units/em space with zero memory lookups.
+/// x-height (fontdimen 5, the `ex` unit) in 1/1000 em: the TFM value for Computer Modern
+/// (cmr10, cmbx10 and cmtt10 differ by under 1%), the AFM `XHeight` for the Base-14 faces.
+#[inline(always)]
+pub fn resolve_x_height_units(family: FontFamily, font_face: Face) -> f32 {
+    match family {
+        FontFamily::ComputerModern if font_face.is_bold() => 444.446,
+        FontFamily::ComputerModern => 430.555,
+        _ if font_face.is_mono() => 426.0,
+        FontFamily::Times => 450.0,
+        FontFamily::Helvetica => 523.0,
+        FontFamily::Palatino => 469.0,
+    }
+}
+
 /// According to TeX specifications (TeX by Topic Ch 20), extra space is added to the
 /// interword space when space factor >= 2000 (e.g. after sentence-ending punctuation).
 #[inline(always)]
@@ -888,6 +1095,8 @@ pub fn resolve_extra_space_units(family: FontFamily, font_face: Face) -> u32 {
     match family {
         FontFamily::Times | FontFamily::Palatino => 83,
         FontFamily::Helvetica => 93,
+        // fontdimen 7.
+        FontFamily::ComputerModern if font_face == Face::SmallCaps => 117,
         FontFamily::ComputerModern => 111,
     }
 }
@@ -931,56 +1140,56 @@ pub fn char_units_family(character: char, font_face: Face, family: FontFamily) -
     if font_face == Face::Symbol {
         if family == FontFamily::ComputerModern {
             if character == '-' || character == '−' {
-                return crate::math::math_tfm::cmsy10_metric(0x00).w;
+                return (crate::math::math_tfm::cmsy10_metric(0x00).w + 0.5) as u16;
             }
             if character == '′' || character == '\'' {
-                return crate::math::math_tfm::cmsy10_metric(0x30).w;
+                return (crate::math::math_tfm::cmsy10_metric(0x30).w + 0.5) as u16;
             }
             if let Some(byte) = unicode_to_symbol_byte(character) {
                 let code = if byte == 0x2D { 0x00 } else { byte };
-                return crate::math::math_tfm::cmsy10_metric(code).w;
+                return (crate::math::math_tfm::cmsy10_metric(code).w + 0.5) as u16;
             }
             let code = character as u32;
             if code < 128 {
                 let c = if code == 0x2D { 0x00 } else { code as u8 };
-                return crate::math::math_tfm::cmsy10_metric(c).w;
+                return (crate::math::math_tfm::cmsy10_metric(c).w + 0.5) as u16;
             }
         }
         return symbol_char_units(character);
     }
     if font_face == Face::Symbol7 {
         if character == '-' || character == '−' {
-            return crate::math::math_tfm::cmsy7_metric(0x00).w;
+            return (crate::math::math_tfm::cmsy7_metric(0x00).w + 0.5) as u16;
         }
         if character == '′' || character == '\'' {
-            return crate::math::math_tfm::cmsy7_metric(0x30).w;
+            return (crate::math::math_tfm::cmsy7_metric(0x30).w + 0.5) as u16;
         }
         if let Some(byte) = unicode_to_symbol_byte(character) {
             let code = if byte == 0x2D { 0x00 } else { byte };
-            return crate::math::math_tfm::cmsy7_metric(code).w;
+            return (crate::math::math_tfm::cmsy7_metric(code).w + 0.5) as u16;
         }
         let code = character as u32;
         if code < 128 {
             let c = if code == 0x2D { 0x00 } else { code as u8 };
-            return crate::math::math_tfm::cmsy7_metric(c).w;
+            return (crate::math::math_tfm::cmsy7_metric(c).w + 0.5) as u16;
         }
         return symbol_char_units(character);
     }
     if font_face == Face::Symbol5 {
         if character == '-' || character == '−' {
-            return crate::math::math_tfm::cmsy5_metric(0x00).w;
+            return (crate::math::math_tfm::cmsy5_metric(0x00).w + 0.5) as u16;
         }
         if character == '′' || character == '\'' {
-            return crate::math::math_tfm::cmsy5_metric(0x30).w;
+            return (crate::math::math_tfm::cmsy5_metric(0x30).w + 0.5) as u16;
         }
         if let Some(byte) = unicode_to_symbol_byte(character) {
             let code = if byte == 0x2D { 0x00 } else { byte };
-            return crate::math::math_tfm::cmsy5_metric(code).w;
+            return (crate::math::math_tfm::cmsy5_metric(code).w + 0.5) as u16;
         }
         let code = character as u32;
         if code < 128 {
             let c = if code == 0x2D { 0x00 } else { code as u8 };
-            return crate::math::math_tfm::cmsy5_metric(c).w;
+            return (crate::math::math_tfm::cmsy5_metric(c).w + 0.5) as u16;
         }
         return symbol_char_units(character);
     }

@@ -52,6 +52,12 @@ pub struct DocumentConfig {
     pub margin_right: f32,
     pub margin_top: f32,
     pub margin_bottom: f32,
+    /// TeX `\topskip`: minimum distance from the top of the text block to the
+    /// first baseline on every page (size1x.clo: 10pt / 11pt / 12pt).
+    pub top_skip: f32,
+    /// LaTeX `\footskip`: distance from the bottom of the text block to the
+    /// baseline of the running foot (page number).
+    pub foot_skip: f32,
     pub base_font_size: f32,
     pub base_leading: f32,
     pub font_family: FontFamily,
@@ -81,18 +87,24 @@ pub struct DocumentConfig {
 impl Default for DocumentConfig {
     fn default() -> Self {
         Self {
-            page_width: 595.0,  // Standard A4 width in pt
-            page_height: 842.0, // Standard A4 height in pt
-            margin_left: 72.0,  // 1 inch = 72 pt
-            margin_right: 72.0,
-            margin_top: 72.0,
-            margin_bottom: 72.0,
-            base_font_size: 11.0,
-            base_leading: 14.0,
+            // A4 (210mm x 297mm) in TeX points; every layout dimension is in TeX points and
+            // the backend scales to PDF big points (72 per inch) once per page.
+            page_width: A4_PT.0,
+            page_height: A4_PT.1,
+            margin_left: TEX_INCH,
+            margin_right: TEX_INCH,
+            margin_top: TEX_INCH,
+            margin_bottom: TEX_INCH,
+            top_skip: 10.0,
+            foot_skip: 30.0,
+            // LaTeX's standard classes default to 10pt.
+            base_font_size: 10.0,
+            base_leading: 12.0,
             font_family: FontFamily::Times,
             page_numbering: true,
             par_indent: 15.0,
-            par_skip: 8.0,
+            // LaTeX kernel: \parskip = 0pt plus 1pt (natural width 0).
+            par_skip: 0.0,
             hang_indent: 0.0,
             hang_after: 1,
             left_skip: 0.0,
@@ -170,21 +182,18 @@ impl PackageHandler for GeometryPackage {
             } else {
                 match option_str {
                     "a4paper" => {
-                        document_config.page_width = 595.0;
-                        document_config.page_height = 842.0;
+                        (document_config.page_width, document_config.page_height) = A4_PT;
                     }
                     "letterpaper" => {
-                        document_config.page_width = 612.0;
-                        document_config.page_height = 792.0;
+                        (document_config.page_width, document_config.page_height) = LETTER_PT;
                     }
-                    "landscape" => {
-                        if document_config.page_width < document_config.page_height {
+                    "landscape"
+                        if document_config.page_width < document_config.page_height => {
                             std::mem::swap(
                                 &mut document_config.page_width,
                                 &mut document_config.page_height,
                             );
                         }
-                    }
                     _ => {}
                 }
             }
@@ -201,8 +210,9 @@ impl PackageHandler for ParskipPackage {
     }
 
     fn apply(&self, _options: &[&str], config: &mut DocumentConfig) {
+        // parskip.sty: \parskip = .5\baselineskip plus 2pt, \parindent = 0pt.
         config.par_indent = 0.0;
-        config.par_skip = 8.0;
+        config.par_skip = 0.5 * config.base_leading;
     }
 }
 
@@ -294,35 +304,125 @@ impl PackageRegistry {
     }
 }
 
+/// One inch in TeX points (`1in = 72.27pt`).
+/// One inch in TeX points.
+pub const TEX_INCH: f32 = 72.27;
+/// PDF big points per TeX point (72 / 72.27): the backend's page transform.
+pub const BP_PER_PT: f32 = 72.0 / 72.27;
+/// A4 and US letter paper in TeX points.
+pub const A4_PT: (f32, f32) = (597.508, 845.047);
+pub const LETTER_PT: (f32, f32) = (614.295, 794.97);
+
+/// `\paperwidth` × `\paperheight` in TeX points for the standard class paper options.
+fn class_paper_size(option: &str) -> Option<(f32, f32)> {
+    match option {
+        "letterpaper" => Some(LETTER_PT),
+        "a4paper" => Some(A4_PT),
+        "a5paper" => Some((421.104, 597.508)),
+        "b5paper" => Some((499.464, 708.661)),
+        "legalpaper" => Some((614.295, 1011.78)),
+        "executivepaper" => Some((542.025, 722.7)),
+        _ => None,
+    }
+}
+
+/// Text-block geometry of the standard LaTeX classes (`article`, `report`, `book`),
+/// transcribed from `size10.clo` / `size11.clo` / `size12.clo` (non-compatibility branch):
+///
+/// - `\textwidth = min(\paperwidth - 2in, W)` with W = 345 / 360 / 390pt (twocolumn: 2W),
+///   truncated to whole points (`\@settopoint`);
+/// - `\textheight = floor((\paperheight - 3.5in) / \baselineskip) * \baselineskip + \topskip`;
+/// - `\oddsidemargin = .5(\paperwidth - \textwidth) - 1in` (twoside: `.4`), truncated;
+/// - `\topmargin = .5(\paperheight - 2in - \headheight - \headsep - \textheight - \footskip)`, truncated.
+///
+/// `\paperwidth`/`\paperheight` come from the class paper option (letter by default), which
+/// can differ from the PDF media box exactly as in pdfLaTeX without `geometry`.
+fn apply_standard_class_geometry(
+    config: &mut DocumentConfig,
+    paper: (f32, f32),
+    size_pt: u8,
+    twoside: bool,
+    twocolumn: bool,
+) {
+    let (paper_w, paper_h) = paper;
+    let (base_tw, top_skip) = match size_pt {
+        11 => (360.0f32, 11.0f32),
+        12 => (390.0, 12.0),
+        _ => (345.0, 10.0),
+    };
+    let head_height = 12.0f32;
+    let head_sep = 25.0f32;
+    let foot_skip = 30.0f32;
+    let baseline_skip = config.base_leading;
+
+    let max_tw = if twocolumn { 2.0 * base_tw } else { base_tw };
+    let text_width = (paper_w - 2.0 * TEX_INCH).min(max_tw).floor();
+    let lines = ((paper_h - 3.5 * TEX_INCH) / baseline_skip).floor().max(1.0);
+    let text_height = lines * baseline_skip + top_skip;
+    let side_frac = if twoside { 0.4 } else { 0.5 };
+    let odd_side_margin = (side_frac * (paper_w - text_width) - TEX_INCH).trunc();
+    let top_margin =
+        (0.5 * (paper_h - 2.0 * TEX_INCH - head_height - head_sep - text_height - foot_skip)).trunc();
+
+    config.margin_left = TEX_INCH + odd_side_margin;
+    config.margin_right = config.page_width - config.margin_left - text_width;
+    config.margin_top = TEX_INCH + top_margin + head_height + head_sep;
+    config.margin_bottom = config.page_height - config.margin_top - text_height;
+    config.top_skip = top_skip;
+    config.foot_skip = foot_skip;
+}
+
 /// Apply document class options (e.g. `12pt`, `letterpaper`, `landscape`, `sans`) to configuration.
+///
+/// For the standard classes this also derives the text block (`\textwidth`, `\textheight`,
+/// `\oddsidemargin`, `\topmargin`, `\topskip`) the way the class size file does.
 pub fn apply_doc_class(doc_class: &DocClass<'_>, config: &mut DocumentConfig) {
+    let mut paper = class_paper_size("letterpaper").unwrap_or((614.295, 794.97));
+    let mut size_pt = 10u8;
+    let mut landscape = false;
+    let mut twoside = doc_class.name == "book";
+    let mut twocolumn = false;
     for &option_str in &doc_class.options {
-        match option_str.trim() {
+        let option_str = option_str.trim();
+        if let Some(sz) = class_paper_size(option_str) {
+            paper = sz;
+        }
+        match option_str {
+            // Values from LaTeX's size10.clo / size11.clo / size12.clo (\@xipt = 10.95pt).
             "10pt" => {
+                size_pt = 10;
                 config.base_font_size = 10.0;
-                config.base_leading = 13.0;
+                config.base_leading = 12.0;
+                config.par_indent = 15.0;
             }
             "11pt" => {
-                config.base_font_size = 11.0;
-                config.base_leading = 14.0;
+                size_pt = 11;
+                config.base_font_size = 10.95;
+                config.base_leading = 13.6;
+                config.par_indent = 17.0;
             }
             "12pt" => {
+                size_pt = 12;
                 config.base_font_size = 12.0;
-                config.base_leading = 15.0;
+                config.base_leading = 14.5;
+                config.par_indent = 18.0;
             }
             "a4paper" => {
-                config.page_width = 595.0;
-                config.page_height = 842.0;
+                (config.page_width, config.page_height) = A4_PT;
             }
             "letterpaper" => {
-                config.page_width = 612.0;
-                config.page_height = 792.0;
+                (config.page_width, config.page_height) = LETTER_PT;
             }
             "landscape" => {
+                landscape = true;
                 if config.page_width < config.page_height {
                     std::mem::swap(&mut config.page_width, &mut config.page_height);
                 }
             }
+            "twoside" => twoside = true,
+            "oneside" => twoside = false,
+            "twocolumn" => twocolumn = true,
+            "onecolumn" => twocolumn = false,
             "sans" | "sansserif" | "sf" => {
                 config.font_family = FontFamily::Helvetica;
             }
@@ -338,6 +438,12 @@ pub fn apply_doc_class(doc_class: &DocClass<'_>, config: &mut DocumentConfig) {
             _ => {}
         }
     }
+    if landscape {
+        paper = (paper.1, paper.0);
+    }
+    if matches!(doc_class.name, "article" | "report" | "book") {
+        apply_standard_class_geometry(config, paper, size_pt, twoside, twocolumn);
+    }
 }
 
 /// Parse TeX dimension string into PDF points (e.g. `1in`, `2.54cm`, `20mm`, `72pt`).
@@ -347,7 +453,17 @@ pub fn parse_dimension_pt(dimension_str: &str) -> Option<f32> {
         return None;
     }
 
-    let (number_part, unit_suffix) = if let Some(stripped) = trimmed_str.strip_suffix("in") {
+    let (number_part, unit_suffix) = if let Some(stripped) = trimmed_str.strip_suffix("bp") {
+        (stripped, "bp")
+    } else if let Some(stripped) = trimmed_str.strip_suffix("pc") {
+        (stripped, "pc")
+    } else if let Some(stripped) = trimmed_str.strip_suffix("dd") {
+        (stripped, "dd")
+    } else if let Some(stripped) = trimmed_str.strip_suffix("cc") {
+        (stripped, "cc")
+    } else if let Some(stripped) = trimmed_str.strip_suffix("sp") {
+        (stripped, "sp")
+    } else if let Some(stripped) = trimmed_str.strip_suffix("in") {
         (stripped, "in")
     } else if let Some(stripped) = trimmed_str.strip_suffix("cm") {
         (stripped, "cm")
@@ -365,9 +481,15 @@ pub fn parse_dimension_pt(dimension_str: &str) -> Option<f32> {
 
     let numeric_value = number_part.trim().parse::<f32>().ok()?;
     match unit_suffix {
-        "in" => Some(numeric_value * 72.0),
-        "cm" => Some(numeric_value * (72.0 / 2.54)),
-        "mm" => Some(numeric_value * (72.0 / 25.4)),
+        // TeX's units (The TeXbook ch. 10), all in TeX points.
+        "in" => Some(numeric_value * TEX_INCH),
+        "cm" => Some(numeric_value * (TEX_INCH / 2.54)),
+        "mm" => Some(numeric_value * (TEX_INCH / 25.4)),
+        "bp" => Some(numeric_value * (TEX_INCH / 72.0)),
+        "pc" => Some(numeric_value * 12.0),
+        "dd" => Some(numeric_value * (1238.0 / 1157.0)),
+        "cc" => Some(numeric_value * (12.0 * 1238.0 / 1157.0)),
+        "sp" => Some(numeric_value / 65536.0),
         "pt" => Some(numeric_value),
         "em" => Some(numeric_value * 11.0),
         "ex" => Some(numeric_value * 5.5),
@@ -394,8 +516,8 @@ pub fn parse_glue_pt(glue_str: &str) -> Option<(f32, f32)> {
         (s, "")
     };
     let width = parse_dimension_pt(w_str.trim())?;
-    let stretch = if rest.starts_with("plus") {
-        let after_plus = rest["plus".len()..].trim();
+    let stretch = if let Some(after_plus) = rest.strip_prefix("plus") {
+        let after_plus = after_plus.trim();
         let stretch_str = if let Some(m_pos) = after_plus.find("minus") {
             &after_plus[..m_pos]
         } else {

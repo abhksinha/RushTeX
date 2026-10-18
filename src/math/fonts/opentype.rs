@@ -1489,6 +1489,12 @@ pub struct GlyphBitSet {
     pub words: [u64; 128],
 }
 
+impl Default for GlyphBitSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GlyphBitSet {
     #[inline(always)]
     pub const fn new() -> Self {

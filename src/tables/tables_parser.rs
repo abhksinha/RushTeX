@@ -2,7 +2,7 @@
 
 use crate::frontend::ast::{Block, Inline, ParseError};
 use crate::frontend::parser::Parser;
-use crate::tables::tables_model::{TableCell, TableData, TableRow, TableRule};
+use crate::tables::tables_model::{LtSections, TableCell, TableData, TableRow, TableRule};
 use crate::tables::tables_spec::{ColAlign, ColSpec};
 
 pub(crate) fn parse_tabular<'a>(
@@ -27,6 +27,7 @@ pub(crate) fn parse_table_float<'a>(
     let _ = p.parse_optional_brackets()?;
     let mut caption = None;
     let mut caption_above = false;
+    let mut centered = false;
     let mut table_block = None;
 
     loop {
@@ -63,6 +64,7 @@ pub(crate) fn parse_table_float<'a>(
         }
         if p.starts_with("\\centering") {
             p.eat("\\centering");
+            centered = true;
             continue;
         }
         // Skip unknown commands inside table float
@@ -76,6 +78,7 @@ pub(crate) fn parse_table_float<'a>(
     if let Some(Block::Table(mut tdata)) = table_block {
         tdata.caption = caption;
         tdata.caption_above = caption_above;
+        tdata.centered = centered;
         Ok(Block::Table(tdata))
     } else {
         // Fallback empty table
@@ -87,11 +90,10 @@ pub(crate) fn parse_table_float<'a>(
             rule_bottom: false,
             bottom_rules: Vec::new(),
             is_longtable: false,
-            header_row_count: 0,
-            first_header_row_count: 0,
-            footer_row_count: 0,
+            lt_sections: LtSections::default(),
             caption,
             caption_above,
+            centered,
         })))
     }
 }
@@ -107,9 +109,7 @@ fn parse_table_body<'a>(
     let col_count = cols.len();
     let mut rows = Vec::with_capacity(8);
     let mut pending_rules = Vec::with_capacity(2);
-    let mut header_row_count = 0;
-    let mut first_header_row_count = 0;
-    let mut footer_row_count = 0;
+    let mut lt_sections = LtSections::default();
     let mut caption = None;
     let mut caption_above = false;
 
@@ -208,25 +208,38 @@ fn parse_table_body<'a>(
             continue;
         }
 
-        // longtable header / footer markers
+        // longtable head / foot markers: each closes the rows collected since the previous
+        // marker into its own box (longtable.sty \LT@end@hd@ft), including trailing rules.
         if is_longtable {
-            if p.cmd_ends_at("\\endhead") {
-                p.eat("\\endhead");
-                header_row_count = rows.len();
-                continue;
-            }
-            if p.cmd_ends_at("\\endfirsthead") {
-                p.eat("\\endfirsthead");
-                first_header_row_count = rows.len();
-                continue;
-            }
-            if p.cmd_ends_at("\\endfoot") {
-                p.eat("\\endfoot");
-                footer_row_count = rows.len();
-                continue;
-            }
-            if p.cmd_ends_at("\\endlastfoot") {
-                p.eat("\\endlastfoot");
+            let marker = if p.cmd_ends_at("\\endfirsthead") {
+                Some(("\\endfirsthead", 0u8))
+            } else if p.cmd_ends_at("\\endhead") {
+                Some(("\\endhead", 1))
+            } else if p.cmd_ends_at("\\endfoot") {
+                Some(("\\endfoot", 2))
+            } else if p.cmd_ends_at("\\endlastfoot") {
+                Some(("\\endlastfoot", 3))
+            } else {
+                None
+            };
+            if let Some((cmd, kind)) = marker {
+                p.eat(cmd);
+                if !pending_rules.is_empty() {
+                    // Rule-only row: no cells, zero height, carries the section's trailing rules.
+                    rows.push(TableRow {
+                        rule_above: true,
+                        rules_above: std::mem::replace(&mut pending_rules, Vec::with_capacity(2)),
+                        cells: Vec::new(),
+                    });
+                }
+                let range = (lt_sections.body_start, rows.len() as u16);
+                match kind {
+                    0 => lt_sections.first_head = range,
+                    1 => lt_sections.head = range,
+                    2 => lt_sections.foot = range,
+                    _ => lt_sections.last_foot = range,
+                }
+                lt_sections.body_start = rows.len() as u16;
                 continue;
             }
             if p.cmd_ends_at("\\caption") {
@@ -285,11 +298,10 @@ fn parse_table_body<'a>(
         rule_bottom,
         bottom_rules: pending_rules,
         is_longtable,
-        header_row_count,
-        first_header_row_count,
-        footer_row_count,
+        lt_sections,
         caption,
         caption_above,
+        centered: false,
     })))
 }
 
@@ -435,7 +447,8 @@ fn parse_multicolumn<'a>(p: &mut Parser<'a>) -> Result<TableCell<'a>, ParseError
     }
 
     p.skip_hws();
-    let inlines = p.require_group()?;
+    let mut inlines = p.require_group()?;
+    trim_cell_edges(&mut inlines);
     Ok(TableCell {
         inlines,
         colspan,
@@ -448,7 +461,11 @@ fn parse_multicolumn<'a>(p: &mut Parser<'a>) -> Result<TableCell<'a>, ParseError
 fn parse_cell_inlines<'a>(p: &mut Parser<'a>) -> Result<Vec<Inline<'a>>, ParseError> {
     let mut out = Vec::new();
     loop {
-        p.skip_hws();
+        // Spaces between items are interword glue; only the cell's edges are trimmed
+        // (`trim_cell_edges`), so a separating space after a group is kept.
+        if out.is_empty() || matches!(p.peek(), Some(' ' | '\t')) && rest_is_cell_end(p) {
+            p.skip_hws();
+        }
         match p.peek() {
             None => break,
             Some('&') => break,
@@ -464,7 +481,9 @@ fn parse_cell_inlines<'a>(p: &mut Parser<'a>) -> Result<Vec<Inline<'a>>, ParseEr
                     || p.cmd_ends_at("\\cline")
                     || p.cmd_ends_at("\\cmidrule")
                     || p.cmd_ends_at("\\endhead")
-                    || p.cmd_ends_at("\\endfoot") =>
+                    || p.cmd_ends_at("\\endfirsthead")
+                    || p.cmd_ends_at("\\endfoot")
+                    || p.cmd_ends_at("\\endlastfoot") =>
             {
                 break;
             }
@@ -474,7 +493,34 @@ fn parse_cell_inlines<'a>(p: &mut Parser<'a>) -> Result<Vec<Inline<'a>>, ParseEr
             Some(_) => out.push(p.parse_inline()?),
         }
     }
+    trim_cell_edges(&mut out);
     Ok(out)
+}
+
+/// Whether only spaces separate the parser from the end of the cell (`&`, `\\`, a rule or
+/// the end of the row's line).
+fn rest_is_cell_end(p: &Parser<'_>) -> bool {
+    let r = p.rest().trim_start_matches([' ', '\t']);
+    r.is_empty() || r.starts_with('&') || r.starts_with("\\\\") || r.starts_with('\n') || r.starts_with('%') || r.starts_with("\\end")
+}
+
+/// The tabular cell template brackets each entry with `\ignorespaces` … `\unskip`, so the
+/// spaces before `&`, `\\` or the end of the cell take no width.
+fn trim_cell_edges(inls: &mut Vec<Inline<'_>>) {
+    while let Some(Inline::Text(t)) = inls.last_mut() {
+        *t = t.trim_end();
+        if !t.is_empty() {
+            break;
+        }
+        inls.pop();
+    }
+    while let Some(Inline::Text(t)) = inls.first_mut() {
+        *t = t.trim_start();
+        if !t.is_empty() {
+            break;
+        }
+        inls.remove(0);
+    }
 }
 
 fn parse_range(s: &str) -> Option<(u16, u16)> {

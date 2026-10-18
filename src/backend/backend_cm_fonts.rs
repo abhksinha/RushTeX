@@ -1,5 +1,9 @@
 //! Embedded Computer Modern CFF (Type 1C) font streams and descriptors.
 //!
+//! The optical sizes (cmr7, cmmi7/5, cmsy7/5, cmex7) and the math-alphabet fonts (cmss10/8,
+//! cmtt10/8, eufm10/7/5, cmmib10/7/5, cmbsy10/7/5) are converted from the TeX Live Type 1
+//! `.pfb` files to bare CFF + zlib (`assets/cm_fonts/*.flate`); see `gen_cm_assets.py`.
+//!
 //! Pre-compressed CFF font programs (CMR10, CMMI10, CMSY10, CMEX10, etc.)
 //! providing 100% pixel-level visual and geometric identity with Donald Knuth's
 //! TeX and legacy pdfLaTeX outputs in an optimized Compact Font Format.
@@ -19,14 +23,14 @@ pub struct CmFontProgram {
     pub compressed_stream: &'static [u8],
 }
 
-pub static OT1_DIFF: &'static str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis /suppress 160 /space /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /sfthyphen /nbspace /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /dieresis";
-pub static OMX_DIFF: &'static str = "0 /parenleftbig /parenrightbig /bracketleftbig /bracketrightbig /floorleftbig /floorrightbig /ceilingleftbig /ceilingrightbig /braceleftbig /bracerightbig /angbracketleftbig /angbracketrightbig /vextendsingle /vextenddouble /slashbig /backslashbig /parenleftBig /parenrightBig /parenleftbigg /parenrightbigg /bracketleftbigg /bracketrightbigg /floorleftbigg /floorrightbigg /ceilingleftbigg /ceilingrightbigg /braceleftbigg /bracerightbigg /angbracketleftbigg /angbracketrightbigg /slashbigg /backslashbigg /parenleftBigg /parenrightBigg /bracketleftBigg /bracketrightBigg /floorleftBigg /floorrightBigg /ceilingleftBigg /ceilingrightBigg /braceleftBigg /bracerightBigg /angbracketleftBigg /angbracketrightBigg /slashBigg /backslashBigg /slashBig /backslashBig /parenlefttp /parenrighttp /bracketlefttp /bracketrighttp /bracketleftbt /bracketrightbt /bracketleftex /bracketrightex /bracelefttp /bracerighttp /braceleftbt /bracerightbt /braceleftmid /bracerightmid /braceex /arrowvertex /parenleftbt /parenrightbt /parenleftex /parenrightex /angbracketleftBig /angbracketrightBig /unionsqtext /unionsqdisplay /contintegraltext /contintegraldisplay /circledottext /circledotdisplay /circleplustext /circleplusdisplay /circlemultiplytext /circlemultiplydisplay /summationtext /producttext /integraltext /uniontext /intersectiontext /unionmultitext /logicalandtext /logicalortext /summationdisplay /productdisplay /integraldisplay /uniondisplay /intersectiondisplay /unionmultidisplay /logicalanddisplay /logicalordisplay /coproducttext /coproductdisplay /hatwide /hatwider /hatwidest /tildewide /tildewider /tildewidest /bracketleftBig /bracketrightBig /floorleftBig /floorrightBig /ceilingleftBig /ceilingrightBig /braceleftBig /bracerightBig /radicalbig /radicalBig /radicalbigg /radicalBigg /radicalbt /radicalvertex /radicaltp /arrowvertexdbl /arrowtp /arrowbt /bracehtipdownleft /bracehtipdownright /bracehtipupleft /bracehtipupright /arrowdbltp /arrowdblbt /parenleftBigg 159 /radical /space /parenleftbig /parenrightbig /bracketleftbig /bracketrightbig /floorleftbig /floorrightbig /ceilingleftbig /ceilingrightbig /braceleftbig /bracerightbig 173 /angbracketleftbig /angbracketrightbig /vextendsingle /vextenddouble /slashbig /backslashbig /parenleftBig /parenrightBig /parenleftbigg /parenrightbigg /bracketleftbigg /bracketrightbigg /floorleftbigg /floorrightbigg /ceilingleftbigg /ceilingrightbigg /braceleftbigg /bracerightbigg /angbracketleftbigg /angbracketrightbigg /slashbigg /backslashbigg /parenleftBigg /arrowdblbt 208 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega";
-pub static OML_DIFF: &'static str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /alpha /beta /gamma /delta /epsilon1 /zeta /eta /theta /iota /kappa /lambda /mu /nu /xi /pi /rho /sigma /tau /upsilon /phi /chi /psi /omega /epsilon /theta1 /pi1 /rho1 /sigma1 /phi1 /arrowlefttophalf /arrowleftbothalf /arrowrighttophalf /arrowrightbothalf /arrowhookleft /arrowhookright /triangleright /triangleleft /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /period /comma /less /slash /greater /star /partialdiff /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /flat /natural /sharp /slurbelow /slurabove /lscript /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /dotlessi /dotlessj /weierstrass /vector /tie /psi 160 /space /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi 173 /Omega /alpha /beta /gamma /delta /epsilon1 /zeta /eta /theta /iota /kappa /lambda /mu /nu /xi /pi /rho /sigma /tau /upsilon /phi /chi /psi /tie";
-pub static CMR5_DIFF: &'static str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /arrowup /arrowdown /quotesingle /exclamdown /questiondown /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /less /equal /greater /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis /suppress 160 /space /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /sfthyphen /nbspace /Omega /arrowup /arrowdown /quotesingle /exclamdown /questiondown /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /dieresis";
-pub static OMS_DIFF: &'static str = "0 /minus /periodcentered /multiply /asteriskmath /divide /diamondmath /plusminus /minusplus /circleplus /circleminus /circlemultiply /circledivide /circledot /circlecopyrt /openbullet /bullet /equivasymptotic /equivalence /reflexsubset /reflexsuperset /lessequal /greaterequal /precedesequal /followsequal /similar /approxequal /propersubset /propersuperset /lessmuch /greatermuch /precedes /follows /arrowleft /arrowright /arrowup /arrowdown /arrowboth /arrownortheast /arrowsoutheast /similarequal /arrowdblleft /arrowdblright /arrowdblup /arrowdbldown /arrowdblboth /arrownorthwest /arrowsouthwest /proportional /prime /infinity /element /owner /triangle /triangleinv /negationslash /mapsto /universal /existential /logicalnot /emptyset /Rfractur /Ifractur /latticetop /perpendicular /aleph /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /union /intersection /unionmulti /logicaland /logicalor /turnstileleft /turnstileright /floorleft /floorright /ceilingleft /ceilingright /braceleft /braceright /angbracketleft /angbracketright /bar /bardbl /arrowbothv /arrowdblbothv /backslash /wreathproduct /radical /coproduct /nabla /integral /unionsq /intersectionsq /subsetsqequal /supersetsqequal /section /dagger /daggerdbl /paragraph /club /diamond /heart /spade /arrowleft 160 /space /minus /periodcentered /multiply /asteriskmath /divide /diamondmath /plusminus /minusplus /circleplus /circleminus 173 /circlemultiply /circledivide /circledot /circlecopyrt /openbullet /bullet /equivasymptotic /equivalence /reflexsubset /reflexsuperset /lessequal /greaterequal /precedesequal /followsequal /similar /approxequal /propersubset /propersuperset /lessmuch /greatermuch /precedes /follows /arrowleft /spade";
-pub static CMTI_DIFF: &'static str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /sterling /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis /suppress 160 /space /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /sfthyphen /nbspace /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /dieresis";
-pub static MSAM_DIFF: &'static str = "0 /squaredot /squareplus /squaremultiply /square /squaresolid /squaresmallsolid /diamond /diamondsolid /clockwise /anticlockwise /harpoonleftright /harpoonrightleft /squareminus /forces /forcesbar /satisfies /dblarrowheadright /dblarrowheadleft /dblarrowleft /dblarrowright /dblarrowup /dblarrowdwn /harpoonupright /harpoondownright /harpoonupleft /harpoondownleft /arrowtailright /arrowtailleft /arrowparrleftright /arrowparrrightleft /shiftleft /shiftright /squiggleright /squiggleleftright /curlyleft /curlyright /circleequal /followsorequal /greaterorsimilar /greaterorapproxeql /multimap /therefore /because /equalsdots /defines /precedesorequal /lessorsimilar /lessorapproxeql /equalorless /equalorgreater /equalorprecedes /equalorfollows /precedesorcurly /lessdblequal /lessorequalslant /lessorgreater /primereverse /axisshort /equaldotrightleft /equaldotleftright /followsorcurly /greaterdblequal /greaterorequalslant /greaterorless /squareimage /squareoriginal /triangleright /triangleleft /trianglerightequal /triangleleftequal /star /between /triangledownsld /trianglerightsld /triangleleftsld /arrowaxisright /arrowaxisleft /triangle /trianglesolid /triangleinv /ringinequal /lessequalgreater /greaterlessequal /lessdbleqlgreater /greaterdbleqlless /Yen /arrowtripleright /arrowtripleleft /check /orunderscore /nand /perpcorrespond /angle /measuredangle /sphericalangle /proportional /smile /frown /subsetdbl /supersetdbl /uniondbl /intersectiondbl /uprise /downfall /multiopenleft /multiopenright /subsetdblequal /supersetdblequal /difference /geomequivalent /muchless /muchgreater /rightanglenw /rightanglene /circleR /circleS /fork /dotplus /revsimilar /revasymptequal /rightanglesw /rightanglese /maltesecross /complement /intercal /circlering /circleasterisk /circleminus /squiggleright 160 /space /squaredot /squareplus /squaremultiply /square /squaresolid /squaresmallsolid /diamond /diamondsolid /clockwise /anticlockwise 173 /harpoonleftright /harpoonrightleft /squareminus /forces /forcesbar /satisfies /dblarrowheadright /dblarrowheadleft /dblarrowleft /dblarrowright /dblarrowup /dblarrowdwn /harpoonupright /harpoondownright /harpoonupleft /harpoondownleft /arrowtailright /arrowtailleft /arrowparrleftright /arrowparrrightleft /shiftleft /shiftright /squiggleright /circleminus";
-pub static MSBM_DIFF: &'static str = "0 /lessornotequal /greaterornotequal /notlessequal /notgreaterequal /notless /notgreater /notprecedes /notfollows /lessornotdbleql /greaterornotdbleql /notlessorslnteql /notgreaterorslnteql /lessnotequal /greaternotequal /notprecedesoreql /notfollowsoreql /precedeornoteqvlnt /followornoteqvlnt /lessornotsimilar /greaterornotsimilar /notlessdblequal /notgreaterdblequal /precedenotslnteql /follownotslnteql /precedenotdbleqv /follownotdbleqv /lessnotdblequal /greaternotdblequal /notsimilar /notapproxequal /upslope /downslope /notsubsetoreql /notsupersetoreql /notsubsetordbleql /notsupersetordbleql /subsetornotdbleql /supersetornotdbleql /subsetornoteql /supersetornoteql /subsetnoteql /supersetnoteql /notsubseteql /notsuperseteql /notparallel /notbar /notshortbar /notshortparallel /notturnstile /notforces /notsatisfies /notforcesextra /nottriangeqlright /nottriangeqlleft /nottriangleleft /nottriangleright /notarrowleft /notarrowright /notdblarrowleft /notdblarrowright /notdblarrowboth /notarrowboth /dividemultiply /emptyset /notexistential /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /hatwide /hatwider /tildewide /tildewider 96 /Finv /Gmir 102 /Omegainv /eth /equalorsimilar /beth /gimel /daleth /lessdot /greaterdot /multicloseleft /multicloseright /barshort /parallelshort /integerdivide /similar /approxequal /approxorequal /followsorequal /precedesorequal /archleftdown /archrightdown /Digamma /kappa /k /planckover2pi /planckover2pi1 /epsiloninv /notsubsetoreql 160 /space /lessornotequal /greaterornotequal /notlessequal /notgreaterequal /notless /notgreater /notprecedes /notfollows /lessornotdbleql /greaterornotdbleql 173 /notlessorslnteql /notgreaterorslnteql /lessnotequal /greaternotequal /notprecedesoreql /notfollowsoreql /precedeornoteqvlnt /followornoteqvlnt /lessornotsimilar /greaterornotsimilar /notlessdblequal /notgreaterdblequal /precedenotslnteql /follownotslnteql /precedenotdbleqv /follownotdbleqv /lessnotdblequal /greaternotdblequal /notsimilar /notapproxequal /upslope /downslope /notsubsetoreql /epsiloninv";
+pub static OT1_DIFF: &str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis /suppress 160 /space /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /sfthyphen /nbspace /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /dieresis";
+pub static OMX_DIFF: &str = "0 /parenleftbig /parenrightbig /bracketleftbig /bracketrightbig /floorleftbig /floorrightbig /ceilingleftbig /ceilingrightbig /braceleftbig /bracerightbig /angbracketleftbig /angbracketrightbig /vextendsingle /vextenddouble /slashbig /backslashbig /parenleftBig /parenrightBig /parenleftbigg /parenrightbigg /bracketleftbigg /bracketrightbigg /floorleftbigg /floorrightbigg /ceilingleftbigg /ceilingrightbigg /braceleftbigg /bracerightbigg /angbracketleftbigg /angbracketrightbigg /slashbigg /backslashbigg /parenleftBigg /parenrightBigg /bracketleftBigg /bracketrightBigg /floorleftBigg /floorrightBigg /ceilingleftBigg /ceilingrightBigg /braceleftBigg /bracerightBigg /angbracketleftBigg /angbracketrightBigg /slashBigg /backslashBigg /slashBig /backslashBig /parenlefttp /parenrighttp /bracketlefttp /bracketrighttp /bracketleftbt /bracketrightbt /bracketleftex /bracketrightex /bracelefttp /bracerighttp /braceleftbt /bracerightbt /braceleftmid /bracerightmid /braceex /arrowvertex /parenleftbt /parenrightbt /parenleftex /parenrightex /angbracketleftBig /angbracketrightBig /unionsqtext /unionsqdisplay /contintegraltext /contintegraldisplay /circledottext /circledotdisplay /circleplustext /circleplusdisplay /circlemultiplytext /circlemultiplydisplay /summationtext /producttext /integraltext /uniontext /intersectiontext /unionmultitext /logicalandtext /logicalortext /summationdisplay /productdisplay /integraldisplay /uniondisplay /intersectiondisplay /unionmultidisplay /logicalanddisplay /logicalordisplay /coproducttext /coproductdisplay /hatwide /hatwider /hatwidest /tildewide /tildewider /tildewidest /bracketleftBig /bracketrightBig /floorleftBig /floorrightBig /ceilingleftBig /ceilingrightBig /braceleftBig /bracerightBig /radicalbig /radicalBig /radicalbigg /radicalBigg /radicalbt /radicalvertex /radicaltp /arrowvertexdbl /arrowtp /arrowbt /bracehtipdownleft /bracehtipdownright /bracehtipupleft /bracehtipupright /arrowdbltp /arrowdblbt /parenleftBigg 159 /radical /space /parenleftbig /parenrightbig /bracketleftbig /bracketrightbig /floorleftbig /floorrightbig /ceilingleftbig /ceilingrightbig /braceleftbig /bracerightbig 173 /angbracketleftbig /angbracketrightbig /vextendsingle /vextenddouble /slashbig /backslashbig /parenleftBig /parenrightBig /parenleftbigg /parenrightbigg /bracketleftbigg /bracketrightbigg /floorleftbigg /floorrightbigg /ceilingleftbigg /ceilingrightbigg /braceleftbigg /bracerightbigg /angbracketleftbigg /angbracketrightbigg /slashbigg /backslashbigg /parenleftBigg /arrowdblbt 208 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega";
+pub static OML_DIFF: &str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /alpha /beta /gamma /delta /epsilon1 /zeta /eta /theta /iota /kappa /lambda /mu /nu /xi /pi /rho /sigma /tau /upsilon /phi /chi /psi /omega /epsilon /theta1 /pi1 /rho1 /sigma1 /phi1 /arrowlefttophalf /arrowleftbothalf /arrowrighttophalf /arrowrightbothalf /arrowhookleft /arrowhookright /triangleright /triangleleft /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /period /comma /less /slash /greater /star /partialdiff /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /flat /natural /sharp /slurbelow /slurabove /lscript /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /dotlessi /dotlessj /weierstrass /vector /tie /psi 160 /space /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi 173 /Omega /alpha /beta /gamma /delta /epsilon1 /zeta /eta /theta /iota /kappa /lambda /mu /nu /xi /pi /rho /sigma /tau /upsilon /phi /chi /psi /tie";
+pub static CMR5_DIFF: &str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /arrowup /arrowdown /quotesingle /exclamdown /questiondown /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /less /equal /greater /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis /suppress 160 /space /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /sfthyphen /nbspace /Omega /arrowup /arrowdown /quotesingle /exclamdown /questiondown /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /dieresis";
+pub static OMS_DIFF: &str = "0 /minus /periodcentered /multiply /asteriskmath /divide /diamondmath /plusminus /minusplus /circleplus /circleminus /circlemultiply /circledivide /circledot /circlecopyrt /openbullet /bullet /equivasymptotic /equivalence /reflexsubset /reflexsuperset /lessequal /greaterequal /precedesequal /followsequal /similar /approxequal /propersubset /propersuperset /lessmuch /greatermuch /precedes /follows /arrowleft /arrowright /arrowup /arrowdown /arrowboth /arrownortheast /arrowsoutheast /similarequal /arrowdblleft /arrowdblright /arrowdblup /arrowdbldown /arrowdblboth /arrownorthwest /arrowsouthwest /proportional /prime /infinity /element /owner /triangle /triangleinv /negationslash /mapsto /universal /existential /logicalnot /emptyset /Rfractur /Ifractur /latticetop /perpendicular /aleph /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /union /intersection /unionmulti /logicaland /logicalor /turnstileleft /turnstileright /floorleft /floorright /ceilingleft /ceilingright /braceleft /braceright /angbracketleft /angbracketright /bar /bardbl /arrowbothv /arrowdblbothv /backslash /wreathproduct /radical /coproduct /nabla /integral /unionsq /intersectionsq /subsetsqequal /supersetsqequal /section /dagger /daggerdbl /paragraph /club /diamond /heart /spade /arrowleft 160 /space /minus /periodcentered /multiply /asteriskmath /divide /diamondmath /plusminus /minusplus /circleplus /circleminus 173 /circlemultiply /circledivide /circledot /circlecopyrt /openbullet /bullet /equivasymptotic /equivalence /reflexsubset /reflexsuperset /lessequal /greaterequal /precedesequal /followsequal /similar /approxequal /propersubset /propersuperset /lessmuch /greatermuch /precedes /follows /arrowleft /spade";
+pub static CMTI_DIFF: &str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /sterling /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis /suppress 160 /space /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /sfthyphen /nbspace /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /dieresis";
+pub static MSAM_DIFF: &str = "0 /squaredot /squareplus /squaremultiply /square /squaresolid /squaresmallsolid /diamond /diamondsolid /clockwise /anticlockwise /harpoonleftright /harpoonrightleft /squareminus /forces /forcesbar /satisfies /dblarrowheadright /dblarrowheadleft /dblarrowleft /dblarrowright /dblarrowup /dblarrowdwn /harpoonupright /harpoondownright /harpoonupleft /harpoondownleft /arrowtailright /arrowtailleft /arrowparrleftright /arrowparrrightleft /shiftleft /shiftright /squiggleright /squiggleleftright /curlyleft /curlyright /circleequal /followsorequal /greaterorsimilar /greaterorapproxeql /multimap /therefore /because /equalsdots /defines /precedesorequal /lessorsimilar /lessorapproxeql /equalorless /equalorgreater /equalorprecedes /equalorfollows /precedesorcurly /lessdblequal /lessorequalslant /lessorgreater /primereverse /axisshort /equaldotrightleft /equaldotleftright /followsorcurly /greaterdblequal /greaterorequalslant /greaterorless /squareimage /squareoriginal /triangleright /triangleleft /trianglerightequal /triangleleftequal /star /between /triangledownsld /trianglerightsld /triangleleftsld /arrowaxisright /arrowaxisleft /triangle /trianglesolid /triangleinv /ringinequal /lessequalgreater /greaterlessequal /lessdbleqlgreater /greaterdbleqlless /Yen /arrowtripleright /arrowtripleleft /check /orunderscore /nand /perpcorrespond /angle /measuredangle /sphericalangle /proportional /smile /frown /subsetdbl /supersetdbl /uniondbl /intersectiondbl /uprise /downfall /multiopenleft /multiopenright /subsetdblequal /supersetdblequal /difference /geomequivalent /muchless /muchgreater /rightanglenw /rightanglene /circleR /circleS /fork /dotplus /revsimilar /revasymptequal /rightanglesw /rightanglese /maltesecross /complement /intercal /circlering /circleasterisk /circleminus /squiggleright 160 /space /squaredot /squareplus /squaremultiply /square /squaresolid /squaresmallsolid /diamond /diamondsolid /clockwise /anticlockwise 173 /harpoonleftright /harpoonrightleft /squareminus /forces /forcesbar /satisfies /dblarrowheadright /dblarrowheadleft /dblarrowleft /dblarrowright /dblarrowup /dblarrowdwn /harpoonupright /harpoondownright /harpoonupleft /harpoondownleft /arrowtailright /arrowtailleft /arrowparrleftright /arrowparrrightleft /shiftleft /shiftright /squiggleright /circleminus";
+pub static MSBM_DIFF: &str = "0 /lessornotequal /greaterornotequal /notlessequal /notgreaterequal /notless /notgreater /notprecedes /notfollows /lessornotdbleql /greaterornotdbleql /notlessorslnteql /notgreaterorslnteql /lessnotequal /greaternotequal /notprecedesoreql /notfollowsoreql /precedeornoteqvlnt /followornoteqvlnt /lessornotsimilar /greaterornotsimilar /notlessdblequal /notgreaterdblequal /precedenotslnteql /follownotslnteql /precedenotdbleqv /follownotdbleqv /lessnotdblequal /greaternotdblequal /notsimilar /notapproxequal /upslope /downslope /notsubsetoreql /notsupersetoreql /notsubsetordbleql /notsupersetordbleql /subsetornotdbleql /supersetornotdbleql /subsetornoteql /supersetornoteql /subsetnoteql /supersetnoteql /notsubseteql /notsuperseteql /notparallel /notbar /notshortbar /notshortparallel /notturnstile /notforces /notsatisfies /notforcesextra /nottriangeqlright /nottriangeqlleft /nottriangleleft /nottriangleright /notarrowleft /notarrowright /notdblarrowleft /notdblarrowright /notdblarrowboth /notarrowboth /dividemultiply /emptyset /notexistential /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /hatwide /hatwider /tildewide /tildewider 96 /Finv /Gmir 102 /Omegainv /eth /equalorsimilar /beth /gimel /daleth /lessdot /greaterdot /multicloseleft /multicloseright /barshort /parallelshort /integerdivide /similar /approxequal /approxorequal /followsorequal /precedesorequal /archleftdown /archrightdown /Digamma /kappa /k /planckover2pi /planckover2pi1 /epsiloninv /notsubsetoreql 160 /space /lessornotequal /greaterornotequal /notlessequal /notgreaterequal /notless /notgreater /notprecedes /notfollows /lessornotdbleql /greaterornotdbleql 173 /notlessorslnteql /notgreaterorslnteql /lessnotequal /greaternotequal /notprecedesoreql /notfollowsoreql /precedeornoteqvlnt /followornoteqvlnt /lessornotsimilar /greaterornotsimilar /notlessdblequal /notgreaterdblequal /precedenotslnteql /follownotslnteql /precedenotdbleqv /follownotdbleqv /lessnotdblequal /greaternotdblequal /notsimilar /notapproxequal /upslope /downslope /notsubsetoreql /epsiloninv";
 
 pub static CMR10_PROGRAM: CmFontProgram = CmFontProgram {
     name: "CMR10",
@@ -106,19 +110,6 @@ pub static CMTI10_PROGRAM: CmFontProgram = CmFontProgram {
     compressed_stream: include_bytes!("../../assets/cm_fonts/cmti10.flate"),
 };
 
-pub static CMR7_PROGRAM: CmFontProgram = CmFontProgram {
-    name: "CMR7",
-    flags: 32,
-    bbox: [-27, -250, 1122, 750],
-    ascent: 694,
-    descent: -194,
-    cap_height: 683,
-    italic_angle: 0,
-    stem_v: 69,
-    diff_encoding: OT1_DIFF,
-    compressed_stream: include_bytes!("../../assets/cm_fonts/cmr10.flate"),
-};
-
 pub static CMR5_PROGRAM: CmFontProgram = CmFontProgram {
     name: "CMR5",
     flags: 32,
@@ -130,58 +121,6 @@ pub static CMR5_PROGRAM: CmFontProgram = CmFontProgram {
     stem_v: 69,
     diff_encoding: CMR5_DIFF,
     compressed_stream: include_bytes!("../../assets/cm_fonts/cmr5.flate"),
-};
-
-pub static CMMI7_PROGRAM: CmFontProgram = CmFontProgram {
-    name: "CMMI7",
-    flags: 4,
-    bbox: [-1, -250, 1171, 750],
-    ascent: 694,
-    descent: -194,
-    cap_height: 683,
-    italic_angle: -14,
-    stem_v: 72,
-    diff_encoding: OML_DIFF,
-    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmi10.flate"),
-};
-
-pub static CMMI5_PROGRAM: CmFontProgram = CmFontProgram {
-    name: "CMMI5",
-    flags: 4,
-    bbox: [37, -250, 1349, 750],
-    ascent: 694,
-    descent: -194,
-    cap_height: 683,
-    italic_angle: -14,
-    stem_v: 72,
-    diff_encoding: OML_DIFF,
-    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmi10.flate"),
-};
-
-pub static CMSY7_PROGRAM: CmFontProgram = CmFontProgram {
-    name: "CMSY7",
-    flags: 4,
-    bbox: [-15, -951, 1251, 782],
-    ascent: 750,
-    descent: -194,
-    cap_height: 683,
-    italic_angle: -14,
-    stem_v: 40,
-    diff_encoding: OMS_DIFF,
-    compressed_stream: include_bytes!("../../assets/cm_fonts/cmsy10.flate"),
-};
-
-pub static CMSY5_PROGRAM: CmFontProgram = CmFontProgram {
-    name: "CMSY5",
-    flags: 4,
-    bbox: [21, -944, 1448, 791],
-    ascent: 750,
-    descent: -194,
-    cap_height: 683,
-    italic_angle: -14,
-    stem_v: 40,
-    diff_encoding: OMS_DIFF,
-    compressed_stream: include_bytes!("../../assets/cm_fonts/cmsy10.flate"),
 };
 
 pub static MSAM10_PROGRAM: CmFontProgram = CmFontProgram {
@@ -209,6 +148,312 @@ pub static MSBM10_PROGRAM: CmFontProgram = CmFontProgram {
     diff_encoding: MSBM_DIFF,
     compressed_stream: include_bytes!("../../assets/cm_fonts/msbm10.flate"),
 };
+
+// ---- GENERATED by scratchpad fontgen/emit_rust.py (Type 1C programs from TeX Live .pfb) ----
+
+pub static CMR7_DIFF_ENC: &str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis";
+pub static CMMI7_DIFF_ENC: &str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /alpha /beta /gamma /delta /epsilon1 /zeta /eta /theta /iota /kappa /lambda /mu /nu /xi /pi /rho /sigma /tau /upsilon /phi /chi /psi /omega /epsilon /theta1 /pi1 /rho1 /sigma1 /phi1 /arrowlefttophalf /arrowleftbothalf /arrowrighttophalf /arrowrightbothalf /arrowhookleft /arrowhookright /triangleright /triangleleft /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /period /comma /less /slash /greater /star /partialdiff /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /flat /natural /sharp /slurbelow /slurabove /lscript /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /dotlessi /dotlessj /weierstrass /vector /tie";
+pub static CMSY7_DIFF_ENC: &str = "0 /minus /periodcentered /multiply /asteriskmath /divide /diamondmath /plusminus /minusplus /circleplus /circleminus /circlemultiply /circledivide /circledot /circlecopyrt /openbullet /bullet /equivasymptotic /equivalence /reflexsubset /reflexsuperset /lessequal /greaterequal /precedesequal /followsequal /similar /approxequal /propersubset /propersuperset /lessmuch /greatermuch /precedes /follows /arrowleft /arrowright /arrowup /arrowdown /arrowboth /arrownortheast /arrowsoutheast /similarequal /arrowdblleft /arrowdblright /arrowdblup /arrowdbldown /arrowdblboth /arrownorthwest /arrowsouthwest /proportional /prime /infinity /element /owner /triangle /triangleinv /negationslash /mapsto /universal /existential /logicalnot /emptyset /Rfractur /Ifractur /latticetop /perpendicular /aleph /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /union /intersection /unionmulti /logicaland /logicalor /turnstileleft /turnstileright /floorleft /floorright /ceilingleft /ceilingright /braceleft /braceright /angbracketleft /angbracketright /bar /bardbl /arrowbothv /arrowdblbothv /backslash /wreathproduct /radical /coproduct /nabla /integral /unionsq /intersectionsq /subsetsqequal /supersetsqequal /section /dagger /daggerdbl /paragraph /club /diamond /heart /spade";
+pub static CMTT10_DIFF_ENC: &str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /arrowup /arrowdown /quotesingle /exclamdown /questiondown /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /visiblespace /exclam /quotedbl /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /less /equal /greater /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /backslash /bracketright /asciicircum /underscore /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /braceleft /bar /braceright /asciitilde /dieresis";
+pub static EUFM10_DIFF_ENC: &str = "0 /dnos /dalt /fnos /falt /galt /kalt /talt /ualt 18 /quoteleft /quoteright 32 /space /exclam 38 /ampersand /quotesingle /parenleft /parenright /asterisk /plus /comma /minus /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon 61 /equal 63 /question 65 /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft 93 /bracketright /asciicircum 97 /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z 125 /quotedbl 127 /onealt";
+pub static CMEX7_DIFF_ENC: &str = "0 /parenleftbig /parenrightbig /bracketleftbig /bracketrightbig /floorleftbig /floorrightbig /ceilingleftbig /ceilingrightbig /braceleftbig /bracerightbig /angbracketleftbig /angbracketrightbig /vextendsingle /vextenddouble /slashbig /backslashbig /parenleftBig /parenrightBig /parenleftbigg /parenrightbigg /bracketleftbigg /bracketrightbigg /floorleftbigg /floorrightbigg /ceilingleftbigg /ceilingrightbigg /braceleftbigg /bracerightbigg /angbracketleftbigg /angbracketrightbigg /slashbigg /backslashbigg /parenleftBigg /parenrightBigg /bracketleftBigg /bracketrightBigg /floorleftBigg /floorrightBigg /ceilingleftBigg /ceilingrightBigg /braceleftBigg /bracerightBigg /angbracketleftBigg /angbracketrightBigg /slashBigg /backslashBigg /slashBig /backslashBig /parenlefttp /parenrighttp /bracketlefttp /bracketrighttp /bracketleftbt /bracketrightbt /bracketleftex /bracketrightex /bracelefttp /bracerighttp /braceleftbt /bracerightbt /braceleftmid /bracerightmid /braceex /arrowvertex /parenleftbt /parenrightbt /parenleftex /parenrightex /angbracketleftBig /angbracketrightBig /unionsqtext /unionsqdisplay /contintegraltext /contintegraldisplay /circledottext /circledotdisplay /circleplustext /circleplusdisplay /circlemultiplytext /circlemultiplydisplay /summationtext /producttext /integraltext /uniontext /intersectiontext /unionmultitext /logicalandtext /logicalortext /summationdisplay /productdisplay /integraldisplay /uniondisplay /intersectiondisplay /unionmultidisplay /logicalanddisplay /logicalordisplay /coproducttext /coproductdisplay /hatwide /hatwider /hatwidest /tildewide /tildewider /tildewidest /bracketleftBig /bracketrightBig /floorleftBig /floorrightBig /ceilingleftBig /ceilingrightBig /braceleftBig /bracerightBig /radicalbig /radicalBig /radicalbigg /radicalBigg /radicalbt /radicalvertex /radicaltp /arrowvertexdbl /arrowtp /arrowbt /bracehtipdownleft /bracehtipdownright /bracehtipupleft /bracehtipupright /arrowdbltp /arrowdblbt";
+
+pub static CMR7_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMR7",
+    flags: 32,
+    bbox: [-27, -250, 1122, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: 0,
+    stem_v: 79,
+    diff_encoding: CMR7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmr7.flate"),
+};
+
+pub static CMMI7_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMMI7",
+    flags: 4,
+    bbox: [-1, -250, 1171, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 81,
+    diff_encoding: CMMI7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmi7.flate"),
+};
+
+pub static CMMI5_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMMI5",
+    flags: 4,
+    bbox: [37, -250, 1349, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 90,
+    diff_encoding: CMMI7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmi5.flate"),
+};
+
+pub static CMSY7_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMSY7",
+    flags: 4,
+    bbox: [-15, -951, 1251, 782],
+    ascent: 750,
+    descent: -951,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 49,
+    diff_encoding: CMSY7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmsy7.flate"),
+};
+
+pub static CMSY5_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMSY5",
+    flags: 4,
+    bbox: [21, -944, 1448, 791],
+    ascent: 750,
+    descent: -944,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 56,
+    diff_encoding: CMSY7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmsy5.flate"),
+};
+
+pub static CMTT10_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMTT10",
+    flags: 32,
+    bbox: [-4, -233, 537, 696],
+    ascent: 694,
+    descent: -222,
+    cap_height: 611,
+    italic_angle: 0,
+    stem_v: 69,
+    diff_encoding: CMTT10_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmtt10.flate"),
+};
+
+pub static CMTT8_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMTT8",
+    flags: 32,
+    bbox: [-5, -232, 545, 699],
+    ascent: 694,
+    descent: -222,
+    cap_height: 611,
+    italic_angle: 0,
+    stem_v: 76,
+    diff_encoding: CMTT10_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmtt8.flate"),
+};
+
+pub static CMSS10_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMSS10",
+    flags: 32,
+    bbox: [-61, -250, 999, 759],
+    ascent: 750,
+    descent: -250,
+    cap_height: 694,
+    italic_angle: 0,
+    stem_v: 78,
+    diff_encoding: CMR7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmss10.flate"),
+};
+
+pub static CMSS8_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMSS8",
+    flags: 32,
+    bbox: [-65, -250, 1062, 761],
+    ascent: 750,
+    descent: -250,
+    cap_height: 694,
+    italic_angle: 0,
+    stem_v: 87,
+    diff_encoding: CMR7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmss8.flate"),
+};
+
+pub static EUFM10_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "EUFM10",
+    flags: 4,
+    bbox: [-28, -257, 1055, 741],
+    ascent: 741,
+    descent: -250,
+    cap_height: 691,
+    italic_angle: 0,
+    stem_v: 76,
+    diff_encoding: EUFM10_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/eufm10.flate"),
+};
+
+pub static EUFM7_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "EUFM7",
+    flags: 4,
+    bbox: [-1, -257, 1158, 741],
+    ascent: 741,
+    descent: -250,
+    cap_height: 692,
+    italic_angle: 0,
+    stem_v: 82,
+    diff_encoding: EUFM10_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/eufm7.flate"),
+};
+
+pub static EUFM5_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "EUFM5",
+    flags: 4,
+    bbox: [63, -257, 1363, 741],
+    ascent: 741,
+    descent: -251,
+    cap_height: 695,
+    italic_angle: 0,
+    stem_v: 91,
+    diff_encoding: EUFM10_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/eufm5.flate"),
+};
+
+pub static CMMIB10_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMMIB10",
+    flags: 4,
+    bbox: [-15, -250, 1216, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 686,
+    italic_angle: -14,
+    stem_v: 113,
+    diff_encoding: CMMI7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmib10.flate"),
+};
+
+pub static CMMIB7_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMMIB7",
+    flags: 4,
+    bbox: [-7, -250, 1341, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 686,
+    italic_angle: -14,
+    stem_v: 63,
+    diff_encoding: CMMI7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmib7.flate"),
+};
+
+pub static CMMIB5_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMMIB5",
+    flags: 4,
+    bbox: [14, -250, 1537, 751],
+    ascent: 750,
+    descent: -250,
+    cap_height: 686,
+    italic_angle: -14,
+    stem_v: 83,
+    diff_encoding: CMMI7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmib5.flate"),
+};
+
+pub static CMBSY10_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMBSY10",
+    flags: 4,
+    bbox: [-26, -940, 1332, 825],
+    ascent: 750,
+    descent: -940,
+    cap_height: 686,
+    italic_angle: -14,
+    stem_v: 61,
+    diff_encoding: CMSY7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmbsy10.flate"),
+};
+
+pub static CMBSY7_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMBSY7",
+    flags: 4,
+    bbox: [-21, -927, 1489, 837],
+    ascent: 750,
+    descent: -927,
+    cap_height: 686,
+    italic_angle: -14,
+    stem_v: 73,
+    diff_encoding: CMSY7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmbsy7.flate"),
+};
+
+pub static CMBSY5_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMBSY5",
+    flags: 4,
+    bbox: [-13, -914, 1699, 854],
+    ascent: 787,
+    descent: -914,
+    cap_height: 686,
+    italic_angle: -14,
+    stem_v: 86,
+    diff_encoding: CMSY7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmbsy5.flate"),
+};
+
+pub static CMEX7_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMEX7",
+    flags: 4,
+    bbox: [-12, -2951, 1627, 770],
+    ascent: 750,
+    descent: -2951,
+    cap_height: 750,
+    italic_angle: 0,
+    stem_v: 80,
+    diff_encoding: CMEX7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmex7.flate"),
+};
+
+pub static CMCSC10_DIFF_ENC: &str = "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /arrowup /arrowdown /quotesingle /exclamdown /questiondown /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /less /equal /greater /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis";
+
+
+pub static CMCSC10_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMCSC10",
+    flags: 32,
+    bbox: [14, -250, 1077, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: 0,
+    stem_v: 72,
+    diff_encoding: CMCSC10_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmcsc10.flate"),
+};
+
+
+// ---- END GENERATED ----
+
+/// Embedded program and `/Widths` of the faces added for optical sizes and math alphabets
+/// (everything past `Face::AmsB`, plus `Face::Mono`/`MonoBold` = cmtt10 under Computer Modern).
+/// `None` for the faces handled by the original per-face dispatch in `backend_pdf`.
+pub fn extra_cm_program(
+    face: crate::backend::fonts::Face,
+    family: crate::backend::fonts::FontFamily,
+) -> Option<(&'static CmFontProgram, &'static [u16; 128])> {
+    use crate::backend::fonts::{Face, FontFamily, CMTT10_WIDTHS, EXTRA_FACE_WIDTHS};
+    let program: &'static CmFontProgram = match face {
+        Face::Mono | Face::MonoBold if family == FontFamily::ComputerModern => {
+            return Some((&CMTT10_PROGRAM, &CMTT10_WIDTHS.0));
+        }
+        Face::MathSans => &CMSS10_PROGRAM,
+        Face::MathSans8 => &CMSS8_PROGRAM,
+        Face::MathMono8 => &CMTT8_PROGRAM,
+        Face::Fraktur => &EUFM10_PROGRAM,
+        Face::Fraktur7 => &EUFM7_PROGRAM,
+        Face::Fraktur5 => &EUFM5_PROGRAM,
+        Face::BoldMathItalic => &CMMIB10_PROGRAM,
+        Face::BoldMathItalic7 => &CMMIB7_PROGRAM,
+        Face::BoldMathItalic5 => &CMMIB5_PROGRAM,
+        Face::BoldSymbol => &CMBSY10_PROGRAM,
+        Face::BoldSymbol7 => &CMBSY7_PROGRAM,
+        Face::BoldSymbol5 => &CMBSY5_PROGRAM,
+        Face::Extension7 => &CMEX7_PROGRAM,
+        Face::SmallCaps => &CMCSC10_PROGRAM,
+        _ => return None,
+    };
+    Some((program, &EXTRA_FACE_WIDTHS[face as usize - 18].0))
+}
 
 // =========================================================================
 // Compile-time /ToUnicode CMap Translation Tables (128 entries x 2 bytes = 256 bytes)
@@ -253,13 +498,40 @@ const fn make_cmr_to_unicode() -> [u16; 128] {
         map[i] = i as u16;
         i += 1;
     }
-    map[0x27] = 0x2019; // '
-    map[0x60] = 0x2018; // `
-    map[0x7B] = 0x2013; // --
-    map[0x7C] = 0x2014; // ---
-    map[0x7D] = 0x201D; // ''
-    map[0x7E] = 0x007E; // ~
-    map[0x7F] = 0x00A8; // umlaut
+    // OT1 positions that are not ASCII (the font's encoding vector, `OT1_DIFF`).
+    map[0x22] = 0x201D; // quotedblright ('')
+    map[0x27] = 0x2019; // quoteright
+    map[0x3C] = 0x00A1; // exclamdown
+    map[0x3E] = 0x00BF; // questiondown
+    map[0x5C] = 0x201C; // quotedblleft (``)
+    map[0x5E] = 0x02C6; // circumflex
+    map[0x5F] = 0x02D9; // dotaccent
+    map[0x60] = 0x2018; // quoteleft
+    map[0x7B] = 0x2013; // endash (--)
+    map[0x7C] = 0x2014; // emdash (---)
+    map[0x7D] = 0x02DD; // hungarumlaut
+    map[0x7E] = 0x02DC; // tilde
+    map[0x7F] = 0x00A8; // dieresis
+    map
+}
+
+/// ToUnicode of the OT1 typewriter fonts (cmtt): ASCII except for these positions.
+const fn make_cmtt_to_unicode() -> [u16; 128] {
+    let mut map = make_cmr_to_unicode();
+    map[0x0B] = 0x2191; // arrowup
+    map[0x0C] = 0x2193; // arrowdown
+    map[0x0D] = 0x0027; // quotesingle
+    map[0x0E] = 0x00A1; // exclamdown
+    map[0x0F] = 0x00BF; // questiondown
+    map[0x20] = 0x2423; // visible space
+    let mut i = 0x21;
+    while i <= 0x7E {
+        map[i] = i as u16;
+        i += 1;
+    }
+    map[0x27] = 0x2019; // quoteright
+    map[0x60] = 0x2018; // quoteleft
+    map[0x7F] = 0x00A8; // dieresis
     map
 }
 
@@ -551,6 +823,7 @@ const fn make_msbm_to_unicode() -> [u16; 128] {
 }
 
 pub static CMR_TO_UNICODE: [u16; 128] = make_cmr_to_unicode();
+pub static CMTT_TO_UNICODE: [u16; 128] = make_cmtt_to_unicode();
 pub static CMMI_TO_UNICODE: [u16; 128] = make_cmmi_to_unicode();
 pub static CMSY_TO_UNICODE: [u16; 128] = make_cmsy_to_unicode();
 pub static CMEX_TO_UNICODE: [u16; 128] = make_cmex_to_unicode();

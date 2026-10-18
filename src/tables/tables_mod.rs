@@ -15,7 +15,7 @@ pub use tables_parser as parser;
 pub use tables_spec as spec;
 
 pub(crate) use tables_layout::layout_table;
-pub use tables_model::{TableCell, TableData, TableRow, TableRule};
+pub use tables_model::{LtSections, TableCell, TableData, TableRow, TableRule};
 pub(crate) use tables_parser::{parse_longtable, parse_table_float, parse_tabular};
 pub use tables_spec::{ColAlign, ColSpec};
 
@@ -172,7 +172,24 @@ C & D \\
             .expect("Compilation of floating tables with captions should succeed");
         assert!(!pdf.is_empty());
         assert!(pdf.starts_with(b"%PDF-1.4"));
-        let pdf_str = String::from_utf8_lossy(&pdf);
+        let raw = String::from_utf8_lossy(&pdf);
+        // Drop TJ kern displacements (`)<number>(`) so kerned words read as plain text.
+        let mut pdf_str = String::with_capacity(raw.len());
+        let mut rest: &str = &raw;
+        while let Some(pos) = rest.find(')') {
+            pdf_str.push_str(&rest[..pos]);
+            let after = &rest[pos + 1..];
+            let num_len = after
+                .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+                .unwrap_or(after.len());
+            if num_len > 0 && after[num_len..].starts_with('(') {
+                rest = &after[num_len + 1..];
+            } else {
+                pdf_str.push(')');
+                rest = after;
+            }
+        }
+        pdf_str.push_str(rest);
         assert!(pdf_str.contains("Table "));
         assert!(pdf_str.contains("1: "));
         assert!(pdf_str.contains("2: "));

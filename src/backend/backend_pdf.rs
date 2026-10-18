@@ -27,7 +27,9 @@
 //! - [`emit_into_consume`]: Serializes pages while progressively deallocating each page's display list.
 
 use crate::font_metrics::{Face, FontFamily};
-use crate::page_layout::{Marker, Page, Paint, PAGE_H, PAGE_W};
+use crate::backend::backend_shape::{self as shape, Glyph, TextFont};
+use crate::backend::optical::OpticalMaster;
+use crate::page_layout::{Marker, Page, Paint, GLYPH_RUN_COUNT_MASK, GLYPH_RUN_SHAPED, PAGE_H, PAGE_W};
 use crate::Error;
 
 enum PagesSlice<'p, 'a> {
@@ -153,6 +155,7 @@ pub(crate) struct PageStreamAccumulator<'w> {
     offsets: Vec<usize>,
     page_metas: Vec<FinishedPageMeta>,
     doc_used_faces: u32,
+    doc_used_masters: u32,
     cid_set: CidBitSet,
     uncompressed_stream: Vec<u8>,
     compressed_stream: Vec<u8>,
@@ -172,6 +175,7 @@ impl<'w> PageStreamAccumulator<'w> {
             offsets,
             page_metas: Vec::with_capacity(32),
             doc_used_faces: 0,
+            doc_used_masters: 0,
             cid_set: CidBitSet::new(),
             uncompressed_stream: Vec::with_capacity(16384),
             compressed_stream: Vec::with_capacity(16384),
@@ -183,23 +187,11 @@ impl<'w> PageStreamAccumulator<'w> {
     pub(crate) fn push_page(&mut self, page: &mut Page<'_>) {
         self.doc_used_faces |= page.used_faces;
         for op in &page.ops {
-            match op {
-                Paint::GlyphRun { face, .. }
-                | Paint::Marker { face, .. }
-                | Paint::PageNumber { face, .. }
-                | Paint::SectionNumber { face, .. }
-                | Paint::FigureTag { face, .. }
-                | Paint::TableTag { face, .. }
-                | Paint::EquationNumber { face, .. } => {
-                    self.doc_used_faces |= 1 << (*face as u8);
-                }
-                Paint::CaptionTag { .. } | Paint::TableCaptionTag { .. } => {
-                    self.doc_used_faces |= 1 << (Face::Roman as u8);
-                }
-                Paint::VectorGlyph { glyph_id, .. } | Paint::CidGlyphRun { glyph_id, .. } => {
-                    self.cid_set.insert(*glyph_id);
-                }
-                Paint::Rule { .. } => {}
+            let (faces, masters) = op_font_usage(op, page.font_family);
+            self.doc_used_faces |= faces;
+            self.doc_used_masters |= masters;
+            if let Paint::VectorGlyph { glyph_id, .. } | Paint::CidGlyphRun { glyph_id, .. } = op {
+                self.cid_set.insert(*glyph_id);
             }
         }
 
@@ -256,6 +248,7 @@ impl<'w> PageStreamAccumulator<'w> {
             &self.page_metas,
             font_family,
             self.doc_used_faces,
+            self.doc_used_masters,
             &math_cids,
             self.enable_compression,
         )?;
@@ -275,6 +268,8 @@ struct MathFontIds {
 #[derive(Clone, Copy)]
 struct TounicodeIds {
     ot1: u32,
+    /// The OT1 typewriter map (cmtt).
+    ot1tt: u32,
     oml: u32,
     oms: u32,
     omx: u32,
@@ -282,18 +277,21 @@ struct TounicodeIds {
     msbm: u32,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_streaming_pdf(
     destination_buffer: &mut Vec<u8>,
     offsets: Vec<usize>,
     metas: &[FinishedPageMeta],
     font_family: FontFamily,
     doc_used_faces: u32,
+    doc_used_masters: u32,
     math_cids: &[u16],
     enable_compression: bool,
 ) -> Result<(), Error> {
     let total_pages = metas.len().max(1);
     let mut doc_used_faces = doc_used_faces;
-    if doc_used_faces == 0 {
+    // A document without text still gets one font resource.
+    if doc_used_faces == 0 && doc_used_masters == 0 {
         doc_used_faces = 1 << (Face::Roman as u8);
     }
     let has_math_font = !math_cids.is_empty();
@@ -303,9 +301,9 @@ fn finish_streaming_pdf(
     let first_page_dict_id = 3 + total_pages as u32;
 
     // Allocate sequential IDs only for used fonts
-    let mut font_object_ids = [0u32; 18];
-    let mut font_descriptor_ids = [0u32; 18];
-    let mut font_file_ids = [0u32; 18];
+    let mut font_object_ids = [0u32; Face::COUNT];
+    let mut font_descriptor_ids = [0u32; Face::COUNT];
+    let mut font_file_ids = [0u32; Face::COUNT];
     let mut next_font_id = 3 + 2 * total_pages as u32;
 
     for (face_idx, obj_id) in font_object_ids.iter_mut().enumerate() {
@@ -328,7 +326,8 @@ fn finish_streaming_pdf(
                         | Face::AmsA
                         | Face::AmsB
                 ))
-                || face == Face::Extension;
+                || matches!(face, Face::Extension | Face::AmsA | Face::AmsB)
+                || crate::backend::cm_fonts::extra_cm_program(face, font_family).is_some();
             *obj_id = next_font_id;
             next_font_id += 1;
             if is_cm_embedded {
@@ -339,54 +338,47 @@ fn finish_streaming_pdf(
         }
     }
 
-    let mut tounicode_ids = TounicodeIds { ot1: 0, oml: 0, oms: 0, omx: 0, msam: 0, msbm: 0 };
+    let master_ids = MasterFontIds::allocate(doc_used_masters, font_family, &mut next_font_id);
+
+    let mut tounicode_ids = TounicodeIds { ot1: 0, ot1tt: 0, oml: 0, oms: 0, omx: 0, msam: 0, msbm: 0 };
     if font_family == FontFamily::ComputerModern {
-        let has_ot1 = (doc_used_faces
-            & ((1 << Face::Roman as u8)
-                | (1 << Face::Bold as u8)
-                | (1 << Face::Italic as u8)
-                | (1 << Face::Roman7 as u8)
-                | (1 << Face::Roman5 as u8)))
-            != 0;
+        let has_ot1 = (doc_used_faces & Face::OT1_MASK & !Face::OT1TT_MASK) != 0 || master_ids.used & !OpticalMaster::TT_MASK != 0;
         if has_ot1 {
             tounicode_ids.ot1 = next_font_id;
             next_font_id += 1;
         }
+        let has_tt = (doc_used_faces & Face::OT1TT_MASK) != 0 || master_ids.used & OpticalMaster::TT_MASK != 0;
+        if has_tt {
+            tounicode_ids.ot1tt = next_font_id;
+            next_font_id += 1;
+        }
 
-        let has_oml = (doc_used_faces
-            & ((1 << Face::MathItalic as u8)
-                | (1 << Face::MathItalic7 as u8)
-                | (1 << Face::MathItalic5 as u8)))
-            != 0;
+        let has_oml = (doc_used_faces & Face::OML_MASK) != 0;
         if has_oml {
             tounicode_ids.oml = next_font_id;
             next_font_id += 1;
         }
 
-        let has_oms = (doc_used_faces
-            & ((1 << Face::Symbol as u8)
-                | (1 << Face::Symbol7 as u8)
-                | (1 << Face::Symbol5 as u8)))
-            != 0;
+        let has_oms = (doc_used_faces & Face::OMS_MASK) != 0;
         if has_oms {
             tounicode_ids.oms = next_font_id;
             next_font_id += 1;
         }
-
-        let has_msam = (doc_used_faces & (1 << Face::AmsA as u8)) != 0;
-        if has_msam {
-            tounicode_ids.msam = next_font_id;
-            next_font_id += 1;
-        }
-
-        let has_msbm = (doc_used_faces & (1 << Face::AmsB as u8)) != 0;
-        if has_msbm {
-            tounicode_ids.msbm = next_font_id;
-            next_font_id += 1;
-        }
     }
 
-    let has_omx = (doc_used_faces & (1 << Face::Extension as u8)) != 0;
+    let has_msam = (doc_used_faces & (1 << Face::AmsA as u8)) != 0;
+    if has_msam {
+        tounicode_ids.msam = next_font_id;
+        next_font_id += 1;
+    }
+
+    let has_msbm = (doc_used_faces & (1 << Face::AmsB as u8)) != 0;
+    if has_msbm {
+        tounicode_ids.msbm = next_font_id;
+        next_font_id += 1;
+    }
+
+    let has_omx = (doc_used_faces & Face::OMX_MASK) != 0;
     if has_omx {
         tounicode_ids.omx = next_font_id;
         next_font_id += 1;
@@ -451,6 +443,7 @@ fn finish_streaming_pdf(
             font_res_bytes.extend_from_slice(b" 0 R");
         }
     }
+    master_ids.write_resources(&mut font_res_bytes);
     if let Some(ref m) = math_ids {
         font_res_bytes.extend_from_slice(b" /F_Math ");
         write_u64(&mut font_res_bytes, m.font_id as u64);
@@ -466,9 +459,9 @@ fn finish_streaming_pdf(
             w.write_all(b"<< /Type /Page /Parent ");
             w.write_ref(pages_id);
             w.write_all(b" /MediaBox [0 0 ");
-            w.write_num(page_w);
+            w.write_num(page_w * crate::config::BP_PER_PT);
             w.write_all(b" ");
-            w.write_num(page_h);
+            w.write_num(page_h * crate::config::BP_PER_PT);
             w.write_all(b"] /Resources << /Font <<");
             w.write_all(&font_res_bytes);
             w.write_all(b" >> >> /Contents ");
@@ -491,6 +484,7 @@ fn finish_streaming_pdf(
         &mut uncompressed_stream,
         enable_compression,
     );
+    master_ids.emit(&mut writer, tounicode_ids.ot1, tounicode_ids.ot1tt);
 
     writer.finish(catalog_id)
 }
@@ -505,38 +499,27 @@ fn emit_into_internal(
     let total_pages = pages.len().max(1);
 
     let mut doc_used_faces = 0u32;
+    let mut doc_used_masters = 0u32;
     let mut cid_set = CidBitSet::new();
     for page in pages.as_slice().iter().take(total_pages) {
         doc_used_faces |= page.used_faces;
         for op in &page.ops {
-            match op {
-                Paint::GlyphRun { face, .. }
-                | Paint::Marker { face, .. }
-                | Paint::PageNumber { face, .. }
-                | Paint::SectionNumber { face, .. }
-                | Paint::FigureTag { face, .. }
-                | Paint::TableTag { face, .. }
-                | Paint::EquationNumber { face, .. } => {
-                    doc_used_faces |= 1 << (*face as u8);
-                }
-                Paint::CaptionTag { .. } | Paint::TableCaptionTag { .. } => {
-                    doc_used_faces |= 1 << (Face::Roman as u8);
-                }
-                Paint::VectorGlyph { glyph_id, .. } | Paint::CidGlyphRun { glyph_id, .. } => {
-                    cid_set.insert(*glyph_id);
-                }
-                Paint::Rule { .. } => {}
+            let (faces, masters) = op_font_usage(op, page.font_family);
+            doc_used_faces |= faces;
+            doc_used_masters |= masters;
+            if let Paint::VectorGlyph { glyph_id, .. } | Paint::CidGlyphRun { glyph_id, .. } = op {
+                cid_set.insert(*glyph_id);
             }
         }
     }
     let math_cids = cid_set.to_sorted_vec();
     let has_math_font = !math_cids.is_empty();
 
-    if doc_used_faces == 0 {
+    if doc_used_faces == 0 && doc_used_masters == 0 {
         doc_used_faces = 1 << (Face::Roman as u8);
     }
     let font_family = pages.as_slice().first().map(|p| p.font_family).unwrap_or_default();
-    let num_fonts = doc_used_faces.count_ones() as usize;
+    let num_fonts = (doc_used_faces.count_ones() + doc_used_masters.count_ones()) as usize;
 
     let mut writer = Writer::new(destination_buffer, total_pages, num_fonts * 3 + 12);
     writer.write_all(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
@@ -546,9 +529,9 @@ fn emit_into_internal(
     let first_page_id = 3u32;
     let first_content_id = first_page_id + total_pages as u32;
 
-    let mut font_object_ids = [0u32; 18];
-    let mut font_descriptor_ids = [0u32; 18];
-    let mut font_file_ids = [0u32; 18];
+    let mut font_object_ids = [0u32; Face::COUNT];
+    let mut font_descriptor_ids = [0u32; Face::COUNT];
+    let mut font_file_ids = [0u32; Face::COUNT];
     let mut next_font_id = first_content_id + total_pages as u32;
     for (face_idx, obj_id) in font_object_ids.iter_mut().enumerate() {
         if (doc_used_faces & (1 << face_idx)) != 0 {
@@ -570,7 +553,8 @@ fn emit_into_internal(
                         | Face::AmsA
                         | Face::AmsB
                 ))
-                || face == Face::Extension;
+                || matches!(face, Face::Extension | Face::AmsA | Face::AmsB)
+                || crate::backend::cm_fonts::extra_cm_program(face, font_family).is_some();
             *obj_id = next_font_id;
             next_font_id += 1;
             if is_cm_embedded {
@@ -581,54 +565,47 @@ fn emit_into_internal(
         }
     }
 
-    let mut tounicode_ids = TounicodeIds { ot1: 0, oml: 0, oms: 0, omx: 0, msam: 0, msbm: 0 };
+    let master_ids = MasterFontIds::allocate(doc_used_masters, font_family, &mut next_font_id);
+
+    let mut tounicode_ids = TounicodeIds { ot1: 0, ot1tt: 0, oml: 0, oms: 0, omx: 0, msam: 0, msbm: 0 };
     if font_family == FontFamily::ComputerModern {
-        let has_ot1 = (doc_used_faces
-            & ((1 << Face::Roman as u8)
-                | (1 << Face::Bold as u8)
-                | (1 << Face::Italic as u8)
-                | (1 << Face::Roman7 as u8)
-                | (1 << Face::Roman5 as u8)))
-            != 0;
+        let has_ot1 = (doc_used_faces & Face::OT1_MASK & !Face::OT1TT_MASK) != 0 || master_ids.used & !OpticalMaster::TT_MASK != 0;
         if has_ot1 {
             tounicode_ids.ot1 = next_font_id;
             next_font_id += 1;
         }
+        let has_tt = (doc_used_faces & Face::OT1TT_MASK) != 0 || master_ids.used & OpticalMaster::TT_MASK != 0;
+        if has_tt {
+            tounicode_ids.ot1tt = next_font_id;
+            next_font_id += 1;
+        }
 
-        let has_oml = (doc_used_faces
-            & ((1 << Face::MathItalic as u8)
-                | (1 << Face::MathItalic7 as u8)
-                | (1 << Face::MathItalic5 as u8)))
-            != 0;
+        let has_oml = (doc_used_faces & Face::OML_MASK) != 0;
         if has_oml {
             tounicode_ids.oml = next_font_id;
             next_font_id += 1;
         }
 
-        let has_oms = (doc_used_faces
-            & ((1 << Face::Symbol as u8)
-                | (1 << Face::Symbol7 as u8)
-                | (1 << Face::Symbol5 as u8)))
-            != 0;
+        let has_oms = (doc_used_faces & Face::OMS_MASK) != 0;
         if has_oms {
             tounicode_ids.oms = next_font_id;
             next_font_id += 1;
         }
-
-        let has_msam = (doc_used_faces & (1 << Face::AmsA as u8)) != 0;
-        if has_msam {
-            tounicode_ids.msam = next_font_id;
-            next_font_id += 1;
-        }
-
-        let has_msbm = (doc_used_faces & (1 << Face::AmsB as u8)) != 0;
-        if has_msbm {
-            tounicode_ids.msbm = next_font_id;
-            next_font_id += 1;
-        }
     }
 
-    let has_omx = (doc_used_faces & (1 << Face::Extension as u8)) != 0;
+    let has_msam = (doc_used_faces & (1 << Face::AmsA as u8)) != 0;
+    if has_msam {
+        tounicode_ids.msam = next_font_id;
+        next_font_id += 1;
+    }
+
+    let has_msbm = (doc_used_faces & (1 << Face::AmsB as u8)) != 0;
+    if has_msbm {
+        tounicode_ids.msbm = next_font_id;
+        next_font_id += 1;
+    }
+
+    let has_omx = (doc_used_faces & Face::OMX_MASK) != 0;
     if has_omx {
         tounicode_ids.omx = next_font_id;
         next_font_id += 1;
@@ -689,6 +666,7 @@ fn emit_into_internal(
             font_res_bytes.extend_from_slice(b" 0 R");
         }
     }
+    master_ids.write_resources(&mut font_res_bytes);
     if let Some(ref m) = math_ids {
         font_res_bytes.extend_from_slice(b" /F_Math ");
         write_u64(&mut font_res_bytes, m.font_id as u64);
@@ -704,9 +682,9 @@ fn emit_into_internal(
             w.write_all(b"<< /Type /Page /Parent ");
             w.write_ref(pages_id);
             w.write_all(b" /MediaBox [0 0 ");
-            w.write_num(page_width);
+            w.write_num(page_width * crate::config::BP_PER_PT);
             w.write_all(b" ");
-            w.write_num(page_height);
+            w.write_num(page_height * crate::config::BP_PER_PT);
             w.write_all(b"] /Resources << /Font <<");
             w.write_all(&font_res_bytes);
             w.write_all(b" >> >> /Contents ");
@@ -825,17 +803,19 @@ fn emit_into_internal(
         &mut uncompressed_stream,
         enable_compression,
     );
+    master_ids.emit(&mut writer, tounicode_ids.ot1, tounicode_ids.ot1tt);
 
     writer.finish(catalog_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_font_objects(
     writer: &mut Writer,
     doc_used_faces: u32,
     font_family: FontFamily,
-    font_object_ids: &[u32; 18],
-    font_descriptor_ids: &[u32; 18],
-    font_file_ids: &[u32; 18],
+    font_object_ids: &[u32; Face::COUNT],
+    font_descriptor_ids: &[u32; Face::COUNT],
+    font_file_ids: &[u32; Face::COUNT],
     tounicode_ids: TounicodeIds,
     math_ids: Option<MathFontIds>,
     math_cids: &[u16],
@@ -843,6 +823,7 @@ fn emit_font_objects(
     enable_compression: bool,
 ) {
     let ot1_tounicode_id = tounicode_ids.ot1;
+    let tt_tounicode_id = tounicode_ids.ot1tt;
     let oml_tounicode_id = tounicode_ids.oml;
     let oms_tounicode_id = tounicode_ids.oms;
     let omx_tounicode_id = tounicode_ids.omx;
@@ -852,6 +833,28 @@ fn emit_font_objects(
     for (face_idx, &id) in font_object_ids.iter().enumerate() {
         if (doc_used_faces & (1 << face_idx)) != 0 {
             let face = Face::from_u8(face_idx as u8);
+            if let Some((program, widths)) = crate::backend::cm_fonts::extra_cm_program(face, font_family) {
+                let bit = face.bit();
+                let tounicode = if bit & Face::OML_MASK != 0 {
+                    oml_tounicode_id
+                } else if bit & Face::OMS_MASK != 0 {
+                    oms_tounicode_id
+                } else if bit & Face::OMX_MASK != 0 {
+                    omx_tounicode_id
+                } else if bit & Face::OT1TT_MASK != 0 {
+                    tt_tounicode_id
+                } else {
+                    ot1_tounicode_id
+                };
+                let ids = CmFontObjectIds {
+                    font_id: id,
+                    descriptor_id: font_descriptor_ids[face_idx],
+                    file_id: font_file_ids[face_idx],
+                    tounicode_id: (tounicode > 0).then_some(tounicode),
+                };
+                write_embedded_cm_font(writer, ids, program, widths, false);
+                continue;
+            }
             if font_family == FontFamily::ComputerModern {
                 let ids = CmFontObjectIds {
                     font_id: id,
@@ -1026,8 +1029,33 @@ fn emit_font_objects(
                             false,
                         );
                     }
+                    Face::AmsA | Face::AmsB => {
+                        let (program, widths, tounicode) = if face == Face::AmsA {
+                            (
+                                &crate::backend::cm_fonts::MSAM10_PROGRAM,
+                                &crate::backend::backend_fonts::MSAM10_WIDTHS,
+                                msam_tounicode_id,
+                            )
+                        } else {
+                            (
+                                &crate::backend::cm_fonts::MSBM10_PROGRAM,
+                                &crate::backend::backend_fonts::MSBM10_WIDTHS,
+                                msbm_tounicode_id,
+                            )
+                        };
+                        let ids = CmFontObjectIds {
+                            font_id: id,
+                            descriptor_id: font_descriptor_ids[face_idx],
+                            file_id: font_file_ids[face_idx],
+                            tounicode_id: (tounicode > 0).then_some(tounicode),
+                        };
+                        write_embedded_cm_font(writer, ids, program, widths, false);
+                    }
                     Face::Symbol => write_font(writer, id, "Symbol", false),
                     Face::Dingbats => write_font(writer, id, "ZapfDingbats", false),
+                    _ if shape::needs_ligature_encoding(font_family, face) => {
+                        write_text_font_with_ligatures(writer, id, face.pdf_name(font_family))
+                    }
                     _ => write_font(writer, id, face.pdf_name(font_family), true),
                 }
             }
@@ -1036,6 +1064,9 @@ fn emit_font_objects(
 
     if ot1_tounicode_id > 0 {
         emit_tounicode_cmap(writer, ot1_tounicode_id, &crate::backend::cm_fonts::CMR_TO_UNICODE, uncompressed_stream);
+    }
+    if tt_tounicode_id > 0 {
+        emit_tounicode_cmap(writer, tt_tounicode_id, &crate::backend::cm_fonts::CMTT_TO_UNICODE, uncompressed_stream);
     }
     if oml_tounicode_id > 0 {
         emit_tounicode_cmap(writer, oml_tounicode_id, &crate::backend::cm_fonts::CMMI_TO_UNICODE, uncompressed_stream);
@@ -1145,6 +1176,91 @@ fn emit_font_objects(
     }
 }
 
+/// The font an op's text is set in, as `(face bit, master bit)`: a text op set in a
+/// design-size master uses only that master, so the face's 10pt font is not embedded for it.
+#[inline]
+fn op_font_usage(op: &Paint, family: FontFamily) -> (u32, u32) {
+    if let Some(m) = text_op_master(op, family) {
+        return (0, 1 << m as u8);
+    }
+    let face = match op {
+        Paint::GlyphRun { face, .. }
+        | Paint::Marker { face, .. }
+        | Paint::PageNumber { face, .. }
+        | Paint::SectionNumber { face, .. }
+        | Paint::FigureTag { face, .. }
+        | Paint::TableTag { face, .. }
+        | Paint::EquationNumber { face, .. } => *face,
+        Paint::CaptionTag { .. } | Paint::TableCaptionTag { .. } => Face::Roman,
+        _ => return (0, 0),
+    };
+    (face.bit(), 0)
+}
+
+/// Design-size master of a text paint op. Math glyph runs (not shaped) keep the font their
+/// TFM metrics came from.
+#[inline]
+fn text_op_master(op: &Paint, family: FontFamily) -> Option<OpticalMaster> {
+    let (face, size) = match op {
+        Paint::GlyphRun { face, size, part_count, .. } if part_count & GLYPH_RUN_SHAPED != 0 => (*face, *size),
+        Paint::Marker { face, size, .. }
+        | Paint::PageNumber { face, size, .. }
+        | Paint::SectionNumber { face, size, .. }
+        | Paint::FigureTag { face, size, .. }
+        | Paint::TableTag { face, size, .. }
+        | Paint::EquationNumber { face, size, .. } => (*face, *size),
+        Paint::CaptionTag { size, .. } | Paint::TableCaptionTag { size, .. } => (Face::Roman, *size),
+        _ => return None,
+    };
+    OpticalMaster::select(family, face, size)
+}
+
+/// Object ids of the embedded design-size masters a document uses.
+struct MasterFontIds {
+    used: u32,
+    first_id: u32,
+}
+
+impl MasterFontIds {
+    /// Reserves three objects (font, descriptor, program) per used master.
+    fn allocate(used: u32, family: FontFamily, next_id: &mut u32) -> Self {
+        let used = if family == FontFamily::ComputerModern { used } else { 0 };
+        let first_id = *next_id;
+        *next_id += 3 * used.count_ones();
+        Self { used, first_id }
+    }
+
+    fn ids(&self) -> impl Iterator<Item = (OpticalMaster, u32)> + '_ {
+        (0..OpticalMaster::COUNT as u8)
+            .filter(|i| self.used & (1 << i) != 0)
+            .enumerate()
+            .map(|(k, i)| (OpticalMaster::from_u8(i), self.first_id + 3 * k as u32))
+    }
+
+    fn write_resources(&self, out: &mut Vec<u8>) {
+        for (m, id) in self.ids() {
+            out.push(b' ');
+            out.extend_from_slice(m.resource().as_bytes());
+            out.push(b' ');
+            write_u64(out, id as u64);
+            out.extend_from_slice(b" 0 R");
+        }
+    }
+
+    fn emit(&self, writer: &mut Writer, ot1_tounicode_id: u32, tt_tounicode_id: u32) {
+        for (m, id) in self.ids() {
+            let tu = if m.is_typewriter() { tt_tounicode_id } else { ot1_tounicode_id };
+            let ids = CmFontObjectIds {
+                font_id: id,
+                descriptor_id: id + 1,
+                file_id: id + 2,
+                tounicode_id: (tu > 0).then_some(tu),
+            };
+            write_embedded_cm_font(writer, ids, m.program(), m.widths(), false);
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct CmFontObjectIds {
     font_id: u32,
@@ -1164,7 +1280,8 @@ fn build_widths_block(widths: &[u16; 128]) -> Vec<u8> {
     b
 }
 
-fn get_cached_cm_widths_block(widths: &[u16; 128]) -> &'static [u8] {
+fn get_cached_cm_widths_block(widths: &[u16; 128]) -> std::borrow::Cow<'static, [u8]> {
+    use std::borrow::Cow;
     use std::sync::OnceLock;
     use crate::backend::backend_fonts::*;
     static CMR10_W: OnceLock<Vec<u8>> = OnceLock::new();
@@ -1182,7 +1299,7 @@ fn get_cached_cm_widths_block(widths: &[u16; 128]) -> &'static [u8] {
     static MSAM10_W: OnceLock<Vec<u8>> = OnceLock::new();
     static MSBM10_W: OnceLock<Vec<u8>> = OnceLock::new();
 
-    if std::ptr::eq(widths, &CMR10_WIDTHS.0) {
+    let block: &'static Vec<u8> = if std::ptr::eq(widths, &CMR10_WIDTHS.0) {
         CMR10_W.get_or_init(|| build_widths_block(widths))
     } else if std::ptr::eq(widths, &CMBX10_WIDTHS.0) {
         CMBX10_W.get_or_init(|| build_widths_block(widths))
@@ -1211,9 +1328,10 @@ fn get_cached_cm_widths_block(widths: &[u16; 128]) -> &'static [u8] {
     } else if std::ptr::eq(widths, &MSBM10_WIDTHS.0) {
         MSBM10_W.get_or_init(|| build_widths_block(widths))
     } else {
-        static FALLBACK: OnceLock<Vec<u8>> = OnceLock::new();
-        FALLBACK.get_or_init(|| build_widths_block(widths))
-    }
+        // Cold path (once per face per document): the optical-size / math-alphabet faces.
+        return Cow::Owned(build_widths_block(widths));
+    };
+    Cow::Borrowed(block.as_slice())
 }
 
 fn build_descriptor_head(program: &crate::backend::cm_fonts::CmFontProgram) -> Vec<u8> {
@@ -1244,7 +1362,10 @@ fn build_descriptor_head(program: &crate::backend::cm_fonts::CmFontProgram) -> V
     b
 }
 
-fn get_cached_cm_descriptor_head(program: &crate::backend::cm_fonts::CmFontProgram) -> &'static [u8] {
+fn get_cached_cm_descriptor_head(
+    program: &crate::backend::cm_fonts::CmFontProgram,
+) -> std::borrow::Cow<'static, [u8]> {
+    use std::borrow::Cow;
     use std::sync::OnceLock;
     static CMR10_D: OnceLock<Vec<u8>> = OnceLock::new();
     static CMBX10_D: OnceLock<Vec<u8>> = OnceLock::new();
@@ -1260,9 +1381,8 @@ fn get_cached_cm_descriptor_head(program: &crate::backend::cm_fonts::CmFontProgr
     static CMSY5_D: OnceLock<Vec<u8>> = OnceLock::new();
     static MSAM10_D: OnceLock<Vec<u8>> = OnceLock::new();
     static MSBM10_D: OnceLock<Vec<u8>> = OnceLock::new();
-    static FALLBACK: OnceLock<Vec<u8>> = OnceLock::new();
 
-    match program.name {
+    let head: &'static Vec<u8> = match program.name {
         "CMR10" => CMR10_D.get_or_init(|| build_descriptor_head(program)),
         "CMBX10" => CMBX10_D.get_or_init(|| build_descriptor_head(program)),
         "CMTI10" => CMTI10_D.get_or_init(|| build_descriptor_head(program)),
@@ -1277,8 +1397,10 @@ fn get_cached_cm_descriptor_head(program: &crate::backend::cm_fonts::CmFontProgr
         "CMSY5" => CMSY5_D.get_or_init(|| build_descriptor_head(program)),
         "MSAM10" => MSAM10_D.get_or_init(|| build_descriptor_head(program)),
         "MSBM10" => MSBM10_D.get_or_init(|| build_descriptor_head(program)),
-        _ => FALLBACK.get_or_init(|| build_descriptor_head(program)),
-    }
+        // Cold path (once per face per document): the optical-size / math-alphabet faces.
+        _ => return Cow::Owned(build_descriptor_head(program)),
+    };
+    Cow::Borrowed(head.as_slice())
 }
 
 fn write_embedded_cm_font(
@@ -1294,7 +1416,7 @@ fn write_embedded_cm_font(
         w.write_all(program.name.as_bytes());
         w.write_all(b" /FontDescriptor ");
         w.write_ref(ids.descriptor_id);
-        w.write_all(widths_block);
+        w.write_all(&widths_block);
         if with_encoding {
             w.write_all(b" /Encoding /WinAnsiEncoding");
         } else if !program.diff_encoding.is_empty() {
@@ -1311,7 +1433,7 @@ fn write_embedded_cm_font(
 
     let desc_head = get_cached_cm_descriptor_head(program);
     writer.obj(ids.descriptor_id, |w| {
-        w.write_all(desc_head);
+        w.write_all(&desc_head);
         w.write_ref(ids.file_id);
         w.write_all(b" >>\n");
     });
@@ -1337,6 +1459,20 @@ fn write_font(w: &mut Writer, id: u32, name: &str, with_encoding: bool) {
         } else {
             w.write_all(b" >>\n");
         }
+    });
+}
+
+/// Base-14 text font whose WinAnsi encoding gains the `fi`/`fl` ligature glyphs in two
+/// undefined slots, so shaped text can address them.
+fn write_text_font_with_ligatures(w: &mut Writer, id: u32, name: &str) {
+    w.obj(id, |w| {
+        w.write_all(b"<< /Type /Font /Subtype /Type1 /BaseFont /");
+        w.write_all(name.as_bytes());
+        w.write_all(b" /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [ ");
+        w.write_int(crate::backend::backend_afm_ligkern::WINANSI_FI as i32);
+        w.write_all(b" /fi ");
+        w.write_int(crate::backend::backend_afm_ligkern::WINANSI_FL as i32);
+        w.write_all(b" /fl ] >> >>\n");
     });
 }
 
@@ -1385,12 +1521,30 @@ fn build_tounicode_cmap_bytes(map: &[u16; 128]) -> Vec<u8> {
         s.extend_from_slice(b" beginbfchar\n");
         for j in 0..chunk {
             let (src, dst) = entries[i + j];
-            let mut hex_buf = [0u8; 12];
+            let mut hex_buf = [0u8; 6];
             write_hex2(&mut hex_buf[0..4], src);
-            hex_buf[4] = b' ';
-            write_hex4(&mut hex_buf[5..11], dst);
-            hex_buf[11] = b'\n';
-            s.extend_from_slice(&hex_buf);
+            s.extend_from_slice(&hex_buf[..4]);
+            s.extend_from_slice(b" <");
+            // Ligatures extract as their letters (U+FB00-FB04 decomposed), as pdfTeX's
+            // glyph names do.
+            let letters: &[u8] = match dst {
+                0xFB00 => b"ff",
+                0xFB01 => b"fi",
+                0xFB02 => b"fl",
+                0xFB03 => b"ffi",
+                0xFB04 => b"ffl",
+                _ => &[],
+            };
+            if letters.is_empty() {
+                write_hex4(&mut hex_buf, dst);
+                s.extend_from_slice(&hex_buf[1..5]);
+            } else {
+                for &c in letters {
+                    write_hex4(&mut hex_buf, c as u16);
+                    s.extend_from_slice(&hex_buf[1..5]);
+                }
+            }
+            s.extend_from_slice(b">\n");
         }
         s.extend_from_slice(b"endbfchar\n");
         i += chunk;
@@ -1403,6 +1557,7 @@ fn build_tounicode_cmap_bytes(map: &[u16; 128]) -> Vec<u8> {
 fn get_cached_tounicode_cmap(map: &[u16; 128]) -> &'static [u8] {
     use std::sync::OnceLock;
     static OT1_CACHE: OnceLock<Vec<u8>> = OnceLock::new();
+    static OT1TT_CACHE: OnceLock<Vec<u8>> = OnceLock::new();
     static OML_CACHE: OnceLock<Vec<u8>> = OnceLock::new();
     static OMS_CACHE: OnceLock<Vec<u8>> = OnceLock::new();
     static OMX_CACHE: OnceLock<Vec<u8>> = OnceLock::new();
@@ -1411,6 +1566,8 @@ fn get_cached_tounicode_cmap(map: &[u16; 128]) -> &'static [u8] {
 
     if std::ptr::eq(map, &crate::backend::cm_fonts::CMR_TO_UNICODE) {
         OT1_CACHE.get_or_init(|| build_tounicode_cmap_bytes(map))
+    } else if std::ptr::eq(map, &crate::backend::cm_fonts::CMTT_TO_UNICODE) {
+        OT1TT_CACHE.get_or_init(|| build_tounicode_cmap_bytes(map))
     } else if std::ptr::eq(map, &crate::backend::cm_fonts::CMMI_TO_UNICODE) {
         OML_CACHE.get_or_init(|| build_tounicode_cmap_bytes(map))
     } else if std::ptr::eq(map, &crate::backend::cm_fonts::CMSY_TO_UNICODE) {
@@ -1585,6 +1742,97 @@ fn fallback_unicode_for_glyph(gid: u16) -> Option<u32> {
     }
 }
 
+/// Writes `word` followed by an interword space inside an open PDF string. With
+/// `space_units` set (inside a `TJ` array), the space is a horizontal displacement
+/// of that many 1/1000 em; otherwise it is a literal space character.
+#[inline]
+fn write_tag_word_space(s: &mut Vec<u8>, word: &[u8], space_units: Option<u32>) {
+    s.extend_from_slice(word);
+    match space_units {
+        Some(u) => {
+            s.extend_from_slice(b") -");
+            write_u64(s, u as u64);
+            s.extend_from_slice(b" (");
+        }
+        None => s.push(b' '),
+    }
+}
+
+/// Emits a body-text run with each word shaped by its font's ligature/kern program.
+///
+/// Ligatures become their glyph codes; implicit kerns become `TJ` displacements (in 1/1000
+/// text-space units, negated: a negative kern moves the next glyph left). Runs without kerns
+/// keep the plain `Tj` form. The resulting advance equals `TextFont::width_units` per word,
+/// which is what layout measured.
+fn emit_shaped_glyph_run(s: &mut Vec<u8>, parts: &[&str], font: &TextFont, face: Face) {
+    let open = s.len();
+    s.extend_from_slice(b"[(");
+    let mut kerned = false;
+    for &p in parts {
+        if p == " " {
+            s.push(b' ');
+            continue;
+        }
+        font.shape(p, |g, kern| {
+            match g {
+                Glyph::Code(code) => push_string_byte(s, code),
+                Glyph::Raw(c) => {
+                    let mut buf = [0u8; 4];
+                    pdf_escape(s, c.encode_utf8(&mut buf), face);
+                }
+            }
+            if kern != 0 {
+                s.push(b')');
+                write_tj_kern(s, kern);
+                s.push(b'(');
+                kerned = true;
+            }
+        });
+    }
+    if kerned {
+        s.extend_from_slice(b")] TJ\n");
+    } else {
+        // No kerns: drop the array bracket (one byte, so the stream needs no shifting).
+        s[open] = b' ';
+        s.extend_from_slice(b") Tj\n");
+    }
+}
+
+/// Writes a TJ displacement for a kern of `kern` 1/10000 em: `-kern / 10` thousandths of
+/// text space, with at most one decimal (integer formatting, no float round trip).
+#[inline]
+fn write_tj_kern(out: &mut Vec<u8>, kern: i32) {
+    let v = -kern;
+    if v < 0 {
+        out.push(b'-');
+    }
+    let a = v.unsigned_abs();
+    write_u64(out, (a / 10) as u64);
+    let frac = (a % 10) as u8;
+    if frac != 0 {
+        out.push(b'.');
+        out.push(b'0' + frac);
+    }
+}
+
+/// Writes one glyph code into a PDF literal string, escaping delimiters and non-printables.
+#[inline(always)]
+fn push_string_byte(out: &mut Vec<u8>, b: u8) {
+    match b {
+        b'\\' | b'(' | b')' => {
+            out.push(b'\\');
+            out.push(b);
+        }
+        32..=126 => out.push(b),
+        _ => {
+            out.push(b'\\');
+            out.push(b'0' + ((b >> 6) & 7));
+            out.push(b'0' + ((b >> 3) & 7));
+            out.push(b'0' + (b & 7));
+        }
+    }
+}
+
 #[inline]
 fn emit_glyph_run_parts(s: &mut Vec<u8>, parts: &[&str], face: Face) {
     for &p in parts {
@@ -1597,8 +1845,10 @@ fn emit_glyph_run_parts(s: &mut Vec<u8>, parts: &[&str], face: Face) {
 }
 
 fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>, has_math_font: bool) {
-    s.extend_from_slice(b"BT\n");
+    // Layout coordinates are TeX points; one transform maps them to PDF big points.
+    s.extend_from_slice(b"0.996264 0 0 0.996264 0 0 cm\nBT\n");
     let mut last_face: Option<Face> = None;
+    let mut last_master: Option<OpticalMaster> = None;
     let mut last_size: Option<f32> = None;
     let mut last_word_spacing: Option<f32> = None;
     let mut last_x = 0.0f32;
@@ -1607,6 +1857,11 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>, has_math_font: bool) {
 
     let mut in_text = true;
     for op in &page.ops {
+        if let Paint::Color { color } = op {
+            // Colour operators are legal inside and outside text objects.
+            write_color(s, *color);
+            continue;
+        }
         if let Paint::Rule { x, y, w, h, fill } = op {
             if in_text {
                 if last_word_spacing.is_some_and(|w| w != 0.0) {
@@ -1719,10 +1974,10 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>, has_math_font: bool) {
             | Paint::EquationNumber {
                 x, y, face, size, ..
             } => (*x, *y, *face, *size, 0.0),
-            Paint::CaptionTag { x, y, .. } | Paint::TableCaptionTag { x, y, .. } => {
-                (*x, *y, Face::Roman, crate::page_layout::FONT_SIZE, 0.0)
+            Paint::CaptionTag { x, y, size, .. } | Paint::TableCaptionTag { x, y, size, .. } => {
+                (*x, *y, Face::Roman, *size, 0.0)
             }
-            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } => unreachable!(),
+            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } | Paint::Color { .. } => unreachable!(),
         };
 
         if !in_text {
@@ -1739,41 +1994,94 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>, has_math_font: bool) {
             last_word_spacing = Some(word_spacing);
         }
 
-        if last_face != Some(face) || last_size != Some(size) {
-            write_tf(s, face, size);
+        let master = text_op_master(op, page.font_family);
+        if last_face != Some(face) || last_size != Some(size) || last_master != master {
+            match master {
+                Some(m) => write_tf_resource(s, m.resource(), size),
+                None => write_tf(s, face, size),
+            }
             last_face = Some(face);
             last_size = Some(size);
+            last_master = master;
         }
 
         if !pos_inited {
             write_tm(s, x, y);
             pos_inited = true;
         } else {
-            write_td(s, x - last_x, y - last_y);
+            // Td is relative and written to 0.01pt, so the offset is taken between the
+            // rounded positions: rounding errors then cannot accumulate along a page.
+            let centi = |v: f32| (v as f64 * 100.0).round();
+            write_td(s, ((centi(x) - centi(last_x)) / 100.0) as f32, ((centi(y) - centi(last_y)) / 100.0) as f32);
         }
 
-        s.push(b'(');
-        match op {
-            Paint::GlyphRun {
-                part_start,
-                part_count,
-                face,
-                ..
-            } => {
-                let start = *part_start as usize;
-                let count = *part_count as usize;
-                emit_glyph_run_parts(s, &page.text_pool[start..start + count], *face);
+        if let Paint::GlyphRun {
+            part_start,
+            part_count,
+            face,
+            ..
+        } = op
+        {
+            let start = *part_start as usize;
+            let count = (*part_count & GLYPH_RUN_COUNT_MASK) as usize;
+            let parts = &page.text_pool[start..start + count];
+            let font = if *part_count & GLYPH_RUN_SHAPED != 0 {
+                shape::text_font_at(page.font_family, *face, size)
+            } else {
+                None
+            };
+            match font {
+                Some(font) => emit_shaped_glyph_run(s, parts, &font, *face),
+                None => {
+                    s.push(b'(');
+                    emit_glyph_run_parts(s, parts, *face);
+                    s.extend_from_slice(b") Tj\n");
+                }
             }
+            last_x = x;
+            last_y = y;
+            continue;
+        }
+
+        // Label tags ("Figure 1:", "Table 1") contain an interword space. In the
+        // OT1-encoded Computer Modern fonts code 32 is the `/suppress` glyph, not a
+        // space, so the space is emitted as a TJ displacement of the font's
+        // interword width (fontdimen 2) instead of as a character.
+        let is_label_tag = matches!(
+            op,
+            Paint::CaptionTag { .. }
+                | Paint::TableCaptionTag { .. }
+                | Paint::FigureTag { .. }
+                | Paint::TableTag { .. }
+        );
+        let tag_space: Option<u32> = if is_label_tag && page.font_family == FontFamily::ComputerModern {
+            Some(crate::font_metrics::resolve_space_units(page.font_family, face))
+        } else {
+            None
+        };
+        if tag_space.is_some() {
+            s.extend_from_slice(b"[(");
+        } else {
+            s.push(b'(');
+        }
+        match op {
+            Paint::GlyphRun { .. } => {}
             Paint::Marker { marker, face, .. } => write_marker(s, *marker, *face),
             Paint::CaptionTag { n, .. } => {
-                s.extend_from_slice(b"Figure ");
+                write_tag_word_space(s, b"Figure", tag_space);
                 write_u64(s, *n as u64);
-                s.extend_from_slice(b": ");
+                s.push(b':');
+                if tag_space.is_none() {
+                    s.push(b' ');
+                }
             }
             Paint::TableCaptionTag { n, .. } => {
-                s.extend_from_slice(b"Table ");
+                write_tag_word_space(s, b"Table", tag_space);
                 write_u64(s, *n as u64);
-                s.extend_from_slice(b": ");
+                s.push(b':');
+                if tag_space.is_none() {
+                    s.push(b' ');
+                }
             }
             Paint::PageNumber { page_number, .. } => {
                 write_u64(s, *page_number as u64);
@@ -1803,11 +2111,11 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>, has_math_font: bool) {
                 }
             },
             Paint::FigureTag { n, .. } => {
-                s.extend_from_slice(b"Figure ");
+                write_tag_word_space(s, b"Figure", tag_space);
                 write_u64(s, *n as u64);
             }
             Paint::TableTag { n, .. } => {
-                s.extend_from_slice(b"Table ");
+                write_tag_word_space(s, b"Table", tag_space);
                 write_u64(s, *n as u64);
             }
             Paint::EquationNumber { n, .. } => {
@@ -1815,9 +2123,13 @@ fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>, has_math_font: bool) {
                 write_u64(s, *n as u64);
                 s.push(b')');
             }
-            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } => {}
+            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } | Paint::Color { .. } => {}
         }
-        s.extend_from_slice(b") Tj\n");
+        if tag_space.is_some() {
+            s.extend_from_slice(b")] TJ\n");
+        } else {
+            s.extend_from_slice(b") Tj\n");
+        }
 
         last_x = x;
         last_y = y;
@@ -2102,8 +2414,13 @@ fn write_tm(out: &mut Vec<u8>, x: f32, y: f32) {
 
 #[inline(always)]
 fn write_tf(out: &mut Vec<u8>, face: Face, size: f32) {
+    write_tf_resource(out, face.resource(), size);
+}
+
+#[inline(always)]
+fn write_tf_resource(out: &mut Vec<u8>, resource: &str, size: f32) {
     let mut buf = [0u8; 32];
-    let res = face.resource().as_bytes();
+    let res = resource.as_bytes();
     let r_len = res.len();
     buf[..r_len].copy_from_slice(res);
     buf[r_len] = b' ';
@@ -2122,6 +2439,25 @@ fn write_tw(out: &mut Vec<u8>, word_spacing: f32) {
 }
 
 #[inline(always)]
+/// `r g b rg r g b RG`, each channel with up to three decimals as xcolor writes them.
+fn write_color(out: &mut Vec<u8>, color: crate::frontend::ast::PackedColor) {
+    let ch = color.channels();
+    for op in [b"rg\n".as_slice(), b"RG\n".as_slice()] {
+        for c in ch {
+            if c == 0 || c == 1000 {
+                out.push(if c == 0 { b'0' } else { b'1' });
+            } else {
+                out.push(b'.');
+                let digits = [b'0' + (c / 100) as u8, b'0' + (c / 10 % 10) as u8, b'0' + (c % 10) as u8];
+                let len = 3 - digits.iter().rev().take_while(|&&d| d == b'0').count();
+                out.extend_from_slice(&digits[..len]);
+            }
+            out.push(b' ');
+        }
+        out.extend_from_slice(op);
+    }
+}
+
 fn write_rule(out: &mut Vec<u8>, x: f32, y: f32, w: f32, h: f32, fill: bool) {
     let mut buf = [0u8; 96];
     buf[..7].copy_from_slice(b"0.15 w ");

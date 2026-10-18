@@ -44,7 +44,9 @@ pub struct HyphenCacheEntry {
     pub breaks: [u8; 12],
     pub piece_units: [u16; 13],
     pub total_units: u16,
-    pub _pad: [u8; 12],
+    /// Design-size master the piece widths were measured with (0 = the face's own font).
+    pub master: u8,
+    pub _pad: [u8; 11],
 }
 
 #[cfg(target_pointer_width = "64")]
@@ -58,10 +60,11 @@ impl HyphenCacheEntry {
             word_len: 0,
             num_breaks: 0,
             family_face: 0,
+            master: 0,
             breaks: [0; 12],
             piece_units: [0; 13],
             total_units: 0,
-            _pad: [0; 12],
+            _pad: [0; 11],
         }
     }
 }
@@ -177,67 +180,84 @@ pub fn hyphenate_word<'a>(
     d_len += 1;
 
     let mut levels = [0u8; 68];
+    let core = &dotted[1..d_len - 1];
 
-    // Match patterns using compact trie in O(L) time
-    for i in 0..d_len {
-        let b0 = dotted[i];
-        let root_idx = if b0 == b'.' {
-            0
-        } else if (b'a'..=b'z').contains(&b0) {
-            (b0 - b'a' + 1) as usize
-        } else {
-            continue;
-        };
-        let mut curr_node_idx = ROOT_CHILDREN[root_idx] as usize;
-        if curr_node_idx == 0xFFFF {
-            continue;
-        }
-
-        let mut offset = 0;
-        loop {
-            let node = &TRIE_NODES[curr_node_idx];
-            if node.pat_idx != 0xFFFF {
-                let packed = PACKED_PATTERNS[node.pat_idx as usize];
-                let count = (packed & 0xFF) as usize;
-                if count > 0 {
-                    let e0 = (packed >> 8) as u8;
-                    let idx0 = i + (e0 >> 4) as usize;
-                    let val0 = e0 & 0x0F;
-                    if val0 > levels[idx0] { levels[idx0] = val0; }
-                }
-                if count > 1 {
-                    let e1 = (packed >> 16) as u8;
-                    let idx1 = i + (e1 >> 4) as usize;
-                    let val1 = e1 & 0x0F;
-                    if val1 > levels[idx1] { levels[idx1] = val1; }
-                }
-                if count > 2 {
-                    let e2 = (packed >> 24) as u8;
-                    let idx2 = i + (e2 >> 4) as usize;
-                    let val2 = e2 & 0x0F;
-                    if val2 > levels[idx2] { levels[idx2] = val2; }
-                }
-            }
-
-            offset += 1;
-            if i + offset >= d_len || offset >= 16 {
-                break;
-            }
-
-            let start = node.child_start as usize;
-            let count = node.child_count as usize;
-            if count == 0 {
-                break;
-            }
-
-            let next_b = dotted[i + offset];
-            let slice = &TRIE_CHAR_CODES[start..start + count];
-            if let Some(pos) = slice.iter().position(|&c| c == next_b) {
-                curr_node_idx = start + pos;
+    // `\hyphenation` exceptions replace the patterns for their word (tex.web §930–§934).
+    if let Some(ex) = US_HYPHEN_EXCEPTIONS
+        .iter()
+        .find(|ex| ex.len() - ex.bytes().filter(|&b| b == b'-').count() == core_len && ex.bytes().filter(|&b| b != b'-').eq(core.iter().copied()))
+    {
+        let mut k = 0;
+        for b in ex.bytes() {
+            if b == b'-' {
+                levels[1 + k] = 1;
             } else {
-                break;
+                k += 1;
             }
         }
+    } else {
+        // Match patterns using compact trie in O(L) time
+        for i in 0..d_len {
+            let b0 = dotted[i];
+            let root_idx = if b0 == b'.' {
+                0
+            } else if b0.is_ascii_lowercase() {
+                (b0 - b'a' + 1) as usize
+            } else {
+                continue;
+            };
+            let mut curr_node_idx = ROOT_CHILDREN[root_idx] as usize;
+            if curr_node_idx == 0xFFFF {
+                continue;
+            }
+
+            let mut offset = 0;
+            loop {
+                let node = &TRIE_NODES[curr_node_idx];
+                if node.pat_idx != 0xFFFF {
+                    let packed = PACKED_PATTERNS[node.pat_idx as usize];
+                    let count = (packed & 0xFF) as usize;
+                    if count > 0 {
+                        let e0 = (packed >> 8) as u8;
+                        let idx0 = i + (e0 >> 4) as usize;
+                        let val0 = e0 & 0x0F;
+                        if val0 > levels[idx0] { levels[idx0] = val0; }
+                    }
+                    if count > 1 {
+                        let e1 = (packed >> 16) as u8;
+                        let idx1 = i + (e1 >> 4) as usize;
+                        let val1 = e1 & 0x0F;
+                        if val1 > levels[idx1] { levels[idx1] = val1; }
+                    }
+                    if count > 2 {
+                        let e2 = (packed >> 24) as u8;
+                        let idx2 = i + (e2 >> 4) as usize;
+                        let val2 = e2 & 0x0F;
+                        if val2 > levels[idx2] { levels[idx2] = val2; }
+                    }
+                }
+
+                offset += 1;
+                if i + offset >= d_len || offset >= 16 {
+                    break;
+                }
+
+                let start = node.child_start as usize;
+                let count = node.child_count as usize;
+                if count == 0 {
+                    break;
+                }
+
+                let next_b = dotted[i + offset];
+                let slice = &TRIE_CHAR_CODES[start..start + count];
+                if let Some(pos) = slice.iter().position(|&c| c == next_b) {
+                    curr_node_idx = start + pos;
+                } else {
+                    break;
+                }
+            }
+        }
+
     }
 
     // Collect break positions: odd level and within [left_min, core_len - right_min]
@@ -245,14 +265,12 @@ pub fn hyphenate_word<'a>(
     let mut break_count = 0;
 
     for k in 1..core_len {
-        if k >= left_min && (core_len - k) >= right_min {
-            if levels[1 + k] % 2 == 1 {
-                if break_count < stack_breaks.len() {
+        if k >= left_min && (core_len - k) >= right_min
+            && levels[1 + k] % 2 == 1
+                && break_count < stack_breaks.len() {
                     stack_breaks[break_count] = k;
                     break_count += 1;
                 }
-            }
-        }
     }
 
     if break_count == 0 {
@@ -268,6 +286,25 @@ pub fn hyphenate_word<'a>(
     }
     out_pieces.push(&word[last..]);
 }
+
+/// The `\hyphenation` exceptions of `hyphen.tex`, which pdfLaTeX loads for US English.
+/// Words listed without hyphens are never hyphenated.
+pub static US_HYPHEN_EXCEPTIONS: &[&str] = &[
+    "as-so-ciate",
+    "as-so-ciates",
+    "dec-li-na-tion",
+    "oblig-a-tory",
+    "phil-an-thropic",
+    "present",
+    "presents",
+    "project",
+    "projects",
+    "reci-procity",
+    "re-cog-ni-zance",
+    "ref-or-ma-tion",
+    "ret-ri-bu-tion",
+    "ta-ble",
+];
 
 /// Precompiled, canonical Knuth-Liang Plain TeX hyphenation patterns.
 /// Alphabetically sorted by non-digit letter sequence for branchless O(log N) lookup.
@@ -4735,62 +4772,6 @@ pub static US_HYPHEN_PATTERNS: &[&str] = &[
     "z4zy",
 ];
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_knuth_liang_pattern_lookup() {
-        assert!(find_pattern(".ach").is_some());
-        assert!(find_pattern("hy3ph").is_none()); // search by letters:
-        assert!(find_pattern("hyph").is_some());
-        assert_eq!(find_pattern(".ba5na"), None);
-        assert_eq!(find_pattern(".bana"), Some(".ba5na"));
-    }
-
-    #[test]
-    fn test_knuth_liang_canonical_words() {
-        let mut pieces = Vec::new();
-
-        hyphenate_word("hyphenation", 2, 3, &mut pieces);
-        assert_eq!(pieces, vec!["hy", "phen", "ation"]);
-
-        pieces.clear();
-        hyphenate_word("algorithm", 2, 3, &mut pieces);
-        assert_eq!(pieces, vec!["al", "go", "rithm"]);
-
-        pieces.clear();
-        hyphenate_word("paragraph", 2, 3, &mut pieces);
-        assert_eq!(pieces, vec!["para", "graph"]);
-
-        pieces.clear();
-        hyphenate_word("computer", 2, 3, &mut pieces);
-        assert_eq!(pieces, vec!["com", "puter"]);
-
-        pieces.clear();
-        hyphenate_word("mathematical", 2, 3, &mut pieces);
-        assert_eq!(pieces, vec!["math", "e", "mat", "i", "cal"]);
-    }
-
-    #[test]
-    fn test_hyphenation_with_punctuation() {
-        let mut pieces = Vec::new();
-        hyphenate_word("algorithm,", 2, 3, &mut pieces);
-        assert_eq!(pieces, vec!["al", "go", "rithm,"]);
-
-        pieces.clear();
-        hyphenate_word("(hyphenation).", 2, 3, &mut pieces);
-        assert_eq!(pieces, vec!["(hy", "phen", "ation)."]);
-    }
-
-    #[test]
-    fn test_soft_hyphen_discretionary() {
-        let mut pieces = Vec::new();
-        hyphenate_word("al\u{00AD}go\u{00AD}rithm", 2, 3, &mut pieces);
-        assert_eq!(pieces, vec!["al", "go", "rithm"]);
-    }
-}
-
 /// Precompiled packed pattern values (count: u8, entry0: u8, entry1: u8, entry2: u8 where entry=(pos<<4)|val).
 pub static PACKED_PATTERNS: [u32; 4461] = [
     0x00004401, 0x00003401, 0x00003101, 0x00003301, 0x00003501, 0x00003501, 0x00004401, 0x00004501,
@@ -5352,4 +5333,60 @@ pub static PACKED_PATTERNS: [u32; 4461] = [
     0x00002301, 0x00003401, 0x00110202, 0x00001401, 0x00001401, 0x00000501, 0x00000401, 0x00000101,
     0x00002401, 0x00002501, 0x00003401, 0x22110403, 0x00001401,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_knuth_liang_pattern_lookup() {
+        assert!(find_pattern(".ach").is_some());
+        assert!(find_pattern("hy3ph").is_none()); // search by letters:
+        assert!(find_pattern("hyph").is_some());
+        assert_eq!(find_pattern(".ba5na"), None);
+        assert_eq!(find_pattern(".bana"), Some(".ba5na"));
+    }
+
+    #[test]
+    fn test_knuth_liang_canonical_words() {
+        let mut pieces = Vec::new();
+
+        hyphenate_word("hyphenation", 2, 3, &mut pieces);
+        assert_eq!(pieces, vec!["hy", "phen", "ation"]);
+
+        pieces.clear();
+        hyphenate_word("algorithm", 2, 3, &mut pieces);
+        assert_eq!(pieces, vec!["al", "go", "rithm"]);
+
+        pieces.clear();
+        hyphenate_word("paragraph", 2, 3, &mut pieces);
+        assert_eq!(pieces, vec!["para", "graph"]);
+
+        pieces.clear();
+        hyphenate_word("computer", 2, 3, &mut pieces);
+        assert_eq!(pieces, vec!["com", "puter"]);
+
+        pieces.clear();
+        hyphenate_word("mathematical", 2, 3, &mut pieces);
+        assert_eq!(pieces, vec!["math", "e", "mat", "i", "cal"]);
+    }
+
+    #[test]
+    fn test_hyphenation_with_punctuation() {
+        let mut pieces = Vec::new();
+        hyphenate_word("algorithm,", 2, 3, &mut pieces);
+        assert_eq!(pieces, vec!["al", "go", "rithm,"]);
+
+        pieces.clear();
+        hyphenate_word("(hyphenation).", 2, 3, &mut pieces);
+        assert_eq!(pieces, vec!["(hy", "phen", "ation)."]);
+    }
+
+    #[test]
+    fn test_soft_hyphen_discretionary() {
+        let mut pieces = Vec::new();
+        hyphenate_word("al\u{00AD}go\u{00AD}rithm", 2, 3, &mut pieces);
+        assert_eq!(pieces, vec!["al", "go", "rithm"]);
+    }
+}
 

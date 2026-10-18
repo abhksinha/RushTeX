@@ -29,7 +29,7 @@ pub(crate) fn layout_lof<'a>(
             face: Face::Bold,
             size: heading_size,
             part_start: text_pool_start,
-            part_count: 1,
+            part_count: 1 | crate::layout::GLYPH_RUN_SHAPED,
             word_spacing: 0.0,
         });
     }
@@ -138,7 +138,7 @@ pub(crate) fn layout_lot<'a>(
             face: Face::Bold,
             size: heading_size,
             part_start: text_pool_start,
-            part_count: 1,
+            part_count: 1 | crate::layout::GLYPH_RUN_SHAPED,
             word_spacing: 0.0,
         });
     }

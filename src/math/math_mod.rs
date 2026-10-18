@@ -16,6 +16,7 @@ pub mod math_display;
 pub mod math_fonts;
 pub mod math_fraction;
 pub mod math_layout;
+pub mod math_mathchar;
 pub mod math_matrix;
 pub mod math_oracle;
 pub mod math_parser;
@@ -24,6 +25,7 @@ pub mod math_scripts;
 pub mod math_spacing;
 pub mod math_symbols;
 pub mod math_tfm;
+pub mod math_tfm_faces;
 
 pub use math_symbols::{lookup_symbol, MathSymbolRecord, MATH_SYMBOLS_TABLE};
 
@@ -99,7 +101,7 @@ pub use math_matrix::{
     MatrixColumnSoA, MatrixDelimBinder, MatrixGridBuffer, MatrixLayoutMetricsEngine,
     RowBaselineAligner, SparseGridCompressor, VcenterGeometryEngine,
 };
-pub use math_parser::{parse_math_str, parse_math_str as parse_math, MathParser};
+pub use math_parser::{parse_math_str, parse_math_str as parse_math, parse_math_str_with_colors, MathParser};
 pub use math_radical::{
     ExtensibleRadicalAssembler, PackedRadicalMetrics, RadicalClearanceGovernor,
     RadicalExcessDistributor, RadicalVariantSelector, RootDegreePositioner,

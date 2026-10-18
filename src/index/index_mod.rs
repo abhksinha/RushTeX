@@ -102,6 +102,15 @@ fn scan_inner<'a>(
                     table_counter,
                 );
             }
+            Block::Aligned(aligned) => {
+                scan_inner(
+                    &aligned.blocks,
+                    registry,
+                    section_counters,
+                    fig_counter,
+                    table_counter,
+                );
+            }
             _ => {}
         }
     }
@@ -174,7 +183,7 @@ Numbers and metrics.
                 ..
             } => {
                 let s =
-                    &page1.text_pool[*part_start as usize..(*part_start + *part_count) as usize];
+                    &page1.text_pool[*part_start as usize..(*part_start + (*part_count & crate::layout::GLYPH_RUN_COUNT_MASK)) as usize];
                 s.contains(&"Contents")
             }
             _ => false,
@@ -213,7 +222,7 @@ Numbers and metrics.
                     ..
                 } => {
                     let s = &page1.text_pool
-                        [*part_start as usize..(*part_start + *part_count) as usize];
+                        [*part_start as usize..(*part_start + (*part_count & crate::layout::GLYPH_RUN_COUNT_MASK)) as usize];
                     s.contains(&".")
                 }
                 _ => false,
@@ -273,7 +282,7 @@ rushtex & 100 \\
                 ..
             } => {
                 let s =
-                    &page1.text_pool[*part_start as usize..(*part_start + *part_count) as usize];
+                    &page1.text_pool[*part_start as usize..(*part_start + (*part_count & crate::layout::GLYPH_RUN_COUNT_MASK)) as usize];
                 s.contains(&"List of Figures")
             }
             _ => false,
@@ -287,7 +296,7 @@ rushtex & 100 \\
                 ..
             } => {
                 let s =
-                    &page1.text_pool[*part_start as usize..(*part_start + *part_count) as usize];
+                    &page1.text_pool[*part_start as usize..(*part_start + (*part_count & crate::layout::GLYPH_RUN_COUNT_MASK)) as usize];
                 s.contains(&"List of Tables")
             }
             _ => false,
@@ -333,7 +342,8 @@ Content on page 3.
             .ops
             .iter()
             .filter_map(|op| match op {
-                Paint::PageNumber { page_number, y, .. } if *y > 100.0 => Some(*page_number),
+                // Exclude the running foot (\footskip below the text block).
+                Paint::PageNumber { page_number, y, .. } if *y > 300.0 => Some(*page_number),
                 _ => None,
             })
             .collect();

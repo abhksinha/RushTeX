@@ -248,6 +248,7 @@ impl DisplayGeometryEngine {
     /// Computes display width, indentation, centering displacement, predisplaysize, skips,
     /// and tag collision in a single vectorized pass.
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub fn compute_display_geometry(
         available_w: f32,
         hang_indent: f32,

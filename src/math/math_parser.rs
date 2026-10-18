@@ -4,10 +4,12 @@
 //! radicals, accents, matrices, and extensible delimiters.
 
 use crate::backend::fonts::Face;
+use crate::frontend::ast::PackedColor;
 use crate::math::math_ast::{
-    BigOpData, ColAlign, DelimitedData, MathChoiceData, MathNode, MathStyle, MatrixData,
-    MatrixDelim, MatrixEnvKind, DELIMITER_OPT_NONE, FRACTION_OPT_EXACT, FRACTION_OPT_NOAXIS,
-    FRACTION_OPT_NONE, FRACTION_OPT_NORULE,
+    BigOpData, ColAlign, DelimitedData, MathChoiceData, MathNode, MathSkip, MathStyle, MatrixData,
+    MatrixDelim, MatrixEnvKind, DELIMITER_OPT_NONE, OP_LIMITS_BOXED_NUCLEUS, OP_LIMITS_DISPLAY,
+    OP_LIMITS_LIMITS, OP_LIMITS_MODE_MASK, OP_LIMITS_NOLIMITS, FRACTION_OPT_EXACT, FRACTION_OPT_NOAXIS,
+    FRACTION_OPT_DELIMITED, FRACTION_OPT_NONE, FRACTION_OPT_NORULE,
 };
 use crate::math::math_fonts::{
     lookup_math_command, mathcode_atom_kind, mathcode_char, mathcode_family, MATHCODE_TABLE,
@@ -17,11 +19,64 @@ use crate::math::math_spacing::MathAtomKind;
 pub struct MathParser<'a> {
     src: &'a str,
     pos: usize,
+    /// Set when the last command expanded a macro into a row whose atoms belong in the
+    /// enclosing list (a macro expansion is not a group in TeX).
+    spliced_row: bool,
+    /// `\definecolor` names of the document, for `\color` and `\textcolor`.
+    colors: Vec<(&'a str, PackedColor)>,
 }
 
 impl<'a> MathParser<'a> {
     pub fn new(src: &'a str) -> Self {
-        Self { src, pos: 0 }
+        Self { src, pos: 0, spliced_row: false, colors: Vec::new() }
+    }
+
+    /// The colour argument of `\color`/`\textcolor`: `[model]{spec}` or `{expression}`;
+    /// black when it does not resolve.
+    fn parse_color_arg(&mut self) -> PackedColor {
+        self.skip_ws();
+        let color = if self.eat("[") {
+            let start = self.pos;
+            while !self.is_eof() && !self.remaining().starts_with(']') {
+                self.pos += 1;
+            }
+            let model = &self.src[start..self.pos];
+            self.eat("]");
+            self.skip_ws();
+            let spec = self.raw_brace_arg();
+            PackedColor::from_model(model, spec)
+        } else {
+            let expr = self.raw_brace_arg();
+            PackedColor::resolve(expr, &self.colors)
+        };
+        color.unwrap_or(PackedColor::BLACK)
+    }
+
+    /// The raw text of a `{...}` argument (balanced braces), or "" when none follows.
+    fn raw_brace_arg(&mut self) -> &'a str {
+        self.skip_ws();
+        if !self.eat("{") {
+            return "";
+        }
+        let start = self.pos;
+        let mut depth = 1usize;
+        let bytes = self.src.as_bytes();
+        while self.pos < bytes.len() {
+            match bytes[self.pos] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            self.pos += 1;
+        }
+        let arg = &self.src[start..self.pos.min(bytes.len())];
+        self.eat("}");
+        arg
     }
 
     #[inline(always)]
@@ -121,7 +176,7 @@ impl<'a> MathParser<'a> {
                 }
             }
 
-            if self.remaining().starts_with("\\right") {
+            if self.at_right_delimiter() {
                 break;
             }
 
@@ -219,10 +274,25 @@ impl<'a> MathParser<'a> {
             let rem = self.remaining();
             let is_candidate = rem.starts_with("\\over")
                 || rem.starts_with("\\atop")
-                || rem.starts_with("\\above");
+                || rem.starts_with("\\above")
+                || rem.starts_with("\\choose")
+                || rem.starts_with("\\brace")
+                || rem.starts_with("\\brack");
 
             if is_candidate {
-                let (is_infix, has_rule, with_delims, is_above) = if self.eat("\\overwithdelims") {
+                // plain.tex: `\choose`, `\brace` and `\brack` are `\atopwithdelims` with fixed
+                // delimiter pairs.
+                let mut fixed_delims: Option<(&'a str, &'a str)> = None;
+                for (name, l, r) in [("\\choose", "(", ")"), ("\\brace", "\\{", "\\}"), ("\\brack", "[", "]")] {
+                    if rem.starts_with(name) && !rem[name.len()..].starts_with(|c: char| c.is_ascii_alphabetic()) {
+                        self.pos += name.len();
+                        fixed_delims = Some((l, r));
+                        break;
+                    }
+                }
+                let (is_infix, has_rule, with_delims, is_above) = if fixed_delims.is_some() {
+                    (true, false, true, false)
+                } else if self.eat("\\overwithdelims") {
                     (true, true, true, false)
                 } else if self.eat("\\atopwithdelims") {
                     (true, false, true, false)
@@ -257,7 +327,9 @@ impl<'a> MathParser<'a> {
                 };
 
                 if is_infix {
-                    let (ldelim, rdelim) = if with_delims {
+                    let (ldelim, rdelim) = if let Some((l, r)) = fixed_delims {
+                        (Some(l), Some(r))
+                    } else if with_delims {
                         self.skip_ws();
                         let l = self.parse_delim_char();
                         self.skip_ws();
@@ -267,7 +339,8 @@ impl<'a> MathParser<'a> {
                         (None, None)
                     };
 
-                    let mut options = FRACTION_OPT_NONE;
+                    let mut options = if with_delims { FRACTION_OPT_DELIMITED } else { FRACTION_OPT_NONE };
+                    let mut thickness = -1.0f32;
                     if is_above {
                         loop {
                             self.skip_ws();
@@ -282,7 +355,9 @@ impl<'a> MathParser<'a> {
                             }
                         }
                         self.skip_ws();
+                        let start = self.pos;
                         self.scan_dimen();
+                        thickness = crate::config::parse_dimension_pt(self.src[start..self.pos].trim()).unwrap_or(-1.0);
                     }
 
                     // Numerator is everything parsed before the infix operator
@@ -302,6 +377,7 @@ impl<'a> MathParser<'a> {
                         den: Box::new(den),
                         has_rule: frac_rule,
                         options,
+                        thickness,
                     };
 
                     return if let (Some(l), Some(r)) = (ldelim, rdelim) {
@@ -314,7 +390,7 @@ impl<'a> MathParser<'a> {
 
             // Batch 2: Item 57 - EmptyNucleusScriptAttacher
             // If expression begins with '_' or '^', inject an empty ordinary nucleus
-            if self.remaining().starts_with('_') || self.remaining().starts_with('^') {
+            if self.remaining().starts_with('_') || self.remaining().starts_with('^') || self.remaining().starts_with('\'') {
                 let empty_nucleus = MathNode::Row(Vec::new());
                 let attached = self.attach_scripts(empty_nucleus);
                 if let Some(ref mut nodes) = rest {
@@ -331,6 +407,19 @@ impl<'a> MathParser<'a> {
             }
 
             if let Some(node) = self.parse_primary(stop_at_delim, stop_at_cell) {
+                if std::mem::take(&mut self.spliced_row) {
+                    if let MathNode::Row(mut items) = node {
+                        // Scripts after a macro attach to the last atom of its expansion.
+                        if let Some(last) = items.pop() {
+                            let last = self.attach_scripts(last);
+                            items.push(last);
+                        }
+                        let nodes = rest.get_or_insert_with(|| first.take().into_iter().collect());
+                        nodes.extend(items);
+                        continue;
+                    }
+                    continue;
+                }
                 // Check if followed by subscript '_' or superscript '^'
                 let attached = self.attach_scripts(node);
                 if let Some(ref mut nodes) = rest {
@@ -360,14 +449,30 @@ impl<'a> MathParser<'a> {
 
     /// Attaches subscripts and superscripts to a nucleus node.
     fn attach_scripts(&mut self, mut nucleus: MathNode<'a>) -> MathNode<'a> {
+        self.skip_ws();
+        if let MathNode::OpLimits { ref mut mode, .. } = nucleus {
+            loop {
+                let m = if self.eat("\\limits") {
+                    OP_LIMITS_LIMITS
+                } else if self.eat("\\nolimits") {
+                    OP_LIMITS_NOLIMITS
+                } else if self.eat("\\displaylimits") {
+                    OP_LIMITS_DISPLAY
+                } else {
+                    break;
+                };
+                *mode = (*mode & !OP_LIMITS_MODE_MASK) | m;
+                self.skip_ws();
+            }
+        }
         if let MathNode::BigOp(ref mut data) = nucleus {
             self.skip_ws();
             if self.eat("\\limits") {
-                data.limits = true;
+                data.limits = OP_LIMITS_LIMITS;
             } else if self.eat("\\nolimits") {
-                data.limits = false;
+                data.limits = OP_LIMITS_NOLIMITS;
             } else if self.eat("\\displaylimits") {
-                data.limits = true;
+                data.limits = OP_LIMITS_DISPLAY;
             }
         }
 
@@ -380,17 +485,17 @@ impl<'a> MathParser<'a> {
             self.skip_ws();
             if self.eat("\\limits") {
                 if let MathNode::BigOp(ref mut data) = nucleus {
-                    data.limits = true;
+                    data.limits = OP_LIMITS_LIMITS;
                 }
                 continue;
             } else if self.eat("\\nolimits") {
                 if let MathNode::BigOp(ref mut data) = nucleus {
-                    data.limits = false;
+                    data.limits = OP_LIMITS_NOLIMITS;
                 }
                 continue;
             } else if self.eat("\\displaylimits") {
                 if let MathNode::BigOp(ref mut data) = nucleus {
-                    data.limits = true;
+                    data.limits = OP_LIMITS_DISPLAY;
                 }
                 continue;
             } else if self.eat("\\nosuperscript") {
@@ -465,6 +570,7 @@ impl<'a> MathParser<'a> {
                     face: Face::Symbol,
                     glyph: "′",
                     code: Some(0xA2),
+                    mathcode: 0,
                 }];
                 while self.eat("'") {
                     primes.push(MathNode::Symbol {
@@ -472,6 +578,7 @@ impl<'a> MathParser<'a> {
                         face: Face::Symbol,
                         glyph: "′",
                         code: Some(0xA2),
+                        mathcode: 0,
                     });
                 }
                 let prime_row = if primes.len() == 1 {
@@ -560,12 +667,21 @@ impl<'a> MathParser<'a> {
                 MathNode::Row(mut nodes) if nodes.len() == 1 => nodes.pop().unwrap(),
                 other => other,
             };
+            // A braced subformula is an Ord atom (TeXbook ch. 17), so `{=}` loses its spacing.
+            if flattened.atom_kind() != MathAtomKind::Ord {
+                return Some(MathNode::Coerce {
+                    kind: MathAtomKind::Ord,
+                    content: Box::new(flattened),
+                });
+            }
             return Some(flattened);
         }
 
-        // 2. Command `\cmd`
+        // 2. Command `\cmd` (a macro expansion here stays one node: it is an argument)
         if rem.starts_with('\\') {
-            return self.parse_command(None, None);
+            let node = self.parse_command(None, None);
+            self.spliced_row = false;
+            return node;
         }
 
         // 3. Number (digits)
@@ -614,6 +730,7 @@ impl<'a> MathParser<'a> {
                     face,
                     glyph,
                     code,
+                    mathcode: 0,
                 });
             }
         }
@@ -623,6 +740,7 @@ impl<'a> MathParser<'a> {
             face: Face::Roman,
             glyph,
             code: None,
+            mathcode: 0,
         })
     }
 
@@ -638,10 +756,16 @@ impl<'a> MathParser<'a> {
             return None;
         }
 
-        // 1. Group `{ ... }`
+        // 1. Group `{ ... }`: a braced subformula is an Ord atom (TeXbook ch. 17).
         if self.eat("{") {
             let inner = self.parse_expression(Some("}"));
             self.eat("}");
+            if inner.atom_kind() != MathAtomKind::Ord {
+                return Some(MathNode::Coerce {
+                    kind: MathAtomKind::Ord,
+                    content: Box::new(inner),
+                });
+            }
             return Some(inner);
         }
 
@@ -668,19 +792,19 @@ impl<'a> MathParser<'a> {
         if let Some(ch) = self.peek_char() {
             if ch == ',' {
                 self.pos += 1;
-                return Some(MathNode::Space(3.0 / 18.0 * 10.0)); // 3 mu thin space
+                return Some(MathNode::Space(MathSkip::Mu(3.0))); // 3 mu thin space
             } else if ch == ':' {
                 self.pos += 1;
-                return Some(MathNode::Space(4.0 / 18.0 * 10.0)); // 4 mu medium space
+                return Some(MathNode::Space(MathSkip::Mu(4.0))); // 4 mu medium space
             } else if ch == ';' {
                 self.pos += 1;
-                return Some(MathNode::Space(5.0 / 18.0 * 10.0)); // 5 mu thick space
+                return Some(MathNode::Space(MathSkip::Mu(5.0))); // 5 mu thick space
             } else if ch == '!' {
                 self.pos += 1;
-                return Some(MathNode::Space(-3.0 / 18.0 * 10.0)); // negative thin space
+                return Some(MathNode::Space(MathSkip::Mu(-3.0))); // negative thin space
             } else if ch == ' ' {
                 self.pos += 1;
-                return Some(MathNode::Space(1.0 / 3.0 * 10.0)); // standard control space
+                return Some(MathNode::Space(MathSkip::TextEm(1.0 / 3.0))); // standard control space
             } else if ch == '{' {
                 self.pos += 1;
                 return Some(MathNode::Symbol {
@@ -688,6 +812,7 @@ impl<'a> MathParser<'a> {
                     face: Face::Symbol,
                     glyph: "{",
                     code: Some(0x7B),
+                    mathcode: 0x4266,
                 });
             } else if ch == '}' {
                 self.pos += 1;
@@ -696,6 +821,7 @@ impl<'a> MathParser<'a> {
                     face: Face::Symbol,
                     glyph: "}",
                     code: Some(0x7D),
+                    mathcode: 0x5267,
                 });
             } else if ch == '|' {
                 self.pos += 1;
@@ -704,6 +830,7 @@ impl<'a> MathParser<'a> {
                     face: Face::Symbol,
                     glyph: "||",
                     code: Some(0x88),
+                    mathcode: 0,
                 });
             } else if ch == '%' || ch == '$' || ch == '&' || ch == '_' {
                 self.pos += 1;
@@ -713,6 +840,7 @@ impl<'a> MathParser<'a> {
                     face: Face::Roman,
                     glyph,
                     code: None,
+                    mathcode: 0,
                 });
             }
         }
@@ -728,7 +856,174 @@ impl<'a> MathParser<'a> {
         }
         let cmd = &self.src[start..self.pos];
 
+        if let Some(body) = lookup_math_macro(cmd) {
+            let tex = self.expand_math_macro(body);
+            let splice = matches!(tex, MathNode::Row(_)) && lookup_math_command(cmd).is_none();
+            // Only the top-level expression loop splices; anywhere else the row stays whole.
+            self.spliced_row = splice;
+            // Keep the single-glyph Base-14 rendering for families without the TeX glyphs.
+            return Some(match lookup_math_command(cmd) {
+                Some(sym) => MathNode::FamilyChoice(Box::new((
+                    tex,
+                    MathNode::Symbol {
+                        kind: sym.kind,
+                        face: sym.face,
+                        glyph: sym.glyph,
+                        code: sym.code,
+                        mathcode: 0,
+                    },
+                ))),
+                None => tex,
+            });
+        }
+
+        // fontmath.ltx builds `\cong` (`\@vereq\sim`, `=` below) and `\notin` (`\c@ncel\in`,
+        // a `\mkern1mu/` overprinted) from other characters; Base-14 families keep their glyph.
+        if cmd == "cong" || cmd == "notin" {
+            if let Some(sym) = lookup_math_command(cmd) {
+                let (rows, env_kind) = if cmd == "cong" {
+                    (vec![vec![MathParser::new("\\sim").parse_expression(None)], vec![MathParser::new("=").parse_expression(None)]], MatrixEnvKind::Vereq)
+                } else {
+                    (vec![vec![MathParser::new("\\mkern1mu/").parse_expression(None)], vec![MathParser::new("\\in").parse_expression(None)]], MatrixEnvKind::Overlay)
+                };
+                let built = MathNode::Coerce {
+                    kind: MathAtomKind::Rel,
+                    content: Box::new(MathNode::Matrix(Box::new(MatrixData {
+                        rows,
+                        delim: MatrixDelim::None,
+                        env_kind,
+                        col_alignments: vec![ColAlign::Center],
+                    }))),
+                };
+                return Some(MathNode::FamilyChoice(Box::new((
+                    built,
+                    MathNode::Symbol { kind: sym.kind, face: sym.face, glyph: sym.glyph, code: sym.code, mathcode: 0 },
+                ))));
+            }
+        }
+
         match cmd {
+            // TeX kerns and glue: `\mkern`, `\mskip`, `\kern`, `\hskip` (stretch is ignored).
+            "mkern" | "mskip" | "kern" | "hskip" => Some(MathNode::Space(self.scan_skip())),
+            // `\mathchar"XYZZ`: a math character given by its TeX math code.
+            "mathchar" => {
+                let mathcode = self.scan_int() as u16;
+                let kind = mathcode_class_kind(mathcode);
+                // A class-1 character makes an Op noad with a character nucleus (Rule 13).
+                let op = kind == MathAtomKind::Op;
+                let sym = MathNode::Symbol {
+                    kind: if op { MathAtomKind::Ord } else { kind },
+                    face: Face::Symbol,
+                    glyph: "?",
+                    code: None,
+                    mathcode,
+                };
+                Some(if op { MathNode::OpLimits { content: Box::new(sym), mode: OP_LIMITS_DISPLAY } } else { sym })
+            }
+            // Commands with no typeset result in math lists.
+            "nobreak" | "allowbreak" | "relax" | "DOTSB" | "DOTSI" | "DOTSX" => {
+                Some(MathNode::Space(MathSkip::Pt(0.0)))
+            }
+            "penalty" => {
+                let _ = self.scan_int();
+                Some(MathNode::Space(MathSkip::Pt(0.0)))
+            }
+
+            // amsmath `\overset{a}{b}` / `\underset{a}{b}`: `\binrel@{b}` around
+            // `\mathop{\kern0pt b}\limits^{a}` (or `_{a}`); latex.ltx `\stackrel{a}{b}`:
+            // `\mathrel{\mathop{b}\limits^{a}}`.
+            "overset" | "underset" | "stackrel" => {
+                let script = Box::new(self.parse_mandatory_arg());
+                let base = self.parse_mandatory_arg();
+                let kind = match cmd {
+                    "stackrel" => MathAtomKind::Rel,
+                    _ => match base.atom_kind() {
+                        k @ (MathAtomKind::Bin | MathAtomKind::Rel) => k,
+                        _ => MathAtomKind::Ord,
+                    },
+                };
+                let boxed = if cmd == "stackrel" { 0 } else { OP_LIMITS_BOXED_NUCLEUS };
+                let op = Box::new(MathNode::OpLimits { content: Box::new(base), mode: OP_LIMITS_LIMITS | boxed });
+                let (sub, sup) = if cmd == "underset" { (Some(script), None) } else { (None, Some(script)) };
+                Some(MathNode::Coerce {
+                    kind,
+                    content: Box::new(MathNode::SubSup { nucleus: op, sub, sup }),
+                })
+            }
+
+            // amsmath `\substack{a\\b}`: a centred `subarray`.
+            "substack" => {
+                self.skip_ws();
+                self.eat("{");
+                Some(self.parse_matrix_body_braced(MatrixDelim::None, MatrixEnvKind::Subarray, vec![ColAlign::Center]))
+            }
+
+            "boxed" => Some(MathNode::Boxed(Box::new(self.parse_mandatory_arg()))),
+
+            // xcolor. `\textcolor{c}{x}` is `{\color{c}x}`: the braces make an Ord atom.
+            "textcolor" => {
+                let color = self.parse_color_arg();
+                let content = self.parse_mandatory_arg();
+                Some(MathNode::Colored { color, content: Box::new(MathNode::Coerce { kind: MathAtomKind::Ord, content: Box::new(content) }) })
+            }
+            // `\color{c}` colours the rest of the current group.
+            "color" => {
+                let color = self.parse_color_arg();
+                let content = self.parse_expression_inner(stop_at_delim, stop_at_cell);
+                Some(MathNode::Colored { color, content: Box::new(content) })
+            }
+
+            "sideset" => {
+                let scripts = |node: MathNode<'a>| match node {
+                    MathNode::SubSup { sub, sup, .. } => (sub, sup),
+                    _ => (None, None),
+                };
+                let (pre_sub, pre_sup) = scripts(self.parse_mandatory_arg());
+                let (post_sub, post_sup) = scripts(self.parse_mandatory_arg());
+                self.skip_ws();
+                let op = self.parse_single_atom().unwrap_or(MathNode::Row(Vec::new()));
+                let pre = MathNode::SubSup {
+                    nucleus: Box::new(MathNode::Phantom { content: Box::new(op.clone()), width: false, height_depth: true }),
+                    sub: pre_sub,
+                    sup: pre_sup,
+                };
+                let post = match op.clone() {
+                    MathNode::BigOp(mut data) => {
+                        data.limits = OP_LIMITS_NOLIMITS;
+                        data.sub = post_sub;
+                        data.sup = post_sup;
+                        MathNode::BigOp(data)
+                    }
+                    other => MathNode::SubSup { nucleus: Box::new(other), sub: post_sub, sup: post_sup },
+                };
+                // The leading `\hbox to\dimen@{}` is an Ord atom of the enclosing list, so the
+                // two atoms are spliced in.
+                self.spliced_row = true;
+                Some(MathNode::Row(vec![MathNode::Row(Vec::new()), MathNode::SideSet(Box::new((op, pre, post)))]))
+            }
+
+            "sf" => {
+                let rest = self.parse_expression_inner(stop_at_delim, stop_at_cell);
+                Some(transform_to_sans(rest))
+            }
+
+            // LaTeX 2.09 font switches (`{\rm sup}`): like `\mathrm` but for the rest of
+            // the current group.
+            "rm" | "bf" | "it" | "tt" | "cal" => {
+                let face = match cmd {
+                    "rm" => Face::Roman,
+                    "bf" => Face::Bold,
+                    "it" => Face::Italic,
+                    "tt" => Face::Mono,
+                    _ => Face::Symbol,
+                };
+                let rest = self.parse_expression_inner(stop_at_delim, stop_at_cell);
+                Some(MathNode::StyleChange {
+                    face,
+                    content: Box::new(rest),
+                })
+            }
+
             // Explicit mathematical style scopes
             "displaystyle" | "textstyle" | "scriptstyle" | "scriptscriptstyle" => {
                 let target_style = match cmd {
@@ -754,6 +1049,7 @@ impl<'a> MathParser<'a> {
                     den,
                     has_rule: true,
                     options: FRACTION_OPT_NONE,
+                    thickness: -1.0,
                 })
             }
             "dfrac" => {
@@ -766,6 +1062,7 @@ impl<'a> MathParser<'a> {
                         den,
                         has_rule: true,
                         options: FRACTION_OPT_NONE,
+                        thickness: -1.0,
                     }),
                 })
             }
@@ -779,6 +1076,7 @@ impl<'a> MathParser<'a> {
                         den,
                         has_rule: true,
                         options: FRACTION_OPT_NONE,
+                        thickness: -1.0,
                     }),
                 })
             }
@@ -790,6 +1088,7 @@ impl<'a> MathParser<'a> {
                     den,
                     has_rule: false,
                     options: crate::math::math_ast::FRACTION_OPT_SKEWED,
+                    thickness: -1.0,
                 })
             }
 
@@ -801,7 +1100,8 @@ impl<'a> MathParser<'a> {
                     num,
                     den,
                     has_rule: false,
-                    options: FRACTION_OPT_NONE,
+                    options: FRACTION_OPT_DELIMITED,
+                    thickness: -1.0,
                 };
                 Some(MathNode::Delimited(Box::new(DelimitedData::new(
                     "(", ")", frac,
@@ -814,7 +1114,8 @@ impl<'a> MathParser<'a> {
                     num,
                     den,
                     has_rule: false,
-                    options: FRACTION_OPT_NONE,
+                    options: FRACTION_OPT_DELIMITED,
+                    thickness: -1.0,
                 };
                 let scope = MathNode::StyleScope {
                     style: MathStyle::Display,
@@ -831,7 +1132,8 @@ impl<'a> MathParser<'a> {
                     num,
                     den,
                     has_rule: false,
-                    options: FRACTION_OPT_NONE,
+                    options: FRACTION_OPT_DELIMITED,
+                    thickness: -1.0,
                 };
                 let scope = MathNode::StyleScope {
                     style: MathStyle::Text,
@@ -843,19 +1145,30 @@ impl<'a> MathParser<'a> {
             }
 
             // Continued fraction `\cfrac{num}{den}`
+            // amsmath: `{\displaystyle\frac{\strut#2}{#3}}\kern-\nulldelimiterspace`
+            // (the `[l]`/`[r]` alignment option is accepted and ignored).
             "cfrac" => {
-                let num = Box::new(self.parse_mandatory_arg());
+                self.skip_ws();
+                if self.eat("[") {
+                    let _ = self.parse_expression(Some("]"));
+                    self.eat("]");
+                }
+                let num = self.parse_mandatory_arg();
                 let den = Box::new(self.parse_mandatory_arg());
                 let frac = MathNode::Fraction {
-                    num,
+                    num: Box::new(MathNode::Row(vec![MathNode::Strut, num])),
                     den,
                     has_rule: true,
                     options: FRACTION_OPT_NONE,
+                    thickness: -1.0,
                 };
-                Some(MathNode::StyleScope {
-                    style: MathStyle::Display,
-                    content: Box::new(frac),
-                })
+                Some(MathNode::Row(vec![
+                    MathNode::StyleScope {
+                        style: MathStyle::Display,
+                        content: Box::new(frac),
+                    },
+                    MathNode::Space(MathSkip::Pt(-1.2)),
+                ]))
             }
 
             // TeX Appendix G Rule 8: `\vcenter{...}`
@@ -918,7 +1231,10 @@ impl<'a> MathParser<'a> {
             "mathord" | "mathop" | "mathbin" | "mathrel" | "mathopen" | "mathclose" | "mathpunct" | "mathinner" => {
                 let kind = match cmd {
                     "mathord" => MathAtomKind::Ord,
-                    "mathop" => MathAtomKind::Op,
+                    "mathop" => {
+                        let content = Box::new(self.parse_mandatory_arg());
+                        return Some(MathNode::OpLimits { content, mode: OP_LIMITS_DISPLAY });
+                    }
                     "mathbin" => MathAtomKind::Bin,
                     "mathrel" => MathAtomKind::Rel,
                     "mathopen" => MathAtomKind::Open,
@@ -1052,7 +1368,7 @@ impl<'a> MathParser<'a> {
                 None
             }
 
-            "jot" => Some(MathNode::Space(3.0)),
+            "jot" => Some(MathNode::Space(MathSkip::Pt(3.0))),
             "cr" | "crcr" | "omit" => None,
             "multispan" => {
                 self.skip_ws();
@@ -1074,12 +1390,18 @@ impl<'a> MathParser<'a> {
                 let num = Box::new(self.parse_mandatory_arg());
                 let den = Box::new(self.parse_mandatory_arg());
 
-                let has_rule = thick_arg != "0pt";
+                let thickness = match thick_arg.trim() {
+                    "" => -1.0,
+                    t => crate::config::parse_dimension_pt(t).unwrap_or(-1.0),
+                };
+                let has_rule = thickness != 0.0;
+                let delimited = !open_arg.is_empty() || !close_arg.is_empty();
                 let mut core = MathNode::Fraction {
                     num,
                     den,
                     has_rule,
-                    options: FRACTION_OPT_NONE,
+                    options: if delimited { FRACTION_OPT_DELIMITED } else { FRACTION_OPT_NONE },
+                    thickness: if has_rule { thickness } else { -1.0 },
                 };
 
                 if !style_arg.is_empty() {
@@ -1130,7 +1452,7 @@ impl<'a> MathParser<'a> {
                     op: cmd,
                     sub: None,
                     sup: None,
-                    limits: true,
+                    limits: OP_LIMITS_DISPLAY,
                 })))
             }
 
@@ -1139,7 +1461,7 @@ impl<'a> MathParser<'a> {
                 op: cmd,
                 sub: None,
                 sup: None,
-                limits: false,
+                limits: OP_LIMITS_NOLIMITS,
             }))),
 
             // Dynamic delimiters `\left( ... \right)`
@@ -1147,7 +1469,7 @@ impl<'a> MathParser<'a> {
                 self.skip_ws();
                 let open = self.parse_delim_char();
                 let content = self.parse_expression(None);
-                let close = if self.eat("\\right") {
+                let close = if self.at_right_delimiter() && self.eat("\\right") {
                     self.skip_ws();
                     self.parse_delim_char()
                 } else {
@@ -1201,96 +1523,55 @@ impl<'a> MathParser<'a> {
             }
 
             // Spacing
-            "quad" => Some(MathNode::Space(10.0)),
-            "qquad" => Some(MathNode::Space(20.0)),
-            "enspace" => Some(MathNode::Space(5.0)),
-            "thinspace" => Some(MathNode::Space(3.0 / 18.0 * 10.0)),
-            "medspace" => Some(MathNode::Space(4.0 / 18.0 * 10.0)),
-            "thickspace" => Some(MathNode::Space(5.0 / 18.0 * 10.0)),
-            "negthinspace" => Some(MathNode::Space(-3.0 / 18.0 * 10.0)),
-            "negmedspace" => Some(MathNode::Space(-4.0 / 18.0 * 10.0)),
-            "negthickspace" => Some(MathNode::Space(-5.0 / 18.0 * 10.0)),
+            "quad" => Some(MathNode::Space(MathSkip::TextEm(1.0))),
+            "qquad" => Some(MathNode::Space(MathSkip::TextEm(2.0))),
+            "enspace" => Some(MathNode::Space(MathSkip::TextEm(0.5))),
+            "thinspace" => Some(MathNode::Space(MathSkip::Mu(3.0))),
+            "medspace" => Some(MathNode::Space(MathSkip::Mu(4.0))),
+            "thickspace" => Some(MathNode::Space(MathSkip::Mu(5.0))),
+            "negthinspace" => Some(MathNode::Space(MathSkip::Mu(-3.0))),
+            "negmedspace" => Some(MathNode::Space(MathSkip::Mu(-4.0))),
+            "negthickspace" => Some(MathNode::Space(MathSkip::Mu(-5.0))),
 
-            // Punctuation and ellipses (The TeXbook Chapter 18)
-            "colon" => Some(MathNode::Symbol {
-                kind: MathAtomKind::Punct,
-                face: Face::Roman,
-                glyph: ":",
-                code: Some(0x3A),
-            }),
+            // Ellipses (The TeXbook Chapter 18); `\colon`, `\bmod` and `\pmod` are in MATH_MACROS.
             // TeX mlist.c line 4557 conditional math glue primitive
             "nonscript" => {
                 self.skip_ws();
                 Some(MathNode::Nonscript)
             },
-            "ldots" | "dotso" => Some(MathNode::Ellipsis(crate::math::math_ast::EllipsisKind::Low)),
-            "cdots" | "dotsb" | "dotsm" => Some(MathNode::Ellipsis(crate::math::math_ast::EllipsisKind::Centered)),
+            // amsmath dots: `\ldots` is the bare `\mathellipsis`; `\cdots` (`\extrap@`) and
+            // `\dotso`/`\dotsc` add a thin space before punctuation, closing delimiters and the
+            // end of the formula; `\dots` picks centered dots before a binary or relation.
+            "ldots" => Some(MathNode::Ellipsis(crate::math::math_ast::EllipsisKind::Low)),
             "vdots" => Some(MathNode::Ellipsis(crate::math::math_ast::EllipsisKind::Vertical)),
             "ddots" => Some(MathNode::Ellipsis(crate::math::math_ast::EllipsisKind::Diagonal)),
-            "dots" => {
-                // Knuth / AMS-LaTeX intelligent dots:
-                // Centered (\cdots) if followed by binary or relational operator; Low (\ldots) otherwise.
-                let rem = self.remaining().trim_start();
-                let is_binary_or_rel = rem.starts_with('+')
-                    || rem.starts_with('-')
-                    || rem.starts_with('=')
-                    || rem.starts_with('<')
-                    || rem.starts_with('>')
-                    || rem.starts_with("\\pm")
-                    || rem.starts_with("\\mp")
-                    || rem.starts_with("\\times")
-                    || rem.starts_with("\\cdot")
-                    || rem.starts_with("\\cap")
-                    || rem.starts_with("\\cup")
-                    || rem.starts_with("\\le")
-                    || rem.starts_with("\\ge")
-                    || rem.starts_with("\\leq")
-                    || rem.starts_with("\\geq")
-                    || rem.starts_with("\\in")
-                    || rem.starts_with("\\subset")
-                    || rem.starts_with("\\subseteq");
-                if is_binary_or_rel {
-                    Some(MathNode::Ellipsis(crate::math::math_ast::EllipsisKind::Centered))
+            "cdots" | "dotsb" | "dotsm" | "dotsi" | "dotso" | "dotsc" | "dots" => {
+                use crate::math::math_ast::EllipsisKind;
+                let next = self.dots_lookahead();
+                let (kind, thin) = match cmd {
+                    "cdots" => (EllipsisKind::Centered, next != DotsNext::Other && next != DotsNext::BinRel),
+                    "dotsb" | "dotsm" | "dotsi" => (EllipsisKind::Centered, false),
+                    "dotsc" => (EllipsisKind::Low, matches!(next, DotsNext::SemiOrPeriod | DotsNext::Closing)),
+                    "dotso" => (EllipsisKind::Low, next == DotsNext::Closing),
+                    _ => match next {
+                        DotsNext::BinRel => (EllipsisKind::Centered, false),
+                        DotsNext::Comma => (EllipsisKind::Low, false),
+                        _ => (EllipsisKind::Low, next == DotsNext::Closing),
+                    },
+                };
+                let dots = MathNode::Ellipsis(kind);
+                Some(if thin {
+                    MathNode::Row(vec![dots, MathNode::Space(MathSkip::Mu(3.0))])
                 } else {
-                    Some(MathNode::Ellipsis(crate::math::math_ast::EllipsisKind::Low))
-                }
-            }
-
-            // Modular arithmetic
-            "bmod" => {
-                let mod_sym = MathNode::StyleChange {
-                    face: Face::Roman,
-                    content: Box::new(MathNode::Row(vec![
-                        MathNode::Variable('m'),
-                        MathNode::Variable('o'),
-                        MathNode::Variable('d'),
-                    ])),
-                };
-                Some(MathNode::Row(vec![
-                    MathNode::Space(4.0 / 18.0 * 10.0),
-                    mod_sym,
-                    MathNode::Space(4.0 / 18.0 * 10.0),
-                ]))
-            }
-            "pmod" => {
-                let arg = self.parse_mandatory_arg();
-                let mod_text = MathNode::StyleChange {
-                    face: Face::Roman,
-                    content: Box::new(MathNode::Row(vec![
-                        MathNode::Variable('m'),
-                        MathNode::Variable('o'),
-                        MathNode::Variable('d'),
-                    ])),
-                };
-                let inner = MathNode::Row(vec![mod_text, MathNode::Space(4.0 / 18.0 * 10.0), arg]);
-                let parens = MathNode::Delimited(Box::new(DelimitedData::new("(", ")", inner)));
-                Some(MathNode::Row(vec![MathNode::Space(5.0), parens]))
+                    dots
+                })
             }
 
             // Accents (mlist.c top, bottom, and overlay accents)
             "vec" | "hat" | "dot" | "ddot" | "dddot" | "ddddot" | "bar" | "tilde" | "check"
             | "breve" | "acute" | "grave" | "mathring" | "overline" | "underline" | "widehat"
-            | "widetilde" | "overrightarrow" | "overleftarrow"
+            | "widetilde" | "overrightarrow" | "overleftarrow" | "overleftrightarrow"
+            | "underrightarrow" | "underleftarrow" | "underleftrightarrow"
             | "utilde" | "underbar" | "not" | "cancel" => {
                 let nucleus = Box::new(self.parse_mandatory_arg());
                 Some(MathNode::Accent {
@@ -1299,12 +1580,14 @@ impl<'a> MathParser<'a> {
                 })
             }
             "underaccent" => {
-                let _acc = self.parse_mandatory_arg();
+                // The first argument names the accent glyph (`{\tilde}`); it must not be
+                // parsed as an accent command, which would consume the following input.
+                let accent = match self.parse_raw_group().trim().trim_start_matches('\\') {
+                    "bar" | "underbar" => "underbar",
+                    _ => "utilde",
+                };
                 let nucleus = Box::new(self.parse_mandatory_arg());
-                Some(MathNode::Accent {
-                    accent: "utilde",
-                    nucleus,
-                })
+                Some(MathNode::Accent { accent, nucleus })
             }
 
             // Extensible horizontal braces and brackets (mlist.c make_delimiter_over/under)
@@ -1361,14 +1644,14 @@ impl<'a> MathParser<'a> {
                 Some(node)
             }
             "mathrm" => {
-                let content = Box::new(self.parse_mandatory_arg());
+                let content = Box::new(join_ligature_letters(self.parse_mandatory_arg()));
                 Some(MathNode::StyleChange {
                     face: Face::Roman,
                     content,
                 })
             }
             "mathbf" => {
-                let content = Box::new(self.parse_mandatory_arg());
+                let content = Box::new(join_ligature_letters(self.parse_mandatory_arg()));
                 Some(MathNode::StyleChange {
                     face: Face::Bold,
                     content,
@@ -1382,7 +1665,7 @@ impl<'a> MathParser<'a> {
                 })
             }
             "mathit" => {
-                let content = Box::new(self.parse_mandatory_arg());
+                let content = Box::new(join_ligature_letters(self.parse_mandatory_arg()));
                 Some(MathNode::StyleChange {
                     face: Face::Italic,
                     content,
@@ -1431,12 +1714,28 @@ impl<'a> MathParser<'a> {
                     "vmatrix" => (MatrixDelim::VBar, MatrixEnvKind::Matrix, Vec::new()),
                     "Vmatrix" => (MatrixDelim::DoubleVBar, MatrixEnvKind::Matrix, Vec::new()),
                     "smallmatrix" => (MatrixDelim::None, MatrixEnvKind::SmallMatrix, Vec::new()),
+                    "subarray" => {
+                        let align = match self.parse_ident_arg() {
+                            "l" => ColAlign::Left,
+                            "r" => ColAlign::Right,
+                            _ => ColAlign::Center,
+                        };
+                        (MatrixDelim::None, MatrixEnvKind::Subarray, vec![align])
+                    }
                     "cases" => (
                         MatrixDelim::LeftBrace,
                         MatrixEnvKind::Cases,
                         vec![ColAlign::Left, ColAlign::Left],
                     ),
-                    "aligned" | "align" | "align*" | "alignat" | "alignat*" | "split" => (
+                    "alignedat" | "alignat" | "alignat*" => {
+                        let _ = self.parse_ident_arg();
+                        (
+                            MatrixDelim::None,
+                            MatrixEnvKind::AlignedAt,
+                            [ColAlign::Right, ColAlign::Left].repeat(4),
+                        )
+                    }
+                    "aligned" | "align" | "align*" | "split" => (
                         MatrixDelim::None,
                         MatrixEnvKind::Aligned,
                         vec![
@@ -1469,7 +1768,7 @@ impl<'a> MathParser<'a> {
                                 _ => None,
                             })
                             .collect();
-                        (MatrixDelim::None, MatrixEnvKind::Matrix, aligns)
+                        (MatrixDelim::None, MatrixEnvKind::Array, aligns)
                     }
                     _ => (MatrixDelim::None, MatrixEnvKind::Matrix, Vec::new()),
                 };
@@ -1479,12 +1778,24 @@ impl<'a> MathParser<'a> {
 
             // Greek letters and STEM symbols
             _ => {
+                let mathcode = crate::math::math_mathchar::lookup_mathchar(cmd).unwrap_or(0);
                 if let Some(sym) = lookup_math_command(cmd) {
                     Some(MathNode::Symbol {
-                        kind: sym.kind,
+                        kind: if mathcode != 0 { mathcode_class_kind(mathcode) } else { sym.kind },
                         face: sym.face,
                         glyph: sym.glyph,
                         code: sym.code,
+                        mathcode,
+                    })
+                } else if mathcode != 0 {
+                    // Declared by LaTeX but absent from the Base-14 table: only Computer
+                    // Modern can draw it, so the command name is kept as the fallback glyph.
+                    Some(MathNode::Symbol {
+                        kind: mathcode_class_kind(mathcode),
+                        face: Face::Symbol,
+                        glyph: cmd,
+                        code: None,
+                        mathcode,
                     })
                 } else {
                     // Unknown command: fallback to Roman text
@@ -1493,6 +1804,7 @@ impl<'a> MathParser<'a> {
                         face: Face::Roman,
                         glyph: cmd,
                         code: None,
+                        mathcode: 0,
                     })
                 }
             }
@@ -1529,9 +1841,9 @@ impl<'a> MathParser<'a> {
             "\\lceil"
         } else if self.eat("\\rceil") {
             "\\rceil"
-        } else if self.eat("\\vert") {
+        } else if self.eat("\\vert") || self.eat("\\lvert") || self.eat("\\rvert") {
             "|"
-        } else if self.eat("\\Vert") {
+        } else if self.eat("\\Vert") || self.eat("\\lVert") || self.eat("\\rVert") {
             "||"
         } else if self.eat("\\backslash") {
             "\\"
@@ -1563,6 +1875,38 @@ impl<'a> MathParser<'a> {
     }
 
     /// Parses a `\text{...}` argument, preserving literal whitespace as inter-word spacing.
+    /// Returns the raw text of a `{...}` group (or a single control word) without parsing it.
+    fn parse_raw_group(&mut self) -> &'a str {
+        self.skip_ws();
+        if !self.eat("{") {
+            let start = self.pos;
+            if self.eat("\\") {
+                while matches!(self.peek_char(), Some(c) if c.is_ascii_alphabetic()) {
+                    self.pos += 1;
+                }
+            } else if let Some(ch) = self.peek_char() {
+                self.pos += ch.len_utf8();
+            }
+            return &self.src[start..self.pos];
+        }
+        let start = self.pos;
+        let mut depth = 1;
+        while let Some(ch) = self.peek_char() {
+            if ch == '{' {
+                depth += 1;
+            } else if ch == '}' {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            self.pos += ch.len_utf8();
+        }
+        let raw = &self.src[start..self.pos];
+        self.eat("}");
+        raw
+    }
+
     fn parse_text_arg(&mut self) -> MathNode<'a> {
         self.skip_ws();
         if !self.eat("{") {
@@ -1593,7 +1937,7 @@ impl<'a> MathParser<'a> {
         let mut i = 0;
         while i < bytes.len() {
             if bytes[i].is_ascii_whitespace() {
-                nodes.push(MathNode::Space(3.3333));
+                nodes.push(MathNode::Space(MathSkip::TextSpace));
                 while i < bytes.len() && bytes[i].is_ascii_whitespace() {
                     i += 1;
                 }
@@ -1608,6 +1952,7 @@ impl<'a> MathParser<'a> {
                     face: Face::Roman,
                     glyph: word,
                     code: None,
+                    mathcode: 0,
                 });
             }
         }
@@ -1654,6 +1999,175 @@ impl<'a> MathParser<'a> {
             self.pos += 2;
         }
         val
+    }
+
+    /// Classifies the token after a dots command the way amsmath's `\\mdots@`, `\\extrap@`
+    /// and `\\rightdelim@` do.
+    fn dots_lookahead(&self) -> DotsNext {
+        let rem = self.remaining().trim_start();
+        let Some(c) = rem.chars().next() else {
+            return DotsNext::Closing;
+        };
+        match c {
+            ',' => return DotsNext::Comma,
+            ';' | '.' => return DotsNext::SemiOrPeriod,
+            ')' | ']' => return DotsNext::Closing,
+            '+' | '=' | '<' | '>' | '-' | '*' | ':' => return DotsNext::BinRel,
+            '\\' => {}
+            _ => return DotsNext::Other,
+        }
+        let name: &str = {
+            let body = &rem[1..];
+            let end = body.find(|ch: char| !ch.is_ascii_alphabetic()).unwrap_or(body.len());
+            if end == 0 { &body[..body.chars().next().map_or(0, char::len_utf8)] } else { &body[..end] }
+        };
+        if matches!(
+            name,
+            "}" | "rbrack" | "rbrace" | "rangle" | "rceil" | "rfloor" | "rgroup" | "rmoustache"
+                | "right" | "bigr" | "Bigr" | "biggr" | "Biggr"
+        ) {
+            return DotsNext::Closing;
+        }
+        if name == "not" {
+            return DotsNext::BinRel;
+        }
+        let class = crate::math::math_mathchar::lookup_mathchar(name)
+            .map(mathcode_class_kind)
+            .or_else(|| lookup_math_command(name).map(|s| s.kind));
+        if matches!(class, Some(MathAtomKind::Bin | MathAtomKind::Rel)) {
+            DotsNext::BinRel
+        } else {
+            DotsNext::Other
+        }
+    }
+
+    /// Whether the input is at `\\right` itself, not a longer control word such as `\\rightarrow`.
+    fn at_right_delimiter(&self) -> bool {
+        let rem = self.remaining();
+        rem.starts_with("\\right") && !rem[6..].starts_with(|c: char| c.is_ascii_alphabetic())
+    }
+
+    /// Expands a [`MATH_MACROS`] body; `#1` is replaced by one mandatory argument.
+    fn expand_math_macro(&mut self, body: &'static str) -> MathNode<'a> {
+        let Some((pre, post)) = body.split_once("#1") else {
+            return MathParser::new(body).parse_expression(None);
+        };
+        let arg = self.parse_mandatory_arg();
+        let mut nodes = Vec::with_capacity(8);
+        for part in [MathParser::new(pre).parse_expression(None), arg, MathParser::new(post).parse_expression(None)] {
+            match part {
+                MathNode::Row(items) => nodes.extend(items),
+                other => nodes.push(other),
+            }
+        }
+        MathNode::Row(nodes)
+    }
+
+    /// Scans a TeX integer: decimal, `"` hexadecimal, `'` octal or `` ` `` character code.
+    fn scan_int(&mut self) -> u32 {
+        self.skip_ws();
+        let (radix, skip) = match self.peek_char() {
+            Some('"') => (16, 1),
+            Some('\'') => (8, 1),
+            Some('`') => {
+                self.pos += 1;
+                if self.remaining().starts_with('\\') {
+                    self.pos += 1;
+                }
+                let ch = self.peek_char().unwrap_or('\0');
+                self.pos += ch.len_utf8();
+                return ch as u32;
+            }
+            _ => (10, 0),
+        };
+        self.pos += skip;
+        let start = self.pos;
+        while self.peek_char().is_some_and(|c| c.is_digit(radix)) {
+            self.pos += 1;
+        }
+        u32::from_str_radix(&self.src[start..self.pos], radix).unwrap_or(0)
+    }
+
+    /// Scans a TeX skip or kern (`-3mu`, `2pt`, `.5em`, `-\thinmuskip`), ignoring any
+    /// `plus`/`minus` stretch, and returns it in its unit.
+    fn scan_skip(&mut self) -> MathSkip {
+        self.skip_ws();
+        let mut sign = 1.0f32;
+        while let Some(c) = self.peek_char() {
+            match c {
+                '-' => sign = -sign,
+                '+' => {}
+                _ if c.is_ascii_whitespace() => {}
+                _ => break,
+            }
+            self.pos += 1;
+        }
+        let skip = if self.eat("\\thinmuskip") {
+            MathSkip::Mu(3.0 * sign)
+        } else if self.eat("\\medmuskip") {
+            MathSkip::Mu(4.0 * sign)
+        } else if self.eat("\\thickmuskip") {
+            MathSkip::Mu(5.0 * sign)
+        } else {
+            let start = self.pos;
+            while self.peek_char().is_some_and(|c| c.is_ascii_digit() || c == '.' || c == ',') {
+                self.pos += 1;
+            }
+            let v = self.src[start..self.pos].replace(',', ".").parse::<f32>().unwrap_or(1.0) * sign;
+            self.skip_ws();
+            self.scan_skip_unit(v)
+        };
+        for keyword in ["plus", "minus"] {
+            self.skip_ws();
+            if self.eat(keyword) {
+                self.skip_ws();
+                let _ = self.scan_skip_component();
+            }
+        }
+        skip
+    }
+
+    /// Consumes the number and unit of a stretch/shrink component (`1fil`, `2mu`).
+    fn scan_skip_component(&mut self) -> f32 {
+        let start = self.pos;
+        while self.peek_char().is_some_and(|c| c.is_ascii_digit() || c == '.' || c == '-') {
+            self.pos += 1;
+        }
+        let v = self.src[start..self.pos].parse::<f32>().unwrap_or(1.0);
+        self.skip_ws();
+        while self.peek_char().is_some_and(|c| c.is_ascii_alphabetic()) {
+            self.pos += 1;
+        }
+        v
+    }
+
+    fn scan_skip_unit(&mut self, v: f32) -> MathSkip {
+        const UNITS: [(&str, f32); 8] = [
+            ("pt", 1.0),
+            ("bp", 72.27 / 72.0),
+            ("mm", 72.27 / 25.4),
+            ("cm", 72.27 / 2.54),
+            ("in", 72.27),
+            ("pc", 12.0),
+            ("dd", 1238.0 / 1157.0),
+            ("sp", 1.0 / 65536.0),
+        ];
+        if self.eat("mu") {
+            return MathSkip::Mu(v);
+        }
+        if self.eat("em") {
+            return MathSkip::TextEm(v);
+        }
+        if self.eat("ex") {
+            // cmr10 x-height is 0.430555 em.
+            return MathSkip::TextEm(v * 0.430555);
+        }
+        for (unit, scale) in UNITS {
+            if self.eat(unit) {
+                return MathSkip::Pt(v * scale);
+            }
+        }
+        MathSkip::Pt(v)
     }
 
     /// Parses `{ident}` string slice.
@@ -1735,7 +2249,7 @@ impl<'a> MathParser<'a> {
                 // 2. In `multline` subsequent rows (row > 0), binary operators like `+`
                 //    must retain binary operator spacing instead of unary promotion.
                 let needs_phantom_ord = match env_kind {
-                    MatrixEnvKind::Aligned => {
+                    MatrixEnvKind::Aligned | MatrixEnvKind::AlignedAt => {
                         (col_idx % 2 == 1)
                             && matches!(
                                 cell.first_atom_kind(),
@@ -1840,7 +2354,48 @@ pub fn parse_math_str<'a>(src: &'a str) -> MathNode<'a> {
     parser.parse_expression(None)
 }
 
+/// [`parse_math_str`] with the document's `\definecolor` names in scope.
+pub fn parse_math_str_with_colors<'a>(src: &'a str, colors: &[(&'a str, PackedColor)]) -> MathNode<'a> {
+    let mut parser = MathParser::new(src);
+    parser.colors.extend_from_slice(colors);
+    parser.parse_expression(None)
+}
+
 /// Recursively transforms ASCII letters into canonical Unicode Mathematical Sans-Serif symbols.
+/// In a text font, adjacent ordinary letters form the font's f-ligatures (TeX §752), so runs
+/// spelling ff, fi, fl, ffi or ffl become one word that the layout shapes.
+fn join_ligature_letters<'a>(node: MathNode<'a>) -> MathNode<'a> {
+    let MathNode::Row(items) = node else { return node };
+    let letter = |n: &MathNode| match n {
+        MathNode::Variable(c) => Some(*c),
+        _ => None,
+    };
+    let mut out = Vec::with_capacity(items.len());
+    let mut i = 0;
+    while i < items.len() {
+        let w = &crate::math::math_ast::MATH_LIGATURE_WORDS;
+        let word: Option<&'static str> = match (letter(&items[i]), items.get(i + 1).and_then(letter), items.get(i + 2).and_then(letter)) {
+            (Some('f'), Some('f'), Some('i')) => Some(w[0]),
+            (Some('f'), Some('f'), Some('l')) => Some(w[1]),
+            (Some('f'), Some('f'), _) => Some(w[2]),
+            (Some('f'), Some('i'), _) => Some(w[3]),
+            (Some('f'), Some('l'), _) => Some(w[4]),
+            _ => None,
+        };
+        match word {
+            Some(w) => {
+                out.push(MathNode::Symbol { kind: MathAtomKind::Ord, face: Face::Roman, glyph: w, code: None, mathcode: 0 });
+                i += w.len();
+            }
+            None => {
+                out.push(items[i].clone());
+                i += 1;
+            }
+        }
+    }
+    MathNode::Row(out)
+}
+
 fn transform_to_sans<'a>(node: MathNode<'a>) -> MathNode<'a> {
     match node {
         MathNode::Variable(ch) => {
@@ -1861,5 +2416,83 @@ fn transform_to_sans<'a>(node: MathNode<'a>) -> MathNode<'a> {
             }
         }
         other => other,
+    }
+}
+
+/// Atom class of a TeX math code (`\\mathchar` class digit; class 7 is a variable-family Ord).
+#[inline]
+fn mathcode_class_kind(mathcode: u16) -> MathAtomKind {
+    match mathcode >> 12 {
+        1 => MathAtomKind::Op,
+        2 => MathAtomKind::Bin,
+        3 => MathAtomKind::Rel,
+        4 => MathAtomKind::Open,
+        5 => MathAtomKind::Close,
+        6 => MathAtomKind::Punct,
+        _ => MathAtomKind::Ord,
+    }
+}
+
+/// Composite math commands from `fontmath.ltx` and `amsmath.sty`, restated with the
+/// primitives this parser implements (`#1` is the single argument). Sorted by name.
+static MATH_MACROS: [(&str, &str); 29] = [
+    ("Longleftarrow", r"\Leftarrow\joinrel\Relbar"),
+    ("Longleftrightarrow", r"\Leftarrow\joinrel\Rightarrow"),
+    ("Longrightarrow", r"\Relbar\joinrel\Rightarrow"),
+    ("Relbar", r"\mathrel{=}"),
+    ("bmod", r"\nonscript\mskip-\medmuskip\mkern5mu\mathbin{\mathrm{mod}}\mkern5mu\nonscript\mskip-\medmuskip"),
+    ("colon", r"\mskip2mu\mathpunct{}\nonscript\mkern-\thinmuskip\mathord{:}\mskip6mu"),
+    ("hookleftarrow", r"\leftarrow\joinrel\rhook"),
+    ("hookrightarrow", r"\lhook\joinrel\rightarrow"),
+    ("iff", r"\;\Longleftrightarrow\;"),
+    ("impliedby", r"\;\Longleftarrow\;"),
+    ("implies", r"\;\Longrightarrow\;"),
+    ("joinrel", r"\mathrel{\mkern-3mu}"),
+    ("lVert", r"\mathopen{\|}"),
+    ("leadsto", r"\rightsquigarrow"),
+    ("longleftarrow", r"\leftarrow\joinrel\relbar"),
+    ("longleftrightarrow", r"\leftarrow\joinrel\rightarrow"),
+    ("longmapsto", r"\mapstochar\longrightarrow"),
+    ("longrightarrow", r"\relbar\joinrel\rightarrow"),
+    ("lvert", r"\mathopen{|}"),
+    ("mapsto", r"\mapstochar\rightarrow"),
+    ("mathstrut", r"\vphantom("),
+    ("mod", r"\mathchoice{\mkern18mu}{\mkern12mu}{\mkern12mu}{\mkern12mu}\mathord{\mathrm{mod}}\,\,#1"),
+    ("ne", r"\not="),
+    ("neq", r"\not="),
+    ("pmod", r"\mathchoice{\mkern18mu}{\mkern8mu}{\mkern8mu}{\mkern8mu}(\mathord{\mathrm{mod}}\mkern6mu#1)"),
+    ("pod", r"\mathchoice{\mkern18mu}{\mkern8mu}{\mkern8mu}{\mkern8mu}(#1)"),
+    ("rVert", r"\mathclose{\|}"),
+    ("relbar", r"\mathrel{\smash{-}}"),
+    ("rvert", r"\mathclose{|}"),
+];
+
+#[inline]
+fn lookup_math_macro(cmd: &str) -> Option<&'static str> {
+    MATH_MACROS
+        .binary_search_by(|(n, _)| n.as_bytes().cmp(cmd.as_bytes()))
+        .ok()
+        .map(|i| MATH_MACROS[i].1)
+}
+
+/// What follows a dots command, as far as amsmath's spacing rules care.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DotsNext {
+    Comma,
+    SemiOrPeriod,
+    Closing,
+    BinRel,
+    Other,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MATH_MACROS;
+
+    #[test]
+    fn math_macros_are_sorted_for_binary_search() {
+        for pair in MATH_MACROS.windows(2) {
+            assert!(pair[0].0.as_bytes() < pair[1].0.as_bytes(), "{} must sort before {}", pair[0].0, pair[1].0);
+        }
     }
 }

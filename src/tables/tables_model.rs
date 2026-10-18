@@ -81,9 +81,29 @@ pub struct TableData<'a> {
     pub rule_bottom: bool,
     pub bottom_rules: Vec<TableRule>,
     pub is_longtable: bool,
-    pub header_row_count: usize,
-    pub first_header_row_count: usize,
-    pub footer_row_count: usize,
+    /// Row ranges of the longtable head/foot boxes (all empty for other tables).
+    pub lt_sections: LtSections,
     pub caption: Option<Vec<Inline<'a>>>,
     pub caption_above: bool,
+    /// `\centering` was given in the enclosing float.
+    pub centered: bool,
+}
+
+/// Row ranges `[start, end)` of the `longtable` head and foot boxes delimited by
+/// `\endfirsthead`, `\endhead`, `\endfoot` and `\endlastfoot`; body rows start at
+/// `body_start`. Packed as `u16` pairs so the whole descriptor stays in 18 bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LtSections {
+    pub first_head: (u16, u16),
+    pub head: (u16, u16),
+    pub foot: (u16, u16),
+    pub last_foot: (u16, u16),
+    pub body_start: u16,
+}
+
+impl LtSections {
+    #[inline]
+    pub fn is_empty_range(r: (u16, u16)) -> bool {
+        r.1 <= r.0
+    }
 }

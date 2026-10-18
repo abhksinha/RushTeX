@@ -86,6 +86,10 @@ pub struct ScriptShiftResolver;
 
 impl ScriptShiftResolver {
     /// Computes candidate shifts and enforces Rules 18a-18e constraints in a unified pass.
+    ///
+    /// `drops` holds `(sup_drop, sub_drop)` in points, taken from the font of the *script*
+    /// size as in TeX §756 (`sup_drop(t)`, `sub_drop(t)`), not from the nucleus size.
+    #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     pub fn resolve(
         has_sup: bool,
@@ -99,12 +103,13 @@ impl ScriptShiftResolver {
         x_height: f32,
         scale: f32,
         params: &crate::math::math_fonts::MathFontParameters,
+        drops: (f32, f32),
     ) -> PackedScriptMetrics {
         // Rule 18a: Candidate superscript shift
         let sup_idx = SCRIPT_STYLE_TO_SUP_IDX[(style as usize) & 7] as usize;
         let sup_param = [params.sup2, params.sup1, params.sup3][sup_idx];
         let sup_shift_std = (sup_param as f32) * scale;
-        let sup_drop = (params.sup_drop as f32) * scale;
+        let sup_drop = drops.0;
         let mut sup_shift = if is_char {
             sup_shift_std
         } else {
@@ -114,7 +119,7 @@ impl ScriptShiftResolver {
         // Rule 18b: Candidate subscript shift
         let sub_param = [params.sub1, params.sub2][has_sup as usize];
         let sub_shift_std = (sub_param as f32) * scale;
-        let sub_drop = (params.sub_drop as f32) * scale;
+        let sub_drop = drops.1;
         let mut sub_shift = if is_char {
             sub_shift_std
         } else {
@@ -275,6 +280,7 @@ impl TransientScriptPair {
 
     /// Computes the horizontal right boundary of the nucleus with attached scripts.
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub fn right_bound(
         &self,
         has_sup: bool,
@@ -298,23 +304,30 @@ impl TransientScriptPair {
         (origin_x + nuc_w).max(sup_r).max(sub_r)
     }
 
-    /// Computes total formula height incorporating superscript shift.
+    /// Height of the nucleus-plus-scripts hlist. A lowered subscript can still rise above the
+    /// baseline (e.g. `{}_C`), and hpack takes the maximum over every box.
     #[inline(always)]
-    pub fn total_height(&self, has_sup: bool, nuc_h: f32, sup_shift: f32) -> f32 {
+    pub fn total_height(&self, has_sup: bool, has_sub: bool, nuc_h: f32, sup_shift: f32, sub_shift: f32) -> f32 {
+        let mut h = nuc_h;
         if has_sup {
-            nuc_h.max(sup_shift + self.sup_box.h)
-        } else {
-            nuc_h
+            h = h.max(sup_shift + self.sup_box.h);
         }
+        if has_sub {
+            h = h.max(self.sub_box.h - sub_shift);
+        }
+        h
     }
 
-    /// Computes total formula depth incorporating subscript shift.
+    /// Depth of the nucleus-plus-scripts hlist (a raised superscript may still descend).
     #[inline(always)]
-    pub fn total_depth(&self, has_sub: bool, nuc_d: f32, sub_shift: f32) -> f32 {
+    pub fn total_depth(&self, has_sup: bool, has_sub: bool, nuc_d: f32, sup_shift: f32, sub_shift: f32) -> f32 {
+        let mut d = nuc_d;
         if has_sub {
-            nuc_d.max(sub_shift + self.sub_box.d)
-        } else {
-            nuc_d
+            d = d.max(sub_shift + self.sub_box.d);
         }
+        if has_sup {
+            d = d.max(self.sup_box.d - sup_shift);
+        }
+        d
     }
 }

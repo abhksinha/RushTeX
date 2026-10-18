@@ -26,19 +26,32 @@ use crate::font_metrics::{self as metrics, Face};
 use crate::index::{pre_scan_entries, IndexRegistry};
 use crate::layout::layout_hz::{
     build_breakpoints, hash_paragraph, hz_break_paragraph_breakpoints_pass,
-    hz_break_paragraph_fast_shape, try_layout_single_line_paragraph, Breakpoint, HzConfig, ParCacheEntry, PAR_CACHE_MAX_LINES,
+    hz_break_paragraph_fast_shape, ragged_break_paragraph, try_layout_single_line_paragraph, Breakpoint, HzConfig, ParCacheEntry, PAR_CACHE_MAX_LINES,
 };
+use crate::frontend::ast::PackedColor;
 use crate::tex_parser::{Block, Document, Graphic, Inline, TableData};
 
 pub const PAR_CACHE_CAP: usize = 256;
 pub const PAR_CACHE_MASK: usize = PAR_CACHE_CAP - 1;
 
-pub const PAGE_W: f32 = 595.0;
-pub const PAGE_H: f32 = 842.0;
-pub const MARGIN: f32 = 72.0;
-pub const FONT_SIZE: f32 = 11.0;
-pub const LEADING: f32 = 14.0;
+pub const PAGE_W: f32 = 597.508;
+pub const PAGE_H: f32 = 845.047;
+pub const MARGIN: f32 = 72.27;
+pub const FONT_SIZE: f32 = 10.0;
+pub const LEADING: f32 = 12.0;
+
+/// Flag bit in [`Paint::GlyphRun`]'s `part_count`: the run is body text, so the backend applies
+/// the font's ligature/kern program to each word ([`crate::backend::shape`]), exactly as layout
+/// measured it. Runs without the flag (math, listings, generated labels) are emitted verbatim.
+pub const GLYPH_RUN_SHAPED: u32 = 1 << 31;
+/// Mask extracting the number of text-pool parts from [`Paint::GlyphRun`]'s `part_count`.
+pub const GLYPH_RUN_COUNT_MASK: u32 = GLYPH_RUN_SHAPED - 1;
 pub const PARA_SKIP: f32 = 8.0;
+/// LaTeX `\topsep` at 10pt (8pt plus 2pt minus 4pt), the space around trivlists.
+pub const TOPSEP: f32 = 8.0;
+/// LaTeX `\partopsep` at 10pt (2pt plus 1pt minus 1pt), added when a trivlist starts in
+/// vertical mode.
+pub const PARTOPSEP: f32 = 2.0;
 pub const LIST_INDENT: f32 = 24.0;
 pub const CELL_PAD: f32 = 6.0;
 pub const FIG_H: f32 = 140.0;
@@ -54,23 +67,11 @@ pub struct Page<'a> {
 }
 
 impl<'a> Page<'a> {
+    /// Appends a paint op. The PDF writer derives the fonts to embed from the ops (a text op
+    /// in a design-size master needs only that master); `used_faces` holds only faces used
+    /// outside the ops.
     #[inline(always)]
     pub fn push_op(&mut self, op: Paint) {
-        match op {
-            Paint::GlyphRun { face, .. }
-            | Paint::Marker { face, .. }
-            | Paint::PageNumber { face, .. }
-            | Paint::SectionNumber { face, .. }
-            | Paint::FigureTag { face, .. }
-            | Paint::TableTag { face, .. }
-            | Paint::EquationNumber { face, .. } => {
-                self.used_faces |= 1 << (face as u8);
-            }
-            Paint::CaptionTag { .. } | Paint::TableCaptionTag { .. } => {
-                self.used_faces |= 1 << (Face::Roman as u8);
-            }
-            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } => {}
-        }
         self.ops.push(op);
     }
 
@@ -91,7 +92,7 @@ impl<'a> Page<'a> {
                 Paint::CaptionTag { .. } | Paint::TableCaptionTag { .. } => {
                     mask |= 1 << (Face::Roman as u8);
                 }
-                Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } => {}
+                Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } | Paint::Color { .. } => {}
             }
         }
         mask
@@ -142,11 +143,13 @@ pub enum Paint {
     CaptionTag {
         x: f32,
         y: f32,
+        size: f32,
         n: u32,
     },
     TableCaptionTag {
         x: f32,
         y: f32,
+        size: f32,
         n: u32,
     },
     PageNumber {
@@ -184,6 +187,10 @@ pub enum Paint {
         face: Face,
         size: f32,
         n: u32,
+    },
+    /// Sets the fill and stroke colour for the ops that follow.
+    Color {
+        color: PackedColor,
     },
     /// Native resolution-independent OpenType vector glyph outline rendered via Bézier paths.
     VectorGlyph {
@@ -237,6 +244,10 @@ pub(crate) struct Layouter<'a> {
     pub(crate) page_height: f32,
     pub(crate) margin_top: f32,
     pub(crate) margin_bottom: f32,
+    /// TeX `\topskip`: the first baseline of a page sits this far below the text-block top.
+    pub(crate) top_skip: f32,
+    /// LaTeX `\footskip`: text-block bottom to page-number baseline.
+    pub(crate) foot_skip: f32,
     pub(crate) base_font_size: f32,
     pub(crate) base_leading: f32,
     pub(crate) font_family: metrics::FontFamily,
@@ -269,12 +280,39 @@ pub(crate) struct Layouter<'a> {
     pub(crate) par_fill_width: f32,
     pub(crate) par_fill_stretch: f32,
     pub(crate) last_line_fit: i32,
+    /// Alignment of the paragraphs being set (`\centering`, `\raggedright`, …).
+    pub(crate) par_align: crate::frontend::ast::ParAlign,
+    /// The `\addvspace` amount that ended the previous block (0 after any other block).
+    pub(crate) last_addvspace: f32,
+    /// Text colour in force between paragraphs (`\color` outside any group).
+    pub(crate) text_color: PackedColor,
+    /// The class's normal size (10pt, 11pt, 12pt), which `\small`, `\Large`, … key off.
+    pub(crate) class_font_size: f32,
+    /// Size in force at the end of the paragraph just exploded; it sets the paragraph's
+    /// `\baselineskip` and, at the top level, the size after it.
+    pub(crate) par_end_size: Option<f32>,
+    /// `\baselineskip` for the next paragraph when its last `\par` falls inside a group
+    /// that changed the size.
+    pub(crate) leading_override: Option<f32>,
+    /// Font size of the largest text on the previous line (for `\lineskip`).
+    pub(crate) prev_line_size: f32,
+    /// Baseline advance after the last text line, while the block just set ended in one
+    /// (0 otherwise): a paragraph with another `\baselineskip` corrects its first line.
+    pub(crate) last_line_advance: f32,
+    /// `last_line_advance` as it stood when the current block began.
+    pub(crate) block_entry_advance: f32,
     pub(crate) words_soa: ParagraphSoA<'a>,
     pub(crate) breakpoints: Vec<Breakpoint>,
     pub(crate) hyphen_scratch: Vec<&'a str>,
-    pub(crate) hyphen_cache: Box<[crate::layout::layout_hyphen::HyphenCacheEntry; crate::layout::layout_hyphen::HYPHEN_CACHE_SIZE]>,
+    /// The hz breaker's hyphenation cache (512 KB), allocated when that breaker first runs.
+    pub(crate) hyphen_cache: Option<Box<[crate::layout::layout_hyphen::HyphenCacheEntry; crate::layout::layout_hyphen::HYPHEN_CACHE_SIZE]>>,
     pub(crate) par_cache: Box<[ParCacheEntry; PAR_CACHE_CAP]>,
     pub(crate) dp_nodes: Vec<crate::layout::layout_hz::DpNode>,
+    /// Buffers of TeX's line breaker, reused for every paragraph.
+    pub(crate) break_scratch: crate::layout::layout_linebreak::BreakScratch,
+    /// Break paragraphs with the hz (font expansion and protrusion) breaker instead of
+    /// TeX's; pdfTeX does this only under `microtype`.
+    pub(crate) hz_microtype: bool,
     pub(crate) dp_prefix: Vec<crate::layout::layout_hz::PrefixSum>,
     pub(crate) pass_stats: [u32; 4],
     pub(crate) debug_timings: bool,
@@ -286,6 +324,8 @@ pub(crate) struct Layouter<'a> {
     pub(crate) line_descriptors: Vec<LineDescriptor>,
     pub(crate) cell_words_soa: ParagraphSoA<'a>,
     pub(crate) cell_lines: Vec<CellLineRange>,
+    /// Line descriptors of the cell paragraph being broken (reused).
+    pub(crate) cell_descs: Vec<LineDescriptor>,
     pub(crate) cell_line_spans: Vec<CellSpan>,
     pub(crate) registry: IndexRegistry<'a>,
     pub(crate) is_dry_run: bool,
@@ -317,7 +357,7 @@ impl<'a> Layouter<'a> {
     ) -> Self {
         let left = config.margin_left;
         let right = config.page_width - config.margin_right;
-        let y = config.page_height - config.margin_top;
+        let y = config.page_height - config.margin_top - config.top_skip;
         Self {
             pages: Vec::with_capacity(32),
             current_page: Page {
@@ -343,6 +383,8 @@ impl<'a> Layouter<'a> {
             page_height: config.page_height,
             margin_top: config.margin_top,
             margin_bottom: config.margin_bottom,
+            top_skip: config.top_skip,
+            foot_skip: config.foot_skip,
             base_font_size: config.base_font_size,
             base_leading: config.base_leading,
             font_family: config.font_family,
@@ -362,7 +404,7 @@ impl<'a> Layouter<'a> {
             list_item_sep: config.list_item_sep,
             list_par_indent: config.list_par_indent,
             french_spacing: config.french_spacing,
-            after_heading: true,
+            after_heading: false,
             has_preceding_text: false,
             last_line_width: 0.0,
             last_line_indent: 0.0,
@@ -375,18 +417,26 @@ impl<'a> Layouter<'a> {
             par_fill_width: config.par_fill_width,
             par_fill_stretch: config.par_fill_stretch,
             last_line_fit: config.last_line_fit,
+            par_align: crate::frontend::ast::ParAlign::Justified,
+            last_addvspace: 0.0,
+            text_color: PackedColor::BLACK,
+            class_font_size: config.base_font_size,
+            par_end_size: None,
+            leading_override: None,
+            prev_line_size: config.base_font_size,
+            last_line_advance: 0.0,
+            block_entry_advance: 0.0,
             words_soa: ParagraphSoA::with_capacity(1024),
             breakpoints: Vec::with_capacity(512),
             hyphen_scratch: Vec::with_capacity(16),
-            hyphen_cache: vec![crate::layout::layout_hyphen::HyphenCacheEntry::empty(); crate::layout::layout_hyphen::HYPHEN_CACHE_SIZE]
-                .into_boxed_slice()
-                .try_into()
-                .unwrap(),
+            hyphen_cache: None,
             par_cache: vec![ParCacheEntry::default(); PAR_CACHE_CAP]
                 .into_boxed_slice()
                 .try_into()
                 .unwrap(),
             dp_nodes: Vec::with_capacity(1024 * 4),
+            break_scratch: Default::default(),
+            hz_microtype: false,
             dp_prefix: Vec::with_capacity(1024),
             pass_stats: [0; 4],
             debug_timings: std::env::var_os("RUSHTEX_DEBUG_PASSES").is_some(),
@@ -398,6 +448,7 @@ impl<'a> Layouter<'a> {
             line_descriptors: Vec::with_capacity(64),
             cell_words_soa: ParagraphSoA::with_capacity(256),
             cell_lines: Vec::with_capacity(32),
+            cell_descs: Vec::new(),
             cell_line_spans: Vec::with_capacity(32),
             registry: IndexRegistry::new(),
             is_dry_run,
@@ -452,7 +503,8 @@ impl<'a> Layouter<'a> {
         page_number: u32,
         page_numbering: bool,
         font_family: metrics::FontFamily,
-        margin_bottom: f32,
+        foot_baseline: f32,
+        text_span: (f32, f32),
     ) {
         if !page_numbering {
             return;
@@ -461,8 +513,9 @@ impl<'a> Layouter<'a> {
         let page_num_size = 10.0f32;
         let digit_units = metrics::resolve_digit_units(font_family, Face::Roman);
         let num_width = (digit_count * digit_units) as f32 * (page_num_size * 0.001);
-        let x = (page.width - num_width) * 0.5;
-        let y = margin_bottom * 0.45;
+        // The plain/article footer is `\hfil\thepage\hfil` in a box of \textwidth.
+        let x = text_span.0 + (text_span.1 - text_span.0 - num_width) * 0.5;
+        let y = foot_baseline;
         page.push_op(Paint::PageNumber {
             x,
             y,
@@ -479,7 +532,8 @@ impl<'a> Layouter<'a> {
             page_number,
             self.page_numbering,
             self.font_family,
-            self.margin_bottom,
+            self.foot_baseline(),
+            (self.left, self.right),
         );
     }
 
@@ -487,7 +541,7 @@ impl<'a> Layouter<'a> {
         let mut last_pages = Vec::with_capacity(2);
         let page_numbering = self.page_numbering;
         let font_family = self.font_family;
-        let margin_bottom = self.margin_bottom;
+        let margin_bottom = self.foot_baseline();
         if let Some(mut old_pending) = self.pending_page.take() {
             self.completed_pages_count += 1;
             Self::add_page_number_to_page(
@@ -496,6 +550,7 @@ impl<'a> Layouter<'a> {
                 page_numbering,
                 font_family,
                 margin_bottom,
+                (self.left, self.right),
             );
             last_pages.push(old_pending);
         }
@@ -521,6 +576,7 @@ impl<'a> Layouter<'a> {
                 page_numbering,
                 font_family,
                 margin_bottom,
+                (self.left, self.right),
             );
             let page = std::mem::replace(
                 &mut self.current_page,
@@ -551,7 +607,7 @@ impl<'a> Layouter<'a> {
 
         let page_numbering = self.page_numbering;
         let font_family = self.font_family;
-        let margin_bottom = self.margin_bottom;
+        let margin_bottom = self.foot_baseline();
 
         if !self.current_page.ops.is_empty() || self.pages.is_empty() {
             self.pages.push(self.current_page);
@@ -565,6 +621,7 @@ impl<'a> Layouter<'a> {
                     page_numbering,
                     font_family,
                     margin_bottom,
+                    (self.left, self.right),
                 );
             }
         }
@@ -631,15 +688,48 @@ impl<'a> Layouter<'a> {
             self.pages.push(previous_page);
         }
 
-        self.y = self.page_height - self.margin_top;
+        self.y = self.page_start_y();
         self.has_preceding_text = false;
         self.last_line_width = 0.0;
         self.last_line_indent = 0.0;
         self.prev_graf = 0;
     }
 
+    /// Baseline of the running foot (`\footskip` below the text block).
+    #[inline(always)]
+    pub(crate) fn foot_baseline(&self) -> f32 {
+        self.margin_bottom - self.foot_skip
+    }
+
+    /// Top edge of the text block on the current page.
+    #[inline(always)]
+    pub(crate) fn text_top(&self) -> f32 {
+        self.page_height - self.margin_top
+    }
+
+    /// Baseline of the first line on a fresh page (`\topskip` below the text-block top).
+    #[inline(always)]
+    pub(crate) fn page_start_y(&self) -> f32 {
+        self.text_top() - self.top_skip
+    }
+
+    /// True while nothing has been contributed to the current page; TeX discards
+    /// glue, kerns and penalties in this state (tex.web §1000).
+    #[inline(always)]
+    pub(crate) fn at_page_top(&self) -> bool {
+        self.y >= self.page_start_y() - 0.01
+    }
+
+    /// Discardable vertical glue: vanishes at the top of a page like TeX's page builder does.
+    #[inline(always)]
+    pub(crate) fn vskip(&mut self, amount: f32) {
+        if !self.at_page_top() {
+            self.y -= amount;
+        }
+    }
+
     pub(crate) fn ensure_room(&mut self, required_height: f32) -> bool {
-        if self.y - required_height < self.margin_bottom {
+        if self.y - required_height < self.margin_bottom - 0.01 {
             self.new_page();
             true
         } else {
@@ -655,7 +745,7 @@ impl<'a> Layouter<'a> {
                 continue;
             }
             if prev_was_block {
-                self.y -= self.par_skip;
+                self.vskip(self.par_skip);
             }
             prev_was_block = true;
             self.layout_single_block(b, depth);
@@ -668,7 +758,7 @@ impl<'a> Layouter<'a> {
             return;
         }
         if *prev_was_block {
-            self.y -= self.par_skip;
+            self.vskip(self.par_skip);
         }
         *prev_was_block = true;
         self.layout_single_block(b, 0);
@@ -709,10 +799,24 @@ impl<'a> Layouter<'a> {
                 self.tolerance = 200;
                 self.emergency_stretch = 0.0;
             }
+            crate::tex_parser::ConfigChange::FontSize(fs) => {
+                (self.base_font_size, self.base_leading) = fs.metrics(self.class_font_size);
+            }
+            crate::tex_parser::ConfigChange::Align(a) => {
+                // Each alignment declaration also sets \parindent to 0pt.
+                self.par_align = *a;
+                self.par_indent = 0.0;
+            }
         }
     }
 
     pub(crate) fn layout_single_block<'doc>(&mut self, b: &'doc Block<'a>, depth: usize) {
+        // `\addvspace` glue left by the previous block, merged with the next one's.
+        let added_vspace = std::mem::take(&mut self.last_addvspace);
+        // Declarations between paragraphs leave the previous line's advance in place.
+        if !matches!(b, Block::ConfigChange(_)) {
+            self.block_entry_advance = std::mem::take(&mut self.last_line_advance);
+        }
         match b {
             Block::ConfigChange(cfg) => self.apply_config_change(cfg),
             Block::Para(inls) => self.layout_para(inls),
@@ -735,6 +839,21 @@ impl<'a> Layouter<'a> {
                 self.right = saved_right;
                 self.par_indent = saved_par_indent;
             }
+            Block::Aligned(aligned) => {
+                // latex.ltx: `center`, `flushleft` and `flushright` are trivlists, so
+                // \topsep is `\addvspace`d above and below: two in a row share one gap.
+                let saved_align = self.par_align;
+                let saved_par_indent = self.par_indent;
+                let top_sep = (TOPSEP + if aligned.in_vmode { PARTOPSEP } else { 0.0 }) * (self.base_font_size / 10.0);
+                self.vskip((top_sep - added_vspace).max(0.0));
+                self.par_align = aligned.align;
+                self.par_indent = 0.0;
+                self.layout_blocks(&aligned.blocks, depth + 1);
+                self.par_align = saved_align;
+                self.par_indent = saved_par_indent;
+                self.vskip(top_sep);
+                self.last_addvspace = top_sep;
+            }
             Block::Table(table_data) => self.layout_table(table_data),
             Block::Figure(fig_data) => self.layout_figure(fig_data.graphic, &fig_data.caption),
             Block::TitleBlock(title_data) => self.layout_title_block(
@@ -748,7 +867,7 @@ impl<'a> Layouter<'a> {
                 title,
             } => self.layout_section(*level, *starred, title),
             Block::PageBreak => self.new_page(),
-            Block::VSpace(h) => self.y -= *h,
+            Block::VSpace(h) => self.vskip(*h),
             Block::HRule => {
                 let w = self.right - self.left;
                 self.ensure_room(4.0);
@@ -1011,7 +1130,7 @@ impl<'a> Layouter<'a> {
             1
         } else {
             self.cell_lines.clear();
-            self.break_cell_words_into_lines(0, self.cell_words_soa.len(), max_w);
+            self.break_cell_words_into_lines(0, self.cell_words_soa.len(), max_w, 18.0, false, true);
             self.cell_lines.len().max(1)
         };
 
@@ -1030,15 +1149,7 @@ impl<'a> Layouter<'a> {
             for i in 0..line_count {
                 let line_desc = self.cell_lines[i];
                 let line_x = self.left + self.left_skip + (max_w - line_desc.line_w).max(0.0) * 0.5;
-                self.paint_cell_line_at(
-                    line_desc.start_word as usize,
-                    (line_desc.start_word + line_desc.word_count) as usize,
-                    line_x,
-                    self.y,
-                    Face::Bold,
-                    18.0,
-                    &title_math,
-                );
+                self.paint_cell_line_at(line_desc, line_x, self.y, 18.0, &title_math);
                 self.y -= title_leading;
             }
             self.y -= 4.0;
@@ -1069,10 +1180,15 @@ impl<'a> Layouter<'a> {
     }
 
     fn layout_section<'doc>(&mut self, level: u8, starred: bool, title: &'doc [Inline<'a>]) {
-        let (skip_before, font_size, skip_after) = match level {
-            1 => (18.0, 14.0, 6.0),
-            2 => (14.0, 12.0, 4.0),
-            _ => (10.0, 11.0, 2.0),
+        // article.cls \@startsection parameters: \section{-3.5ex plus -1ex minus -.2ex}{2.3ex plus .2ex}
+        // in \Large, \subsection / \subsubsection {-3.25ex ...}{1.5ex plus .2ex} in \large /
+        // \normalsize. The ex unit is that of the body font (cmr: 0.430554em).
+        let ex = 0.430554 * self.base_font_size;
+        let (large, large_bls, bigger, bigger_bls) = section_font_sizes(self.base_font_size, self.base_leading);
+        let (skip_before, font_size, heading_leading, skip_after) = match level {
+            1 => (3.5 * ex, large, large_bls, 2.3 * ex),
+            2 => (3.25 * ex, bigger, bigger_bls, 1.5 * ex),
+            _ => (3.25 * ex, self.base_font_size, self.base_leading, 1.5 * ex),
         };
 
         let (sec_number, num_w) = if !starred {
@@ -1097,26 +1213,33 @@ impl<'a> Layouter<'a> {
             self.font_family,
             &mut section_math,
         );
-        let heading_leading = font_size * 1.25;
-
         let title_lines = if (title_w + num_w) <= max_w && !inlines_have_break(title) {
             1
         } else {
             self.cell_lines.clear();
-            self.break_cell_words_into_lines(
-                0,
-                self.cell_words_soa.len(),
-                (max_w - num_w).max(20.0),
-            );
+            self.break_cell_words_into_lines(0, self.cell_words_soa.len(), (max_w - num_w).max(20.0), font_size, false, false);
             self.cell_lines.len().max(1)
         };
 
-        let title_h = (title_lines as f32) * heading_leading;
-        let needed_body_lines = 2.0 * self.base_leading;
-        let total_needed = skip_before + title_h + skip_after + needed_body_lines;
-        let broken = self.ensure_room(total_needed);
-        if !broken && self.y < self.page_height - self.margin_top - 0.1 {
-            self.y -= skip_before;
+        // Vertical model (TeX): `self.y` is where the next baseline would go at \baselineskip.
+        // The heading's first baseline lies \addvspace{beforeskip} plus its own \baselineskip
+        // below the previous baseline; at the top of a page the skip is discarded and the
+        // baseline sits \topskip (or the heading's height) below the text top.
+        // \@afterheading forbids a break after the heading and after the first line of the
+        // next paragraph (\clubpenalty 10000), so the heading needs two body lines below it.
+        let heading_ht = 0.7 * font_size;
+        let title_extra = ((title_lines as f32) - 1.0) * heading_leading;
+        let below_first_baseline = title_extra + skip_after + self.par_skip + 2.0 * self.base_leading;
+        let top_drop = |l: &Self| (heading_ht - l.top_skip).max(0.0);
+        let first_baseline_offset = if self.at_page_top() {
+            top_drop(self)
+        } else {
+            skip_before + (heading_leading - self.base_leading)
+        };
+        if self.ensure_room(first_baseline_offset + below_first_baseline) {
+            self.y -= top_drop(self);
+        } else {
+            self.y -= first_baseline_offset;
         }
 
         if !starred && self.current_sec_idx < self.registry.toc_entries.len() {
@@ -1145,24 +1268,18 @@ impl<'a> Layouter<'a> {
                 self.left + self.left_skip + num_w,
                 self.y,
             );
-            self.y -= font_size + skip_after;
+            self.y -= skip_after + self.base_leading;
         } else {
             let line_count = self.cell_lines.len();
             for line_idx in 0..line_count {
                 let line_desc = self.cell_lines[line_idx];
                 let line_x = self.left + self.left_skip + if line_idx == 0 { num_w } else { 0.0 };
-                self.paint_cell_line_at(
-                    line_desc.start_word as usize,
-                    (line_desc.start_word + line_desc.word_count) as usize,
-                    line_x,
-                    self.y,
-                    Face::Bold,
-                    font_size,
-                    &section_math,
-                );
-                self.y -= heading_leading;
+                self.paint_cell_line_at(line_desc, line_x, self.y, font_size, &section_math);
+                if line_idx + 1 < line_count {
+                    self.y -= heading_leading;
+                }
             }
-            self.y -= skip_after;
+            self.y -= skip_after + self.base_leading;
         }
         self.after_heading = true;
         self.has_preceding_text = false;
@@ -1236,6 +1353,7 @@ impl<'a> Layouter<'a> {
                 self.push_op(Paint::CaptionTag {
                     x: self.left + ((self.right - self.left) - figure_width) * 0.5,
                     y: self.y,
+                    size: self.base_font_size,
                     n: self.figure_counter,
                 });
             }
@@ -1245,18 +1363,13 @@ impl<'a> Layouter<'a> {
                 self.y -= self.base_leading;
             } else {
                 self.cell_lines.clear();
-                self.break_cell_words_into_lines(0, self.cell_words_soa.len(), cap_max_w);
+                let base = self.base_font_size;
+                self.break_cell_words_into_lines(0, self.cell_words_soa.len(), cap_max_w, base, true, false);
                 let line_count = self.cell_lines.len();
                 for idx in 0..line_count {
                     let line_desc = self.cell_lines[idx];
                     let cur_y = self.y;
-                    self.paint_cell_line(
-                        line_desc.start_word as usize,
-                        (line_desc.start_word + line_desc.word_count) as usize,
-                        cap_x,
-                        cur_y,
-                        &cap_math,
-                    );
+                    self.paint_cell_line(line_desc, cap_x, cur_y, &cap_math);
                     if idx + 1 < line_count {
                         self.y -= self.base_leading;
                     }
@@ -1584,10 +1697,69 @@ impl<'a> Layouter<'a> {
     }
 
     fn layout_para<'doc>(&mut self, inls: &'doc [Inline<'a>]) {
-        self.layout_para_full(inls, None, None);
+        if !inlines_have_par_end(inls) {
+            self.layout_para_full(inls, None, None);
+            return;
+        }
+        // `\par` inside the paragraph (possibly inside a group) ends it there: each piece is
+        // a paragraph of its own, with the declarations of the groups open at its end.
+        let pieces = split_at_par_end(inls, None, false);
+        let mut first = true;
+        for piece in &pieces {
+            if is_blank_inlines(&piece.inls) {
+                continue;
+            }
+            if !first {
+                self.vskip(self.par_skip);
+            }
+            first = false;
+            let saved = (self.par_align, self.par_indent);
+            if let Some(a) = piece.end_align {
+                self.par_align = a;
+                self.par_indent = 0.0;
+            }
+            if let Some(fs) = piece.end_size {
+                self.leading_override = Some(fs.metrics(self.class_font_size).1);
+            }
+            let indent = if piece.start_align.is_some() && leading_group_has_text(&piece.inls) { Some(0.0) } else { None };
+            self.layout_para_full(&piece.inls, indent, None);
+            if piece.end_align.is_some() {
+                (self.par_align, self.par_indent) = saved;
+            }
+        }
+    }
+
+    /// `\baselineskip` that goes with text of `size` pt: the size declaration's own, or
+    /// 1.2 times the size for sizes no declaration selects.
+    fn leading_for_size(&self, size: f32) -> f32 {
+        crate::frontend::ast::FontSize::ALL
+            .iter()
+            .map(|fs| fs.metrics(self.class_font_size))
+            .find(|(s, _)| (s - size).abs() < 0.005)
+            .map_or(size * 1.2, |(_, l)| l)
     }
 
     fn layout_para_full<'doc>(
+        &mut self,
+        inls: &'doc [Inline<'a>],
+        custom_first_line_indent: Option<f32>,
+        custom_hanging_indent: Option<f32>,
+    ) {
+        let par_leading = self.base_leading;
+        let par_size = self.base_font_size;
+        self.par_end_size = None;
+        self.layout_para_full_inner(inls, custom_first_line_indent, custom_hanging_indent);
+        // A size declared at the paragraph's top level holds after it (until its group ends).
+        match self.par_end_size.take() {
+            Some(end) if (end - par_size).abs() > 1e-4 => {
+                self.base_font_size = end;
+                self.base_leading = self.leading_for_size(end);
+            }
+            _ => self.base_leading = par_leading,
+        }
+    }
+
+    fn layout_para_full_inner<'doc>(
         &mut self,
         inls: &'doc [Inline<'a>],
         custom_first_line_indent: Option<f32>,
@@ -1597,10 +1769,12 @@ impl<'a> Layouter<'a> {
             return;
         }
 
-        let mut is_noindent = false;
+        let mut is_noindent = starts_with_align(inls);
         let mut is_indent = false;
+        let mut inline_align = None;
         for inl in inls {
             match inl {
+                Inline::Align(a) => inline_align = Some(*a),
                 Inline::NoIndent => is_noindent = true,
                 Inline::Indent => is_indent = true,
                 Inline::HangIndent(dim) => self.hang_indent = *dim,
@@ -1639,6 +1813,8 @@ impl<'a> Layouter<'a> {
             _ => 2,
         }).sum();
         self.words_soa.reserve(est_words);
+        self.words_soa.set_color(self.text_color);
+        self.words_soa.class_size = self.class_font_size;
         let mut math_collector = Vec::new();
         let mut space_factor = 1000u16;
         let t_exp_start = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
@@ -1654,6 +1830,23 @@ impl<'a> Layouter<'a> {
         );
         if let Some(t) = t_exp_start {
             self.time_explode_ns += t.elapsed().as_nanos() as u64;
+        }
+        // A `\color` at the paragraph's top level holds until its group ends, past the
+        // paragraph.
+        self.text_color = self.words_soa.current_color();
+        // TeX sets the whole paragraph with the \baselineskip in force at its \par.
+        let end_size = self.words_soa.current_size(self.base_font_size);
+        self.par_end_size = Some(end_size);
+        if let Some(leading) = self.leading_override.take() {
+            self.base_leading = leading;
+        } else if (end_size - self.base_font_size).abs() > 1e-4 {
+            self.base_leading = self.leading_for_size(end_size);
+        }
+        // The interline glue above the first line is this paragraph's \baselineskip, not
+        // the advance the previous line already made.
+        let entry = std::mem::take(&mut self.block_entry_advance);
+        if entry > 0.0 && (entry - self.base_leading).abs() > 1e-4 && !self.at_page_top() {
+            self.y -= self.base_leading - entry;
         }
         if self.words_soa.is_empty() {
             return;
@@ -1676,217 +1869,263 @@ impl<'a> Layouter<'a> {
         };
         let first_line_indent = custom_first_line_indent.unwrap_or(base_first_indent);
         let custom_hang = custom_hanging_indent.unwrap_or(self.hang_indent);
+        // The paragraph is already indented when a declaration inside it is reached; the
+        // alignment holds from here on, and so does its \parindent of 0pt.
+        if let Some(a) = inline_align {
+            self.par_align = a;
+            self.par_indent = 0.0;
+        }
 
         let measure = (self.right - self.right_skip) - (self.left + self.left_skip);
         self.line_descriptors.clear();
 
-        let par_hash = hash_paragraph(
-            &self.words_soa,
-            measure,
-            first_line_indent,
-            custom_hang,
-            self.hang_after,
-            &self.par_shape,
-            self.tolerance,
-            self.pre_tolerance,
-            self.emergency_stretch,
-            self.looseness,
-            self.par_fill_width,
-            self.par_fill_stretch,
-            self.base_font_size,
-            self.font_family,
-            math_collector.len(),
-        );
-
-        let cache_slot = (par_hash as usize) & PAR_CACHE_MASK;
-        let cached_entry = self.par_cache[cache_slot];
-        let is_cached = cached_entry.hash == par_hash && par_hash != 0;
-
         let mut pass = 0;
-
-        if is_cached {
-            self.line_descriptors.extend_from_slice(&cached_entry.descriptors[..cached_entry.line_count as usize]);
-        } else if try_layout_single_line_paragraph(
-            &self.words_soa,
-            measure,
-            first_line_indent,
-            self.par_fill_width,
-            self.par_fill_stretch,
-            &self.par_shape,
-            self.looseness,
-            &mut self.line_descriptors,
-        ) {
-            pass = 1;
-            if par_hash != 0 && !self.line_descriptors.is_empty() {
-                let entry = &mut self.par_cache[cache_slot];
-                entry.hash = par_hash;
-                entry.line_count = 1;
-                entry.descriptors[0] = self.line_descriptors[self.line_descriptors.len() - 1];
-            }
-        } else {
-            let hz_config = HzConfig::default();
-
-            // Build candidate breakpoints and prefix sums once per paragraph
-            let t_hy = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
-            build_breakpoints(
-                &self.words_soa,
-                self.font_family,
-                self.base_font_size,
+        if !self.hz_microtype {
+            let t_br = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
+            let params = self.tex_break_params(first_line_indent);
+            let shape = crate::layout::layout_linebreak::LineShape {
                 measure,
+                hang_indent: custom_hang,
+                hang_after: self.hang_after,
+                par_shape: &self.par_shape,
+            };
+            pass = crate::layout::layout_linebreak::tex_line_break(
+                &self.words_soa,
+                0..self.words_soa.len(),
+                &params,
+                &shape,
+                self.base_font_size,
+                &mut self.break_scratch,
+                &mut self.line_descriptors,
+            ) as usize;
+            if let Some(t) = t_br {
+                self.time_pass1_ns += t.elapsed().as_nanos() as u64;
+            }
+        } else if self.par_align != crate::frontend::ast::ParAlign::Justified {
+            // With fil glue at a margin every line that is not overfull has badness 0, so
+            // TeX's optimum is the fewest lines; the greedy fill reaches it (§829–§836).
+            ragged_break_paragraph(
+                &self.words_soa,
+                measure,
+                first_line_indent,
                 custom_hang,
+                self.hang_after,
                 &self.par_shape,
-                &mut self.hyphen_cache,
-                &mut self.hyphen_scratch,
-                &hz_config,
-                &mut self.breakpoints,
-                &mut self.dp_prefix,
+                &mut self.line_descriptors,
             );
-            if let Some(t) = t_hy {
-                self.time_hyph_ns += t.elapsed().as_nanos() as u64;
-            }
+            pass = 1;
+        } else {
+            let par_hash = hash_paragraph(
+                &self.words_soa,
+                measure,
+                first_line_indent,
+                custom_hang,
+                self.hang_after,
+                &self.par_shape,
+                self.tolerance,
+                self.pre_tolerance,
+                self.emergency_stretch,
+                self.looseness,
+                self.par_fill_width,
+                self.par_fill_stretch,
+                self.base_font_size,
+                self.font_family,
+                math_collector.len(),
+            );
 
-            // Pass 1: Try without hyphenation under pre_tolerance and tolerance
-            if self.pre_tolerance >= 0 {
-                let t_p1 = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
-                let max_unhyph = (self.tolerance as f32).max(self.pre_tolerance as f32);
-                if hz_break_paragraph_breakpoints_pass(
-                    &mut self.words_soa,
-                    &self.breakpoints,
-                    &self.dp_prefix,
-                    self.hyphen_cache.as_ref(),
-                    self.base_font_size * 0.001,
-                    self.font_family,
-                    measure,
-                    first_line_indent,
-                    custom_hang,
-                    self.hang_after,
-                    &self.par_shape,
-                    &hz_config,
-                    false, // allow_hyphenation = false
-                    self.pre_tolerance as f32,
-                    max_unhyph,
-                    0.0,
-                    self.looseness,
-                    self.par_fill_width,
-                    self.par_fill_stretch,
-                    &mut self.dp_nodes,
-                    &mut self.line_descriptors,
-                ) {
-                    pass = 1;
-                }
-                if let Some(t) = t_p1 {
-                    self.time_pass1_ns += t.elapsed().as_nanos() as u64;
-                }
-            }
+            let cache_slot = (par_hash as usize) & PAR_CACHE_MASK;
+            let cached_entry = self.par_cache[cache_slot];
+            let is_cached = cached_entry.hash == par_hash && par_hash != 0;
 
-            // Pass 2: Retry with hyphenation enabled under tolerance
-            if pass == 0 {
-                self.line_descriptors.clear();
-                let t_p2 = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
-                if hz_break_paragraph_breakpoints_pass(
-                    &mut self.words_soa,
-                    &self.breakpoints,
-                    &self.dp_prefix,
-                    self.hyphen_cache.as_ref(),
-                    self.base_font_size * 0.001,
-                    self.font_family,
-                    measure,
-                    first_line_indent,
-                    custom_hang,
-                    self.hang_after,
-                    &self.par_shape,
-                    &hz_config,
-                    true, // allow_hyphenation = true
-                    -1.0,
-                    self.tolerance as f32,
-                    0.0,
-                    self.looseness,
-                    self.par_fill_width,
-                    self.par_fill_stretch,
-                    &mut self.dp_nodes,
-                    &mut self.line_descriptors,
-                ) {
-                    pass = 2;
+            if is_cached {
+                self.line_descriptors.extend_from_slice(&cached_entry.descriptors[..cached_entry.line_count as usize]);
+            } else if try_layout_single_line_paragraph(
+                &self.words_soa,
+                measure,
+                first_line_indent,
+                self.par_fill_width,
+                self.par_fill_stretch,
+                &self.par_shape,
+                self.looseness,
+                &mut self.line_descriptors,
+            ) {
+                pass = 1;
+                if par_hash != 0 && !self.line_descriptors.is_empty() {
+                    let entry = &mut self.par_cache[cache_slot];
+                    entry.hash = par_hash;
+                    entry.line_count = 1;
+                    entry.descriptors[0] = self.line_descriptors[self.line_descriptors.len() - 1];
                 }
-                if let Some(t) = t_p2 {
-                    self.time_pass2_ns += t.elapsed().as_nanos() as u64;
-                }
-            }
+            } else {
+                let hz_config = HzConfig::default();
 
-            // Pass 3: If emergency_stretch > 0, retry with emergency stretch added to elasticity
-            if pass == 0 && self.emergency_stretch > 0.0 {
-                self.line_descriptors.clear();
-                if hz_break_paragraph_breakpoints_pass(
-                    &mut self.words_soa,
-                    &self.breakpoints,
-                    &self.dp_prefix,
-                    self.hyphen_cache.as_ref(),
-                    self.base_font_size * 0.001,
+                // Build candidate breakpoints and prefix sums once per paragraph
+                let t_hy = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
+                build_breakpoints(
+                    &self.words_soa,
                     self.font_family,
+                    self.base_font_size,
                     measure,
-                    first_line_indent,
                     custom_hang,
-                    self.hang_after,
                     &self.par_shape,
+                    self.hyphen_cache.get_or_insert_with(|| {
+                        vec![crate::layout::layout_hyphen::HyphenCacheEntry::empty(); crate::layout::layout_hyphen::HYPHEN_CACHE_SIZE]
+                            .into_boxed_slice()
+                            .try_into()
+                            .unwrap()
+                    }),
+                    &mut self.hyphen_scratch,
                     &hz_config,
-                    true, // allow_hyphenation = true
-                    -1.0,
-                    self.tolerance as f32,
-                    self.emergency_stretch,
-                    self.looseness,
-                    self.par_fill_width,
-                    self.par_fill_stretch,
-                    &mut self.dp_nodes,
-                    &mut self.line_descriptors,
-                ) {
-                    pass = 3;
+                    &mut self.breakpoints,
+                    &mut self.dp_prefix,
+                );
+                if let Some(t) = t_hy {
+                    self.time_hyph_ns += t.elapsed().as_nanos() as u64;
                 }
-            }
 
-            // Fallback: If all passes failed, typeset with relaxed badness (10000.0)
-            if pass == 0 {
-                self.line_descriptors.clear();
-                if !hz_break_paragraph_breakpoints_pass(
-                    &mut self.words_soa,
-                    &self.breakpoints,
-                    &self.dp_prefix,
-                    self.hyphen_cache.as_ref(),
-                    self.base_font_size * 0.001,
-                    self.font_family,
-                    measure,
-                    first_line_indent,
-                    custom_hang,
-                    self.hang_after,
-                    &self.par_shape,
-                    &hz_config,
-                    true, // allow_hyphenation = true
-                    -1.0,
-                    10000.0,
-                    self.emergency_stretch,
-                    self.looseness,
-                    self.par_fill_width,
-                    self.par_fill_stretch,
-                    &mut self.dp_nodes,
-                    &mut self.line_descriptors,
-                ) {
-                    hz_break_paragraph_fast_shape(
-                        &self.words_soa,
+                // Pass 1: Try without hyphenation under pre_tolerance and tolerance
+                if self.pre_tolerance >= 0 {
+                    let t_p1 = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
+                    let max_unhyph = (self.tolerance as f32).max(self.pre_tolerance as f32);
+                    if hz_break_paragraph_breakpoints_pass(
+                        &mut self.words_soa,
+                        &self.breakpoints,
+                        &self.dp_prefix,
+                        self.hyphen_cache.as_deref().map_or(&[][..], |c| &c[..]),
+                        self.base_font_size * 0.001,
+                        self.font_family,
                         measure,
                         first_line_indent,
                         custom_hang,
                         self.hang_after,
                         &self.par_shape,
                         &hz_config,
+                        false, // allow_hyphenation = false
+                        self.pre_tolerance as f32,
+                        max_unhyph,
+                        0.0,
+                        self.looseness,
+                        self.par_fill_width,
+                        self.par_fill_stretch,
+                        &mut self.dp_nodes,
                         &mut self.line_descriptors,
-                    );
+                    ) {
+                        pass = 1;
+                    }
+                    if let Some(t) = t_p1 {
+                        self.time_pass1_ns += t.elapsed().as_nanos() as u64;
+                    }
                 }
-            }
 
-            if !self.line_descriptors.is_empty() && self.line_descriptors.len() <= PAR_CACHE_MAX_LINES {
-                let entry = &mut self.par_cache[cache_slot];
-                entry.hash = par_hash;
-                entry.line_count = self.line_descriptors.len() as u16;
-                entry.descriptors[..self.line_descriptors.len()].copy_from_slice(&self.line_descriptors);
+                // Pass 2: Retry with hyphenation enabled under tolerance
+                if pass == 0 {
+                    self.line_descriptors.clear();
+                    let t_p2 = if self.debug_timings { Some(std::time::Instant::now()) } else { None };
+                    if hz_break_paragraph_breakpoints_pass(
+                        &mut self.words_soa,
+                        &self.breakpoints,
+                        &self.dp_prefix,
+                        self.hyphen_cache.as_deref().map_or(&[][..], |c| &c[..]),
+                        self.base_font_size * 0.001,
+                        self.font_family,
+                        measure,
+                        first_line_indent,
+                        custom_hang,
+                        self.hang_after,
+                        &self.par_shape,
+                        &hz_config,
+                        true, // allow_hyphenation = true
+                        -1.0,
+                        self.tolerance as f32,
+                        0.0,
+                        self.looseness,
+                        self.par_fill_width,
+                        self.par_fill_stretch,
+                        &mut self.dp_nodes,
+                        &mut self.line_descriptors,
+                    ) {
+                        pass = 2;
+                    }
+                    if let Some(t) = t_p2 {
+                        self.time_pass2_ns += t.elapsed().as_nanos() as u64;
+                    }
+                }
+
+                // Pass 3: If emergency_stretch > 0, retry with emergency stretch added to elasticity
+                if pass == 0 && self.emergency_stretch > 0.0 {
+                    self.line_descriptors.clear();
+                    if hz_break_paragraph_breakpoints_pass(
+                        &mut self.words_soa,
+                        &self.breakpoints,
+                        &self.dp_prefix,
+                        self.hyphen_cache.as_deref().map_or(&[][..], |c| &c[..]),
+                        self.base_font_size * 0.001,
+                        self.font_family,
+                        measure,
+                        first_line_indent,
+                        custom_hang,
+                        self.hang_after,
+                        &self.par_shape,
+                        &hz_config,
+                        true, // allow_hyphenation = true
+                        -1.0,
+                        self.tolerance as f32,
+                        self.emergency_stretch,
+                        self.looseness,
+                        self.par_fill_width,
+                        self.par_fill_stretch,
+                        &mut self.dp_nodes,
+                        &mut self.line_descriptors,
+                    ) {
+                        pass = 3;
+                    }
+                }
+
+                // Fallback: If all passes failed, typeset with relaxed badness (10000.0)
+                if pass == 0 {
+                    self.line_descriptors.clear();
+                    if !hz_break_paragraph_breakpoints_pass(
+                        &mut self.words_soa,
+                        &self.breakpoints,
+                        &self.dp_prefix,
+                        self.hyphen_cache.as_deref().map_or(&[][..], |c| &c[..]),
+                        self.base_font_size * 0.001,
+                        self.font_family,
+                        measure,
+                        first_line_indent,
+                        custom_hang,
+                        self.hang_after,
+                        &self.par_shape,
+                        &hz_config,
+                        true, // allow_hyphenation = true
+                        -1.0,
+                        10000.0,
+                        self.emergency_stretch,
+                        self.looseness,
+                        self.par_fill_width,
+                        self.par_fill_stretch,
+                        &mut self.dp_nodes,
+                        &mut self.line_descriptors,
+                    ) {
+                        hz_break_paragraph_fast_shape(
+                            &self.words_soa,
+                            measure,
+                            first_line_indent,
+                            custom_hang,
+                            self.hang_after,
+                            &self.par_shape,
+                            &hz_config,
+                            &mut self.line_descriptors,
+                        );
+                    }
+                }
+
+                if !self.line_descriptors.is_empty() && self.line_descriptors.len() <= PAR_CACHE_MAX_LINES {
+                    let entry = &mut self.par_cache[cache_slot];
+                    entry.hash = par_hash;
+                    entry.line_count = self.line_descriptors.len() as u16;
+                    entry.descriptors[..self.line_descriptors.len()].copy_from_slice(&self.line_descriptors);
+                }
             }
         }
 
@@ -1920,8 +2159,6 @@ impl<'a> Layouter<'a> {
             self.last_line_indent = 0.0;
             self.prev_graf = 0;
         }
-
-        self.y -= self.par_skip;
     }
 
     #[inline]
@@ -1942,6 +2179,96 @@ impl<'a> Layouter<'a> {
         (pool.len() - count_before) as u32
     }
 
+    /// Lowers the baseline of a line whose text is larger than the paragraph's
+    /// `\baselineskip` allows: when the glue between the previous line's depth and this
+    /// line's height would drop below `\lineskiplimit` (0pt), TeX uses `\lineskip` (1pt)
+    /// instead (§679). Heights and depths are those of Computer Modern's tallest and
+    /// deepest letters (0.694 and 0.194 em). Returns the line's largest size.
+    fn raise_for_line_size(&mut self, start: usize, end: usize, par_size: f32) -> f32 {
+        let runs = &self.words_soa.size_runs;
+        let mut max_size = if runs.first().is_some_and(|r| r.0 as usize <= start) { 0.0 } else { par_size };
+        let k = runs.partition_point(|r| r.0 as usize <= start);
+        if k > 0 {
+            max_size = runs[k - 1].1;
+        }
+        for r in &runs[k..] {
+            if r.0 as usize >= end {
+                break;
+            }
+            max_size = max_size.max(r.1);
+        }
+        let glue = self.base_leading - 0.194 * self.prev_line_size - 0.694 * max_size;
+        if glue < 0.0 {
+            // Only between lines of one page; ensure_room already ran for this line.
+            self.y -= 1.0 - glue;
+        }
+        max_size
+    }
+
+    /// The \linebreak parameters of the current paragraph, with LaTeX's alignment skips.
+    fn tex_break_params(&self, indent: f32) -> crate::layout::layout_linebreak::BreakParams {
+        use crate::frontend::ast::ParAlign;
+        use crate::layout::layout_linebreak::{BreakParams, Skip};
+        let mut p = BreakParams {
+            pretolerance: self.pre_tolerance,
+            tolerance: self.tolerance,
+            emergency_stretch: self.emergency_stretch,
+            looseness: self.looseness,
+            indent,
+            family: self.font_family,
+            ..BreakParams::default()
+        };
+        p.par_fill_skip = if self.par_fill_stretch.is_infinite() {
+            Skip { width: self.par_fill_width, ..Skip::FIL }
+        } else {
+            Skip { width: self.par_fill_width, stretch: self.par_fill_stretch, stretch_order: 0 }
+        };
+        match self.par_align {
+            ParAlign::Justified => {}
+            ParAlign::RaggedRight => p.right_skip = Skip::FIL,
+            ParAlign::Center => {
+                p.left_skip = Skip::FIL;
+                p.right_skip = Skip::FIL;
+                p.par_fill_skip = Skip::ZERO;
+                p.final_hyphen_demerits = 0;
+            }
+            ParAlign::RaggedLeft => {
+                p.left_skip = Skip::FIL;
+                p.par_fill_skip = Skip::ZERO;
+            }
+        }
+        p
+    }
+
+    /// TeX's glue setting of a line (`hpack`, tex.web §656–§667): the ratio by which every
+    /// interword glue of the line stretches or shrinks. Lines that end in fil glue (the
+    /// last line, `\\`, ragged margins) keep their natural spacing unless overfull; an
+    /// overfull line shrinks at most fully.
+    fn line_glue_set(&self, desc: &LineDescriptor, available: f32, ragged: bool, is_last_line: bool) -> GlueSet {
+        let start = desc.start_word as usize;
+        let glue = self.words_soa.line_glue(start, start + desc.word_count as usize);
+        let stretch = glue[0];
+        let x = available - desc.line_w;
+        if x < 0.0 || ragged || stretch <= 0.0 || desc.justify() {
+            GlueSet::for_line(x, glue, desc.justify() && !ragged)
+        } else if is_last_line && self.last_line_fit > 0 {
+            // e-TeX \lastlinefit: a fraction of the previous lines' looseness.
+            let fit = (self.last_line_fit as f32 / 1000.0).clamp(0.0, 1.0);
+            GlueSet::Stretch(x / stretch * fit * 0.25)
+        } else {
+            GlueSet::Natural
+        }
+    }
+
+    /// A formula with `\color` inside ends its scopes black; the text after it continues in
+    /// the line's colour.
+    fn restore_color_after_math(&mut self, ops_before: usize, line_color: PackedColor) {
+        let colored = self.current_page.ops[ops_before..].iter().any(|op| matches!(op, Paint::Color { .. }));
+        if colored && line_color != PackedColor::BLACK {
+            self.push_op(Paint::Color { color: line_color });
+        }
+    }
+
     fn flush_line_descriptor(
         &mut self,
         desc: &LineDescriptor,
@@ -1950,7 +2277,9 @@ impl<'a> Layouter<'a> {
         if desc.word_count == 0 {
             return;
         }
-        self.ensure_room(self.base_leading);
+        // A line fits while its baseline stays inside the text block; its depth may hang
+        // into \maxdepth below it (tex.web §1002–1010).
+        self.ensure_room(0.0);
         if self.is_dry_run {
             self.y -= self.base_leading;
             return;
@@ -1959,35 +2288,17 @@ impl<'a> Layouter<'a> {
         let measure = (self.right - self.right_skip) - (self.left + self.left_skip);
         let available = measure - desc.line_indent;
 
+        let ragged = self.par_align != crate::frontend::ast::ParAlign::Justified;
         let is_last_line = (desc.start_word + desc.word_count) as usize >= self.words_soa.len();
-        let target_available = if is_last_line && self.par_fill_width > 0.0 {
-            (available - self.par_fill_width).max(0.0)
-        } else {
-            available
-        };
+        let glue_set = self.line_glue_set(desc, available, ragged, is_last_line);
 
-        let word_spacing = if desc.justify() && desc.num_spaces > 0 && desc.line_w < target_available {
-            let slack = target_available - desc.line_w;
-            let extra = slack / (desc.num_spaces as f32);
-            if extra <= 18.0 {
-                extra
-            } else {
-                0.0
-            }
-        } else if is_last_line && self.last_line_fit > 0 && desc.num_spaces > 0 && desc.line_w < target_available {
-            let slack = target_available - desc.line_w;
-            let max_fit = (self.last_line_fit as f32 / 1000.0).clamp(0.0, 1.0);
-            let extra = (slack / (desc.num_spaces as f32)) * max_fit * 0.25;
-            if extra <= 18.0 {
-                extra
-            } else {
-                0.0
-            }
-        } else {
-            0.0
+        let slack = (available - desc.line_w).max(0.0);
+        let align_shift = match self.par_align {
+            crate::frontend::ast::ParAlign::Center => 0.5 * slack,
+            crate::frontend::ast::ParAlign::RaggedLeft => slack,
+            _ => 0.0,
         };
-
-        let mut x = self.left + self.left_skip + desc.line_indent;
+        let mut x = self.left + self.left_skip + desc.line_indent + align_shift;
         let start = desc.start_word as usize;
         let end = (desc.start_word + desc.word_count) as usize;
         let count = end.saturating_sub(start);
@@ -2004,21 +2315,46 @@ impl<'a> Layouter<'a> {
             i += 1;
         }
 
+        // Colour of the ops emitted so far on this line; each line ends black again, so
+        // page furniture and other blocks never inherit a text colour.
+        let mut line_color = PackedColor::BLACK;
+        let mut color_end = if self.words_soa.color_runs.is_empty() { usize::MAX } else { 0 };
+        let par_size = self.base_font_size;
+        let mut run_size = par_size;
+        let mut size_end = if self.words_soa.size_runs.is_empty() { usize::MAX } else { 0 };
+        let line_size = if self.words_soa.size_runs.is_empty() {
+            par_size
+        } else {
+            self.raise_for_line_size(start, end, par_size)
+        };
+        self.prev_line_size = line_size;
+
         while i < end {
             let attr = self.words_soa.attrs[i];
             let w = self.words_soa.widths[i];
             if attr.is_space() {
-                let extra = if attr.kind() == WordKind::Space { word_spacing } else { 0.0 };
-                x += w + extra;
+                x += w + glue_set.adjust(self.words_soa.glue[i]);
                 i += 1;
                 continue;
+            }
+            if i >= color_end {
+                let (color, next) = self.words_soa.color_span(i);
+                color_end = next;
+                if color != line_color {
+                    self.push_op(Paint::Color { color });
+                    line_color = color;
+                }
+            }
+            if i >= size_end {
+                (run_size, size_end) = self.words_soa.size_span(i, par_size);
             }
             if attr.is_math() {
                 if let Some(m_idx) = self.words_soa.get_math_idx(i) {
                     if let Some(&node) = math_collector.get(m_idx) {
+                        let ops_before = self.current_page.ops.len();
                         let m_box = crate::math::render_math(
                             node,
-                            self.base_font_size,
+                            run_size,
                             self.font_family,
                             crate::math::MathStyle::Text,
                             x,
@@ -2027,20 +2363,61 @@ impl<'a> Layouter<'a> {
                             &mut self.current_page.text_pool,
                         );
                         x += m_box.w;
+                        self.restore_color_after_math(ops_before, line_color);
                     }
                 }
                 i += 1;
                 continue;
             }
             let face = attr.face();
+            // A word cut by hyphenation is painted from its slice.
+            let cut = if i == start && desc.head_cut != 0 {
+                Some(&self.words_soa.texts[i][desc.head_cut as usize..])
+            } else if i + 1 == end && desc.tail_cut != 0 {
+                Some(&self.words_soa.texts[i][..desc.tail_cut as usize])
+            } else {
+                None
+            };
+            if let Some(piece) = cut {
+                let pool_start = self.current_page.text_pool.len() as u32;
+                self.current_page.text_pool.push(piece);
+                self.push_op(Paint::GlyphRun {
+                    x,
+                    y: self.y,
+                    face,
+                    size: run_size,
+                    part_start: pool_start,
+                    part_count: 1 | GLYPH_RUN_SHAPED,
+                    word_spacing: 0.0,
+                });
+                let shaped = |t: &str| crate::backend::shape::word_width_pt(t, face, run_size, self.font_family);
+                x += shaped(piece);
+                if i == start && desc.head_cut != 0 {
+                    // Material after the word's letters (an italic correction) stays with
+                    // its post-break part.
+                    x += self.words_soa.widths[i] - shaped(self.words_soa.texts[i]);
+                }
+                i += 1;
+                continue;
+            }
             let x0 = x;
             let run_start = i;
             let is_cm = self.font_family == metrics::FontFamily::ComputerModern;
+            // A space can ride inside a run only if the font's space glyph (plus `Tw`) has
+            // exactly its measured width and glue; a space after punctuation (other space
+            // factor) or of another face is positioned explicitly instead.
+            let plain = crate::backend::scaled::space_glue(self.font_family, face, run_size);
+            let plain_space_w = crate::backend::scaled::to_pt(plain.space as i64);
+            let plain_glue = [
+                crate::backend::scaled::to_pt(plain.stretch as i64),
+                crate::backend::scaled::to_pt(plain.shrink as i64),
+            ];
+            let word_spacing = glue_set.adjust(plain_glue);
 
             let mut run_w = 0.0f32;
             let mut run_extra = 0.0f32;
 
-            while i < end {
+            while i < end && i < color_end && i < size_end {
                 let cur_attr = self.words_soa.attrs[i];
                 let cur_face = cur_attr.face();
                 if !cur_attr.is_word_like() && !cur_attr.is_space() {
@@ -2049,7 +2426,16 @@ impl<'a> Layouter<'a> {
                 if cur_attr.is_word_like() && cur_face != face {
                     break;
                 }
-                if cur_attr.is_space() && is_cm {
+                if cur_attr.is_space()
+                    && (is_cm
+                        || cur_attr.kind() != WordKind::Space
+                        || cur_face != face
+                        || (self.words_soa.widths[i] - plain_space_w).abs() > 1e-3
+                        || self.words_soa.glue[i] != plain_glue)
+                {
+                    break;
+                }
+                if cur_attr.is_word_like() && i + 1 == end && desc.tail_cut != 0 {
                     break;
                 }
                 run_w += self.words_soa.widths[i];
@@ -2075,9 +2461,9 @@ impl<'a> Layouter<'a> {
                     x: x0,
                     y: self.y,
                     face,
-                    size: self.base_font_size,
+                    size: run_size,
                     part_start: pool_start,
-                    part_count,
+                    part_count: part_count | GLYPH_RUN_SHAPED,
                     word_spacing,
                 });
             }
@@ -2086,8 +2472,9 @@ impl<'a> Layouter<'a> {
         }
 
         if end > start
-            && self.words_soa.attrs[end - 1].kind() == WordKind::Hyphen
-            && !self.words_soa.texts[end - 1].ends_with('-')
+            && (desc.tail_cut != 0
+                || (self.words_soa.attrs[end - 1].kind() == WordKind::Hyphen
+                    && !self.words_soa.texts[end - 1].ends_with('-')))
         {
             let hyph_face = self.words_soa.attrs[end - 1].face();
             let pool_start = self.current_page.text_pool.len() as u32;
@@ -2097,14 +2484,18 @@ impl<'a> Layouter<'a> {
                 x: hyph_x,
                 y: self.y,
                 face: hyph_face,
-                size: self.base_font_size,
+                size: run_size,
                 part_start: pool_start,
-                part_count: 1,
+                part_count: 1 | GLYPH_RUN_SHAPED,
                 word_spacing: 0.0,
             });
         }
+        if line_color != PackedColor::BLACK {
+            self.push_op(Paint::Color { color: PackedColor::BLACK });
+        }
 
         self.y -= self.base_leading;
+        self.last_line_advance = self.base_leading;
     }
 
     fn paint_inlines_at<'doc>(&mut self, inlines: &'doc [Inline<'a>], x: f32, y: f32) {
@@ -2123,11 +2514,16 @@ impl<'a> Layouter<'a> {
             return;
         }
         let mut scratch_runs = Vec::with_capacity(32);
-        flatten_into(inlines, default_face, &mut scratch_runs);
+        flatten_into(inlines, default_face, self.text_color, &mut scratch_runs);
+        let mut cur_color = PackedColor::BLACK;
         let mut scratch_slices = Vec::with_capacity(32);
         let scale = font_size * 0.001;
         for run in &scratch_runs {
             let run = *run;
+            if run.color != cur_color && (run.math.is_some() || !run.text.trim().is_empty()) {
+                self.push_op(Paint::Color { color: run.color });
+                cur_color = run.color;
+            }
             if let Some(m) = run.math {
                 let m_box = crate::math::render_math(
                     m,
@@ -2149,9 +2545,10 @@ impl<'a> Layouter<'a> {
             let bytes = s.as_bytes();
             let mut i = 0;
             let x0 = x;
-            let space_units = metrics::resolve_space_units(self.font_family, run.face);
-            let space_w = space_units as f32 * scale;
-            let table = metrics::resolve_width_table(self.font_family, run.face);
+            let space_units = metrics::resolve_space_units_at(self.font_family, run.face, font_size);
+            let space_w = space_units * scale;
+            let table = metrics::resolve_width_table_at(self.font_family, run.face, font_size);
+            let shaper = crate::backend::shape::text_font_at(self.font_family, run.face, font_size);
 
             let is_cm = self.font_family == metrics::FontFamily::ComputerModern;
             scratch_slices.clear();
@@ -2188,13 +2585,16 @@ impl<'a> Layouter<'a> {
                             face: run.face,
                             size: font_size,
                             part_start: pool_idx,
-                            part_count: 1,
+                            part_count: 1 | GLYPH_RUN_SHAPED,
                             word_spacing: 0.0,
                         });
                     } else {
                         scratch_slices.push(word);
                     }
-                    x += metrics::string_units_table(word, table) as f32 * scale;
+                    x += match &shaper {
+                        Some(font) => font.width_units(word),
+                        None => metrics::string_units_table(word, table) as f32,
+                    } * scale;
                 }
             }
             if !is_cm && !scratch_slices.is_empty() {
@@ -2210,72 +2610,66 @@ impl<'a> Layouter<'a> {
                         face: run.face,
                         size: font_size,
                         part_start: pool_start,
-                        part_count: pool_len,
+                        part_count: pool_len | GLYPH_RUN_SHAPED,
                         word_spacing: 0.0,
                     });
                 }
             }
         }
+        if cur_color != PackedColor::BLACK {
+            self.push_op(Paint::Color { color: PackedColor::BLACK });
+        }
     }
 
-    pub(crate) fn break_cell_words_into_lines(&mut self, start: usize, end: usize, inner_w: f32) {
-        let mut line_start = start;
-        let mut line_w = 0.0f32;
-        let mut i = start;
-
-        while i < end {
-            let attr = self.cell_words_soa.attrs[i];
-            let k = attr.kind();
-            let w = self.cell_words_soa.widths[i];
-
-            if k == WordKind::Break {
-                let (trimmed_end, trimmed_w) = self.trim_cell_line(line_start, i, line_w);
-                self.cell_lines.push(CellLineRange {
-                    start_word: line_start as u16,
-                    word_count: (trimmed_end - line_start) as u16,
-                    line_w: trimmed_w,
-                });
-                i += 1;
-                line_start = i;
-                line_w = 0.0;
-                continue;
-            }
-
-            if line_start < i && line_w + w > inner_w && !attr.is_space() {
-                let (trimmed_end, trimmed_w) = self.trim_cell_line(line_start, i, line_w);
-                self.cell_lines.push(CellLineRange {
-                    start_word: line_start as u16,
-                    word_count: (trimmed_end - line_start) as u16,
-                    line_w: trimmed_w,
-                });
-                if attr.is_space() {
-                    i += 1;
-                }
-                line_start = i;
-                line_w = 0.0;
-                continue;
-            }
-
-            if line_start == i && attr.is_space() {
-                i += 1;
-                line_start = i;
-                continue;
-            }
-
-            line_w += w;
-            i += 1;
+    /// Breaks the cell (or caption) paragraph `cell_words_soa[start..end]` into lines of
+    /// width `inner_w` with TeX's line breaker, unindented. `boxed` material (p-cells, float
+    /// contents) is set after `\@parboxrestore`, which ends in `\sloppy`; `centered` sets
+    /// the lines with `\centering` instead of justified.
+    pub(crate) fn break_cell_words_into_lines(&mut self, start: usize, end: usize, inner_w: f32, base_size: f32, boxed: bool, centered: bool) {
+        use crate::layout::layout_linebreak::{BreakParams, Skip};
+        let mut params = BreakParams {
+            pretolerance: self.pre_tolerance,
+            tolerance: self.tolerance,
+            emergency_stretch: self.emergency_stretch,
+            family: self.font_family,
+            ..Default::default()
+        };
+        if boxed {
+            // \sloppy: \tolerance 9999, \emergencystretch 3em.
+            params.tolerance = 9999;
+            params.emergency_stretch = 3.0 * crate::backend::scaled::quad_pt(self.font_family, base_size);
         }
-
-        if line_start < end {
-            let (trimmed_end, trimmed_w) = self.trim_cell_line(line_start, end, line_w);
-            if trimmed_end > line_start {
-                self.cell_lines.push(CellLineRange {
-                    start_word: line_start as u16,
-                    word_count: (trimmed_end - line_start) as u16,
-                    line_w: trimmed_w,
-                });
-            }
+        if centered {
+            params.left_skip = Skip::FIL;
+            params.right_skip = Skip::FIL;
+            params.par_fill_skip = Skip::ZERO;
+            params.final_hyphen_demerits = 0;
         }
+        let shape = crate::layout::layout_linebreak::LineShape { measure: inner_w, hang_indent: 0.0, hang_after: 1, par_shape: &[] };
+        let mut descs = std::mem::take(&mut self.cell_descs);
+        descs.clear();
+        crate::layout::layout_linebreak::tex_line_break(
+            &self.cell_words_soa,
+            start..end,
+            &params,
+            &shape,
+            base_size,
+            &mut self.break_scratch,
+            &mut descs,
+        );
+        for d in &descs {
+            let s = d.start_word as usize;
+            let glue = GlueSet::for_line(inner_w - d.line_w, self.cell_words_soa.line_glue(s, s + d.word_count as usize), d.justify() && !centered);
+            self.cell_lines.push(CellLineRange {
+                start_word: d.start_word,
+                word_count: d.word_count,
+                line_w: d.line_w,
+                glue,
+                head_cut: d.head_cut,
+                tail_cut: d.tail_cut,
+            });
+        }
+        self.cell_descs = descs;
     }
 
     pub(crate) fn trim_cell_line(&self, start: usize, mut end: usize, mut line_w: f32) -> (usize, f32) {
@@ -2286,58 +2680,63 @@ impl<'a> Layouter<'a> {
         (end, line_w.max(0.0))
     }
 
-    pub(crate) fn paint_cell_line(
-        &mut self,
-        start: usize,
-        end: usize,
-        x: f32,
-        y: f32,
-        math_collector: &[&crate::math::MathNode<'a>],
-    ) {
-        self.paint_cell_line_at(
-            start,
-            end,
-            x,
-            y,
-            Face::Roman,
-            self.base_font_size,
-            math_collector,
-        );
+    /// Paints one cell (or caption) line with its glue setting, its first word starting at
+    /// `x` on baseline `y`.
+    pub(crate) fn paint_cell_line(&mut self, line: CellLineRange, x: f32, y: f32, math_collector: &[&crate::math::MathNode<'a>]) {
+        self.paint_cell_line_at(line, x, y, self.base_font_size, math_collector);
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn paint_cell_line_at(
         &mut self,
-        start: usize,
-        end: usize,
+        line: CellLineRange,
         mut x: f32,
         y: f32,
-        _default_face: Face,
         font_size: f32,
         math_collector: &[&crate::math::MathNode<'a>],
     ) {
         if self.is_dry_run {
             return;
         }
+        let start = line.start_word as usize;
+        let end = start + line.word_count as usize;
+        let glue_set = line.glue;
         let mut i = start;
         while i < end && self.cell_words_soa.attrs[i].is_space() {
             i += 1;
         }
+        // Colour and size runs, as in `flush_line_descriptor`; the line ends black.
+        let mut line_color = PackedColor::BLACK;
+        let mut color_end = if self.cell_words_soa.color_runs.is_empty() { usize::MAX } else { 0 };
+        let mut run_size = font_size;
+        let mut size_end = if self.cell_words_soa.size_runs.is_empty() { usize::MAX } else { 0 };
+        let is_cm = self.font_family == metrics::FontFamily::ComputerModern;
 
         while i < end {
             let attr = self.cell_words_soa.attrs[i];
             let w = self.cell_words_soa.widths[i];
             if attr.is_space() {
-                x += w;
+                x += w + glue_set.adjust(self.cell_words_soa.glue[i]);
                 i += 1;
                 continue;
+            }
+            if i >= color_end {
+                let (color, next) = self.cell_words_soa.color_span(i);
+                color_end = next;
+                if color != line_color {
+                    self.push_op(Paint::Color { color });
+                    line_color = color;
+                }
+            }
+            if i >= size_end {
+                (run_size, size_end) = self.cell_words_soa.size_span(i, font_size);
             }
             if attr.is_math() {
                 if let Some(m_idx) = self.cell_words_soa.get_math_idx(i) {
                     if let Some(&node) = math_collector.get(m_idx) {
+                        let ops_before = self.current_page.ops.len();
                         let m_box = crate::math::render_math(
                             node,
-                            font_size,
+                            run_size,
                             self.font_family,
                             crate::math::MathStyle::Text,
                             x,
@@ -2346,31 +2745,59 @@ impl<'a> Layouter<'a> {
                             &mut self.current_page.text_pool,
                         );
                         x += m_box.w;
+                        self.restore_color_after_math(ops_before, line_color);
                     }
                 }
                 i += 1;
                 continue;
             }
             let face = attr.face();
+            // A word cut by hyphenation is painted from its slice.
+            let cut = if i == start && line.head_cut != 0 {
+                Some(&self.cell_words_soa.texts[i][line.head_cut as usize..])
+            } else if i + 1 == end && line.tail_cut != 0 {
+                Some(&self.cell_words_soa.texts[i][..line.tail_cut as usize])
+            } else {
+                None
+            };
+            if let Some(piece) = cut {
+                let pool_start = self.current_page.text_pool.len() as u32;
+                self.current_page.text_pool.push(piece);
+                self.push_op(Paint::GlyphRun {
+                    x,
+                    y,
+                    face,
+                    size: run_size,
+                    part_start: pool_start,
+                    part_count: 1 | GLYPH_RUN_SHAPED,
+                    word_spacing: 0.0,
+                });
+                let shaped = |t: &str| crate::backend::shape::word_width_pt(t, face, run_size, self.font_family);
+                x += shaped(piece);
+                if i == start && line.head_cut != 0 {
+                    x += self.cell_words_soa.widths[i] - shaped(self.cell_words_soa.texts[i]);
+                }
+                i += 1;
+                continue;
+            }
             let x0 = x;
             let run_start = i;
-            let is_cm = self.font_family == metrics::FontFamily::ComputerModern;
-
-            while i < end {
+            // Spaces ride inside a run only at their natural width in a font without
+            // explicit positioning.
+            let spaces_in_run = !is_cm && glue_set == GlueSet::Natural;
+            while i < end && i < color_end && i < size_end {
                 let cur_attr = self.cell_words_soa.attrs[i];
-                let cur_face = cur_attr.face();
                 if !cur_attr.is_word_like() && !cur_attr.is_space() {
                     break;
                 }
-                if cur_attr.is_word_like() && cur_face != face {
+                if cur_attr.is_word_like() && (cur_attr.face() != face || (i + 1 == end && line.tail_cut != 0)) {
                     break;
                 }
-                if cur_attr.is_space() && is_cm {
+                if cur_attr.is_space() && !spaces_in_run {
                     break;
                 }
                 i += 1;
             }
-
             let run_end = i;
             if run_start == run_end {
                 i += 1;
@@ -2386,16 +2813,36 @@ impl<'a> Layouter<'a> {
                     x: x0,
                     y,
                     face,
-                    size: font_size,
+                    size: run_size,
                     part_start: pool_start,
-                    part_count,
+                    part_count: part_count | GLYPH_RUN_SHAPED,
                     word_spacing: 0.0,
                 });
             }
-
             for idx in run_start..run_end {
                 x += self.cell_words_soa.widths[idx];
             }
+        }
+        // The hyphen of a line broken at a discretionary.
+        if end > start
+            && (line.tail_cut != 0
+                || (self.cell_words_soa.attrs[end - 1].kind() == WordKind::Hyphen
+                    && !self.cell_words_soa.texts[end - 1].ends_with('-')))
+        {
+            let pool_start = self.current_page.text_pool.len() as u32;
+            self.current_page.text_pool.push("-");
+            self.push_op(Paint::GlyphRun {
+                x,
+                y,
+                face: self.cell_words_soa.attrs[end - 1].face(),
+                size: run_size,
+                part_start: pool_start,
+                part_count: 1 | GLYPH_RUN_SHAPED,
+                word_spacing: 0.0,
+            });
+        }
+        if line_color != PackedColor::BLACK {
+            self.push_op(Paint::Color { color: PackedColor::BLACK });
         }
     }
 }
@@ -2437,7 +2884,7 @@ pub fn marker_width_family(
     family: metrics::FontFamily,
 ) -> f32 {
     let scale = size * 0.001;
-    let table = metrics::resolve_width_table(family, face);
+    let table = metrics::resolve_width_table_at(family, face, size);
     match marker {
         Marker::Bullet => metrics::width_family('•', face, size, family),
         Marker::Dash => metrics::width_family('–', face, size, family),
@@ -2490,6 +2937,18 @@ pub fn marker_width_family(
     }
 }
 
+/// `\Large` and `\large` sizes with their \baselineskip for the standard class size files.
+fn section_font_sizes(base_size: f32, base_leading: f32) -> (f32, f32, f32, f32) {
+    if base_size >= 10.5 {
+        (17.28, 22.0, 14.4, 18.0) // size11.clo and size12.clo
+    } else if (base_size - 10.0).abs() < 0.01 {
+        (14.4, 18.0, 12.0, 14.0) // size10.clo
+    } else {
+        let r = base_leading / base_size;
+        (base_size * 1.44, base_size * 1.44 * r, base_size * 1.2, base_size * 1.2 * r)
+    }
+}
+
 pub(crate) fn section_number_width(
     number: [u16; 4],
     level: u8,
@@ -2497,10 +2956,10 @@ pub(crate) fn section_number_width(
     size: f32,
     family: metrics::FontFamily,
 ) -> f32 {
-    let table = metrics::resolve_width_table(family, face);
-    let digit_units = metrics::resolve_digit_units(family, face);
+    let table = metrics::resolve_width_table_at(family, face, size);
+    let digit_units = metrics::resolve_digit_units_at(family, face, size);
     let dot_units = table[b'.' as usize] as u32;
-    let space_units = metrics::resolve_space_units(family, face);
+    let space_units = metrics::resolve_space_units_at(family, face, size).round() as u32;
     let scale = size * 0.001;
 
     let mut total_units = 0;
@@ -2524,10 +2983,10 @@ pub(crate) fn equation_number_width(
     family: metrics::FontFamily,
 ) -> f32 {
     let scale = size * 0.001;
-    let table = metrics::resolve_width_table(family, face);
+    let table = metrics::resolve_width_table_at(family, face, size);
     let open_w = table[b'(' as usize] as f32 * scale;
     let close_w = table[b')' as usize] as f32 * scale;
-    let digit_units = metrics::resolve_digit_units(family, face);
+    let digit_units = metrics::resolve_digit_units_at(family, face, size);
     let digits = count_digits(n);
     open_w + close_w + (digits as f32) * (digit_units as f32 * scale)
 }
@@ -2670,13 +3129,24 @@ pub struct SparseMathIdx {
 #[derive(Default)]
 pub struct ParagraphSoA<'a> {
     pub widths: Vec<f32>,
+    /// Stretch and shrink of each item in points: the interword glue of spaces (TeX's
+    /// font glue adjusted by the space factor), zero for boxes.
+    pub glue: Vec<[f32; 2]>,
     pub attrs: Vec<PackedWordAttr>,
     pub texts: Vec<&'a str>,
     pub math_indices: Vec<SparseMathIdx>,
+    /// Sparse colour runs: (first word, colour), sorted. Empty for all-black text, so
+    /// uncoloured paragraphs pay nothing.
+    pub color_runs: Vec<(u32, PackedColor)>,
+    /// Sparse font-size runs (first word, size in pt), sorted; empty while every word is at
+    /// the paragraph's size.
+    pub size_runs: Vec<(u32, f32)>,
+    /// The class's normal size, which the size declarations resolve against.
+    pub class_size: f32,
 }
 
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(core::mem::size_of::<ParagraphSoA>() == 96);
+const _: () = assert!(core::mem::size_of::<ParagraphSoA>() == 176);
 
 impl<'a> ParagraphSoA<'a> {
     pub fn new() -> Self {
@@ -2686,18 +3156,89 @@ impl<'a> ParagraphSoA<'a> {
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             widths: Vec::with_capacity(cap),
+            glue: Vec::with_capacity(cap),
             attrs: Vec::with_capacity(cap),
             texts: Vec::with_capacity(cap),
             math_indices: Vec::with_capacity(4),
+            color_runs: Vec::new(),
+            size_runs: Vec::new(),
+            class_size: FONT_SIZE,
         }
     }
 
     #[inline]
     pub fn clear(&mut self) {
         self.widths.clear();
+        self.glue.clear();
         self.attrs.clear();
         self.texts.clear();
         self.math_indices.clear();
+        self.color_runs.clear();
+        self.size_runs.clear();
+    }
+
+    /// Size of the next word pushed; `base` is the paragraph's size.
+    #[inline]
+    pub fn current_size(&self, base: f32) -> f32 {
+        self.size_runs.last().map_or(base, |r| r.1)
+    }
+
+    /// Sets the size from the next word on; `base` is the size words without a run have.
+    pub fn set_size(&mut self, size: f32, base: f32) {
+        if size == self.current_size(base) {
+            return;
+        }
+        let at = self.widths.len() as u32;
+        match self.size_runs.last_mut() {
+            Some(last) if last.0 == at => last.1 = size,
+            _ => self.size_runs.push((at, size)),
+        }
+        let n = self.size_runs.len();
+        if n >= 2 && self.size_runs[n - 1].0 == at && self.size_runs[n - 2].1 == size {
+            self.size_runs.pop();
+        }
+    }
+
+    /// Size of word `i` (or `base`) and the index of the next word whose size may differ.
+    pub fn size_span(&self, i: usize, base: f32) -> (f32, usize) {
+        let k = self.size_runs.partition_point(|r| r.0 as usize <= i);
+        let size = if k == 0 { base } else { self.size_runs[k - 1].1 };
+        let next = self.size_runs.get(k).map_or(usize::MAX, |r| r.0 as usize);
+        (size, next)
+    }
+
+    /// Colour of the next word pushed.
+    #[inline]
+    pub fn current_color(&self) -> PackedColor {
+        self.color_runs.last().map_or(PackedColor::BLACK, |r| r.1)
+    }
+
+    /// Sets the colour from the next word on.
+    pub fn set_color(&mut self, color: PackedColor) {
+        if color == self.current_color() {
+            return;
+        }
+        let at = self.widths.len() as u32;
+        match self.color_runs.last_mut() {
+            Some(last) if last.0 == at => last.1 = color,
+            _ => self.color_runs.push((at, color)),
+        }
+        // Setting back the colour of the run before an empty run merges the two.
+        let n = self.color_runs.len();
+        if n >= 2 && self.color_runs[n - 1].0 == at && self.color_runs[n - 2].1 == color {
+            self.color_runs.pop();
+        }
+        if self.color_runs.len() == 1 && self.color_runs[0] == (0, PackedColor::BLACK) {
+            self.color_runs.clear();
+        }
+    }
+
+    /// Colour of word `i` and the index of the next word whose colour may differ.
+    pub fn color_span(&self, i: usize) -> (PackedColor, usize) {
+        let k = self.color_runs.partition_point(|r| r.0 as usize <= i);
+        let color = if k == 0 { PackedColor::BLACK } else { self.color_runs[k - 1].1 };
+        let next = self.color_runs.get(k).map_or(usize::MAX, |r| r.0 as usize);
+        (color, next)
     }
 
     #[inline]
@@ -2710,7 +3251,27 @@ impl<'a> ParagraphSoA<'a> {
     #[inline]
     pub fn push(&mut self, text: &'a str, face: Face, width: f32, kind: WordKind) {
         self.widths.push(width);
+        self.glue.push([0.0; 2]);
         self.attrs.push(PackedWordAttr::new(kind, face));
+        self.texts.push(text);
+    }
+
+    /// Appends interword glue: natural width, stretch and shrink in points.
+    #[inline]
+    /// Stretch and shrink of the glue in items `start..end`, leading spaces excluded (TeX
+    /// discards them after a break).
+    pub fn line_glue(&self, start: usize, end: usize) -> [f32; 2] {
+        let mut i = start;
+        while i < end && self.attrs[i].is_space() {
+            i += 1;
+        }
+        self.glue[i..end].iter().fold([0.0, 0.0], |a, g| [a[0] + g[0], a[1] + g[1]])
+    }
+
+    pub fn push_space(&mut self, text: &'a str, face: Face, glue: (f32, f32, f32)) {
+        self.widths.push(glue.0);
+        self.glue.push([glue.1, glue.2]);
+        self.attrs.push(PackedWordAttr::new(WordKind::Space, face));
         self.texts.push(text);
     }
 
@@ -2723,6 +3284,7 @@ impl<'a> ParagraphSoA<'a> {
     pub fn push_math_atom(&mut self, width: f32, math_idx: u32, kind: WordKind) {
         let idx = self.widths.len() as u32;
         self.widths.push(width);
+        self.glue.push([0.0; 2]);
         self.attrs.push(PackedWordAttr::new(kind, Face::Roman));
         self.texts.push("");
         self.math_indices.push(SparseMathIdx {
@@ -2765,16 +3327,65 @@ impl<'a> ParagraphSoA<'a> {
     }
 }
 
+/// The glue setting of one line: interword glue keeps its natural width, or every glue
+/// changes by the ratio times its stretch or shrink.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum GlueSet {
+    Natural,
+    Stretch(f32),
+    Shrink(f32),
+}
+
+impl GlueSet {
+    /// TeX's glue setting (`hpack`, §656–§664) for a line `slack` points short of its width
+    /// (negative: too long) whose glue totals `[stretch, shrink]`. A line that does not
+    /// justify keeps its natural spacing unless it must shrink; shrinking stops at the
+    /// glue's full shrink.
+    #[inline]
+    pub(crate) fn for_line(slack: f32, glue: [f32; 2], justify: bool) -> Self {
+        if slack < 0.0 {
+            if glue[1] > 0.0 { GlueSet::Shrink((-slack / glue[1]).min(1.0)) } else { GlueSet::Natural }
+        } else if justify && glue[0] > 0.0 {
+            GlueSet::Stretch(slack / glue[0])
+        } else {
+            GlueSet::Natural
+        }
+    }
+
+    /// The change of a glue with `[stretch, shrink]` under this setting, in points.
+    #[inline(always)]
+    pub(crate) fn adjust(self, g: [f32; 2]) -> f32 {
+        match self {
+            GlueSet::Natural => 0.0,
+            GlueSet::Stretch(r) => r * g[0],
+            GlueSet::Shrink(r) => -r * g[1],
+        }
+    }
+}
+
 /// Bit-packed 16-byte formatted line descriptor from hz line breaking.
 /// Exactly 4 descriptors fit into a single 64-byte L1 CPU cache line (64 / 16 = 4).
 pub use crate::layout::layout_hz::FlatAsciiWidthTable;
 pub use crate::layout::layout_hz::HzLineDescriptor as LineDescriptor;
 
+/// One line of a table cell or caption: its items, natural width, glue setting and the
+/// byte offsets of hyphenation cuts in its first and last word (0 = whole word).
 #[derive(Clone, Copy, Debug)]
 pub struct CellLineRange {
     pub start_word: u16,
     pub word_count: u16,
     pub line_w: f32,
+    pub(crate) glue: GlueSet,
+    pub head_cut: u8,
+    pub tail_cut: u8,
+}
+
+impl CellLineRange {
+    /// A line set at its natural width.
+    #[inline]
+    pub fn natural(start_word: u16, word_count: u16, line_w: f32) -> Self {
+        Self { start_word, word_count, line_w, glue: GlueSet::Natural, head_cut: 0, tail_cut: 0 }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2783,9 +3394,117 @@ pub struct CellSpan {
     pub count: u16,
 }
 
+/// A paragraph piece between `\par`s (see [`split_at_par_end`]).
+struct ParPiece<'a> {
+    inls: Vec<Inline<'a>>,
+    /// Alignment declared in a group still open where the piece ends: the piece takes it.
+    end_align: Option<crate::frontend::ast::ParAlign>,
+    /// Alignment declared in a group open where the piece starts (its \parindent is 0pt).
+    start_align: Option<crate::frontend::ast::ParAlign>,
+    /// Size declared in a group still open where the piece ends: its `\baselineskip`
+    /// spaces the piece's lines.
+    end_size: Option<crate::frontend::ast::FontSize>,
+}
+
+fn inlines_have_par_end(inls: &[Inline<'_>]) -> bool {
+    inls.iter().any(|inl| match inl {
+        Inline::ParEnd => true,
+        Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x) => inlines_have_par_end(x),
+        _ => false,
+    })
+}
+
+/// Whether the inlines typeset nothing (only spaces and declarations).
+fn is_blank_inlines(inls: &[Inline<'_>]) -> bool {
+    inls.iter().all(|inl| match inl {
+        Inline::Text(s) => s.trim().is_empty(),
+        Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x) => is_blank_inlines(x),
+        Inline::Math(_) | Inline::HSpace(_) => false,
+        _ => true,
+    })
+}
+
+/// Whether the piece's first item is a group with material, i.e. it starts inside a group.
+fn leading_group_has_text(inls: &[Inline<'_>]) -> bool {
+    match inls.first() {
+        Some(Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x)) => !is_blank_inlines(x),
+        _ => false,
+    }
+}
+
+/// Splits a paragraph's inlines at every `\par`, at any group depth. Each piece keeps the
+/// containers (groups, font changes) its material sits in, and records the group-scoped
+/// alignment in effect at its end and at its start. `in_group` says whether `items` is a
+/// group's content, whose declarations end with the group; declarations at the top level
+/// of the paragraph persist and are read by the paragraph layout itself.
+fn split_at_par_end<'a>(
+    items: &[Inline<'a>],
+    inherited: Option<crate::frontend::ast::ParAlign>,
+    in_group: bool,
+) -> Vec<ParPiece<'a>> {
+    let mut pieces = vec![ParPiece { inls: Vec::new(), end_align: None, start_align: inherited, end_size: None }];
+    let mut cur = inherited;
+    let mut cur_size = None;
+    for item in items {
+        match item {
+            Inline::ParEnd => {
+                let last = pieces.last_mut().unwrap();
+                last.end_align = if in_group { cur } else { None };
+                last.end_size = if in_group { cur_size } else { None };
+                pieces.push(ParPiece { inls: Vec::new(), end_align: None, start_align: if in_group { cur } else { None }, end_size: None });
+            }
+            Inline::Align(a) if in_group => {
+                cur = Some(*a);
+                pieces.last_mut().unwrap().inls.push(item.clone());
+            }
+            Inline::FontSize(fs) if in_group => {
+                cur_size = Some(*fs);
+                pieces.last_mut().unwrap().inls.push(item.clone());
+            }
+            Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x) if inlines_have_par_end(x) => {
+                let wrap = |v: Vec<Inline<'a>>| match item {
+                    Inline::Bold(_) => Inline::Bold(v),
+                    Inline::Italic(_) => Inline::Italic(v),
+                    Inline::Mono(_) => Inline::Mono(v),
+                    _ => Inline::Group(v),
+                };
+                let sub = split_at_par_end(x, if in_group { cur } else { None }, true);
+                let n = sub.len();
+                for (k, sp) in sub.into_iter().enumerate() {
+                    if k > 0 {
+                        pieces.push(ParPiece { inls: Vec::new(), end_align: None, start_align: sp.start_align, end_size: None });
+                    }
+                    let last = pieces.last_mut().unwrap();
+                    if k + 1 < n {
+                        last.end_align = sp.end_align;
+                        last.end_size = sp.end_size.or(cur_size);
+                    }
+                    last.inls.push(wrap(sp.inls));
+                }
+            }
+            _ => pieces.last_mut().unwrap().inls.push(item.clone()),
+        }
+    }
+    pieces
+}
+
+/// Whether the paragraph opens with an alignment declaration (possibly inside a leading
+/// group): it ran in vertical mode, so the paragraph starts with \parindent 0pt.
+fn starts_with_align(inls: &[Inline<'_>]) -> bool {
+    for inl in inls {
+        match inl {
+            Inline::Text(s) if s.trim().is_empty() => continue,
+            Inline::Align(_) => return true,
+            Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x) => return starts_with_align(x),
+            _ => return false,
+        }
+    }
+    false
+}
+
 pub(crate) fn inlines_have_break(inls: &[Inline<'_>]) -> bool {
     inls.iter().any(|inl| match inl {
-        Inline::Break => true,
+        Inline::Break | Inline::ParEnd => true,
         Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x) => {
             inlines_have_break(x)
         }
@@ -2797,36 +3516,49 @@ pub(crate) fn inlines_have_break(inls: &[Inline<'_>]) -> bool {
 struct FlatRun<'a, 'doc> {
     text: &'a str,
     face: Face,
+    color: PackedColor,
     is_break: bool,
     math: Option<&'doc crate::math::MathNode<'a>>,
 }
 
-fn flatten_into<'a, 'doc>(inls: &'doc [Inline<'a>], face: Face, out: &mut Vec<FlatRun<'a, 'doc>>) {
-    for i in inls {
+fn flatten_into<'a, 'doc>(inls: &'doc [Inline<'a>], face: Face, color: PackedColor, out: &mut Vec<FlatRun<'a, 'doc>>) {
+    for (k, i) in inls.iter().enumerate() {
         match i {
             Inline::Text(s) => {
                 if !s.is_empty() {
                     out.push(FlatRun {
                         text: s,
                         face,
+                        color,
                         is_break: false,
                         math: None,
                     });
                 }
             }
-            Inline::Bold(x) => flatten_into(x, face.with_bold(true), out),
-            Inline::Italic(x) => flatten_into(x, face.with_italic(true), out),
-            Inline::Mono(x) => flatten_into(x, face.with_mono(true), out),
-            Inline::Group(x) => flatten_into(x, face, out),
-            Inline::Break => out.push(FlatRun {
+            Inline::Bold(x) => flatten_into(x, face.with_bold(true), color, out),
+            Inline::Italic(x) => flatten_into(x, face.with_italic(true), color, out),
+            Inline::Mono(x) => flatten_into(x, face.with_mono(true), color, out),
+            Inline::Group(x) => flatten_into(x, face, color, out),
+            Inline::ScShape => {
+                flatten_into(&inls[k + 1..], Face::SmallCaps, color, out);
+                break;
+            }
+            Inline::Color(c) => {
+                flatten_into(&inls[k + 1..], face, *c, out);
+                break;
+            }
+            Inline::FontSize(_) => {}
+            Inline::Break | Inline::ParEnd => out.push(FlatRun {
                 text: "",
                 face,
+                color,
                 is_break: true,
                 math: None,
             }),
             Inline::Math(node) => out.push(FlatRun {
                 text: "",
                 face,
+                color,
                 is_break: false,
                 math: Some(node),
             }),
@@ -2846,6 +3578,7 @@ fn flatten_into<'a, 'doc>(inls: &'doc [Inline<'a>], face: Face, out: &mut Vec<Fl
             | Inline::LastLineFit(_)
             | Inline::Sloppy
             | Inline::Fussy
+            | Inline::Align(_)
             | Inline::HSpace(_) => {}
         }
     }
@@ -2883,6 +3616,7 @@ pub(crate) fn explode_inlines_into_family<'a, 'doc>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
     inls: &'doc [Inline<'a>],
     face: Face,
@@ -2894,15 +3628,18 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
     french_spacing: bool,
 ) -> f32 {
     let scale = size * 0.001;
-    let space_units = metrics::resolve_space_units(family, face);
-    let extra_space_units = metrics::resolve_extra_space_units(family, face);
-    let space_w = space_units as f32 * scale;
-    let extra_space_w = extra_space_units as f32 * scale;
-    let table = metrics::resolve_width_table(family, face);
+    let space_glue = crate::backend::scaled::space_glue(family, face, size);
+    let table = metrics::resolve_width_table_at(family, face, size);
     let flat_table = FlatAsciiWidthTable::from_table(table);
+    let shaper = crate::backend::shape::text_font_at(family, face, size);
+    // Exact (TFM) widths need the whole word; the unit table only serves fonts without them.
+    let exact_widths = shaper.is_some() || crate::backend::scaled::fix_metrics(family, face, size).is_some();
+    // Word width in points: the font's ligature/kern program when the face has one (TeX builds
+    // ligatures and implicit kerns while it reads the characters), plain advances otherwise.
+    let word_width = |word: &str| -> f32 { crate::backend::shape::word_width_pt(word, face, size, family) };
     let mut total_w = 0.0;
 
-    for inl in inls {
+    for (idx, inl) in inls.iter().enumerate() {
         match inl {
             Inline::Text(s) => {
                 let bytes = s.as_bytes();
@@ -2912,12 +3649,13 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
                     let b = bytes[i];
                     if is_tex_space_byte(b) {
                         let text = if b == b' ' { &s[i..i + 1] } else { " " };
-                        let current_space_w = if *space_factor >= 2000 {
-                            space_w + extra_space_w
-                        } else {
-                            space_w
-                        };
-                        soa.push(text, face, current_space_w, WordKind::Space);
+                        let (gw, gs, gk) = space_glue.at_space_factor(*space_factor);
+                        let current_space_w = crate::backend::scaled::to_pt(gw as i64);
+                        soa.push_space(
+                            text,
+                            face,
+                            (current_space_w, crate::backend::scaled::to_pt(gs as i64), crate::backend::scaled::to_pt(gk as i64)),
+                        );
                         total_w += current_space_w;
                         i += 1;
                         while i < len && is_tex_space_byte(bytes[i]) {
@@ -2931,6 +3669,12 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
 
                         while i < len {
                             if is_simple_ascii && i + 16 <= len && crate::layout::layout_hz::is_all_ascii_lowercase_16(&bytes[i..i + 16]) {
+                                if exact_widths {
+                                    // Shaped faces measure the whole word below.
+                                    w_sf = 1000;
+                                    i += 16;
+                                    continue;
+                                }
                                 let chunk = &bytes[i..i + 16];
                                 word_units += flat_table.get_advance_units(chunk[0]) as u32
                                     + flat_table.get_advance_units(chunk[1]) as u32
@@ -2953,6 +3697,11 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
                                 continue;
                             }
                             if is_simple_ascii && i + 8 <= len && crate::layout::layout_hz::is_all_ascii_lowercase_8(&bytes[i..i + 8]) {
+                                if exact_widths {
+                                    w_sf = 1000;
+                                    i += 8;
+                                    continue;
+                                }
                                 let chunk = &bytes[i..i + 8];
                                 word_units += flat_table.get_advance_units(chunk[0]) as u32
                                     + flat_table.get_advance_units(chunk[1]) as u32
@@ -2989,7 +3738,7 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
                             if !french_spacing {
                                 *space_factor = w_sf;
                             }
-                            let width = word_units as f32 * scale;
+                            let width = if exact_widths { word_width(word) } else { word_units as f32 * scale };
                             soa.push(word, face, width, WordKind::Word);
                             total_w += width;
                         } else {
@@ -3005,18 +3754,17 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
                                 } else if cb == 0xC2 && idx + 1 < w_len && w_bytes[idx + 1] == 0xAD {
                                     has_soft_hyphen = true;
                                 }
-                                if !french_spacing {
-                                    if !cb.is_ascii_lowercase() || fb_sf != 1000 {
+                                if !french_spacing
+                                    && (!cb.is_ascii_lowercase() || fb_sf != 1000) {
                                         fb_sf = crate::layout::layout_hz::update_space_factor(fb_sf, cb, false);
                                     }
-                                }
                             }
                             if !french_spacing {
                                 *space_factor = fb_sf;
                             }
 
                             if !has_hyphen && !has_soft_hyphen {
-                                let width = metrics::string_units_table(word, table) as f32 * scale;
+                                let width = word_width(word);
                                 soa.push(word, face, width, WordKind::Word);
                                 total_w += width;
                             } else if word == "\u{00AD}" {
@@ -3031,7 +3779,7 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
                                 for (shy_pos, _) in word.match_indices('\u{00AD}') {
                                     if shy_pos > last {
                                         let piece = &word[last..shy_pos];
-                                        let p_w = metrics::string_units_table(piece, table) as f32 * scale;
+                                        let p_w = word_width(piece);
                                         soa.push(piece, face, p_w, WordKind::Hyphen);
                                         total_w += p_w;
                                     }
@@ -3039,27 +3787,36 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
                                 }
                                 if last < word.len() {
                                     let piece = &word[last..];
-                                    let p_w = metrics::string_units_table(piece, table) as f32 * scale;
+                                    let p_w = word_width(piece);
                                     soa.push(piece, face, p_w, WordKind::Word);
                                     total_w += p_w;
                                 }
                             } else if has_hyphen && word.len() > 1 && !word.starts_with('-') && !word.ends_with('-') {
                                 let mut last = 0;
                                 for (hyphen_pos, _) in word.match_indices('-') {
+                                    // TeX puts the explicit-hyphen discretionary after a character
+                                    // that is still the hyphen once ligatures are formed: `--`/`---`
+                                    // become en/em dashes in shaped fonts and get no break.
+                                    if shaper.is_some()
+                                        && (word.as_bytes().get(hyphen_pos + 1) == Some(&b'-')
+                                            || (hyphen_pos > 0 && word.as_bytes()[hyphen_pos - 1] == b'-'))
+                                    {
+                                        continue;
+                                    }
                                     let piece = &word[last..=hyphen_pos];
-                                    let p_w = metrics::string_units_table(piece, table) as f32 * scale;
+                                    let p_w = word_width(piece);
                                     soa.push(piece, face, p_w, WordKind::Hyphen);
                                     total_w += p_w;
                                     last = hyphen_pos + 1;
                                 }
                                 if last < word.len() {
                                     let piece = &word[last..];
-                                    let p_w = metrics::string_units_table(piece, table) as f32 * scale;
+                                    let p_w = word_width(piece);
                                     soa.push(piece, face, p_w, WordKind::Word);
                                     total_w += p_w;
                                 }
                             } else {
-                                let width = metrics::string_units_table(word, table) as f32 * scale;
+                                let width = word_width(word);
                                 let kind = if word.ends_with('-') || word.ends_with('\u{00AD}') || word.ends_with('\u{2010}') {
                                     WordKind::Hyphen
                                 } else {
@@ -3073,16 +3830,62 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
                 }
             }
             Inline::Bold(x) => {
-                total_w += explode_inlines_into_family_sf(x, face.with_bold(true), size, soa, family, math_collector, space_factor, french_spacing)
+                let color = soa.current_color();
+                total_w += explode_inlines_into_family_sf(x, face.with_bold(true), size, soa, family, math_collector, space_factor, french_spacing);
+                soa.set_color(color);
+                soa.set_size(size, size);
             }
             Inline::Italic(x) => {
-                total_w += explode_inlines_into_family_sf(x, face.with_italic(true), size, soa, family, math_collector, space_factor, french_spacing)
+                let color = soa.current_color();
+                let first = soa.len();
+                let it_face = face.with_italic(true);
+                total_w += explode_inlines_into_family_sf(x, it_face, size, soa, family, math_collector, space_factor, french_spacing);
+                // `\textit` ends with LaTeX's `\check@icr`: an italic correction unless a
+                // period or comma follows (`\nocorrlist`).
+                let next_nocorr = matches!(inls.get(idx + 1), Some(Inline::Text(t)) if t.starts_with(['.', ',']));
+                if !next_nocorr && soa.len() > first {
+                    let last = soa.len() - 1;
+                    let attr = soa.attrs[last];
+                    if attr.is_word_like() && attr.face() == Face::Italic {
+                        if let Some(ch) = soa.texts[last].chars().next_back() {
+                            let ic = crate::backend::scaled::italic_correction_pt(family, Face::Italic, size, ch);
+                            soa.widths[last] += ic;
+                            total_w += ic;
+                        }
+                    }
+                }
+                soa.set_color(color);
+                soa.set_size(size, size);
             }
             Inline::Mono(x) => {
-                total_w += explode_inlines_into_family_sf(x, face.with_mono(true), size, soa, family, math_collector, space_factor, french_spacing)
+                let color = soa.current_color();
+                total_w += explode_inlines_into_family_sf(x, face.with_mono(true), size, soa, family, math_collector, space_factor, french_spacing);
+                soa.set_color(color);
+                soa.set_size(size, size);
             }
-            Inline::Group(x) => total_w += explode_inlines_into_family_sf(x, face, size, soa, family, math_collector, space_factor, french_spacing),
-            Inline::Break => {
+            Inline::Group(x) => {
+                let color = soa.current_color();
+                total_w += explode_inlines_into_family_sf(x, face, size, soa, family, math_collector, space_factor, french_spacing);
+                soa.set_color(color);
+                soa.set_size(size, size);
+            }
+            Inline::Color(c) => soa.set_color(*c),
+            Inline::ScShape => {
+                // The rest of the group is set in small caps (cmcsc10); the Base-14 families
+                // have no small-caps face, so they keep the upright one.
+                let sc = if family == metrics::FontFamily::ComputerModern { Face::SmallCaps } else { face };
+                total_w += explode_inlines_into_family_sf(&inls[idx + 1..], sc, size, soa, family, math_collector, space_factor, french_spacing);
+                break;
+            }
+            Inline::FontSize(fs) => {
+                // The rest of the group is set at the new size.
+                let class = if soa.class_size > 0.0 { soa.class_size } else { FONT_SIZE };
+                let new_size = fs.metrics(class).0;
+                soa.set_size(new_size, size);
+                total_w += explode_inlines_into_family_sf(&inls[idx + 1..], face, new_size, soa, family, math_collector, space_factor, french_spacing);
+                break;
+            }
+            Inline::Break | Inline::ParEnd => {
                 *space_factor = 1000;
                 soa.push("", face, 0.0, WordKind::Break);
             }
@@ -3192,7 +3995,7 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
             | Inline::PreTolerance(_) | Inline::Tolerance(_) | Inline::EmergencyStretch(_)
             | Inline::Looseness(_) | Inline::LeftSkip(_) | Inline::RightSkip(_)
             | Inline::ParFillSkip { .. } | Inline::PrevGraf(_) | Inline::LastLineFit(_)
-            | Inline::Sloppy | Inline::Fussy => {}
+            | Inline::Sloppy | Inline::Fussy | Inline::Align(_) => {}
         }
     }
     total_w
@@ -3219,87 +4022,84 @@ fn measure_inlines_face_size_family(
     size: f32,
     family: metrics::FontFamily,
 ) -> f32 {
-    let units = measure_inlines_units_family(inls, face, family);
-    let mut total_w = units as f32 * (size * 0.001);
-    for inl in inls {
-        if let Inline::HSpace(dim) = inl {
-            total_w += *dim;
-        }
-    }
-    total_w
+    let mut sf = 1000u16;
+    measure_inlines_pt(inls, face, size, family, &mut sf)
 }
 
-fn measure_inlines_units_family(
+/// Natural width in points of `inls` set on one line, with the widths and interword glue
+/// that `explode_inlines_into_family_sf` gives them (TFM widths, space factor, the italic
+/// correction of `\textit`), so a measured box holds exactly what is later set in it.
+fn measure_inlines_pt(
     inls: &[Inline<'_>],
     face: Face,
+    size: f32,
     family: metrics::FontFamily,
-) -> u32 {
-    let mut total_units: u32 = 0;
-    let table = metrics::resolve_width_table(family, face);
-    let space_units = metrics::resolve_space_units(family, face);
-
-    for inl in inls {
+    sf: &mut u16,
+) -> f32 {
+    use crate::backend::scaled::{space_glue, to_pt};
+    let glue = space_glue(family, face, size);
+    let mut total = 0.0f32;
+    for (idx, inl) in inls.iter().enumerate() {
         match inl {
             Inline::Text(s) => {
                 let bytes = s.as_bytes();
                 let mut i = 0;
                 while i < bytes.len() {
-                    let b = bytes[i];
-                    if is_tex_space_byte(b) {
-                        total_units += space_units;
-                        i += 1;
+                    if is_tex_space_byte(bytes[i]) {
                         while i < bytes.len() && is_tex_space_byte(bytes[i]) {
                             i += 1;
                         }
+                        total += to_pt(glue.at_space_factor(*sf).0 as i64);
                     } else {
                         let start = i;
-                        i += 1;
                         while i < bytes.len() && !is_tex_space_byte(bytes[i]) {
+                            *sf = crate::layout::layout_hz::update_space_factor(*sf, bytes[i], false);
                             i += 1;
                         }
-                        let word = &s[start..i];
-                        total_units += metrics::string_units_table(word, table);
+                        total += crate::backend::shape::word_width_pt(&s[start..i], face, size, family);
                     }
                 }
             }
-            Inline::Bold(x) => {
-                total_units += measure_inlines_units_family(x, face.with_bold(true), family);
-            }
+            Inline::Bold(x) => total += measure_inlines_pt(x, face.with_bold(true), size, family, sf),
             Inline::Italic(x) => {
-                total_units += measure_inlines_units_family(x, face.with_italic(true), family);
+                total += measure_inlines_pt(x, face.with_italic(true), size, family, sf);
+                let next_nocorr = matches!(inls.get(idx + 1), Some(Inline::Text(t)) if t.starts_with(['.', ',']));
+                if !next_nocorr && face.with_italic(true) == Face::Italic {
+                    if let Some(ch) = last_text_char(x) {
+                        total += crate::backend::scaled::italic_correction_pt(family, Face::Italic, size, ch);
+                    }
+                }
             }
-            Inline::Mono(x) => {
-                total_units += measure_inlines_units_family(x, face.with_mono(true), family);
+            Inline::Mono(x) => total += measure_inlines_pt(x, face.with_mono(true), size, family, sf),
+            Inline::Group(x) => total += measure_inlines_pt(x, face, size, family, sf),
+            Inline::ScShape => {
+                let sc = if family == metrics::FontFamily::ComputerModern { Face::SmallCaps } else { face };
+                total += measure_inlines_pt(&inls[idx + 1..], sc, size, family, sf);
+                break;
             }
-            Inline::Group(x) => {
-                total_units += measure_inlines_units_family(x, face, family);
+            Inline::FontSize(fs) => {
+                total += measure_inlines_pt(&inls[idx + 1..], face, fs.metrics(FONT_SIZE).0, family, sf);
+                break;
             }
-            Inline::Break => {}
+            Inline::HSpace(dim) => total += dim.max(0.0),
             Inline::Math(node) => {
-                let mb =
-                    crate::math::measure_math(node, 1000.0, family, crate::math::MathStyle::Text);
-                total_units += mb.w as u32;
+                *sf = 1000;
+                total += crate::math::measure_math(node, size, family, crate::math::MathStyle::Text).w;
             }
-            Inline::NoIndent
-            | Inline::Indent
-            | Inline::HangIndent(_)
-            | Inline::HangAfter(_)
-            | Inline::ParShape(_)
-            | Inline::PreTolerance(_)
-            | Inline::Tolerance(_)
-            | Inline::EmergencyStretch(_)
-            | Inline::Looseness(_)
-            | Inline::LeftSkip(_)
-            | Inline::RightSkip(_)
-            | Inline::ParFillSkip { .. }
-            | Inline::PrevGraf(_)
-            | Inline::LastLineFit(_)
-            | Inline::Sloppy
-            | Inline::Fussy
-            | Inline::HSpace(_) => {}
+            Inline::Break | Inline::ParEnd => *sf = 1000,
+            _ => {}
         }
     }
-    total_units
+    total
+}
+
+/// The last character of the text at the end of `inls`, looking into nested groups.
+fn last_text_char(inls: &[Inline<'_>]) -> Option<char> {
+    match inls.last()? {
+        Inline::Text(t) => t.chars().next_back().filter(|c| !c.is_whitespace()),
+        Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x) => last_text_char(x),
+        _ => None,
+    }
 }
 
 #[allow(dead_code)]
@@ -3313,9 +4113,8 @@ fn measure_text_run_size_family(
     size: f32,
     family: metrics::FontFamily,
 ) -> f32 {
-    let mut total_units: u32 = 0;
-    let space_units = metrics::resolve_space_units(family, face);
-    let table = metrics::resolve_width_table(family, face);
+    let mut total_units: f32 = 0.0;
+    let space_units = metrics::resolve_space_units_at(family, face, size);
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -3333,10 +4132,10 @@ fn measure_text_run_size_family(
                 i += 1;
             }
             let word = &s[start..i];
-            total_units += metrics::string_units_table(word, table);
+            total_units += crate::backend::shape::text_units_at(word, face, size, family);
         }
     }
-    total_units as f32 * (size * 0.001)
+    total_units * (size * 0.001)
 }
 
 #[inline]
@@ -3382,7 +4181,6 @@ mod tests {
             assert_eq!(d1.start_word, d2.start_word);
             assert_eq!(d1.word_count, d2.word_count);
             assert_eq!(d1.line_w, d2.line_w);
-            assert_eq!(d1.num_spaces, d2.num_spaces);
         }
 
         // Third modified paragraph: produces different layout

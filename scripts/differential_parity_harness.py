@@ -127,9 +127,11 @@ def compile_and_rasterize_formula(
         r"\usepackage{amsmath}" "\n"
         r"\usepackage{amssymb}" "\n"
         r"\usepackage{xfrac}" "\n"
-        r"\usepackage{cancel}" "\n"
-        r"\usepackage{accents}" "\n"
-        r"\providecommand{\utilde}[1]{\underaccent{\tilde}{#1}}" "\n"
+        # Optional packages: a basic TeX Live lacks them, and a missing one must not fail
+        # every specimen, only the ones that use it.
+        r"\IfFileExists{cancel.sty}{\usepackage{cancel}}{}" "\n"
+        r"\IfFileExists{accents.sty}{\usepackage{accents}"
+        r"\providecommand{\utilde}[1]{\underaccent{\tilde}{#1}}}{}" "\n"
         r"\pagestyle{empty}" "\n"
         r"\begin{document}" "\n"
         r"\[" "\n"

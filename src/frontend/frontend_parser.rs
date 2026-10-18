@@ -19,6 +19,11 @@ pub(crate) struct Parser<'a> {
     pub(crate) byte_offset: usize,
     pub(crate) preamble: Preamble<'a>,
     pub(crate) doc_env_start: Option<usize>,
+    /// latex.ltx `\@endpe`: a list-like environment ended without a blank line after it,
+    /// so the paragraph that follows is not indented.
+    pub(crate) end_par_env: bool,
+    /// Colours from `\definecolor`, looked up before the xcolor base colours.
+    pub(crate) colors: Vec<(&'a str, PackedColor)>,
 }
 
 impl<'a> Parser<'a> {
@@ -28,6 +33,8 @@ impl<'a> Parser<'a> {
             byte_offset: 0,
             preamble: Preamble::default(),
             doc_env_start: None,
+            end_par_env: false,
+            colors: Vec::new(),
         }
     }
 
@@ -73,7 +80,7 @@ impl<'a> Parser<'a> {
     }
 
     #[inline(always)]
-    fn rest(&self) -> &'a str {
+    pub(crate) fn rest(&self) -> &'a str {
         &self.source_code[self.byte_offset..]
     }
 
@@ -235,6 +242,54 @@ impl<'a> Parser<'a> {
         true
     }
 
+    /// `\definecolor{name}{model}{spec}`.
+    fn parse_definecolor(&mut self) -> Result<(), ParseError> {
+        self.skip_hws();
+        let name = self.brace_arg()?.trim();
+        self.skip_hws();
+        let model = self.brace_arg()?;
+        self.skip_hws();
+        let spec = self.brace_arg()?;
+        let color = PackedColor::from_model(model, spec).ok_or_else(|| self.err(format!("unknown colour model or value '{model}' '{spec}'")))?;
+        match self.colors.iter_mut().find(|(n, _)| *n == name) {
+            Some(slot) => slot.1 = color,
+            None => self.colors.push((name, color)),
+        }
+        Ok(())
+    }
+
+    /// The colour argument of `\color`/`\textcolor`: `[model]{spec}` or `{expression}`.
+    fn parse_color_arg(&mut self) -> Result<PackedColor, ParseError> {
+        self.skip_hws();
+        if self.eat("[") {
+            let start = self.byte_offset;
+            while !matches!(self.peek(), Some(']') | None) {
+                self.bump();
+            }
+            let model = &self.source_code[start..self.byte_offset];
+            if !self.eat("]") {
+                return Err(self.err("unclosed colour model '['"));
+            }
+            self.skip_hws();
+            let spec = self.brace_arg()?;
+            return PackedColor::from_model(model, spec)
+                .ok_or_else(|| self.err(format!("unknown colour model or value '{model}' '{spec}'")));
+        }
+        let expr = self.brace_arg()?;
+        self.color_expression(expr).ok_or_else(|| self.err(format!("undefined colour '{}'", expr.trim())))
+    }
+
+    /// An xcolor expression: `name`, `name!pct` (mixed with white) or `name!pct!name2`,
+    /// chained left to right.
+    fn color_expression(&self, expr: &str) -> Option<PackedColor> {
+        PackedColor::resolve(expr, &self.colors)
+    }
+
+    /// Parses a math formula with the document's `\definecolor` names in scope.
+    fn parse_math(&self, src: &'a str) -> crate::math::MathNode<'a> {
+        crate::math::parse_math_str_with_colors(src, &self.colors)
+    }
+
     pub(crate) fn parse_optional_brackets(&mut self) -> Result<Vec<&'a str>, ParseError> {
         self.skip_hws();
         let open_offset = self.byte_offset;
@@ -317,6 +372,12 @@ impl<'a> Parser<'a> {
                 let pkg = crate::doc_config::Package { name, options };
                 registry.apply(&pkg, &mut self.preamble.config);
                 self.preamble.packages.push(pkg);
+                continue;
+            }
+            if self.cmd_ends_at("\\definecolor") {
+                in_preamble = true;
+                self.eat("\\definecolor");
+                self.parse_definecolor()?;
                 continue;
             }
             if self.cmd_ends_at("\\title") {
@@ -470,9 +531,20 @@ impl<'a> Parser<'a> {
     pub(crate) fn parse_next_block(&mut self) -> Result<Option<Block<'a>>, ParseError> {
         macro_rules! parse_para_or_continue {
             () => {{
-                let inls = self.parse_para_inlines()?;
+                let para_start = self.byte_offset;
+                let mut inls = self.parse_para_inlines()?;
                 if !is_empty_inlines(&inls) {
+                    if std::mem::take(&mut self.end_par_env) {
+                        inls.insert(0, Inline::NoIndent);
+                    }
                     return Ok(Some(Block::Para(inls)));
+                } else if has_lasting_declaration(&inls) {
+                    // `\color{..}` or `\small` alone before a blank line typesets nothing
+                    // but holds for the paragraphs after it.
+                    return Ok(Some(Block::Para(inls)));
+                } else if self.byte_offset > para_start {
+                    // Only spaces and paragraph-local declarations: nothing to set.
+                    continue;
                 } else if self.peek().is_some()
                     && !self.starts_with("\\begin")
                     && !self.starts_with("\\end")
@@ -502,7 +574,7 @@ impl<'a> Parser<'a> {
                     if let Some(pos) = rest.find("$$") {
                         let math_slice = &self.source_code[start..start + pos];
                         self.byte_offset = start + pos + 2;
-                        let math = crate::math::parse_math(math_slice);
+                        let math = self.parse_math(math_slice);
                         return Ok(Some(Block::Equation {
                             starred: true,
                             math: Box::new(math),
@@ -534,7 +606,7 @@ impl<'a> Parser<'a> {
                 if let Some(pos) = rest.find("\\]") {
                     let math_slice = &self.source_code[start..start + pos];
                     self.byte_offset = start + pos + 2;
-                    let math = crate::math::parse_math(math_slice);
+                    let math = self.parse_math(math_slice);
                     return Ok(Some(Block::Equation {
                         starred: true,
                         math: Box::new(math),
@@ -662,6 +734,16 @@ impl<'a> Parser<'a> {
                     "sloppy" => {
                         self.byte_offset += 1 + cmd.len();
                         return Ok(Some(Block::ConfigChange(ConfigChange::Sloppy)));
+                    }
+                    "centering" | "raggedright" | "raggedleft" => {
+                        self.byte_offset += 1 + cmd.len();
+                        return Ok(Some(Block::ConfigChange(ConfigChange::Align(align_of_declaration(cmd)))));
+                    }
+                    _ if FontSize::from_command(cmd).is_some() => {
+                        self.byte_offset += 1 + cmd.len();
+                        self.skip_hws();
+                        let size = FontSize::from_command(cmd).unwrap_or(FontSize::NormalSize);
+                        return Ok(Some(Block::ConfigChange(ConfigChange::FontSize(size))));
                     }
                     "fussy" => {
                         self.byte_offset += 1 + cmd.len();
@@ -830,6 +912,9 @@ impl<'a> Parser<'a> {
             "description" => self.parse_list(ListKind::Description, env_start),
             "quote" => self.parse_quote(false, env_start),
             "quotation" => self.parse_quote(true, env_start),
+            "center" => self.parse_aligned("center", ParAlign::Center, env_start),
+            "flushleft" => self.parse_aligned("flushleft", ParAlign::RaggedRight, env_start),
+            "flushright" => self.parse_aligned("flushright", ParAlign::RaggedLeft, env_start),
             "tabular" => crate::tables::parse_tabular(self, env_start),
             "longtable" => crate::tables::parse_longtable(self, env_start),
             "table" => crate::tables::parse_table_float(self, env_start),
@@ -854,7 +939,7 @@ impl<'a> Parser<'a> {
                 format!("unsupported environment {{{other}}}"),
                 Some("unsupported environment"),
                 None,
-                Some("supported environments: enumerate, itemize, description, quote, quotation, tabular, longtable, table, figure, verbatim, lstlisting, equation, equation*, displaymath, align, align*, gather, gather*, multline, multline*"),
+                Some("supported environments: enumerate, itemize, description, quote, quotation, center, flushleft, flushright, tabular, longtable, table, figure, verbatim, lstlisting, equation, equation*, displaymath, align, align*, gather, gather*, multline, multline*"),
             )),
         }
     }
@@ -877,7 +962,7 @@ impl<'a> Parser<'a> {
         if let Some(pos) = rest.find(end_token) {
             let math_slice = &self.source_code[start..start + pos];
             self.byte_offset = start + pos + end_token.len();
-            let math = crate::math::parse_math(math_slice);
+            let math = self.parse_math(math_slice);
             Ok(Block::Equation {
                 starred,
                 math: Box::new(math),
@@ -921,7 +1006,7 @@ impl<'a> Parser<'a> {
             let full_end = self.byte_offset + pos + end_token.len();
             let math_slice = &self.source_code[env_start..full_end];
             self.byte_offset = full_end;
-            let math = crate::math::parse_math(math_slice);
+            let math = self.parse_math(math_slice);
             Ok(Block::Equation {
                 starred,
                 math: Box::new(math),
@@ -1281,6 +1366,7 @@ impl<'a> Parser<'a> {
             });
         }
         items.shrink_to_fit();
+        self.note_env_end();
         Ok(Block::List(Box::new(ListData {
             kind,
             options,
@@ -1308,10 +1394,62 @@ impl<'a> Parser<'a> {
                 Some(&format!("did you forget to add '\\end{{{name}}}'?")),
             ));
         }
+        self.note_env_end();
         Ok(Block::Quote(Box::new(QuoteData {
             is_quotation,
             blocks,
         })))
+    }
+
+    fn parse_aligned(
+        &mut self,
+        name: &'static str,
+        align: ParAlign,
+        open_offset: usize,
+    ) -> Result<Block<'a>, ParseError> {
+        let in_vmode = self.begins_in_vmode(open_offset);
+        self.skip_ws();
+        let blocks = self.parse_blocks()?;
+        if !self.eat_end_env(name) {
+            let end_line = self.current_line_number();
+            let span_len = "\\begin{".len() + name.len() + 1;
+            return Err(self.err_span(
+                open_offset,
+                span_len,
+                format!("unclosed \\begin{{{name}}}"),
+                Some(&format!("this '\\begin{{{name}}}' is never closed")),
+                Some(&format!("reached end of file at line {end_line} without finding matching '\\end{{{name}}}'")),
+                Some(&format!("did you forget to add '\\end{{{name}}}'?")),
+            ));
+        }
+        self.note_env_end();
+        Ok(Block::Aligned(Box::new(AlignedData { align, in_vmode, blocks })))
+    }
+
+    /// Whether the source before `offset` leaves TeX in vertical mode: a blank line, the
+    /// end of another environment, or `\begin{document}` precedes it rather than paragraph
+    /// text.
+    fn begins_in_vmode(&self, offset: usize) -> bool {
+        let before = self.source_code[..offset.min(self.source_code.len())].trim_end_matches([' ', '\t']);
+        let Some(head) = before.strip_suffix('\n') else {
+            return before.trim_end().is_empty();
+        };
+        let head = head.trim_end_matches([' ', '\t', '\r']);
+        if head.ends_with('\n') || head.is_empty() {
+            return true;
+        }
+        let last_line = head.rsplit('\n').next().unwrap_or("").trim_start();
+        last_line.starts_with("\\end{") || last_line.starts_with("\\begin{document}") || last_line.starts_with("\\par")
+    }
+
+    /// Records whether a blank line follows the `\end{...}` just read (`\@endparenv`).
+    fn note_env_end(&mut self) {
+        let rest = self.rest().trim_start_matches([' ', '\t']);
+        let blank = rest
+            .strip_prefix('\n')
+            .or_else(|| rest.strip_prefix("\r\n"))
+            .is_some_and(|r| r.trim_start_matches([' ', '\t', '\r']).starts_with('\n'));
+        self.end_par_env = !blank;
     }
 
     fn parse_figure(&mut self, open_offset: usize) -> Result<Block<'a>, ParseError> {
@@ -1523,13 +1661,13 @@ impl<'a> Parser<'a> {
                         let shift = bytes[1] - b'a';
                         if shift < 26 && ((TERM_MASK & (1 << shift)) != 0) {
                             if let Some(cmd) = self.peek_control_word() {
-                                let is_terminator = match cmd {
+                                let is_terminator = matches!(
+                                    cmd,
                                     "begin" | "bigskip" | "end" | "item" | "section" | "subsection"
-                                    | "subsubsection" | "smallskip" | "maketitle" | "medskip"
-                                    | "newpage" | "clearpage" | "hrule" | "tableofcontents"
-                                    | "listoffigures" | "listoftables" | "vspace" => true,
-                                    _ => false,
-                                };
+                                        | "subsubsection" | "smallskip" | "maketitle" | "medskip"
+                                        | "newpage" | "clearpage" | "hrule" | "tableofcontents"
+                                        | "listoffigures" | "listoftables" | "vspace"
+                                );
                                 if is_terminator {
                                     break;
                                 }
@@ -1564,7 +1702,7 @@ impl<'a> Parser<'a> {
                 if let Some(pos) = find_unescaped_char(rest, '$') {
                     let math_slice = &self.source_code[start..start + pos];
                     self.byte_offset = start + pos + 1;
-                    let math = crate::math::parse_math(math_slice);
+                    let math = self.parse_math(math_slice);
                     Ok(Inline::Math(Box::new(math)))
                 } else {
                     Err(self.err_span(
@@ -1639,7 +1777,7 @@ impl<'a> Parser<'a> {
                 if let Some(pos) = rest.find("\\)") {
                     let math_slice = &self.source_code[start..start + pos];
                     self.byte_offset = start + pos + 2;
-                    let math = crate::math::parse_math(math_slice);
+                    let math = self.parse_math(math_slice);
                     return Ok(Inline::Math(Box::new(math)));
                 } else {
                     return Err(self.err_span(
@@ -1660,7 +1798,7 @@ impl<'a> Parser<'a> {
                 if let Some(pos) = rest.find("\\]") {
                     let math_slice = &self.source_code[start..start + pos];
                     self.byte_offset = start + pos + 2;
-                    let math = crate::math::parse_math(math_slice);
+                    let math = self.parse_math(math_slice);
                     return Ok(Inline::Math(Box::new(math)));
                 } else {
                     return Err(self.err_span(
@@ -1707,7 +1845,32 @@ impl<'a> Parser<'a> {
             b"textbf" => return Ok(Inline::Bold(self.require_group()?)),
             b"textit" | b"emph" => return Ok(Inline::Italic(self.require_group()?)),
             b"texttt" => return Ok(Inline::Mono(self.require_group()?)),
-            b"par" => return Ok(Inline::Break),
+            b"par" => return Ok(Inline::ParEnd),
+            b"color" => {
+                // xcolor's \color ends in \ignorespaces.
+                let color = self.parse_color_arg()?;
+                self.skip_hws();
+                return Ok(Inline::Color(color));
+            }
+            b"textsc" => {
+                let mut body = self.require_group()?;
+                body.insert(0, Inline::ScShape);
+                return Ok(Inline::Group(body));
+            }
+            b"scshape" => {
+                self.skip_hws();
+                return Ok(Inline::ScShape);
+            }
+            b"textcolor" => {
+                let color = self.parse_color_arg()?;
+                let mut body = self.require_group()?;
+                body.insert(0, Inline::Color(color));
+                return Ok(Inline::Group(body));
+            }
+            b"definecolor" => {
+                self.parse_definecolor()?;
+                return Ok(Inline::Text(""));
+            }
             b"noindent" => return Ok(Inline::NoIndent),
             b"indent" => return Ok(Inline::Indent),
             b"frenchspacing" => {
@@ -1814,6 +1977,12 @@ impl<'a> Parser<'a> {
                 Ok(Inline::EmergencyStretch(dim))
             }
             "sloppy" => Ok(Inline::Sloppy),
+            "centering" | "raggedright" | "raggedleft" => Ok(Inline::Align(align_of_declaration(name))),
+            _ if FontSize::from_command(name).is_some() => {
+                // A control word swallows the spaces after it.
+                self.skip_hws();
+                Ok(Inline::FontSize(FontSize::from_command(name).unwrap_or(FontSize::NormalSize)))
+            }
             "fussy" => Ok(Inline::Fussy),
             "looseness" => {
                 self.skip_hws();
@@ -2513,10 +2682,19 @@ fn is_single_escape(c: char) -> bool {
     (c as u32) < 256 && SINGLE_ESCAPE_LUT[c as usize]
 }
 
+/// Whether a top-level declaration in `v` outlives the paragraph (text colour, size).
+fn has_lasting_declaration(v: &[Inline<'_>]) -> bool {
+    v.iter().any(|i| matches!(i, Inline::Color(_) | Inline::FontSize(_)))
+}
+
 fn is_empty_inlines(v: &[Inline<'_>]) -> bool {
     v.iter().all(|i| match i {
         Inline::Text(s) => s.trim().is_empty(),
         Inline::Break
+        | Inline::ParEnd
+        | Inline::Color(_)
+        | Inline::FontSize(_)
+        | Inline::ScShape
         | Inline::NoIndent
         | Inline::Indent
         | Inline::HangIndent(_)
@@ -2533,12 +2711,22 @@ fn is_empty_inlines(v: &[Inline<'_>]) -> bool {
         | Inline::LastLineFit(_)
         | Inline::Sloppy
         | Inline::Fussy
+        | Inline::Align(_)
         | Inline::HSpace(_) => true,
         Inline::Bold(x) | Inline::Italic(x) | Inline::Mono(x) | Inline::Group(x) => {
             is_empty_inlines(x)
         }
         Inline::Math(_) => false,
     })
+}
+
+/// The alignment a `\centering`, `\raggedright` or `\raggedleft` declaration selects.
+fn align_of_declaration(cmd: &str) -> ParAlign {
+    match cmd {
+        "centering" => ParAlign::Center,
+        "raggedleft" => ParAlign::RaggedLeft,
+        _ => ParAlign::RaggedRight,
+    }
 }
 
 fn suggest_command(name: &str) -> Option<&'static str> {
@@ -2592,6 +2780,23 @@ fn suggest_command(name: &str) -> Option<&'static str> {
         "usepackage",
         "includegraphics",
         "centering",
+        "textsc",
+        "scshape",
+        "tiny",
+        "scriptsize",
+        "footnotesize",
+        "small",
+        "normalsize",
+        "large",
+        "Large",
+        "LARGE",
+        "huge",
+        "Huge",
+        "color",
+        "textcolor",
+        "definecolor",
+        "raggedright",
+        "raggedleft",
         "caption",
         "label",
         "ref",

@@ -7,7 +7,7 @@ use super::engine_font::{Font, Fonts};
 use super::engine_node::{Kind, Node, Nodes, MARGIN_LEFT, MARGIN_RIGHT};
 use super::engine_run::Machine;
 use super::engine_value::Value;
-use super::engine_whatsit::XIMAGE;
+use super::engine_whatsit::sized;
 use crate::backend::scaled::round_xn_over_d;
 
 /// One font's codes (pdftex.web `pdf_font_lp_base`, `rp_base`, `ef_base`).
@@ -302,7 +302,7 @@ impl Machine<'_, '_> {
 pub(super) fn cp_skipable(nodes: &Nodes, n: &Node) -> bool {
     match n.kind {
         Kind::Ins | Kind::Mark | Kind::Adjust | Kind::Penalty => true,
-        Kind::Whatsit => n.sub != XIMAGE,
+        Kind::Whatsit => !sized(n.sub),
         Kind::Disc => n.a == -1 && n.sub == 0,
         Kind::Math => n.a == 0,
         Kind::Kern => !n.is_margin_kern() && (n.a == 0 || n.sub == 0 || n.sub == 3),

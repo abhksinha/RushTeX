@@ -136,6 +136,10 @@ pub struct PdfDoc {
     pub last_ximage: i32,
     /// `\pdflastximagepages`.
     pub last_ximage_pages: i32,
+    /// `\pdfxform`s (`engine_xform`) and `\pdflastxform`.
+    pub forms: Vec<super::engine_xform::XForm>,
+    pub shipped_forms: Vec<crate::backend::backend_ship::ShippedForm>,
+    pub last_xform: i32,
     pub group_obj: i32,
 }
 
@@ -162,6 +166,9 @@ impl Default for PdfDoc {
             images: Vec::new(),
             last_ximage: 0,
             last_ximage_pages: 0,
+            forms: Vec::new(),
+            shipped_forms: Vec::new(),
+            last_xform: 0,
             group_obj: 0,
         }
     }

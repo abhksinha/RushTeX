@@ -532,6 +532,8 @@ impl<'e, 'a> Machine<'e, 'a> {
             }
             // pdfTeX's protrusion and expansion codes and `\pdffontexpand`.
             Meaning::Native(i) if self.micro_command(super::engine_tables::PRIMITIVES[i as usize].0) => return,
+            // pdfTeX's `\pdfxform` and `\pdfrefxform`.
+            Meaning::Native(i) if self.xform_command(super::engine_tables::PRIMITIVES[i as usize].0, false) => return,
             Meaning::CharDef(n) => {
                 let c = char::from_u32(n).unwrap_or('\0');
                 let cat = if c.is_ascii_alphabetic() { Cat::Letter } else { Cat::Other };
@@ -753,6 +755,7 @@ impl<'e, 'a> Machine<'e, 'a> {
                         // pdfTeX: `\immediate\pdfobj` writes the object whether or not a page refers to it.
                         Meaning::Prim(Prim::PdfObj) => self.pdf_obj(true),
                         Meaning::Prim(Prim::PdfXImage) => self.pdf_ximage(true),
+                        Meaning::Native(i) if self.xform_command(super::engine_tables::PRIMITIVES[i as usize].0, true) => {}
                         _ => self.input.back(n.t),
                     }
                 }

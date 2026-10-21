@@ -13,6 +13,9 @@ use super::engine_pack::badness;
 use super::engine_prim::{Meaning, Prim};
 use super::engine_run::{Machine, Mode};
 use super::engine_whatsit::XIMAGE;
+
+/// pdfTeX's `\ignoreprimitiveerror` (§236 slot).
+const IGNORE_PRIMITIVE_ERROR: u32 = 102;
 use super::engine_token::{Span, Token};
 
 const INF_BAD: i32 = 10_000;
@@ -87,9 +90,10 @@ pub(super) struct Page {
     pub marks: Vec<(u32, Marks)>,
     /// Boxes shipped out, in order (§638).
     pub shipped: Vec<u32>,
-    /// The shipped pages as PDF content, and the fonts they use (one bit per font).
+    /// The shipped pages as PDF content, and for each font the font whose PDF object it
+    /// shares (pdfTeX's `pdf_font_num`, `NOT_USED` until the font is first shipped).
     pub pdf: Vec<super::engine_ship::ShippedPage>,
-    pub fonts_used: Vec<u64>,
+    pub font_base: Vec<u16>,
 }
 
 impl Page {
@@ -253,7 +257,11 @@ impl Machine<'_, '_> {
                     act[2 + g.stretch_order as usize] += g.stretch;
                     act[6] += g.shrink;
                     if g.shrink_order != 0 && g.shrink != 0 {
-                        self.error("Infinite glue shrinkage found in box being split");
+                        // pdfTeX's `print_ignored_err`: bit 1 of `\ignoreprimitiveerror`
+                        // (latex.ltx sets it) sends this one to the log only.
+                        if self.e.eqtb.word(Reg { region: Region::Int, slot: IGNORE_PRIMITIVE_ERROR }) & 1 == 0 {
+                            self.error("Infinite glue shrinkage found in box being split");
+                        }
                         g.shrink_order = 0;
                     }
                     act[1] += prev_dp + g.width;

@@ -14,7 +14,7 @@ use super::engine_eqtb::{Glue, Reg, Region};
 use super::engine_node::{BoxRec, Kind, Node, Sign, RUNNING};
 use super::engine_pack::order;
 use super::engine_prim::{Meaning, Prim};
-use super::engine_run::{Machine, Mode};
+use super::engine_run::{Machine, Mode, X};
 use super::engine_token::{Span, Token};
 use super::END_TEMPLATE_ID;
 
@@ -262,12 +262,24 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// The first non-blank token of an entry, looked at for `\omit` or `\noalign` (§785,
+    /// §791): e-TeX expands no `\protected` macro here (`get_x_or_protected`), so one
+    /// such as LaTeX's `\{` runs inside the entry's template, in its mode.
+    fn next_entry_token(&mut self) -> Option<X> {
+        loop {
+            let x = self.get_x_token(true)?;
+            if !super::engine_value::blank(x) {
+                return Some(x);
+            }
+        }
+    }
+
     /// §785 `align_peek`: what follows a `\cr` (or the preamble): `\noalign`, the
     /// alignment's `}`, an ignored `\crcr`, or a new row.
     fn align_peek(&mut self) {
         loop {
             self.input.align_state = ALIGN_IDLE;
-            let Some(x) = self.next_non_blank() else { return };
+            let Some(x) = self.next_entry_token() else { return };
             match x.m {
                 Meaning::Prim(Prim::NoAlign) => {
                     self.scan_left_brace();
@@ -354,7 +366,7 @@ impl Machine<'_, '_> {
             self.init_span(cur + 1);
         }
         self.input.align_state = ALIGN_IDLE;
-        let Some(x) = self.next_non_blank() else { return false };
+        let Some(x) = self.next_entry_token() else { return false };
         self.aligns.last_mut().expect("in an alignment").cur = cur + 1;
         self.init_col(x.t, x.m);
         false

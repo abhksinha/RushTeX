@@ -35,6 +35,7 @@ const INTER_LINE_PENALTY: u32 = 13;
 const DOUBLE_HYPHEN_DEMERITS: u32 = 14;
 const FINAL_HYPHEN_DEMERITS: u32 = 15;
 const ADJ_DEMERITS: u32 = 16;
+const TRACING_PARAGRAPHS: u32 = 32;
 const LOOSENESS: u32 = 19;
 const HANG_AFTER: u32 = 41;
 const HSIZE: u32 = 3;
@@ -127,6 +128,9 @@ struct Breaker<'p> {
     adj_demerits: i32,
     double_hyphen: i32,
     final_hyphen: i32,
+    /// `\tracingparagraphs > 0`: feasible breaks and new active nodes go to stderr in
+    /// pdfTeX's `@ via @@n` / `@@n: line` form (§846, §856), for diffing against its log.
+    trace: bool,
 }
 
 impl Breaker<'_> {
@@ -159,6 +163,11 @@ impl Breaker<'_> {
                     for fit in 0..4 {
                         if self.minimal[fit] <= self.minimum {
                             self.passives.push(Passive { at: at.map(|a| a as u32), prev: self.best_place[fit] });
+                            if self.trace {
+                                // §846
+                                let prev = self.best_place[fit].map_or(0, |p| p + 1);
+                                eprintln!("@@{}: line {}.{}{} t={} -> @@{prev}", self.passives.len(), self.best_line[fit], fit, if hyphenated { "-" } else { "" }, self.minimal[fit]);
+                            }
                             let a = Active { passive: Some(self.passives.len() as u32 - 1), line: self.best_line[fit] + 1, fitness: fit as u8, hyphenated, total: self.minimal[fit], origin };
                             self.actives.insert(i, a);
                             i += 1;
@@ -234,6 +243,20 @@ impl Breaker<'_> {
                 }
                 d
             };
+            if self.trace {
+                // §856
+                let kind = match at.map(|a| self.par[a].kind) {
+                    None => "\\par",
+                    Some(Kind::Glue) => "",
+                    Some(Kind::Penalty) => "\\penalty",
+                    Some(Kind::Disc) => "\\discretionary",
+                    Some(Kind::Kern) => "\\kern",
+                    Some(_) => "\\math",
+                };
+                let b = if b > INF_BAD { "*".to_string() } else { b.to_string() };
+                let d = if artificial { "*".to_string() } else { d.to_string() };
+                eprintln!("@{kind} via @@{} b={b} p={pi} d={d}", r.passive.map_or(0, |p| p + 1));
+            }
             d += r.total;
             if d <= self.minimal[fit] {
                 self.minimal[fit] = d;
@@ -437,6 +460,7 @@ impl Machine<'_, '_> {
             adj_demerits: self.ip(ADJ_DEMERITS),
             double_hyphen: self.ip(DOUBLE_HYPHEN_DEMERITS),
             final_hyphen: self.ip(FINAL_HYPHEN_DEMERITS),
+            trace: self.ip(TRACING_PARAGRAPHS) > 0,
         };
         // §863: the passes.
         let (hyphen_penalty, ex_hyphen_penalty) = (self.ip(HYPHEN_PENALTY), self.ip(EX_HYPHEN_PENALTY));
@@ -452,6 +476,9 @@ impl Machine<'_, '_> {
         }
         let best = loop {
             br.threshold = br.threshold.min(INF_BAD);
+            if br.trace {
+                eprintln!("{}", if br.threshold == pretolerance && !second { "@firstpass" } else { "@secondpass" });
+            }
             // §864: the paragraph's start.
             br.passives.clear();
             br.actives.clear();

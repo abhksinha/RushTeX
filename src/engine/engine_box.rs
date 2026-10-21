@@ -64,7 +64,7 @@ impl Machine<'_, '_> {
 
     /// §216 `push_nest`: a new list in `mode`.
     pub(super) fn push_nest(&mut self, mode: Mode, inner: bool, aux: i32) {
-        self.nest.push(Level { mode: self.mode, inner: self.inner, start: self.start, aux: self.aux, prev_graf: self.prev_graf, delim: self.delim });
+        self.nest.push(Level { mode: self.mode, inner: self.inner, clang: self.clang as u8, start: self.start, aux: self.aux, prev_graf: self.prev_graf, delim: self.delim });
         self.delim = -1;
         self.mode = mode;
         self.inner = inner;
@@ -77,6 +77,7 @@ impl Machine<'_, '_> {
         if let Some(l) = self.nest.pop() {
             self.mode = l.mode;
             self.inner = l.inner;
+            self.clang = l.clang as i32;
             self.start = l.start;
             self.aux = l.aux;
             self.prev_graf = l.prev_graf;
@@ -157,9 +158,10 @@ impl Machine<'_, '_> {
                 self.aux = 1000;
             }
             Prim::NoIndent => {}
-            // §1113: the italic correction of the last character.
+            // §1113: the italic correction of the last character, or of a ligature's
+            // character.
             Prim::ItalCorr => {
-                if let Some(t) = self.tail().filter(|t| t.kind == Kind::Char) {
+                if let Some(t) = self.tail().filter(|t| matches!(t.kind, Kind::Char | Kind::Lig)) {
                     let f = &self.e.fonts.list[t.font as usize];
                     let ic = u8::try_from(t.a).ok().and_then(|c| f.metrics.dims(c, f.size)).map_or(0, |d| d[3]);
                     self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, ic) });

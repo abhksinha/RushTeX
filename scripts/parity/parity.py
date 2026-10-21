@@ -110,9 +110,34 @@ def run_pdflatex(tex, outdir, passes=5, halt=True):
     return pdf
 
 
+def tex_install_mtime():
+    """When the TeX installation last changed: `tlmgr` rewrites a tree's package database
+    (`tlpkg/texlive.tlpdb`, in the tree for user mode, beside it for the system) and
+    `mktexlsr` its `ls-R` on every install, so a reference older than that may lack a font
+    or package the engine now finds."""
+    stamps = []
+    for var in ("TEXMFHOME", "TEXMFDIST", "TEXMFLOCAL"):
+        r = subprocess.run(["kpsewhich", f"-var-value={var}"], capture_output=True, text=True)
+        for tree in r.stdout.split(":") if r.returncode == 0 else []:
+            t = Path(tree.strip()).expanduser()
+            for f in (t / "ls-R", t / "tlpkg" / "texlive.tlpdb", t.parent / "tlpkg" / "texlive.tlpdb"):
+                if f.exists():
+                    stamps.append(f.stat().st_mtime)
+    return max(stamps, default=0)
+
+
+_install = []
+
+
+def INSTALL_MTIME():
+    if not _install:
+        _install.append(tex_install_mtime())
+    return _install[0]
+
+
 def ref_pdf(tex):
     pdf = OUT / "ref" / (tex.stem + ".pdf")
-    if pdf.exists() and pdf.stat().st_mtime >= tex.stat().st_mtime:
+    if pdf.exists() and pdf.stat().st_mtime >= max(tex.stat().st_mtime, INSTALL_MTIME()):
         return pdf
     return run_pdflatex(tex, OUT / "ref")
 

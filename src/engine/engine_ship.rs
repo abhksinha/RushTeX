@@ -30,6 +30,23 @@ const PDF_MINOR_VERSION: u32 = 67;
 const PDF_LINK_MARGIN: u32 = 25;
 const PDF_DEST_MARGIN: u32 = 26;
 
+/// `pdf_font_num` of a font not yet shipped.
+const NOT_USED: u16 = u16::MAX;
+
+/// The font whose PDF object `f` shares, fixed at `f`'s first use (pdftex.web
+/// `pdf_init_font`): the earlier-used font of the same file name at another size, else `f`
+/// itself. That font's size gives the shared `/Widths`. Searched once per font.
+fn font_base(base: &mut Vec<u16>, fonts: &[Font], f: u16) -> u16 {
+    if base.len() < fonts.len() {
+        base.resize(fonts.len(), NOT_USED);
+    }
+    if base[f as usize] == NOT_USED {
+        let name = &fonts[f as usize].name;
+        base[f as usize] = (0..base.len()).map(|k| base[k]).find(|&b| b != NOT_USED && fonts[b as usize].name == *name).unwrap_or(f);
+    }
+    base[f as usize]
+}
+
 /// Pascal's `round` as web2c implements it (`zround`): `r + 0.5` truncated, so a value just
 /// under one half rounds up when the addition does. `f64::round` would differ there by 1sp.
 #[inline]
@@ -60,9 +77,9 @@ struct Walk<'a> {
     text: TextState,
     out: Vec<u8>,
     page_height: i64,
-    /// Fonts used on the page, one bit each.
-    used: &'a mut Vec<u64>,
-    /// Resource names (`/F<n>`), made when a font is first used on the page.
+    /// The font each font shares its PDF object with (`NOT_USED` before its first use).
+    base: &'a mut Vec<u16>,
+    /// Resource names (`/F<base>`), made when a font is first used on the page.
     names: Vec<String>,
     colors: &'a mut ColorStacks,
     /// A whatsit's token text `a..b` as pdfTeX's `show_token_list` prints it.
@@ -149,16 +166,12 @@ impl Walk<'_> {
     /// A character of a real font, written to the page.
     fn real_char(&mut self, f: u16, c: u8, w: i32, h: i32, v: i32) {
         let font = &self.fonts[f as usize];
-        let (word, bit) = (f as usize / 64, f as usize % 64);
-        if self.used.len() <= word {
-            self.used.resize(word + 1, 0);
-        }
-        self.used[word] |= 1 << bit;
         if self.names.len() <= f as usize {
             self.names.resize(f as usize + 1, String::new());
         }
         if self.names[f as usize].is_empty() {
-            self.names[f as usize] = format!("/F{f}");
+            let base = font_base(self.base, self.fonts, f);
+            self.names[f as usize] = format!("/F{base}");
         }
         self.text.set_font(&mut self.out, f as u32, &self.names[f as usize], font.size as i64);
         self.text.char(&mut self.out, c, w as i64, h as i64, self.page_height - v as i64);
@@ -494,7 +507,7 @@ impl Machine<'_, '_> {
             h => h,
         };
         self.check_virtual_fonts(b);
-        let mut used = std::mem::take(&mut self.page.fonts_used);
+        let mut base = std::mem::take(&mut self.page.font_base);
         let mut colors = std::mem::take(&mut self.colors);
         let mut pdf_doc = std::mem::take(&mut self.pdf_doc);
         // `pdf_last_page`: the page's object, made now unless a `goto page` asked for it.
@@ -506,7 +519,7 @@ impl Machine<'_, '_> {
             me.show(me.e.toks.get(super::engine_token::Span { start: a as u32, end: b as u32 }), &mut s);
             s
         };
-        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, used: &mut used, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj, cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new() };
+        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj, cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new() };
         // `pdf_out_colorstack_startpage`, at the page's origin.
         for (mode, s) in walk.colors.page_start() {
             walk.literal(mode, &s, 0, height);
@@ -520,7 +533,7 @@ impl Machine<'_, '_> {
         for &(obj, link, rect) in &annots {
             pdf_doc.write_link(link, obj, rect, height);
         }
-        self.page.fonts_used = used;
+        self.page.font_base = base;
         self.colors = colors;
         self.pdf_doc = pdf_doc;
         self.page.pdf.push(ShippedPage { id: page_obj, width, height, content, annots: annots.iter().map(|a| a.0).collect(), group, images });
@@ -535,8 +548,9 @@ impl Machine<'_, '_> {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let used = self.page.fonts_used.get(i / 64).is_some_and(|w| w & (1 << (i % 64)) != 0);
-                used.then(|| crate::backend::backend_ship::DocFont {
+                // Only a font with its own PDF object is written; the others name it.
+                let own = self.page.font_base.get(i) == Some(&(i as u16));
+                own.then(|| crate::backend::backend_ship::DocFont {
                     name: f.name.clone(),
                     size: f.size as i64,
                     widths: std::array::from_fn(|c| f.metrics.dims(c as u8, f.size).map_or(0, |d| d[0])),

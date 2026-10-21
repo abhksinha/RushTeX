@@ -171,6 +171,8 @@ impl Nodes {
 pub struct Level {
     pub mode: Mode,
     pub inner: bool,
+    /// §212 `clang`: a horizontal list's current language (in the padding after `inner`).
+    pub clang: u8,
     pub start: u32,
     pub aux: i32,
     pub prev_graf: i32,

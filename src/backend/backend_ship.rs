@@ -72,25 +72,54 @@ impl Doc {
     }
 }
 
-/// A font's line in `pdftex.map`: its PostScript name, encoding file and font file.
+/// A font's line in `pdftex.map`: its PostScript name, encoding file and font file, and
+/// its `SlantFont` and `ExtendFont` effects in thousandths (0 for none).
 #[derive(Debug, Default, PartialEq)]
 struct MapEntry<'m> {
     ps: &'m str,
     enc: Option<&'m str>,
     file: Option<&'m str>,
+    slant: i32,
+    extend: i32,
 }
 
-/// The `pdftex.map` line of TFM `name` (pdftexdir/mapfile.c: the TFM name, then the
-/// PostScript name unless the next field is a file or a quoted special, then `<file`s).
-fn map_entry<'m>(map: &'m str, name: &str) -> Option<MapEntry<'m>> {
-    let line = map.lines().find(|l| l.split_whitespace().next() == Some(name))?;
+/// `pdftex.map`'s lines by TFM name, indexed once per document instead of searched per font.
+fn map_index(map: &str) -> std::collections::HashMap<&str, &str> {
+    let mut index = std::collections::HashMap::with_capacity(map.len() / 48);
+    for l in map.lines() {
+        if let Some(name) = l.split_whitespace().next().filter(|n| !n.starts_with(['%', '#', '*', ';'])) {
+            // mapfile.c keeps the first entry of a name.
+            index.entry(name).or_insert(l);
+        }
+    }
+    index
+}
+
+/// mapfile.c: a number before `SlantFont` or `ExtendFont`, read as a C `float`, in
+/// thousandths rounded half away from zero.
+fn effect(number: &str) -> Option<i32> {
+    let d = number.parse::<f32>().ok()? * 1000.0;
+    Some(if d > 0.0 { d + 0.5 } else { d - 0.5 } as i32)
+}
+
+/// The `pdftex.map` line of a TFM (pdftexdir/mapfile.c: the TFM name, then the PostScript
+/// name unless the next field is a file or a quoted special, then `<file`s).
+fn map_entry<'m>(line: &'m str) -> MapEntry<'m> {
     let mut e = MapEntry::default();
     let mut quoted = false;
+    let mut prev = "";
     for (i, t) in line.split_whitespace().enumerate().skip(1) {
-        // A quoted special (`" T1Encoding ReEncodeFont "`) is skipped whole.
+        // A quoted special (`" .167 SlantFont "`): only the effects are read from it.
         let quotes = t.matches('"').count();
         if quoted || quotes > 0 {
             quoted ^= quotes % 2 == 1;
+            let word = t.trim_matches('"');
+            match word {
+                "SlantFont" => e.slant = effect(prev).unwrap_or(0),
+                "ExtendFont" => e.extend = effect(prev).unwrap_or(0),
+                _ => {}
+            }
+            prev = word;
             continue;
         }
         if let Some(f) = t.strip_prefix('<') {
@@ -104,7 +133,93 @@ fn map_entry<'m>(map: &'m str, name: &str) -> Option<MapEntry<'m>> {
             e.ps = t;
         }
     }
-    Some(e)
+    e
+}
+
+/// C's `printf("%g")` of a `float` value: six significant digits, trailing zeros dropped,
+/// exponent form below 1e-4 or from 1e6.
+fn fmt_g(v: f32) -> String {
+    let v = v as f64;
+    if v == 0.0 {
+        return "0".to_string();
+    }
+    let sci = format!("{v:.5e}");
+    let (mant, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let exp: i32 = exp.parse().unwrap_or(0);
+    let trim = |s: String| if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s };
+    if !(-4..6).contains(&exp) {
+        format!("{}e{}{:02}", trim(mant.to_string()), if exp < 0 { '-' } else { '+' }, exp.abs())
+    } else {
+        trim(format!("{:.*}", (5 - exp) as usize, v))
+    }
+}
+
+/// writet1.c's `t1_scan_keys` for a font with effects: `/FontMatrix` slanted, then
+/// extended (`t1_modify_fm`), `/ItalicAngle` less the slant's angle (`t1_modify_italic`), and
+/// `-Slant_<s>`/`-Extend_<e>` added to `/FontName`. Lines are rewritten in place, in
+/// `float`s as writet1.c computes them; the new cleartext and the italic angle.
+fn t1_effects(clear: &[u8], slant: i32, extend: i32) -> (Vec<u8>, Option<i32>) {
+    let mut out = Vec::with_capacity(clear.len() + 32);
+    let mut angle = None;
+    for line in clear.split_inclusive(|&c| c == b'\n' || c == b'\r') {
+        if let Some(rest) = line.strip_prefix(b"/FontMatrix") {
+            let Some(open) = rest.iter().position(|&c| c == b'[' || c == b'{') else {
+                out.extend_from_slice(line);
+                continue;
+            };
+            let close = if rest[open] == b'[' { b']' } else { b'}' };
+            let end = rest.iter().position(|&c| c == close).unwrap_or(rest.len());
+            let text = String::from_utf8_lossy(&rest[open + 1..end]).into_owned();
+            let mut a = [0f32; 6];
+            for (k, n) in text.split_whitespace().take(6).enumerate() {
+                a[k] = n.parse().unwrap_or(0.0);
+            }
+            if slant != 0 {
+                let s = slant as f64 * 1e-3;
+                for (x, y) in [(0, 1), (2, 3), (4, 5)] {
+                    a[x] = (a[x] as f64 + a[y] as f64 * s) as f32;
+                }
+            }
+            if extend != 0 {
+                let e = extend as f64 * 1e-3;
+                for x in [0, 2, 4] {
+                    a[x] = (a[x] as f64 * e) as f32;
+                }
+            }
+            out.extend_from_slice(b"/FontMatrix");
+            out.extend_from_slice(&rest[..=open]);
+            for v in a {
+                out.extend_from_slice(fmt_g(v).as_bytes());
+                out.push(b' ');
+            }
+            out.extend_from_slice(&rest[end..]);
+        } else if line.starts_with(b"/ItalicAngle") && slant != 0 {
+            let sp = line.iter().position(|&c| c == b' ').unwrap_or(line.len() - 1);
+            let tail = &line[sp + 1..];
+            let len = tail.iter().position(|&c| !(c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'.'))).unwrap_or(tail.len());
+            let a0: f32 = std::str::from_utf8(&tail[..len]).ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            let a = (a0 as f64 - (slant as f64 * 1e-3).atan() * (180.0 / std::f64::consts::PI)) as f32;
+            out.extend_from_slice(&line[..=sp]);
+            out.extend_from_slice(fmt_g(a).as_bytes());
+            out.extend_from_slice(&tail[len..]);
+            angle = Some((a as f64).round() as i32);
+        } else if let Some(rest) = line.strip_prefix(b"/FontName") {
+            let start = rest.iter().position(|&c| c == b'/').map_or(0, |k| k + 1);
+            let len = rest[start..].iter().position(|&c| c == b' ' || c == b'\n' || c == b'\r').unwrap_or(rest.len() - start);
+            out.extend_from_slice(b"/FontName");
+            out.extend_from_slice(&rest[..start + len]);
+            if slant != 0 {
+                out.extend_from_slice(format!("-Slant_{slant}").as_bytes());
+            }
+            if extend != 0 {
+                out.extend_from_slice(format!("-Extend_{extend}").as_bytes());
+            }
+            out.extend_from_slice(&rest[start + len..]);
+        } else {
+            out.extend_from_slice(line);
+        }
+    }
+    (out, angle)
 }
 
 /// The 256 glyph names of an encoding file (`/Name [ /g0 /g1 ... ] def`), read as pdfTeX's
@@ -239,6 +354,7 @@ pub struct DocMeta<'m> {
 /// read from the map file.
 pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, meta: &DocMeta) -> Vec<u8> {
     let map = files("pdftex.map").map(|b| b.iter().map(|&c| char::from(c)).collect::<String>()).unwrap_or_default();
+    let map = map_index(&map);
     let mut d = Doc { buf: Vec::with_capacity(1 << 16), offsets: vec![0] };
     // pdfTeX's header: `\pdfminorversion` (4 when unset or out of range).
     let minor = if (0..=9).contains(&meta.minor) && meta.minor != 0 { meta.minor } else { 4 };
@@ -255,21 +371,14 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
     let (catalog, tree, resources) = (meta.base, meta.base + 1, meta.base + 2);
     let first_content = meta.base + 3;
     let mut next = first_content + pages.len();
-    // One PDF font per file name, in order of the engine's fonts.
-    let mut by_name: Vec<(&str, usize)> = Vec::new();
+    // One PDF font per given font, in order of the engine's fonts: the caller passes only
+    // the font each file name's other sizes share (`engine_ship`'s `font_base`).
     let mut font_obj = vec![0usize; fonts.len()];
     for (i, f) in fonts.iter().enumerate() {
         let Some(f) = f else { continue };
-        font_obj[i] = match by_name.iter().find(|(n, _)| *n == f.name) {
-            Some(&(_, id)) => id,
-            None => {
-                let id = next;
-                next += 4;
-                by_name.push((&f.name, id));
-                d.write_font(id, f, &map, files, to_unicode);
-                id
-            }
-        };
+        font_obj[i] = next;
+        d.write_font(next, f, &map, files, to_unicode);
+        next += 4;
     }
     // The fonts are shared by every page; a page that shows images has its own resources
     // with them added, as pdfTeX lists only a page's own XObjects (a viewer treats a page
@@ -396,15 +505,25 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
 impl Doc {
     /// The font, its descriptor, its program and its ToUnicode map as objects `id` to
     /// `id + 3`.
-    fn write_font(&mut self, id: usize, f: &DocFont, map: &str, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode) {
+    fn write_font(&mut self, id: usize, f: &DocFont, map: &std::collections::HashMap<&str, &str>, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode) {
         let program = crate::backend::backend_optical::program_by_name(&f.name);
-        let entry = map_entry(map, &f.name);
+        let entry = map.get(f.name.as_str()).map(|l| map_entry(l));
         // A font from the map file carries its glyph names; its program is embedded whole.
         // With `\pdfgentounicode`, every font's ToUnicode comes from its glyph names (the
         // `.enc` file's, else the program's built-in encoding), as pdfTeX makes it.
         let enc = entry.as_ref().and_then(|e| e.enc).and_then(files).map(|b| b.iter().map(|&c| char::from(c)).collect::<String>());
         let wants_pfb = program.is_none() || (to_unicode.is_some() && enc.is_none());
-        let pfb = if wants_pfb { entry.as_ref().and_then(|e| e.file).and_then(files).and_then(|b| pfb_segments(&b)) } else { None };
+        let mut pfb = if wants_pfb { entry.as_ref().and_then(|e| e.file).and_then(files).and_then(|b| pfb_segments(&b)) } else { None };
+        // A map entry's `SlantFont`/`ExtendFont` change the embedded program (writet1.c).
+        let mut italic = 0;
+        if let (Some(e), Some((data, lens))) = (&entry, &mut pfb) {
+            if e.slant != 0 || e.extend != 0 {
+                let (clear, angle) = t1_effects(&data[..lens[0]], e.slant, e.extend);
+                italic = angle.unwrap_or(0);
+                data.splice(..lens[0], clear.iter().copied());
+                lens[0] = clear.len();
+            }
+        }
         // An embedded program is named by its own `/FontName`, as pdfTeX names it.
         let base = match (program, &entry, &pfb) {
             (Some(p), _, _) => p.name.to_string(),
@@ -477,7 +596,7 @@ impl Doc {
             self.begin(id + 1);
             self.buf.extend_from_slice(b"<< /Type /FontDescriptor /FontName /");
             self.buf.extend_from_slice(base.as_bytes());
-            self.buf.extend_from_slice(format!(" /Flags 4 /FontBBox [{} {} {} {}] /Ascent {} /Descent {} /CapHeight {} /ItalicAngle 0 /StemV 80 /FontFile ", bbox[0], bbox[1], bbox[2], bbox[3], bbox[3], bbox[1], bbox[3]).as_bytes());
+            self.buf.extend_from_slice(format!(" /Flags 4 /FontBBox [{} {} {} {}] /Ascent {} /Descent {} /CapHeight {} /ItalicAngle {} /StemV 80 /FontFile ", bbox[0], bbox[1], bbox[2], bbox[3], bbox[3], bbox[1], bbox[3], italic).as_bytes());
             self.reference(id + 2);
             self.buf.extend_from_slice(b" >>\n");
             self.end();
@@ -510,11 +629,18 @@ mod tests {
 
     #[test]
     fn map_lines() {
-        let map = "cmr10 CMR10 <cmr10.pfb\necrm1000 SFRM1000 \" T1Encoding ReEncodeFont \" <cm-super-t1.enc <sfrm1000.pfb\nmsam10 MSAM10 <[msam10.pfb\n";
-        assert_eq!(map_entry(map, "cmr10"), Some(MapEntry { ps: "CMR10", enc: None, file: Some("cmr10.pfb") }));
-        assert_eq!(map_entry(map, "ecrm1000"), Some(MapEntry { ps: "SFRM1000", enc: Some("cm-super-t1.enc"), file: Some("sfrm1000.pfb") }));
-        assert_eq!(map_entry(map, "msam10").and_then(|e| e.file), Some("msam10.pfb"));
-        assert_eq!(map_entry(map, "cmr1"), None);
+        let map = "cmr10 CMR10 <cmr10.pfb\necrm1000 SFRM1000 \" T1Encoding ReEncodeFont \" <cm-super-t1.enc <sfrm1000.pfb\nmsam10 MSAM10 <[msam10.pfb\nfvsro8t BeraSerif-Roman \".167 SlantFont\" <fvsr8a.pfb\n";
+        let index = map_index(map);
+        let entry = |n: &str| index.get(n).map(|l| map_entry(l));
+        assert_eq!(entry("cmr10"), Some(MapEntry { ps: "CMR10", enc: None, file: Some("cmr10.pfb"), ..Default::default() }));
+        assert_eq!(entry("ecrm1000"), Some(MapEntry { ps: "SFRM1000", enc: Some("cm-super-t1.enc"), file: Some("sfrm1000.pfb"), ..Default::default() }));
+        assert_eq!(entry("msam10").and_then(|e| e.file), Some("msam10.pfb"));
+        assert_eq!(entry("fvsro8t").map(|e| (e.slant, e.extend)), Some((167, 0)));
+        assert_eq!(entry("cmr1"), None);
+        // writet1.c's rewrites, numbers as C's `%g` of a `float`.
+        let (clear, angle) = t1_effects(b"/FontName /BeraSerif-Roman def\n/ItalicAngle 0 def\n/FontMatrix [0.001 0 0 0.001 0 0]readonly def\n", 167, 0);
+        assert_eq!(String::from_utf8_lossy(&clear), "/FontName /BeraSerif-Roman-Slant_167 def\n/ItalicAngle -9.4809 def\n/FontMatrix [0.001 0 0.000167 0.001 0 0 ]readonly def\n");
+        assert_eq!(angle, Some(-9));
         assert_eq!(encoding_names("% c\n/T1Encoding [\n/grave /acute % x\n/circumflex] def"), ["grave", "acute", "circumflex"]);
     }
 }

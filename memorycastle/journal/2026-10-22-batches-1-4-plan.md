@@ -46,3 +46,11 @@ copied twice; tables are built once.
 
 ## Open
 - Batch 3 documents are picked by coverage; their gaps are not known ahead.
+
+## Measured
+- Batch 1 closed (commit `835f51e`): items 1–4 done; all 15 references rebuilt with
+  `FIXED_DATE`, still 15/15 ZERO; 332 tests, clippy, 12 probe suites agree.
+- Items 5–6 move into the XImage redesign of batch 2. The PNG copy path has no gate in the
+  corpus (every corpus PNG has `sBIT`, so pdfTeX never copies them): file size only, last.
+- Reordered at the user's request: the coverage corpus (tables, mathematics, enumerations,
+  minipages, two columns, wrapped figures, from CTAN documentation) comes before figures.

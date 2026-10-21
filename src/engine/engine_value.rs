@@ -89,7 +89,7 @@ impl Machine<'_, '_> {
     }
 
     /// §443: one optional space after a constant.
-    fn skip_one_space(&mut self) {
+    pub(super) fn skip_one_space(&mut self) {
         if let Some(x) = self.get_x_token(false) {
             if !blank(x) {
                 self.input.back(x.t);
@@ -504,14 +504,24 @@ impl Machine<'_, '_> {
     /// §461 `scan_glue`: an internal glue (mu glue with `mu`), or a dimension with `plus`
     /// and `minus` parts.
     pub(super) fn scan_glue(&mut self, mu: bool) -> Glue {
+        self.scan_glue_spec(mu).0
+    }
+
+    /// [`Self::scan_glue`], and whether the glue is a new specification (§461 `new_spec`)
+    /// rather than an internal glue's own: only an internal zero glue is `zero_glue`
+    /// (every zero glue assigned is, §1229 `trap_zero_glue`), which pdfTeX's protrusion
+    /// passes over.
+    pub(super) fn scan_glue_spec(&mut self, mu: bool) -> (Glue, bool) {
         let (neg, x) = self.scan_signs();
-        let Some(x) = x else { return Glue::default() };
+        let Some(x) = x else { return (Glue::default(), true) };
+        // e-TeX's `\glueexpr` and `\muexpr`, and pdfTeX's conversions, compute new glue.
+        let computed = matches!(x.m, Meaning::Prim(Prim::GlueExpr | Prim::MuExpr) | Meaning::Native(_));
         let width = match self.internal(x) {
             Some(v @ (Value::Glue(g) | Value::Mu(g))) => {
                 if mu != matches!(v, Value::Mu(_)) {
                     self.error("Incompatible glue units");
                 }
-                return if neg { negate(g) } else { g };
+                return if neg { (negate(g), true) } else { (g, computed) };
             }
             // §428: a font identifier is no number.
             Some(Value::Font(_)) => {
@@ -541,7 +551,7 @@ impl Machine<'_, '_> {
         if self.scan_keyword("minus") {
             (g.shrink, g.shrink_order) = self.scan_dimen_in(true, mu);
         }
-        g
+        (g, true)
     }
 
     /// §465 `the_toks`: the tokens `\the` makes of the next quantity, appended to `out`:

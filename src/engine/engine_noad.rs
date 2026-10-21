@@ -649,7 +649,7 @@ impl Machine<'_, '_> {
             let (d, visible) = match n.kind {
                 Kind::Char | Kind::Lig => {
                     let f = &self.e.fonts.list[n.font as usize];
-                    (u8::try_from(n.a).ok().and_then(|c| f.metrics.dims(c, f.size)).map_or(0, |d| d[0]), true)
+                    (u8::try_from(n.a).ok().and_then(|c| f.dims(c)).map_or(0, |d| d[0]), true)
                 }
                 Kind::Box => (self.e.nodes.boxes[n.a as usize].width, true),
                 Kind::Rule => (self.e.nodes.rules[n.a as usize][0], true),

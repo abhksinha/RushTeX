@@ -72,7 +72,7 @@ impl Machine<'_, '_> {
                 let f = self.scan_font_ident() as usize;
                 let c = self.scan_int();
                 let font = &self.e.fonts.list[f];
-                u8::try_from(c).ok().and_then(|c| font.metrics.dims(c, font.size)).is_some()
+                u8::try_from(c).ok().and_then(|c| font.dims(c)).is_some()
             }
             Prim::IfInCsname => self.in_csname > 0,
             Prim::IfFalse => false,

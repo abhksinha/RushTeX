@@ -327,7 +327,7 @@ impl Machine<'_, '_> {
         let a_char = self.scan_char_num();
         let af = self.cur_font();
         let font = &self.e.fonts.list[af as usize];
-        let Some([a, _, _, _]) = font.metrics.dims(a_char, font.size) else { return };
+        let Some([a, _, _, _]) = font.dims(a_char) else { return };
         let (x, s) = (font.params[4], font.params[0] as f64 / 65536.0);
         self.do_assignments();
         // §1124: the character to accent.
@@ -346,7 +346,7 @@ impl Machine<'_, '_> {
             None => None,
         };
         let font = &self.e.fonts.list[f as usize];
-        let q = c.and_then(|c| font.metrics.dims(c, font.size).map(|d| (c, d)));
+        let q = c.and_then(|c| font.dims(c).map(|d| (c, d)));
         let accent = Node { kind: Kind::Char, sub: 0, font: af, a: a_char as i32, b: 0 };
         match q {
             Some((c, [w, h, _, _])) => {

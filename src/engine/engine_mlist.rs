@@ -231,7 +231,7 @@ impl Machine<'_, '_> {
     /// Width, height, depth and italic correction of `c` in `f`; zero when it is absent.
     fn char_dims(&self, f: u16, c: u8) -> [i32; 4] {
         let font = &self.e.fonts.list[f as usize];
-        font.metrics.dims(c, font.size).unwrap_or([0; 4])
+        font.dims(c).unwrap_or([0; 4])
     }
 
     fn char_exists(&self, f: u16, c: u8) -> bool {

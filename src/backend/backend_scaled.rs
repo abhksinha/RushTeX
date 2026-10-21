@@ -210,6 +210,20 @@ pub fn xn_over_d(x: i32, n: i32, d: i32) -> i32 {
     ((x as i64 * n as i64) / d as i64) as i32
 }
 
+/// pdfTeX's `round_xn_over_d`: `x * n / d` (`n`, `d` positive), its magnitude rounded half
+/// up.
+#[inline]
+pub fn round_xn_over_d(x: i32, n: i32, d: i32) -> i32 {
+    let p = (x as i64).abs() * n as i64;
+    let (q, r) = (p / d as i64, p % d as i64);
+    let u = (q + (2 * r >= d as i64) as i64) as i32;
+    if x >= 0 {
+        u
+    } else {
+        -u
+    }
+}
+
 /// A math kern or glue of `w` mu (in units of 2^-16 mu) at a math quad of `math_quad` sp:
 /// §716 `math_kern`, with `cur_mu = x_over_n(math_quad, 18)` (§732).
 #[inline]

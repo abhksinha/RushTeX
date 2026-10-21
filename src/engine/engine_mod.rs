@@ -35,6 +35,7 @@ pub mod engine_scan;
 pub mod engine_show;
 pub mod engine_pdfdoc;
 pub mod engine_image;
+pub mod engine_microtype;
 pub mod engine_regex;
 pub mod engine_ship;
 pub mod engine_showbox;

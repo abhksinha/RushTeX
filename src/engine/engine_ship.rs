@@ -9,6 +9,7 @@
 
 use super::engine_eqtb::Glue;
 use super::engine_font::Font;
+use super::engine_microtype::Micro;
 use super::engine_node::{BoxRec, Kind, Nodes, Sign, RUNNING};
 use super::engine_run::Machine;
 use super::engine_color::{ColorStacks, SET_ORIGIN};
@@ -35,10 +36,15 @@ const NOT_USED: u16 = u16::MAX;
 
 /// The font whose PDF object `f` shares, fixed at `f`'s first use (pdftex.web
 /// `pdf_init_font`): the earlier-used font of the same file name at another size, else `f`
-/// itself. That font's size gives the shared `/Widths`. Searched once per font.
-fn font_base(base: &mut Vec<u16>, fonts: &[Font], f: u16) -> u16 {
+/// itself; an expanded copy shares its base's (which is set up first). That font's size
+/// gives the shared `/Widths`. Searched once per font.
+fn font_base(base: &mut Vec<u16>, fonts: &[Font], micro: &Micro, f: u16) -> u16 {
     if base.len() < fonts.len() {
         base.resize(fonts.len(), NOT_USED);
+    }
+    if base[f as usize] == NOT_USED && fonts[f as usize].expand != 0 {
+        let b = font_base(base, fonts, micro, micro.expand(f).blink);
+        base[f as usize] = b;
     }
     if base[f as usize] == NOT_USED {
         let name = &fonts[f as usize].name;
@@ -73,6 +79,7 @@ fn vet_glue(g: f64) -> f64 {
 struct Walk<'a> {
     nodes: &'a Nodes,
     fonts: &'a [Font],
+    micro: &'a Micro,
     vf: &'a VfTable,
     text: TextState,
     out: Vec<u8>,
@@ -169,12 +176,15 @@ impl Walk<'_> {
         if self.names.len() <= f as usize {
             self.names.resize(f as usize + 1, String::new());
         }
+        let base = font_base(self.base, self.fonts, self.micro, f);
         if self.names[f as usize].is_empty() {
-            let base = font_base(self.base, self.fonts, f);
             self.names[f as usize] = format!("/F{base}");
         }
-        self.text.set_font(&mut self.out, f as u32, &self.names[f as usize], font.size as i64);
-        self.text.char(&mut self.out, c, w as i64, h as i64, self.page_height - v as i64);
+        // pdf_set_font: `Tf` only when the shared font or the size changes.
+        self.text.set_font(&mut self.out, base as u32, &self.names[f as usize], font.size as i64);
+        // An automatically expanded copy is its base drawn through a scaled text matrix.
+        let ea = if font.expand != 0 && self.micro.expand(f).auto { font.expand as i64 } else { 0 };
+        self.text.char_ex(&mut self.out, c, w as i64, h as i64, self.page_height - v as i64, ea);
     }
 
     /// A rule with its lower left corner at (h, v).
@@ -460,7 +470,7 @@ impl PacketOut for Walk<'_> {
     /// way the character's own width is the advance.
     fn packet_char(&mut self, f: u16, c: u8, h: i32, v: i32, depth: u8) -> i32 {
         let font = &self.fonts[f as usize];
-        let Some([w, _, _, _]) = font.metrics.dims(c, font.size) else { return 0 };
+        let Some([w, _, _, _]) = font.dims(c) else { return 0 };
         let vf = self.vf;
         match vf.get(f) {
             Some(packets) => packets.typeset(font.size, c, h, v, depth, self),
@@ -519,7 +529,7 @@ impl Machine<'_, '_> {
             me.show(me.e.toks.get(super::engine_token::Span { start: a as u32, end: b as u32 }), &mut s);
             s
         };
-        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj, cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new() };
+        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj, cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new() };
         // `pdf_out_colorstack_startpage`, at the page's origin.
         for (mode, s) in walk.colors.page_start() {
             walk.literal(mode, &s, 0, height);
@@ -553,7 +563,7 @@ impl Machine<'_, '_> {
                 own.then(|| crate::backend::backend_ship::DocFont {
                     name: f.name.clone(),
                     size: f.size as i64,
-                    widths: std::array::from_fn(|c| f.metrics.dims(c as u8, f.size).map_or(0, |d| d[0])),
+                    widths: std::array::from_fn(|c| f.dims(c as u8).map_or(0, |d| d[0])),
                 })
             })
             .collect();

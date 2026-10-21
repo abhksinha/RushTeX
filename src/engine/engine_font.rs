@@ -25,13 +25,41 @@ pub struct Font {
     /// §1257 `font_id_text`: the control sequence that last named the font (`\the\font`
     /// gives it back); `u32::MAX` for none.
     pub ident: u32,
+    /// pdfTeX's `pdf_font_expand_ratio` of an expanded copy (thousandths; 0 for a font as
+    /// loaded): its widths, italic corrections and kerns are the base's times
+    /// `1000 + expand` over 1000 (`auto_expand_font`).
+    pub expand: i16,
+}
+
+impl Font {
+    /// Width, height, depth and italic correction of `c`, if it exists (§554), expanded as
+    /// pdfTeX's `auto_expand_font` scales its copy.
+    #[inline]
+    pub fn dims(&self, c: u8) -> Option<[i32; 4]> {
+        let d = self.metrics.dims(c, self.size)?;
+        if self.expand == 0 {
+            return Some(d);
+        }
+        Some([self.expanded(d[0]), d[1], d[2], self.expanded(d[3])])
+    }
+
+    /// A width or kern of this font's base, scaled to this expanded copy.
+    #[inline]
+    pub fn expanded(&self, v: i32) -> i32 {
+        if self.expand == 0 {
+            v
+        } else {
+            crate::backend::scaled::round_xn_over_d(v, 1000 + self.expand as i32, 1000)
+        }
+    }
 }
 
 /// Where a font's character metrics come from: an embedded TFM, or one read from a file.
+#[derive(Clone)]
 pub enum Metrics {
     None,
     Static(&'static Tfm),
-    File(Box<FileTfm>),
+    File(std::rc::Rc<FileTfm>),
 }
 
 /// The parts of a TFM file (§539–§545) the engine reads: each character's `char_info` word
@@ -222,26 +250,28 @@ impl Fonts {
             let metrics = match r.u8()? {
                 0 => Metrics::None,
                 1 => Metrics::Static(by_name(&name)?),
-                2 => Metrics::File(Box::new(FileTfm { bc: r.u8()?, info: r.all()?, widths: r.all()?, heights: r.all()?, depths: r.all()?, italics: r.all()?, lig_kern: r.all()?, kerns: r.all()?, exten: r.all()? })),
+                2 => Metrics::File(std::rc::Rc::new(FileTfm { bc: r.u8()?, info: r.all()?, widths: r.all()?, heights: r.all()?, depths: r.all()?, italics: r.all()?, lig_kern: r.all()?, kerns: r.all()?, exten: r.all()? })),
                 _ => return None,
             };
             let ident = r.u32()?;
-            list.push(Font { name, size, design, params, hyphen_char, skew_char, metrics, ident });
+            list.push(Font { name, size, design, params, hyphen_char, skew_char, metrics, ident, expand: 0 });
         }
-        (!list.is_empty()).then_some(Fonts { list })
+        (!list.is_empty()).then_some(Fonts { list, micro: Default::default() })
     }
 }
 
 /// Every font loaded so far.
 pub struct Fonts {
     pub list: Vec<Font>,
+    /// Protrusion and expansion codes and links (`engine_microtype`); never in a format.
+    pub micro: super::engine_microtype::Micro,
 }
 
 impl Default for Fonts {
     /// §552: `\nullfont` has seven zero parameters.
     fn default() -> Self {
-        let null = Font { name: String::from("nullfont"), size: 0, design: 0, params: vec![0; 7], hyphen_char: '-' as i32, skew_char: -1, metrics: Metrics::None, ident: u32::MAX };
-        Fonts { list: vec![null] }
+        let null = Font { name: String::from("nullfont"), size: 0, design: 0, params: vec![0; 7], hyphen_char: '-' as i32, skew_char: -1, metrics: Metrics::None, ident: u32::MAX, expand: 0 };
+        Fonts { list: vec![null], micro: Default::default() }
     }
 }
 
@@ -293,7 +323,7 @@ impl Machine<'_, '_> {
         let (design, raw, metrics) = match by_name(name) {
             Some(tfm) => (tfm.design >> 4, tfm.params.to_vec(), Metrics::Static(tfm)),
             None => match self.read_file.as_ref().and_then(|read| read(&format!("{name}.tfm"))).as_deref().and_then(parse_tfm) {
-                Some((design, params, file)) => (design, params, Metrics::File(Box::new(file))),
+                Some((design, params, file)) => (design, params, Metrics::File(std::rc::Rc::new(file))),
                 None => {
                     // §561: `Font \x=name at 12.0pt not loadable: …`.
                     let mut msg = String::from("Font ");
@@ -325,7 +355,7 @@ impl Machine<'_, '_> {
         }
         let hyphen_char = self.int_param("defaulthyphenchar");
         let skew_char = self.int_param("defaultskewchar");
-        self.e.fonts.list.push(Font { name: name.to_string(), size, design, params, hyphen_char, skew_char, metrics, ident: u32::MAX });
+        self.e.fonts.list.push(Font { name: name.to_string(), size, design, params, hyphen_char, skew_char, metrics, ident: u32::MAX, expand: 0 });
         (self.e.fonts.list.len() - 1) as u16
     }
 

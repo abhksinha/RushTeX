@@ -101,28 +101,51 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
 }
 
 /// Undoes the filters of `rows` rows of `stride` bytes (each after its filter byte), `bpp`
-/// bytes per complete pixel (at least 1), from `raw` at `*at`.
-fn unfilter(raw: &[u8], at: &mut usize, rows: usize, stride: usize, bpp: usize) -> Option<Vec<u8>> {
+/// bytes per complete pixel (at least 1), from `raw` at `*at`. The filter is chosen once per
+/// row, so each row runs one tight loop.
+pub(crate) fn unfilter(raw: &[u8], at: &mut usize, rows: usize, stride: usize, bpp: usize) -> Option<Vec<u8>> {
     let mut out = vec![0u8; rows * stride];
     for y in 0..rows {
         let filter = *raw.get(*at)?;
         let line = raw.get(*at + 1..*at + 1 + stride)?;
         *at += 1 + stride;
         let (done, cur) = out.split_at_mut(y * stride);
-        let prev = if y > 0 { &done[(y - 1) * stride..] } else { &[][..] };
         let cur = &mut cur[..stride];
-        for x in 0..stride {
-            let a = if x >= bpp { cur[x - bpp] } else { 0 };
-            let b = prev.get(x).copied().unwrap_or(0);
-            let c = if x >= bpp { prev.get(x - bpp).copied().unwrap_or(0) } else { 0 };
-            cur[x] = line[x].wrapping_add(match filter {
-                0 => 0,
-                1 => a,
-                2 => b,
-                3 => ((a as u16 + b as u16) / 2) as u8,
-                4 => paeth(a, b, c),
-                _ => return None,
-            });
+        // The row above; the first row's is all zeros.
+        let zeros;
+        let prev: &[u8] = if y > 0 {
+            &done[(y - 1) * stride..]
+        } else {
+            zeros = vec![0u8; stride];
+            &zeros
+        };
+        let bpp = bpp.min(stride);
+        match filter {
+            0 => cur.copy_from_slice(line),
+            1 => {
+                cur[..bpp].copy_from_slice(&line[..bpp]);
+                for x in bpp..stride {
+                    cur[x] = line[x].wrapping_add(cur[x - bpp]);
+                }
+            }
+            2 => {
+                for x in 0..stride {
+                    cur[x] = line[x].wrapping_add(prev[x]);
+                }
+            }
+            3 => {
+                for x in 0..stride {
+                    let a = if x >= bpp { cur[x - bpp] } else { 0 };
+                    cur[x] = line[x].wrapping_add(((a as u16 + prev[x] as u16) / 2) as u8);
+                }
+            }
+            4 => {
+                for x in 0..stride {
+                    let (a, c) = if x >= bpp { (cur[x - bpp], prev[x - bpp]) } else { (0, 0) };
+                    cur[x] = line[x].wrapping_add(paeth(a, prev[x], c));
+                }
+            }
+            _ => return None,
         }
     }
     Some(out)

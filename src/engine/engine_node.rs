@@ -167,6 +167,13 @@ impl Nodes {
         Node { kind: Kind::Lig, sub: (from.len().min(63) as u8) << 2 | hits, font: f, a: c as i32, b: at }
     }
 
+    /// A ligature of `c` in font `f` made from the characters stored from `at` to the end
+    /// of `lig_chars`.
+    pub fn lig_node_at(&mut self, f: u16, c: u8, at: usize, hits: u8) -> Node {
+        let len = self.lig_chars.len() - at;
+        Node { kind: Kind::Lig, sub: (len.min(63) as u8) << 2 | hits, font: f, a: c as i32, b: at as i32 }
+    }
+
     /// The characters a ligature was made from.
     pub fn lig_from(&self, n: &Node) -> &[u8] {
         let at = n.b as usize;

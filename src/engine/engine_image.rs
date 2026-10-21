@@ -13,12 +13,16 @@ use super::engine_run::Machine;
 use super::engine_whatsit::XIMAGE;
 use crate::backend::backend_deflate::DeflateCompressor;
 use crate::backend::backend_pdftex::{ext_xn_over_d, print_int};
+use crate::backend::backend_pdfread::{write_form, FormSpec, PdfFile};
 use crate::backend::backend_png::{png_info, png_to_pdf, ColorSpace};
 
 /// `\pdfimageresolution`, `\pdfimagehicolor` and `\pdfminorversion` (§236 slots).
 const PDF_IMAGE_RESOLUTION: u32 = 60;
 const PDF_IMAGE_HICOLOR: u32 = 73;
 const PDF_MINOR_VERSION: u32 = 67;
+/// `\pdfoptionalwaysusepdfpagebox` and `\pdfpagebox`.
+const PDF_ALWAYS_PAGE_BOX: u32 = 64;
+const PDF_PAGE_BOX: u32 = 69;
 /// pdfTeX's `one_hundred_inch` (100in in sp) and `one_inch` (1in over `max_dimen`).
 const ONE_HUNDRED_INCH: i64 = 473_628_672;
 const ONE_INCH: f64 = 226.0;
@@ -33,11 +37,29 @@ pub struct XImage {
     attr: String,
     pub group: i32,
     pub wanted: bool,
+    /// A page of a PDF file, written as a form XObject.
+    pub pdf: Option<PdfPage>,
+}
+
+/// An included PDF page: its number, the page box (0 media to 4 art), its size and the
+/// box's lower left corner in sp (writeimg.c `bp2int`), and `/Rotate`.
+#[derive(Debug, Clone)]
+pub struct PdfPage {
+    page: i64,
+    page_box: usize,
+    pub size: [i32; 2],
+    pub orig: [i32; 2],
+    pub rotate: i64,
+}
+
+/// writeimg.c `bp2int`: big points (a C `float`) to sp, C `round`.
+fn bp2int(p: f32) -> i32 {
+    (p as f64 * (6578176.0 / 100.0)).round() as i32
 }
 
 /// `scale_image`: the size of an image of `x`×`y` pixels at `xr`×`yr` dpi, with
 /// `\pdfimageresolution` `default_res` and the dimensions given (`None` running).
-fn scale_image(x: i64, y: i64, mut xr: i64, mut yr: i64, default_res: i64, given: [Option<i32>; 3]) -> [i32; 3] {
+fn scale_image(x: i64, y: i64, mut xr: i64, mut yr: i64, default_res: i64, given: [Option<i32>; 3], pdf: bool) -> [i32; 3] {
     if xr > 65535 || yr > 65535 {
         xr = 0;
         yr = 0;
@@ -50,7 +72,10 @@ fn scale_image(x: i64, y: i64, mut xr: i64, mut yr: i64, default_res: i64, given
         xr = default_res;
         yr = default_res;
     }
-    let (w, h) = if xr > 0 && yr > 0 {
+    // A PDF page's size is its box's, already in sp.
+    let (w, h) = if pdf {
+        (x, y)
+    } else if xr > 0 && yr > 0 {
         (ext_xn_over_d(ONE_HUNDRED_INCH, x, 100 * xr), ext_xn_over_d(ONE_HUNDRED_INCH, y, 100 * yr))
     } else {
         (ext_xn_over_d(ONE_HUNDRED_INCH, x, 7200), ext_xn_over_d(ONE_HUNDRED_INCH, y, 7200))
@@ -68,37 +93,67 @@ fn scale_image(x: i64, y: i64, mut xr: i64, mut yr: i64, default_res: i64, given
     }
 }
 
+/// writeimg.c `read_pdf_info`: the file's page count and page `page`'s box `page_box`.
+fn pdf_page_info(bytes: Vec<u8>, page: i64, page_box: usize) -> Option<(i32, PdfPage)> {
+    let mut f = PdfFile::open(bytes)?;
+    f.load_object_streams();
+    let (p, _) = f.page(page)?;
+    let [x1, y1, x2, y2] = p.boxes[page_box];
+    let size = [bp2int(x2 - x1), bp2int(y2 - y1)];
+    Some((f.page_count() as i32, PdfPage { page, page_box, size, orig: [bp2int(x1), bp2int(y1)], rotate: p.rotate }))
+}
+
 impl Machine<'_, '_> {
     /// `scan_image`: `\pdfximage [<rule spec>] [attr {…}] [named {…}|page n] [colorspace n]
     /// [<box spec>] {file}`; with `\immediate` the image is written even if no page shows it.
     pub(super) fn pdf_ximage(&mut self, immediate: bool) {
         let given = self.scan_alt_rule();
         let attr = if self.scan_keyword("attr") { self.general_text_string() } else { String::new() };
+        let mut page = 1;
         if self.scan_keyword("named") {
             self.general_text_string();
         } else if self.scan_keyword("page") {
-            self.scan_int();
+            page = self.scan_int() as i64;
         }
         if self.scan_keyword("colorspace") {
             self.scan_int();
         }
-        for kw in ["mediabox", "cropbox", "bleedbox", "trimbox", "artbox"] {
-            if self.scan_keyword(kw) {
-                break;
-            }
+        // pdftex.web `scan_image`: the box asked for, else `\pdfpagebox`, else the crop box;
+        // `\pdfoptionalwaysusepdfpagebox` overrides.
+        let mut page_box = ["mediabox", "cropbox", "bleedbox", "trimbox", "artbox"].iter().position(|kw| self.scan_keyword(kw));
+        let param = |v: i32| (1..=5).contains(&v).then(|| v as usize - 1);
+        if let Some(b) = param(self.image_param(PDF_ALWAYS_PAGE_BOX)) {
+            page_box = Some(b);
         }
+        let page_box = page_box.or_else(|| param(self.image_param(PDF_PAGE_BOX))).unwrap_or(1);
         let file = self.general_text_string();
-        let Some(info) = self.open_bytes(&file).as_deref().and_then(png_info) else {
-            self.error(format!("pdfTeX error (ext1): cannot read image file `{file}'"));
-            return;
-        };
+        let bytes = self.open_bytes(&file);
         let res = self.image_param(PDF_IMAGE_RESOLUTION).clamp(0, 65535) as i64;
-        let dims = scale_image(info.width as i64, info.height as i64, info.x_res as i64, info.y_res as i64, res, given);
+        let (dims, alpha, pdf) = match bytes {
+            Some(b) if b.starts_with(b"%PDF") => {
+                let Some(p) = pdf_page_info(b, page, page_box) else {
+                    self.error(format!("pdfTeX error (ext1): cannot read image file `{file}'"));
+                    return;
+                };
+                let (pages, p) = p;
+                self.pdf_doc.last_ximage_pages = pages;
+                let [w, h] = if p.rotate == 90 || p.rotate == 270 { [p.size[1], p.size[0]] } else { p.size };
+                (scale_image(w as i64, h as i64, 0, 0, res, given, true), false, Some(p))
+            }
+            b => {
+                let Some(info) = b.as_deref().and_then(png_info) else {
+                    self.error(format!("pdfTeX error (ext1): cannot read image file `{file}'"));
+                    return;
+                };
+                self.pdf_doc.last_ximage_pages = 1;
+                (scale_image(info.width as i64, info.height as i64, info.x_res as i64, info.y_res as i64, res, given, false), info.alpha, None)
+            }
+        };
         let doc = &mut self.pdf_doc;
         let obj = doc.new_obj();
         // `read_png_info`: an image with alpha in PDF 1.4 or later needs a transparency
         // group on its pages, one object for the whole document.
-        let group = if info.alpha {
+        let group = if alpha {
             if doc.group_obj == 0 {
                 doc.group_obj = doc.new_obj();
             }
@@ -106,7 +161,7 @@ impl Machine<'_, '_> {
         } else {
             0
         };
-        doc.images.push(XImage { obj, file, dims, attr, group, wanted: immediate });
+        doc.images.push(XImage { obj, file, dims, attr, group, wanted: immediate, pdf });
         doc.last_ximage = obj;
     }
 
@@ -140,6 +195,13 @@ impl PdfDoc {
     pub fn write_images(&self, read: &dyn Fn(&str) -> Option<Vec<u8>>, hicolor: bool, objs: &mut Vec<(i32, Vec<u8>)>, next: &mut i32) {
         let mut deflate = DeflateCompressor::new();
         for im in self.images.iter().filter(|i| i.wanted) {
+            if let Some(p) = &im.pdf {
+                let Some(mut f) = read(&im.file).and_then(PdfFile::open) else { continue };
+                f.load_object_streams();
+                let spec = FormSpec { page: p.page, page_box: p.page_box, attr: im.attr.as_bytes(), file_name: &im.file };
+                write_form(&f, &spec, im.obj, objs, next);
+                continue;
+            }
             let Some(img) = read(&im.file).and_then(|b| png_to_pdf(&b, hicolor)) else { continue };
             let smask = img.smask.as_ref().map(|_| {
                 *next += 1;
@@ -207,9 +269,9 @@ mod tests {
     #[test]
     fn scale_image_follows_pdftex() {
         // 833×286 pixels, no pHYs, `\pdfimageresolution` 72: 1bp per pixel.
-        let [w, h, d] = scale_image(833, 286, 0, 0, 72, [None; 3]);
+        let [w, h, d] = scale_image(833, 286, 0, 0, 72, [None; 3], false);
         assert_eq!((w, h, d), (54_796_206, 18_813_583, 0));
         // A given width scales the height by the aspect ratio.
-        assert_eq!(scale_image(100, 50, 0, 0, 72, [Some(1000), None, None]), [1000, 500, 0]);
+        assert_eq!(scale_image(100, 50, 0, 0, 72, [Some(1000), None, None], false), [1000, 500, 0]);
     }
 }

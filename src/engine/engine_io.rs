@@ -91,7 +91,11 @@ impl Machine<'_, '_> {
     /// closed reads back (`./` is the current directory).
     pub(super) fn open_bytes(&self, name: &str) -> Option<Vec<u8>> {
         let local = name.strip_prefix("./").unwrap_or(name);
-        if let Some(w) = self.closed.iter().rev().find(|w| w.name == local || w.name == format!("{local}.tex") || format!("{}.tex", w.name) == local) {
+        let written = |w: &&WriteStream| {
+            let n = w.name.strip_prefix("./").unwrap_or(&w.name);
+            n == local || n.strip_suffix(".tex") == Some(local) || local.strip_suffix(".tex") == Some(n)
+        };
+        if let Some(w) = self.closed.iter().rev().find(written) {
             return Some(w.text.chars().map(|c| c as u32 as u8).collect());
         }
         let read = self.read_file.as_ref()?;

@@ -174,8 +174,11 @@ impl Machine<'_, '_> {
                     self.error(format!("Missing }} inserted (\\{} in an \\hbox)", p.name()));
                     return true;
                 }
+                // §1095 `head_for_vmode`: the command again after an inserted `\par` token,
+                // whatever `\par` means now (LaTeX's list `\par` restores the `\parshape`).
                 self.input.back(x.t);
-                self.end_graf();
+                let par = Token::cs(self.e.cs.intern("par"));
+                self.input.back(par);
             }
             // §1094
             Prim::Par => {

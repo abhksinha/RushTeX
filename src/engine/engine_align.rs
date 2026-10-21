@@ -435,6 +435,11 @@ impl Machine<'_, '_> {
         self.end_group(ALIGN_GROUP);
         self.end_group(ALIGN_GROUP);
         let Some(mut a) = self.aligns.pop() else { return };
+        // §800: the rows of an alignment in a display are shifted by `\displayindent`.
+        let o = match self.nest.last() {
+            Some(l) if l.mode == Mode::Math && !l.inner => self.dimen_param(super::engine_noad::DISPLAY_INDENT),
+            _ => 0,
+        };
         // §801: an unused column has no width and no tabskip after it; §803: the widths of
         // spanned entries move on to the next column, less this column and its tabskip.
         for k in 0..a.cols.len() {
@@ -475,7 +480,7 @@ impl Machine<'_, '_> {
                 Kind::Box if n.sub == UNSET_ROW => {
                     let row = self.e.nodes.boxes[n.a as usize];
                     let list = self.set_row(&a, &p, &row);
-                    let b = BoxRec { width: p.width, list, glue_set: p.glue_set, glue_sign: p.glue_sign, glue_order: p.glue_order, shift: 0, ..row };
+                    let b = BoxRec { width: p.width, list, glue_set: p.glue_set, glue_sign: p.glue_sign, glue_order: p.glue_order, shift: o, ..row };
                     self.cur[i] = Node::new(Kind::Box, self.e.nodes.add_box(b) as i32);
                 }
                 Kind::Rule => {
@@ -484,6 +489,13 @@ impl Machine<'_, '_> {
                     if w == RUNNING || h == RUNNING || d == RUNNING {
                         let dims = [if w == RUNNING { p.width } else { w }, if h == RUNNING { p.height } else { h }, if d == RUNNING { p.depth } else { d }];
                         self.cur[i] = self.e.nodes.rule_node(dims);
+                    }
+                    // A shifted rule goes in a box of its natural size.
+                    if o != 0 {
+                        let [w, h, d] = self.e.nodes.rules[self.cur[i].a as usize];
+                        let list = self.e.nodes.store(&[self.cur[i]]);
+                        let b = self.e.nodes.add_box(BoxRec { width: w, height: h, depth: d, list, shift: o, ..BoxRec::default() });
+                        self.cur[i] = Node::new(Kind::Box, b as i32);
                     }
                 }
                 _ => {}

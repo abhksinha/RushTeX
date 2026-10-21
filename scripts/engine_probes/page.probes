@@ -1,0 +1,6 @@
+\pages
+\the\ht6/\the\dp6/\the\ht5/\splitfirstmark/\splitbotmark
+\the\ht7/\the\dp7
+\the\pagegoal/\the\pagetotal/\the\pagedepth/\the\pagestretch/\the\pageshrink
+\the\deadcycles/\the\insertpenalties/\the\lastkern
+\the\count30

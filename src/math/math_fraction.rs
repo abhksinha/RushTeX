@@ -52,52 +52,35 @@ impl FractionShiftResolver {
         rule_t: f32,
         num_d: f32,
         den_h: f32,
-        scale: f32,
-        params: &crate::math::math_fonts::MathFontParameters,
+        params: &crate::math::math_fonts::MathParams,
     ) -> PackedFractionMetrics {
-        let disp_idx = style.is_display() as usize;
-
+        // §744–§746 in scaled points.
+        use crate::backend::scaled::{half, sp_pt, to_sp};
+        let display = style.is_display();
+        let (axis_h, t, num_d, den_h) = (to_sp(axis_h), to_sp(rule_t), to_sp(num_d), to_sp(den_h));
+        let mut shift_up = to_sp(if display { params.num1 } else if has_rule { params.num2 } else { params.num3 });
+        let mut shift_down = to_sp(if display { params.denom1 } else { params.denom2 });
         if has_rule {
-            let num_param = [params.num2, params.num1][disp_idx];
-            let den_param = [params.denom2, params.denom1][disp_idx];
-            let clr_param = [params.frac_clearance_text, params.frac_clearance_display][disp_idx];
-
-            let num_shift = (num_param as f32) * scale;
-            let den_shift = (den_param as f32) * scale;
-            // Rule 15d: φ is 3θ in display style and θ otherwise; the font's own value holds
-            // for its default rule, an explicit `\above` thickness scales it.
-            let default_t = (params.rule_thickness as f32) * scale;
-            let min_clr = if default_t > 0.0 && (rule_t - default_t).abs() > 1e-4 && rule_t > 0.0 {
-                [1.0, 3.0][disp_idx] * rule_t
-            } else {
-                (clr_param as f32) * scale
-            };
-
-            let half_t = 0.5 * rule_t;
-            let actual_num_shift = num_shift.max(axis_h + half_t + min_clr + num_d);
-            let actual_den_shift = den_shift.max(half_t + min_clr + den_h - axis_h);
-
-            PackedFractionMetrics::new(actual_num_shift, actual_den_shift, rule_t, min_clr)
-        } else {
-            let num_param = [params.num3, params.num1][disp_idx];
-            let den_param = [params.denom2, params.denom1][disp_idx];
-            let mult = [3.0, 7.0][disp_idx];
-            let min_gap = (params.rule_thickness as f32 * mult) * scale;
-
-            let num_shift = (num_param as f32) * scale;
-            let den_shift = (den_param as f32) * scale;
-
-            let mut actual_num_shift = num_shift.max(axis_h + num_d);
-            let mut actual_den_shift = den_shift.max(den_h - axis_h);
-
-            let gap = (actual_num_shift - num_d) - (-actual_den_shift + den_h);
-            if gap < min_gap {
-                let shortfall = min_gap - gap;
-                actual_num_shift += shortfall * 0.5;
-                actual_den_shift += shortfall * 0.5;
+            let clr = if display { 3 * t } else { t };
+            let delta = half(t);
+            let delta1 = clr - ((shift_up - num_d) - (axis_h + delta));
+            let delta2 = clr - ((axis_h - delta) - (den_h - shift_down));
+            if delta1 > 0 {
+                shift_up += delta1;
             }
-
-            PackedFractionMetrics::new(actual_num_shift, actual_den_shift, 0.0, min_gap)
+            if delta2 > 0 {
+                shift_down += delta2;
+            }
+            PackedFractionMetrics::new(sp_pt(shift_up), sp_pt(shift_down), rule_t, sp_pt(clr))
+        } else {
+            let drt = to_sp(params.rule_thickness);
+            let clr = if display { 7 * drt } else { 3 * drt };
+            let delta = half(clr - ((shift_up - num_d) - (den_h - shift_down)));
+            if delta > 0 {
+                shift_up += delta;
+                shift_down += delta;
+            }
+            PackedFractionMetrics::new(sp_pt(shift_up), sp_pt(shift_down), 0.0, sp_pt(clr))
         }
     }
 }

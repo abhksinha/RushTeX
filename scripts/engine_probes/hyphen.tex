@@ -1,0 +1,18 @@
+%% typeset
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\input hyphen.tex
+\defaulthyphenchar=`\- \font\tenrm=cmr10 \tenrm \font\tenit=cmti10
+\lefthyphenmin=2 \righthyphenmin=3 \uchyph=1 \tolerance=10000 \pretolerance=-1
+\def\walk{\unskip\unpenalty\setbox0\lastbox\ifvoid0 \else\setbox3\hbox{\unhcopy0}\xdef\w{\the\wd3,\w}\expandafter\walk\fi}
+\def\test#1{\setbox1\vbox{\hsize=1sp \parindent=0pt \parfillskip=0pt plus 1fil \hskip0pt #1\par \global\count1=\prevgraf}\gdef\w{}\setbox2\vbox{\unvcopy1 \walk}\xdef\r{\the\count1:\w}}
+\hyphenation{rush-tex ta-ble}
+\test{difficult}\let\ra\r
+\test{efficient office shuffling affluent}\let\rb\r
+\test{hyphenation typesetting algorithm}\let\rc\r
+\test{rushtex table tables}\let\rd\r
+\test{``Paragraph'' (characteristic), Uppercase}\let\re\r
+\test{\tenit difficult officially fluffiest}\let\rf\r
+\test{\uchyph=0 Uppercase \lefthyphenmin=4 independence}\let\rg\r
+\test{\hyphenchar\tenrm=-1 independence}\let\rh\r
+\test{\language=3 independence \language=0 independence}\let\ri\r
+\test{x\hbox{}independence \kern1pt independence\kern1pt}\let\rj\r

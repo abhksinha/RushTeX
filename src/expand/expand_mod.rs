@@ -25,15 +25,25 @@
 //! - Category codes are fixed (only `\makeatletter` is honoured for macro names).
 //! - `\setcounter` on `section`/`figure`/`table`/`equation` changes reference numbers only;
 //!   the layout engine keeps its own numbering.
-//! - `\pageref` resolves to `??` until layout-position feedback exists (roadmap phase 4).
+//! - `\pageref` reads the pages of a previous pass, as LaTeX reads its `.aux` file
+//!   (`expand_with_pages`); without one it prints `??`.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::diagnostic::{locate_diagnostic, Diagnostic};
 
+/// amsthm `\qed` in text: `\leavevmode\unskip\penalty9999 \hbox{}\nobreak\hfill\quad\hbox{\qedsymbol}`
+/// (the \penalty9999 breakpoint is not modelled).
+/// Marks a `\let` copy of a builtin control word in a macro body (see `define_let`).
+const LET_FROZEN: u8 = 0x01;
+
+const QED: &str = "\\unskip\\nobreak\\hfill\\quad$\\openbox$";
+
 #[path = "expand_native.rs"]
 mod native;
+#[path = "expand_classes.rs"]
+pub(crate) mod classes;
 
 const MAX_EXPANSIONS: u32 = 1_000_000;
 const MAX_STACK_DEPTH: usize = 1024;
@@ -43,10 +53,143 @@ const MIN_OUTPUT_LIMIT: usize = 64 << 20;
 ///
 /// Returns the input unchanged (borrowed) when it contains no constructs that need expansion.
 pub fn expand(source: &str) -> Result<Cow<'_, str>, Diagnostic> {
+    expand_with_pages(source, no_pages()).map(|(out, _)| out)
+}
+
+/// [`expand`] for a document that uses `\pageref`: `pages` holds each label's page from a
+/// previous pass (the `.aux` file's `\newlabel`s), and each `\label` leaves a
+/// `\rushtexpagelabel{N}` whatsit whose page layout records. Returns the label keys in
+/// `N` order; empty when the source has no `\pageref`.
+pub fn expand_with_pages<'s>(source: &'s str, pages: &'s HashMap<String, u32>) -> Result<(Cow<'s, str>, Vec<String>), Diagnostic> {
     if !needs_expansion(source) {
-        return Ok(Cow::Borrowed(source));
+        return Ok((Cow::Borrowed(source), Vec::new()));
     }
-    Expander::new(source).run().map(Cow::Owned)
+    let mut ex = Expander::new(source);
+    ex.track_pages = source.contains("\\pageref");
+    ex.known_pages = pages;
+    ex.run().map(|(out, keys)| (Cow::Owned(out), keys))
+}
+
+/// Expands like [`expand`] but keeps going past errors, for `rushtex --gaps`: each error is
+/// recorded and the runaway expansion is abandoned at the source position it came from.
+/// At most `MAX_RECOVERED` errors are kept, so pathological input stays bounded.
+pub fn expand_recovering(source: &str) -> (Cow<'_, str>, Vec<Diagnostic>) {
+    if !needs_expansion(source) {
+        return (Cow::Borrowed(source), Vec::new());
+    }
+    const MAX_RECOVERED: usize = 1000;
+    let mut ex = Expander::new(source);
+    let mut errors = Vec::new();
+    while let Some(b) = ex.input.peek() {
+        let step = match b {
+            b'\\' => ex.control(),
+            b'%' => {
+                ex.copy_comment();
+                Ok(())
+            }
+            b if b == ex.short_verb => {
+                ex.short_verb_run();
+                Ok(())
+            }
+            _ => {
+                ex.copy_run();
+                Ok(())
+            }
+        };
+        if let Err(e) = step {
+            errors.push(e);
+            // Back to the source frame: the macro being expanded is dropped.
+            while ex.input.frames.len() > 1 {
+                ex.input.pop_frame();
+            }
+            ex.expansions = 0;
+            if errors.len() >= MAX_RECOVERED {
+                break;
+            }
+        }
+        if ex.out.len() > ex.out_limit {
+            errors.push(ex.error("macro expansion produced too much output (possible runaway recursion)"));
+            break;
+        }
+    }
+    (Cow::Owned(ex.finish()), errors)
+}
+
+/// The material around the column in `\setbox\@outputbox\hbox{<left>\vbox..{..}<right>}`.
+fn column_wrap(body: &str, regs: &crate::engine::Engine) -> Option<(String, String)> {
+    let start = body.find("\\setbox\\@outputbox\\hbox")?;
+    let rest = &body[start + "\\setbox\\@outputbox\\hbox".len()..];
+    let open = rest.find('{')?;
+    let inner = &rest[open + 1..open + group_len(&rest[open..])? - 1];
+    let v = inner.find("\\vbox")?;
+    let vopen = v + inner[v..].find('{')?;
+    let vend = vopen + group_len(&inner[vopen..])?;
+    Some((wrap_items(&inner[..v], regs)?, wrap_items(&inner[vend..], regs)?))
+}
+
+/// Byte length of the balanced `{..}` group `s` starts with.
+fn group_len(s: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, b) in s.bytes().enumerate() {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `\vrule [width d]` and `\kern d`/`\hskip d` items as `r<pt>`/`k<pt>`, comma separated.
+fn wrap_items(s: &str, regs: &crate::engine::Engine) -> Option<String> {
+    let mut out = String::new();
+    let mut rest = s.trim_start();
+    while !rest.is_empty() {
+        let (kind, after) = if let Some(r) = rest.strip_prefix("\\vrule") {
+            ('r', r)
+        } else if let Some(r) = rest.strip_prefix("\\kern").or_else(|| rest.strip_prefix("\\hskip")) {
+            ('k', r)
+        } else {
+            let r = rest.strip_prefix('%')?;
+            rest = r.split_once('\n').map_or("", |(_, t)| t).trim_start();
+            continue;
+        };
+        let after = after.trim_start();
+        let (width, tail) = if kind == 'r' {
+            match after.strip_prefix("width") {
+                Some(w) => wrap_dimen(w.trim_start(), regs)?,
+                None => (0.4, after),
+            }
+        } else {
+            wrap_dimen(after, regs)?
+        };
+        if !out.is_empty() {
+            out.push(',');
+        }
+        out.push(kind);
+        out.push_str(&width.to_string());
+        rest = tail.trim_start();
+    }
+    Some(out)
+}
+
+/// A dimension: `<factor>?\register` or a literal with its unit; the rest after it.
+fn wrap_dimen<'s>(s: &'s str, regs: &crate::engine::Engine) -> Option<(f32, &'s str)> {
+    let num = s.bytes().take_while(|b| b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'+')).count();
+    let factor = if num == 0 { 1.0 } else { s[..num].parse::<f32>().ok()? };
+    let r = &s[num..];
+    if let Some(cs) = r.strip_prefix('\\') {
+        let n = cs.bytes().take_while(|b| b.is_ascii_alphabetic() || *b == b'@').count();
+        let v = crate::backend::scaled::sp_pt(regs.eqtb.word(regs.names.user(&cs[..n])?));
+        return Some((factor * v, &cs[n..]));
+    }
+    let unit = r.bytes().take_while(|b| b.is_ascii_alphabetic()).count();
+    Some((crate::doc_config::parse_dimension_pt(&s[..num + unit])?, &r[unit..]))
 }
 
 /// Single linear scan for control words that require the expansion stage.
@@ -64,10 +207,29 @@ pub fn needs_expansion(source: &str) -> bool {
             if is_trigger(name) {
                 return true;
             }
+            // `\maketitle` without `\date` prints `\today`, which the expander supplies.
+            if name == "maketitle" && !source.contains("\\date") {
+                return true;
+            }
+            if name == "documentclass" {
+                let after = &source[end..];
+                let after = after.trim_start();
+                let after = if after.starts_with('[') { &after[after.find(']').map_or(0, |p| p + 1)..] } else { after };
+                if let Some(class) = after.trim_start().strip_prefix('{').and_then(|r| r.split('}').next()) {
+                    if classes::class_code(class.trim()).is_some() {
+                        return true;
+                    }
+                }
+            }
             if name == "begin" {
                 let after = &bytes[end..];
-                if after.starts_with(b"{proof}") || after.starts_with(b"{comment}") {
+                if after.starts_with(b"{proof}") || after.starts_with(b"{comment}") || after.starts_with(b"{abstract}") {
                     return true;
+                }
+                if let Some(env) = after.strip_prefix(b"{").and_then(|r| r.iter().position(|&b| b == b'}').map(|e| &r[..e])) {
+                    if std::str::from_utf8(env).is_ok_and(|e| declaration_env(e).is_some()) {
+                        return true;
+                    }
                 }
             }
             i = end;
@@ -90,11 +252,20 @@ fn is_trigger(name: &str) -> bool {
             | "edef"
             | "xdef"
             | "let"
+            | "chardef"
+            | "appendix"
+            | "newdimen"
+            | "newskip"
+            | "newcount"
+            | "newlength"
             | "newenvironment"
             | "renewenvironment"
             | "newif"
             | "iftrue"
             | "iffalse"
+            | "ifx"
+            | "ifdefined"
+            | "ifnum"
             | "newcounter"
             | "setcounter"
             | "addtocounter"
@@ -109,8 +280,15 @@ fn is_trigger(name: &str) -> bool {
             | "cite"
             | "bibitem"
             | "today"
+            | "qed"
             | "DeclareMathOperator"
+            | "DeclareRobustCommand"
             | "makeatletter"
+            | "lowercase"
+            | "uppercase"
+            | "MakeUppercase"
+            | "MakeLowercase"
+            | "MakeShortVerb"
     )
 }
 
@@ -141,9 +319,18 @@ struct Input<'s> {
     /// Indices into `owned` that are free for reuse.
     free_owned: Vec<u32>,
     frames: Vec<Frame>,
+    /// The engine's catcode table, copied after each change: control words are scanned
+    /// with it (§356).
+    cats: crate::engine::CatTable,
 }
 
 impl<'s> Input<'s> {
+    /// Whether byte `b` is a letter (catcode 11) now.
+    #[inline]
+    fn is_letter(&self, b: u8) -> bool {
+        b < 128 && self.cats.get(b as char) == crate::engine::Cat::Letter
+    }
+
     #[inline]
     fn base_str(&self, base: Base) -> &str {
         match base {
@@ -234,6 +421,15 @@ impl<'s> Input<'s> {
         });
     }
 
+    /// TeX's `\ignorespaces` on the input: spaces and one end of line, not a blank line.
+    fn ignore_spaces(&mut self) {
+        if self.peek().is_some() {
+            let rest = self.top_rest();
+            let n = rest.len() - ignore_spaces(rest).len();
+            self.bump(n);
+        }
+    }
+
     fn skip_spaces(&mut self) {
         while let Some(b) = self.peek() {
             if matches!(b, b' ' | b'\t' | b'\r' | b'\n') {
@@ -275,7 +471,7 @@ impl<'s> Input<'s> {
         self.bump(1);
         out.push('\\');
         let rest = self.top_rest();
-        let n = rest.bytes().take_while(|b| b.is_ascii_alphabetic() || *b == b'@').count();
+        let n = rest.bytes().take_while(|&b| self.is_letter(b)).count();
         if n > 0 {
             out.push_str(&rest[..n]);
             self.bump(n);
@@ -345,11 +541,13 @@ impl<'s> Input<'s> {
 // Definitions
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 enum Piece {
     Lit(Box<str>),
     Param(u8),
 }
 
+#[derive(Clone)]
 struct Macro {
     nargs: u8,
     default: Option<(u32, u32)>,
@@ -386,10 +584,17 @@ struct Counter {
 
 enum EnvKind {
     User(u32),
-    Theorem,
+    /// A theorem whose `\end` was not found ahead; `true` in the remark style.
+    Theorem(bool),
     Proof,
     Bibliography,
     Float { is_table: bool },
+    /// `\begin{X}` for a declaration `\X`: a group that starts with the declaration.
+    Declaration { par: bool },
+    /// The `math` environment: `$..$`.
+    InlineMath,
+    /// article.cls's one-column `abstract`: `\small`, a centred bold heading, `quotation`.
+    Abstract,
 }
 
 struct EnvEntry {
@@ -422,15 +627,46 @@ struct Expander<'s> {
     counter_ids: HashMap<String, u32>,
     theorems: HashMap<String, TheoremDef>,
     theorem_style: TheoremStyle,
-    at_letter: bool,
     cond_depth: u32,
+    /// `\begin{document}` has been reached.
+    in_document: bool,
+    /// `\title`, `\author` and `\date` from the preamble, unexpanded. LaTeX stores their
+    /// arguments and expands them at `\maketitle`, so they may use macros defined after
+    /// them; they are replayed just before `\begin{document}`, once the preamble's
+    /// definitions are all known.
+    front_matter: String,
+    /// Registers, parameters and grouping (`\newdimen`, `\setlength`, `\begingroup`).
+    engine: crate::engine::Engine,
+    /// The body of a user `\@makecol`, re-read whenever a register it uses changes.
+    makecol: Option<String>,
     env_stack: Vec<EnvEntry>,
 
     current_label: String,
     labels: HashMap<String, String>,
+    /// Whether `\label`s leave page whatsits (the source uses `\pageref`).
+    track_pages: bool,
+    /// The label keys of the page whatsits, in their `N` order.
+    page_keys: Vec<String>,
+    /// The previous pass's label pages.
+    known_pages: &'s HashMap<String, u32>,
+    /// `\label`s inside the rows of a display alignment, bound to their row's number.
+    row_labels: HashMap<String, String>,
+    /// Alignments nested in a display alignment whose rows that one already numbered.
+    numbered_nested_aligns: u32,
+    /// Open lists, innermost last: the `enumerate` item counter, or `None` for the others.
+    lists: Vec<Option<i32>>,
+    /// The list label macros as they were when each open list began: the environment is a
+    /// group, so a `\renewcommand{\labelenumi}` inside it ends with it.
+    list_label_saves: Vec<[Option<Macro>; 4]>,
+    /// After `\appendix`: `\thesection` is `\Alph{section}`.
+    appendix: bool,
     bib: HashMap<String, String>,
     bib_count: u32,
     pending: Vec<Pending>,
+    /// shortvrb's `\MakeShortVerb` character (`|` in ltxguide), 0 when none: `|x|` is `\verb|x|`.
+    short_verb: u8,
+    /// `\c@secnumdepth`: deeper headings take no number.
+    sec_num_depth: i32,
 }
 
 const C_SECTION: u32 = 0;
@@ -466,6 +702,7 @@ impl<'s> Expander<'s> {
                     pos: 0,
                     end: source.len() as u32,
                 }],
+                cats: crate::engine::CatTable::latex(),
             },
             out: String::with_capacity(source.len() + source.len() / 8),
             out_limit: MIN_OUTPUT_LIMIT.max(source.len().saturating_mul(64)),
@@ -479,14 +716,27 @@ impl<'s> Expander<'s> {
             counter_ids,
             theorems: HashMap::new(),
             theorem_style: TheoremStyle::Plain,
-            at_letter: false,
             cond_depth: 0,
-            env_stack: Vec::new(),
+            in_document: false,
+            front_matter: String::new(),
+            engine: crate::engine::Engine::default(),
+            makecol: None,
+            env_stack: Vec::with_capacity(16),
             current_label: String::new(),
             labels: HashMap::new(),
+            track_pages: false,
+            page_keys: Vec::new(),
+            known_pages: no_pages(),
+            row_labels: HashMap::new(),
+            numbered_nested_aligns: 0,
+            lists: Vec::new(),
+            list_label_saves: Vec::new(),
+            appendix: false,
             bib: HashMap::new(),
             bib_count: 0,
             pending: Vec::new(),
+            short_verb: 0,
+            sec_num_depth: 3,
         }
     }
 
@@ -499,18 +749,20 @@ impl<'s> Expander<'s> {
         locate_diagnostic(self.input.source, pos, message)
     }
 
-    fn run(mut self) -> Result<String, Diagnostic> {
+    fn run(mut self) -> Result<(String, Vec<String>), Diagnostic> {
         while let Some(b) = self.input.peek() {
             match b {
                 b'\\' => self.control()?,
                 b'%' => self.copy_comment(),
+                b if b == self.short_verb => self.short_verb_run(),
                 _ => self.copy_run(),
             }
             if self.out.len() > self.out_limit {
                 return Err(self.error("macro expansion produced too much output (possible runaway recursion)"));
             }
         }
-        Ok(self.finish())
+        let keys = std::mem::take(&mut self.page_keys);
+        Ok((self.finish(), keys))
     }
 
     // ----- output helpers ---------------------------------------------------
@@ -538,7 +790,7 @@ impl<'s> Expander<'s> {
         let n = rest
             .as_bytes()
             .iter()
-            .position(|&b| b == b'\\' || b == b'%')
+            .position(|&b| b == b'\\' || b == b'%' || b == self.short_verb)
             .unwrap_or(rest.len());
         let first_alpha = rest.as_bytes()[0].is_ascii_alphabetic();
         if self.out_ends_cs && first_alpha {
@@ -547,6 +799,13 @@ impl<'s> Expander<'s> {
         self.out.push_str(&rest[..n]);
         self.out_ends_cs = false;
         self.input.bump(n);
+    }
+
+    /// `|text|` under `\MakeShortVerb{\|}`: shortvrb makes the character active as `\verb|`.
+    fn short_verb_run(&mut self) {
+        self.emit_cs("verb");
+        self.out_ends_cs = false;
+        self.copy_verb();
     }
 
     fn copy_comment(&mut self) {
@@ -577,8 +836,17 @@ impl<'s> Expander<'s> {
             self.out.push('\\');
             return Ok(());
         };
-        let at_letter = self.at_letter;
-        let is_letter = |b: u8| b.is_ascii_alphabetic() || (at_letter && b == b'@');
+        // §356: a control word is the letters (catcode 11) after the escape.
+        let is_letter = |b: u8| self.input.is_letter(b);
+        if first == LET_FROZEN {
+            // A `\let` copy of a builtin: its meaning as it was, whatever the name means now.
+            self.input.bump(1);
+            let rest = self.input.top_rest();
+            let n = rest.bytes().take_while(|&b| b.is_ascii_alphabetic() || b == b'@').count();
+            let name = rest[..n].to_string();
+            self.input.bump(n);
+            return self.dispatch_builtin(name);
+        }
         if !is_letter(first) {
             let c = self.input.peek_char().unwrap_or('\\');
             self.out.push('\\');
@@ -598,12 +866,97 @@ impl<'s> Expander<'s> {
         if self.macros.contains_key(&name) {
             return self.expand_macro(&name);
         }
+        self.dispatch_builtin(name)
+    }
+
+    /// A control word that is not a macro: the expander's builtins, or passed on to the parser.
+    fn dispatch_builtin(&mut self, name: String) -> Result<(), Diagnostic> {
         match name.as_str() {
+            "documentclass" => {
+                // The class's own code runs after the `\documentclass` line.
+                let options = self.input.read_optional();
+                let mut class = String::new();
+                self.input.read_arg(&mut class);
+                self.emit_cs("documentclass");
+                if let Some(o) = &options {
+                    self.out.push('[');
+                    self.out.push_str(o);
+                    self.out.push(']');
+                }
+                self.out.push('{');
+                self.out.push_str(&class);
+                self.out.push('}');
+                self.out_ends_cs = false;
+                if let Some(code) = classes::class_code(class.trim()) {
+                    self.push_text(code);
+                }
+                Ok(())
+            }
             "newcommand" => self.define_command(DefineKind::New),
             "renewcommand" => self.define_command(DefineKind::Renew),
             "providecommand" => self.define_command(DefineKind::Provide),
+            // Robust or not makes no difference without `\protect`; it defines or redefines.
+            "DeclareRobustCommand" => self.define_command(DefineKind::Renew),
+            "title" | "author" | "date" if !self.in_document => {
+                let mut arg = String::new();
+                self.input.read_arg(&mut arg);
+                let newlines = arg.bytes().filter(|&b| b == b'\n').count();
+                self.front_matter.push('\\');
+                self.front_matter.push_str(&name);
+                self.front_matter.push('{');
+                self.front_matter.push_str(&arg);
+                self.front_matter.push_str("}\n");
+                self.finish_definition(newlines);
+                Ok(())
+            }
             "def" | "gdef" | "edef" | "xdef" => self.define_def(),
             "let" => self.define_let(),
+            "chardef" => self.define_chardef(),
+            "appendix" => {
+                self.counters[C_SECTION as usize].value = 0;
+                self.reset_children(C_SECTION);
+                self.appendix = true;
+                self.emit_cs("appendix");
+                Ok(())
+            }
+            // Dimension registers keep their `\setlength` values for `\@makecol`; the others
+            // only consume their name.
+            "newdimen" | "newskip" | "newcount" | "newlength" => {
+                self.input.skip_spaces();
+                let mut target = String::new();
+                if self.input.peek() == Some(b'{') {
+                    self.input.read_arg(&mut target);
+                } else {
+                    self.input.read_token(&mut target);
+                }
+                // latex.ltx: `\newlength` is `\newskip`.
+                let region = match name.as_str() {
+                    "newcount" => crate::engine::Region::Int,
+                    "newdimen" => crate::engine::Region::Dimen,
+                    _ => crate::engine::Region::Glue,
+                };
+                self.engine.names.allocate(target.trim().trim_start_matches('\\'), region);
+                self.finish_definition(0);
+                Ok(())
+            }
+            "setlength" | "addtolength" if !self.engine.names.is_empty() => {
+                let (mut reg, mut value) = (String::new(), String::new());
+                self.input.read_arg(&mut reg);
+                self.input.read_arg(&mut value);
+                let key = reg.trim().trim_start_matches('\\');
+                self.out.push('\\');
+                self.out.push_str(&name);
+                self.out.push('{');
+                self.out.push_str(&reg);
+                self.out.push_str("}{");
+                self.out.push_str(&value);
+                self.out.push('}');
+                self.out_ends_cs = false;
+                if self.assign_length(key, &value, name == "addtolength") && self.makecol.as_deref().is_some_and(|b| b.contains(reg.trim())) {
+                    self.emit_column_wrap();
+                }
+                Ok(())
+            }
             "newenvironment" | "renewenvironment" => self.define_environment(),
             "DeclareMathOperator" => self.define_math_operator(),
             "newif" => {
@@ -614,12 +967,29 @@ impl<'s> Expander<'s> {
                 self.finish_definition(0);
                 Ok(())
             }
-            "makeatletter" => {
-                self.at_letter = true;
+            // §1063 `\begingroup`/§1065 `\endgroup`: the engine's group; the parser still sees them.
+            "begingroup" => {
+                let _ = self.engine.eqtb.begin_group();
+                self.emit_cs("begingroup");
                 Ok(())
             }
-            "makeatother" => {
-                self.at_letter = false;
+            "endgroup" => {
+                self.engine.eqtb.end_group();
+                self.input.cats = *self.engine.eqtb.cats();
+                self.emit_cs("endgroup");
+                Ok(())
+            }
+            // latex.ltx `\makeatletter`/`\makeatother`: `\catcode`\@11` and `12`, local.
+            "makeatletter" | "makeatother" => {
+                let cat = if name == "makeatletter" { crate::engine::Cat::Letter } else { crate::engine::Cat::Other };
+                self.engine.eqtb.set_catcode(b'@', cat, false);
+                self.input.cats = *self.engine.eqtb.cats();
+                Ok(())
+            }
+            "catcode" => {
+                if !self.assign_catcode() {
+                    self.emit_cs("catcode");
+                }
                 Ok(())
             }
             "else" if self.cond_depth > 0 => {
@@ -686,6 +1056,14 @@ impl<'s> Expander<'s> {
                 self.input.read_arg(&mut c);
                 self.input.read_arg(&mut v);
                 let value = self.eval_int(&v);
+                if name == "setcounter" && matches!(c.trim(), "secnumdepth" | "tocdepth") {
+                    // The parser numbers the headings and fills the contents.
+                    if c.trim() == "secnumdepth" {
+                        self.sec_num_depth = value;
+                    }
+                    self.emit(&format!("\\setcounter{{{}}}{{{value}}}", c.trim()));
+                    return Ok(());
+                }
                 if let Some(&id) = self.counter_ids.get(c.trim()) {
                     let counter = &mut self.counters[id as usize];
                     if name == "setcounter" {
@@ -711,10 +1089,16 @@ impl<'s> Expander<'s> {
             "arabic" | "roman" | "Roman" | "alph" | "Alph" | "value" => {
                 let mut c = String::new();
                 self.input.read_arg(&mut c);
-                let value = self
-                    .counter_ids
-                    .get(c.trim())
-                    .map_or(0, |&id| self.counters[id as usize].value);
+                let c = c.trim();
+                let value = match self.counter_ids.get(c) {
+                    Some(&id) => self.counters[id as usize].value,
+                    // `enumi`…`enumiv` are the open `enumerate` counters.
+                    None => ENUM_COUNTERS
+                        .iter()
+                        .position(|n| *n == c)
+                        .and_then(|d| self.lists.iter().flatten().nth(d).copied())
+                        .unwrap_or(0),
+                };
                 let text = format_counter(value, &name);
                 self.emit(&text);
                 Ok(())
@@ -734,7 +1118,22 @@ impl<'s> Expander<'s> {
             "label" => {
                 let mut key = String::new();
                 self.input.read_arg(&mut key);
-                self.labels.insert(key.trim().to_string(), self.current_label.clone());
+                let key = key.trim();
+                let value = self.row_labels.remove(key).unwrap_or_else(|| self.current_label.clone());
+                self.labels.insert(key.to_string(), value);
+                if self.track_pages {
+                    // latex.ltx `\label`: `\protected@write\@auxout{}{\string\newlabel{key}{{..}{\thepage}}}`.
+                    self.out_ends_cs_guard();
+                    let n = self.page_keys.len();
+                    self.page_keys.push(key.to_string());
+                    self.out.push_str("\\rushtexpagelabel{");
+                    self.out.push_str(&n.to_string());
+                    self.out.push('}');
+                }
+                // latex.ltx `\@esphack`: after a positive skip the spaces that follow are ignored.
+                if ends_with_hskip(&self.out) {
+                    self.input.ignore_spaces();
+                }
                 Ok(())
             }
             "ref" | "eqref" => {
@@ -751,7 +1150,10 @@ impl<'s> Expander<'s> {
             "pageref" => {
                 let mut key = String::new();
                 self.input.read_arg(&mut key);
-                self.emit("??");
+                match self.known_pages.get(key.trim()) {
+                    Some(page) => self.emit(&page.to_string()),
+                    None => self.emit(UNDEFINED_REF),
+                }
                 Ok(())
             }
             "cite" => {
@@ -777,16 +1179,56 @@ impl<'s> Expander<'s> {
                 self.emit(&item);
                 Ok(())
             }
+            // amsthm `\qed` outside math, like the end of a `proof`.
+            "qed" => {
+                self.push_text(QED);
+                Ok(())
+            }
+            "lowercase" | "uppercase" | "MakeUppercase" | "MakeLowercase" => {
+                let mut arg = String::new();
+                self.input.read_arg(&mut arg);
+                let upper = matches!(name.as_str(), "uppercase" | "MakeUppercase");
+                // `\MakeUppercase` leaves math alone; TeX's primitives change every letter token.
+                let text = change_case(&arg, upper, name.starts_with("Make"));
+                self.push_text(&text);
+                Ok(())
+            }
             "today" => {
                 let text = today_string();
                 self.emit(&text);
+                Ok(())
+            }
+            "item" => {
+                // latex.ltx `\@item`: without an optional label, an `enumerate` item does
+                // `\refstepcounter{enum<depth>}`.
+                let mut label = None;
+                if self.input.peek() != Some(b'[') {
+                    if let Some(Some(n)) = self.lists.last_mut() {
+                        *n += 1;
+                        self.current_label = self.enum_ref();
+                        // A user `\labelenum<depth>` is the label; the default ones are the
+                        // layout's markers.
+                        let depth = self.lists.iter().flatten().count();
+                        label = ENUM_LABELS.get(depth - 1).filter(|l| self.macros.contains_key(**l));
+                    }
+                }
+                self.emit_cs("item");
+                if let Some(l) = label {
+                    self.push_text(&format!("[{{\\{l}}}]"));
+                }
                 Ok(())
             }
             "begin" => self.begin_environment(),
             "end" => self.end_environment(),
             "section" | "subsection" | "subsubsection" => {
                 let starred = self.input.peek() == Some(b'*');
-                if !starred {
+                let level = match name.as_str() {
+                    "section" => 1,
+                    "subsection" => 2,
+                    _ => 3,
+                };
+                // `\@startsection` steps the counter only for numbered levels.
+                if !starred && level <= self.sec_num_depth {
                     let id = match name.as_str() {
                         "section" => C_SECTION,
                         "subsection" => C_SUBSECTION,
@@ -813,6 +1255,18 @@ impl<'s> Expander<'s> {
                     self.current_label = self.format_the(C_TABLE);
                 }
                 self.emit_cs(&name);
+                Ok(())
+            }
+            "MakeShortVerb" | "DeleteShortVerb" => {
+                let _star = self.input.peek() == Some(b'*') && {
+                    self.input.bump(1);
+                    true
+                };
+                let mut arg = String::new();
+                self.input.read_arg(&mut arg);
+                let c = arg.trim().trim_start_matches('\\').bytes().next().unwrap_or(0);
+                self.short_verb = if name == "MakeShortVerb" && c.is_ascii_punctuation() { c } else { 0 };
+                self.finish_definition(0);
                 Ok(())
             }
             "verb" | "lstinline" => {
@@ -1001,7 +1455,12 @@ impl<'s> Expander<'s> {
                 x.nargs == y.nargs
                     && arena[x.body.0 as usize..x.body.1 as usize] == arena[y.body.0 as usize..y.body.1 as usize]
             }
-            (None, None) => a == b,
+            (None, None) if a == b => true,
+            // Undefined control sequences all have the same meaning, which is how
+            // `\ifx\foo\undefined` tests for a definition. The expander does not know every
+            // command the engine defines, so a name counts as undefined only when it is
+            // compared with one of the conventional undefined names.
+            (None, None) => (is_undefined_name(na) && !engine_defines(nb)) || (is_undefined_name(nb) && !engine_defines(na)),
             _ => false,
         }
     }
@@ -1094,9 +1553,98 @@ impl<'s> Expander<'s> {
         let plain = pieces.iter().all(|p| matches!(p, Piece::Param(_)));
         let pattern = if plain { None } else { Some(pieces.into_boxed_slice()) };
         let newlines = body.bytes().filter(|&b| b == b'\n').count();
+        let makecol = name == "@makecol";
         self.insert_macro(name, nargs, None, &body, pattern);
+        if makecol {
+            self.makecol = Some(body);
+            self.emit_column_wrap();
+        }
         self.finish_definition(newlines);
         Ok(())
+    }
+
+    /// An environment is a group (latex.ltx `\begin`): its local assignments end with it.
+    fn push_env(&mut self, entry: EnvEntry) {
+        // Past TeX's own limit the document is runaway; grouping just stops nesting.
+        let _ = self.engine.eqtb.begin_group();
+        self.env_stack.push(entry);
+    }
+
+    /// `\setlength{\reg}{value}` (or `\addtolength`) on a register the engine knows, in
+    /// scaled points; whether it was one.
+    fn assign_length(&mut self, key: &str, value: &str, add: bool) -> bool {
+        use crate::engine::{engine_scan, Region};
+        let Some(reg) = self.engine.names.user(key) else { return false };
+        let (em, ex) = (crate::backend::scaled::to_sp(11.0) as i64, crate::backend::scaled::to_sp(5.5) as i64);
+        let e = &self.engine;
+        let lookup = |n: &str| e.names.lookup(n).map(|r| e.eqtb.glue(r));
+        let Some(mut g) = engine_scan::scan_glue(value, em, ex, &lookup) else { return false };
+        if reg.region != Region::Glue {
+            g = crate::engine::Glue { width: g.width, ..Default::default() };
+        }
+        if add {
+            let old = self.engine.eqtb.glue(reg);
+            g.width = g.width.saturating_add(old.width);
+            if g.stretch_order == old.stretch_order {
+                g.stretch = g.stretch.saturating_add(old.stretch);
+            }
+            if g.shrink_order == old.shrink_order {
+                g.shrink = g.shrink.saturating_add(old.shrink);
+            }
+        }
+        self.engine.eqtb.set_glue(reg, g, false);
+        true
+    }
+
+    /// Emits `\rushtexcolumnwrap{left}{right}` for a user `\@makecol` that sets
+    /// `\@outputbox` to `\hbox{<left> \vbox to\@colht{..} <right>}`: each side a list of
+    /// `r<width>` (`\vrule`) and `k<width>` (`\kern`, `\hskip`) items in pt. Anything
+    /// else clears the wrap.
+    /// §1232 `def_code` for `\catcode`: `<char number>[=]<code>`, a local assignment. `false`
+    /// (nothing read) when the operands are not numbers.
+    fn assign_catcode(&mut self) -> bool {
+        if self.input.peek().is_none() {
+            return false;
+        }
+        let rest = self.input.top_rest();
+        let int = |n: &str| self.int_value(n);
+        let Some((ch, a)) = crate::engine::engine_scan::scan_int(rest, &int) else {
+            return false;
+        };
+        let after = rest[a..].trim_start_matches(' ');
+        let after = after.strip_prefix('=').unwrap_or(after);
+        let Some((code, b)) = crate::engine::engine_scan::scan_int(after, &int) else {
+            return false;
+        };
+        let used = rest.len() - after.len() + b;
+        let (Ok(ch), Some(cat)) = (u8::try_from(ch), u8::try_from(code).ok().and_then(crate::engine::Cat::from_u8)) else {
+            return false;
+        };
+        self.input.bump(used);
+        self.engine.eqtb.set_catcode(ch, cat, false);
+        self.input.cats = *self.engine.eqtb.cats();
+        true
+    }
+
+    /// An internal integer by name: a count register or parameter, or a `\chardef` constant
+    /// (`\@ne`, `\m@ne`).
+    fn int_value(&self, name: &str) -> Option<i32> {
+        if let Some(reg) = self.engine.lookup(name).filter(|r| r.region == crate::engine::Region::Int) {
+            return Some(self.engine.eqtb.word(reg));
+        }
+        let m = self.macros.get(name)?;
+        let body = self.input.arena.get(m.body.0 as usize..m.body.1 as usize)?;
+        body.strip_prefix("\\char")?.trim().parse().ok()
+    }
+
+    fn emit_column_wrap(&mut self) {
+        let (left, right) = self.makecol.as_deref().and_then(|b| column_wrap(b, &self.engine)).unwrap_or_default();
+        self.out.push_str("\\rushtexcolumnwrap{");
+        self.out.push_str(&left);
+        self.out.push_str("}{");
+        self.out.push_str(&right);
+        self.out.push('}');
+        self.out_ends_cs = false;
     }
 
     fn define_let(&mut self) -> Result<(), Diagnostic> {
@@ -1130,9 +1678,64 @@ impl<'s> Expander<'s> {
                 has_params: m.has_params,
             };
             self.macros.insert(name, copy);
+        } else if source.len() > 1 && source[1..].bytes().all(|b| b.is_ascii_alphabetic() || b == b'@') {
+            // tex.web §1221: `\let` copies the current meaning, so a later `\def` of the
+            // source does not change the copy (`\let\oldcs\cs \def\cs{..\oldcs..}`).
+            let frozen = format!("\\{}{}", LET_FROZEN as char, src_name);
+            self.insert_macro(name, 0, None, &frozen, None);
         } else {
             self.insert_macro(name, 0, None, &source, None);
         }
+        self.finish_definition(0);
+        Ok(())
+    }
+
+    /// `\chardef\cs=<number>`: `\cs` typesets that character code (`\char`). The number
+    /// may be decimal, `'` octal, `"` hex or `` `c `` / `` `\c `` (tex.web §442).
+    fn define_chardef(&mut self) -> Result<(), Diagnostic> {
+        self.input.skip_spaces();
+        let mut target = String::new();
+        self.input.read_token(&mut target);
+        self.input.skip_spaces();
+        if self.input.peek() == Some(b'=') {
+            self.input.bump(1);
+        }
+        self.input.skip_spaces();
+        let code = match self.input.peek() {
+            Some(b'`') => {
+                self.input.bump(1);
+                if self.input.peek() == Some(b'\\') {
+                    self.input.bump(1);
+                }
+                let c = self.input.peek().unwrap_or(b' ');
+                self.input.bump(1);
+                c as u32
+            }
+            Some(q @ (b'\'' | b'"')) => {
+                self.input.bump(1);
+                let radix = if q == b'"' { 16 } else { 8 };
+                let mut n = 0;
+                while let Some(d) = self.input.peek().and_then(|b| (b as char).to_digit(radix)) {
+                    n = n * radix + d;
+                    self.input.bump(1);
+                }
+                n
+            }
+            _ => {
+                let mut n = 0;
+                while let Some(d) = self.input.peek().and_then(|b| (b as char).to_digit(10)) {
+                    n = n * 10 + d;
+                    self.input.bump(1);
+                }
+                n
+            }
+        };
+        // One optional space ends the number.
+        if self.input.peek() == Some(b' ') {
+            self.input.bump(1);
+        }
+        let name = target.trim_start_matches('\\').to_string();
+        self.insert_macro(name, 0, None, &format!("\\char{code} "), None);
         self.finish_definition(0);
         Ok(())
     }
@@ -1227,10 +1830,47 @@ impl<'s> Expander<'s> {
 
     // ----- environments -------------------------------------------------------
 
+    /// The environment `name` stands for when `\name` was `\let` to another environment's
+    /// command (`\let\Foo\quote`, `\let\endFoo\endquote`): `\begin{Foo}` runs `\Foo`,
+    /// so it opens `quote`.
+    fn resolve_env_alias(&self, mut name: String) -> String {
+        for _ in 0..8 {
+            if self.envs.contains_key(&name) || self.theorems.contains_key(&name) {
+                break;
+            }
+            let Some(m) = self.macros.get(&name).filter(|m| m.nargs == 0 && !m.has_params && m.pattern.is_none()) else {
+                break;
+            };
+            let body = self.input.arena[m.body.0 as usize..m.body.1 as usize].trim();
+            // A `\let` copy of a builtin names it after the `LET_FROZEN` marker.
+            let Some(target) = body.strip_prefix('\\').map(|t| t.strip_prefix(LET_FROZEN as char).unwrap_or(t)).filter(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_alphabetic())) else {
+                break;
+            };
+            if target == name {
+                break;
+            }
+            name = target.to_string();
+        }
+        name
+    }
+
     fn begin_environment(&mut self) -> Result<(), Diagnostic> {
         let mut raw = String::new();
         self.input.read_arg(&mut raw);
-        let name = raw.trim().to_string();
+        let name = self.resolve_env_alias(raw.trim().to_string());
+        if name == "document" && !self.in_document {
+            self.in_document = true;
+            if !self.front_matter.is_empty() {
+                let mut replay = std::mem::take(&mut self.front_matter);
+                // latex.ltx starts `\@date` as `\today`.
+                if !replay.contains("\\date{") {
+                    replay.push_str("\\date{\\today}\n");
+                }
+                replay.push_str("\\begin{document}");
+                self.push_text(&replay);
+                return Ok(());
+            }
+        }
 
         if let Some((nargs, default, begin)) = self.envs.get(&name).map(|e| (e.nargs, e.default, e.begin)) {
             self.count_expansion(&name)?;
@@ -1247,7 +1887,7 @@ impl<'s> Expander<'s> {
                 self.input.read_arg(&mut a);
                 args.push(a);
             }
-            self.env_stack.push(EnvEntry {
+            self.push_env(EnvEntry {
                 name,
                 kind: EnvKind::User(id),
             });
@@ -1259,6 +1899,23 @@ impl<'s> Expander<'s> {
 
         if self.theorems.contains_key(&name) {
             return self.begin_theorem(name);
+        }
+
+        if name == "abstract" {
+            // article.cls (not titlepage, one column); the environment is a group.
+            let heading = if self.macros.contains_key("abstractname") { "\\abstractname" } else { "Abstract" };
+            self.push_text(&format!("{{\\small\\begin{{center}}{{\\bfseries {heading}\\vspace{{-.5em}}\\vspace{{0pt}}}}\\end{{center}}\\begin{{quotation}}"));
+            self.push_env(EnvEntry { name, kind: EnvKind::Abstract });
+            return Ok(());
+        }
+
+        // LaTeX's `\begin{X}` runs `\X` inside a group when no environment X exists, so
+        // every declaration is also an environment. `sloppypar` adds a `\par` at each end.
+        if let Some(decl) = declaration_env(&name) {
+            let par = name == "sloppypar";
+            self.push_text(&format!("{}{{\\{decl} ", if par { "\\par" } else { "" }));
+            self.push_env(EnvEntry { name, kind: EnvKind::Declaration { par } });
+            return Ok(());
         }
 
         match name.as_str() {
@@ -1275,6 +1932,11 @@ impl<'s> Expander<'s> {
                 self.input.bump(n);
                 return Ok(());
             }
+            "math" => {
+                self.push_env(EnvEntry { name, kind: EnvKind::InlineMath });
+                self.emit("$");
+                return Ok(());
+            }
             "comment" => {
                 let rest = self.input.top_rest();
                 let end = "\\end{comment}";
@@ -1284,40 +1946,68 @@ impl<'s> Expander<'s> {
             }
             "proof" => {
                 let title = self.input.read_optional().unwrap_or_else(|| "Proof".to_string());
-                self.env_stack.push(EnvEntry {
+                self.push_env(EnvEntry {
                     name,
                     kind: EnvKind::Proof,
                 });
-                let head = format!("\n\n\\noindent\\textit{{{title}.}}\\hspace{{0.5em}}");
+                // amsthm: `\item[\hskip\labelsep\itshape #1.]\ignorespaces`, a label box with
+                // no italic correction, then `\labelsep`.
+                self.input.ignore_spaces();
+                // The wrapper goes straight out: expanded, it would cover `proof` on the stack.
+                self.emit("\n\n\\begin{rushtexproof}");
+                let head = format!("\\noindent{{\\itshape {title}.}}\\hspace{{0.5em}}");
                 self.push_text(&head);
                 return Ok(());
             }
             "thebibliography" => {
                 let mut widest = String::new();
                 self.input.read_arg(&mut widest);
-                self.env_stack.push(EnvEntry {
+                self.push_env(EnvEntry {
                     name,
                     kind: EnvKind::Bibliography,
                 });
-                self.emit("\\section*{References}\n\\begin{enumerate}");
+                // article.cls: `\leftmargin` is the width of `\@biblabel{#1}` plus `\labelsep`.
+                let widest: String = widest.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+                // It also sets `\sloppy` and `\sfcode`\.\@m`, both ended with the list.
+                self.emit(&format!(
+                    "\\section*{{References}}\n\\rushtexperiodsf{{1}}\\sloppy\n\\begin{{enumerate}}[rushtexbib={widest}]"
+                ));
                 return Ok(());
+            }
+            "enumerate" => {
+                self.save_list_labels();
+                self.lists.push(Some(0));
+            }
+            "itemize" | "description" => {
+                self.save_list_labels();
+                self.lists.push(None);
             }
             "figure" | "figure*" => {
                 self.step_counter(C_FIGURE);
                 self.current_label = self.format_the(C_FIGURE);
-                self.env_stack.push(EnvEntry {
+                self.push_env(EnvEntry {
                     name: name.clone(),
                     kind: EnvKind::Float { is_table: false },
                 });
             }
             "table" | "table*" | "longtable" => {
-                self.env_stack.push(EnvEntry {
+                self.push_env(EnvEntry {
                     name: name.clone(),
                     kind: EnvKind::Float { is_table: true },
                 });
             }
-            "equation" | "align" | "alignat" | "gather" | "multline" | "equation*" | "align*"
-            | "alignat*" | "gather*" | "multline*" | "displaymath" => {
+            "align" | "alignat" | "gather" | "flalign" | "align*" | "alignat*" | "gather*" | "flalign*" => {
+                // amsmath numbers each row of these (`\incr@eqnum` as the row ends).
+                let end = format!("\\end{{{name}}}");
+                if self.numbered_nested_aligns > 0 {
+                    self.numbered_nested_aligns -= 1;
+                } else if self.input.peek().is_some() {
+                    let rest = self.input.top_rest();
+                    let body = rest[..find_matching_end(rest, &format!("\\begin{{{name}}}"), &end).unwrap_or(rest.len())].to_string();
+                    self.number_rows(&body, !name.ends_with('*'));
+                }
+            }
+            "equation" | "multline" | "equation*" | "multline*" | "displaymath" => {
                 let numbered = !name.ends_with('*') && name != "displaymath";
                 let end = format!("\\end{{{name}}}");
                 let tag = self.input.peek().and_then(|_| {
@@ -1345,29 +2035,56 @@ impl<'s> Expander<'s> {
     fn end_environment(&mut self) -> Result<(), Diagnostic> {
         let mut raw = String::new();
         self.input.read_arg(&mut raw);
-        let name = raw.trim();
+        let resolved = self.resolve_env_alias(raw.trim().to_string());
+        let name = resolved.as_str();
         let matches_top = self.env_stack.last().is_some_and(|e| e.name == name);
         if matches_top {
             let entry = self.env_stack.pop().unwrap();
+            self.engine.eqtb.end_group();
+            self.input.cats = *self.engine.eqtb.cats();
             match entry.kind {
                 EnvKind::User(id) => {
                     let end = self.envs[&self.env_ids[id as usize]].end;
                     self.input.push_arena(end.0, end.1);
                     return Ok(());
                 }
-                EnvKind::Theorem => {
-                    self.push_text("\n\n");
+                EnvKind::Theorem(remark) => {
+                    self.push_text(if remark { "\n\n\\end{rushtextheoremhalf}\n\n" } else { "\n\n\\end{rushtextheorem}\n\n" });
                     return Ok(());
                 }
                 EnvKind::Proof => {
-                    self.push_text("\\hspace{1em}$\\square$\n\n");
+                    self.emit(QED);
+                    self.emit("\n\n\\end{rushtexproof}\n\n");
                     return Ok(());
                 }
                 EnvKind::Bibliography => {
-                    self.emit("\\end{enumerate}");
+                    self.emit("\\end{enumerate}\\rushtexperiodsf{0}\\fussy");
+                    return Ok(());
+                }
+                EnvKind::Abstract => {
+                    self.push_text("\\end{quotation}}");
+                    return Ok(());
+                }
+                EnvKind::Declaration { par } => {
+                    self.push_text(if par { "\\par}" } else { "}" });
+                    return Ok(());
+                }
+                EnvKind::InlineMath => {
+                    self.emit("$");
                     return Ok(());
                 }
                 EnvKind::Float { .. } => {}
+            }
+        }
+        if matches!(name, "enumerate" | "itemize" | "description") {
+            self.lists.pop();
+            if let Some(saved) = self.list_label_saves.pop() {
+                for (name, m) in ENUM_LABELS.iter().zip(saved) {
+                    match m {
+                        Some(m) => self.macros.insert(name.to_string(), m),
+                        None => self.macros.remove(*name),
+                    };
+                }
             }
         }
         let name = name.to_string();
@@ -1377,6 +2094,34 @@ impl<'s> Expander<'s> {
         self.out.push('}');
         self.out_ends_cs = false;
         Ok(())
+    }
+
+    /// `\p@enumN\theenumN` of the innermost `enumerate` item (article.cls): `2`, `2a`,
+    /// `2(a)iii`, `2(a)iiiB`.
+    fn save_list_labels(&mut self) {
+        let saved = ENUM_LABELS.map(|n| self.macros.get(n).cloned());
+        self.list_label_saves.push(saved);
+    }
+
+    fn enum_ref(&self) -> String {
+        let mut out = String::new();
+        let counts: Vec<i32> = self.lists.iter().filter_map(|l| *l).collect();
+        for (depth, &n) in counts.iter().enumerate() {
+            match depth {
+                0 => out.push_str(&format_counter(n, "arabic")),
+                1 => out.push_str(&format_counter(n, "alph")),
+                2 => {
+                    // `\p@enumiii` is `\theenumi(\theenumii)`.
+                    let last = out.pop();
+                    out.push('(');
+                    out.extend(last);
+                    out.push(')');
+                    out.push_str(&format_counter(n, "roman"));
+                }
+                _ => out.push_str(&format_counter(n, "Alph")),
+            }
+        }
+        out
     }
 
     fn push_text(&mut self, text: &str) {
@@ -1398,23 +2143,35 @@ impl<'s> Expander<'s> {
             self.current_label = n.clone();
         }
 
+        // amsthm `\@thm` is a trivlist; the parser takes its spacing from the wrapper.
+        // The body font is the wrapper's (`\itshape` for `plain`); the head sets its own
+        // (`\thm@headfont`, the note in `\thm@notefont`: medium upright).
+        let wrapper = match style {
+            TheoremStyle::Plain => "rushtextheorem",
+            TheoremStyle::Definition => "rushtextheoremup",
+            TheoremStyle::Remark => "rushtextheoremhalf",
+        };
+        let head_font = if style == TheoremStyle::Remark { "\\normalfont\\itshape " } else { "\\normalfont\\bfseries " };
         let mut head = String::with_capacity(64);
-        head.push_str("\n\n\\noindent");
-        let title_cmd = if style == TheoremStyle::Remark { "\\textit{" } else { "\\textbf{" };
-        head.push_str(title_cmd);
+        head.push_str("\n\n\\begin{");
+        head.push_str(wrapper);
+        head.push_str("}\\noindent{");
+        head.push_str(head_font);
         head.push_str(&title);
+        // amsthm `\thmnumber{ \@upn{#2}}`: the number is upright in every style.
         if let Some(n) = &number {
-            head.push(' ');
+            head.push_str(" \\textup{");
             head.push_str(n);
+            head.push('}');
         }
-        head.push('}');
         if let Some(note) = &note {
-            head.push_str(" (");
+            head.push_str(" {\\normalfont (");
             head.push_str(note);
-            head.push(')');
+            head.push_str(")}");
         }
-        head.push_str(title_cmd);
-        head.push_str(".}\\hspace{0.5em}");
+        // amsthm `\thm@headpunct` and `\thm@headsep`; `\ignorespaces` drops the space
+        // after `\begin{..}`.
+        head.push_str(".}\\hspace{5pt plus 1pt minus 1pt}");
 
         // Look ahead for the matching \end in the current frame so the body can be
         // italicised paragraph by paragraph (groups cannot span blank lines or lists).
@@ -1426,19 +2183,17 @@ impl<'s> Expander<'s> {
                 let (idx, mut buf) = self.input.take_owned();
                 buf.push_str(&head);
                 let body = &self.input.top_rest()[..len];
-                if style == TheoremStyle::Plain {
-                    italicize_paragraphs(body, &mut buf);
-                } else {
-                    buf.push_str(body);
-                }
-                buf.push_str("\n\n");
+                buf.push_str(ignore_spaces(body));
+                buf.push_str("\n\n\\end{");
+                buf.push_str(wrapper);
+                buf.push_str("}\n\n");
                 self.input.bump(len + end_tok.len());
                 self.input.push_owned(idx, buf);
             }
             None => {
-                self.env_stack.push(EnvEntry {
+                self.push_env(EnvEntry {
                     name,
-                    kind: EnvKind::Theorem,
+                    kind: EnvKind::Theorem(style == TheoremStyle::Remark),
                 });
                 self.push_text(&head);
             }
@@ -1478,7 +2233,7 @@ impl<'s> Expander<'s> {
                         continue;
                     }
                     let rest = self.input.top_rest();
-                    let n = rest.bytes().take_while(|b| b.is_ascii_alphabetic() || *b == b'@').count();
+                    let n = rest.bytes().take_while(|&b| self.input.is_letter(b)).count();
                     if n == 0 {
                         let c = self.input.peek_char().unwrap();
                         self.input.bump(c.len_utf8());
@@ -1553,6 +2308,45 @@ impl<'s> Expander<'s> {
 
     // ----- counters -------------------------------------------------------------
 
+    /// The numbers of a display alignment's rows: each row not `\tag`ged, `\notag`ged or
+    /// holding a nested alignment steps `equation` when the environment is numbered; a
+    /// nested alignment (amsmath `\ingather@`) numbers its own rows, and a starred one
+    /// clears the row's number. A row's `\label`s refer to its number.
+    fn number_rows(&mut self, body: &str, numbered: bool) {
+        for row in split_display_rows(body) {
+            let nested = row.match_indices("\\begin{").find_map(|(at, _)| {
+                let rest = &row[at + 7..];
+                let env = &rest[..rest.find('}')?];
+                if !ALIGN_ENVS.contains(&env) {
+                    return None;
+                }
+                let inner = &rest[env.len() + 1..];
+                let len = find_matching_end(inner, &format!("\\begin{{{env}}}"), &format!("\\end{{{env}}}")).unwrap_or(inner.len());
+                Some((inner[..len].to_string(), !env.ends_with('*')))
+            });
+            if let Some((inner, inner_numbered)) = nested {
+                self.numbered_nested_aligns += 1;
+                self.number_rows(&inner, inner_numbered);
+                continue;
+            }
+            let label = if let Some(tag) = find_tag(row) {
+                tag
+            } else if numbered && !row.contains("\\notag") && !row.contains("\\nonumber") {
+                self.step_counter(C_EQUATION);
+                self.format_the(C_EQUATION)
+            } else {
+                continue;
+            };
+            let mut rest = row;
+            while let Some(at) = rest.find("\\label{") {
+                rest = &rest[at + 7..];
+                let key = rest.split('}').next().unwrap_or("").trim();
+                self.row_labels.insert(key.to_string(), label.clone());
+            }
+            self.current_label = label;
+        }
+    }
+
     fn step_counter(&mut self, id: u32) {
         self.counters[id as usize].value += 1;
         self.reset_children(id);
@@ -1569,9 +2363,14 @@ impl<'s> Expander<'s> {
 
     fn format_the(&self, id: u32) -> String {
         let counter = &self.counters[id as usize];
+        let own = if id == C_SECTION && self.appendix {
+            format_counter(counter.value, "Alph")
+        } else {
+            counter.value.to_string()
+        };
         match counter.parent {
-            Some(parent) => format!("{}.{}", self.format_the(parent), counter.value),
-            None => counter.value.to_string(),
+            Some(parent) => format!("{}.{own}", self.format_the(parent)),
+            None => own,
         }
     }
 
@@ -1596,11 +2395,12 @@ impl<'s> Expander<'s> {
             match p {
                 Pending::Ref { at, key, paren } => {
                     result.push_str(&self.out[cursor..at]);
-                    let value = self.labels.get(&key).map_or("??", String::as_str);
+                    let value = self.labels.get(&key).map_or(UNDEFINED_REF, String::as_str);
                     if paren {
-                        result.push('(');
+                        // amsmath `\eqref`: `\textup{\tagform@{..}}`.
+                        result.push_str("\\textup{(");
                         result.push_str(value);
-                        result.push(')');
+                        result.push_str(")}");
                     } else {
                         result.push_str(value);
                     }
@@ -1610,10 +2410,12 @@ impl<'s> Expander<'s> {
                     result.push_str(&self.out[cursor..at]);
                     result.push('[');
                     for (i, key) in keys.split(',').map(str::trim).filter(|k| !k.is_empty()).enumerate() {
+                        // latex.ltx `\@citea`: `,\penalty\@m\ `, a space at space factor 1000.
                         if i > 0 {
-                            result.push_str(", ");
+                            result.push_str(",\\@ ");
                         }
-                        result.push_str(self.bib.get(key).map_or("?", String::as_str));
+                        // latex.ltx `\@citex`: `\hbox{\reset@font\bfseries ?}`.
+                        result.push_str(self.bib.get(key).map_or("\\mbox{\\normalfont\\bfseries ?}", String::as_str));
                     }
                     if let Some(note) = note {
                         result.push_str(", ");
@@ -1640,7 +2442,63 @@ enum DefineKind {
 // Free helpers
 // ---------------------------------------------------------------------------
 
+/// The declaration that `\begin{name}` runs, for the declarations that rushtex knows.
+fn declaration_env(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "sloppypar" => "sloppy",
+        "em" => "em",
+        "bfseries" => "bfseries",
+        "mdseries" => "mdseries",
+        "itshape" => "itshape",
+        "slshape" => "slshape",
+        "upshape" => "upshape",
+        "scshape" => "scshape",
+        "ttfamily" => "ttfamily",
+        "sffamily" => "sffamily",
+        "rmfamily" => "rmfamily",
+        "normalfont" => "normalfont",
+        "tiny" => "tiny",
+        "scriptsize" => "scriptsize",
+        "footnotesize" => "footnotesize",
+        "small" => "small",
+        "normalsize" => "normalsize",
+        "large" => "large",
+        "Large" => "Large",
+        "LARGE" => "LARGE",
+        "huge" => "huge",
+        "Huge" => "Huge",
+        _ => return None,
+    })
+}
+
 /// Replaces `#n` with `args[n-1]` and `##` with `#`.
+/// Names left undefined on purpose so `\ifx` can test against them.
+fn is_undefined_name(name: &str) -> bool {
+    matches!(name, "undefined" | "@undefined" | "@nil@undefined")
+}
+
+/// Control sequences pdfTeX and the LaTeX kernel define that documents test with
+/// `\ifx...\undefined` to detect the engine or format. Everything else that is not a user
+/// macro is assumed to be undefined in such a test.
+fn engine_defines(name: &str) -> bool {
+    name.starts_with("pdf") || matches!(name, "documentclass" | "NeedsTeXFormat" | "@preamblecmds" | "@notprerr" | "relax" | "fmtname")
+}
+
+fn starts_with_letter(text: &str) -> bool {
+    text.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+}
+
+/// Whether `text` ends in a control word (`\name`, the backslash not itself escaped).
+fn ends_with_control_word(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let letters = bytes.iter().rev().take_while(|b| b.is_ascii_alphabetic()).count();
+    if letters == 0 || letters == bytes.len() {
+        return false;
+    }
+    let slashes = bytes[..bytes.len() - letters].iter().rev().take_while(|&&b| b == b'\\').count();
+    slashes % 2 == 1
+}
+
 fn substitute(body: &str, args: &[String], out: &mut String) {
     let bytes = body.as_bytes();
     let mut last = 0;
@@ -1657,7 +2515,16 @@ fn substitute(body: &str, args: &[String], out: &mut String) {
             if next.is_ascii_digit() && next != b'0' {
                 out.push_str(&body[last..i]);
                 if let Some(arg) = args.get((next - b'1') as usize) {
+                    // Tokens cannot fuse: `\bfseries#1` with `word` is `\bfseries` then
+                    // `word`, so a space (skipped after a control word) keeps them apart, on
+                    // both sides of the argument.
+                    if starts_with_letter(arg) && ends_with_control_word(out) {
+                        out.push(' ');
+                    }
                     out.push_str(arg);
+                    if ends_with_control_word(arg) && body.as_bytes().get(i + 2).is_some_and(u8::is_ascii_alphabetic) {
+                        out.push(' ');
+                    }
                 }
                 i += 2;
                 last = i;
@@ -1712,6 +2579,46 @@ fn strip_outer_braces(s: &mut String) {
     }
 }
 
+/// The amsmath environments whose rows are numbered.
+const ALIGN_ENVS: [&str; 8] = ["align", "align*", "alignat", "alignat*", "gather", "gather*", "flalign", "flalign*"];
+
+/// The rows of an alignment body: split at each `\\` outside braces and nested
+/// environments; a last row holding only spaces (after a final `\\`) is dropped.
+fn split_display_rows(body: &str) -> Vec<&str> {
+    let b = body.as_bytes();
+    let (mut rows, mut start, mut depth, mut i) = (Vec::new(), 0, 0i32, 0);
+    while i < b.len() {
+        match b[i] {
+            b'%' => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
+            b'\\' => {
+                let rest = &body[i..];
+                if rest.starts_with("\\begin{") {
+                    depth += 1;
+                } else if rest.starts_with("\\end{") {
+                    depth -= 1;
+                } else if rest.starts_with("\\\\") && depth == 0 {
+                    rows.push(&body[start..i]);
+                    start = i + 2;
+                }
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let last = &body[start..];
+    if !last.trim().is_empty() || rows.is_empty() {
+        rows.push(last);
+    }
+    rows
+}
+
 fn find_tag(body: &str) -> Option<String> {
     let pos = body.find("\\tag")?;
     let rest = body[pos + 4..].trim_start_matches('*').trim_start();
@@ -1751,55 +2658,42 @@ fn find_matching_end(text: &str, begin_tok: &str, end_tok: &str) -> Option<usize
     None
 }
 
-/// Wraps each plain paragraph in `\textit{…}`; paragraphs holding block constructs stay upright.
-fn italicize_paragraphs(body: &str, out: &mut String) {
-    let mut rest = body;
-    loop {
-        let (para, sep, next) = match find_blank_line(rest) {
-            Some((s, e)) => (&rest[..s], &rest[s..e], Some(&rest[e..])),
-            None => (rest, "", None),
-        };
-        let blocky = ["\\begin", "\\item", "$$", "\\[", "\\section", "\\par"]
-            .iter()
-            .any(|k| para.contains(k));
-        if para.trim().is_empty() || blocky {
-            out.push_str(para);
-        } else {
-            out.push_str("\\textit{");
-            out.push_str(para.trim_end());
-            if para.contains('%') {
-                out.push('\n');
-            }
-            out.push('}');
-        }
-        out.push_str(sep);
-        match next {
-            Some(n) => rest = n,
-            None => break,
-        }
+/// Whether horizontal-mode output ends in positive glue (`\@bsphack`'s `\lastskip`): a space,
+/// an end of line that is not a blank line, or an `\hspace` with positive width.
+fn ends_with_hskip(out: &str) -> bool {
+    let t = out.trim_end_matches([' ', '\t']);
+    if t.len() < out.len() {
+        return !t.is_empty() && !t.ends_with('\n');
     }
+    if let Some(r) = t.strip_suffix('\n') {
+        return !r.trim_end_matches([' ', '\t', '\r']).ends_with('\n') && !r.is_empty();
+    }
+    // Only the last control sequence can be the `\hspace` (its argument is a plain length).
+    t.strip_suffix('}')
+        .and_then(|r| r.rfind('\\').and_then(|i| r[i..].strip_prefix("\\hspace{")))
+        .and_then(crate::config::parse_glue3_pt)
+        .is_some_and(|(w, _, _)| w > 0.0)
 }
 
-/// Finds the first blank-line separator (`\n`, optional horizontal space, `\n`).
-fn find_blank_line(text: &str) -> Option<(usize, usize)> {
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while let Some(off) = bytes[i..].iter().position(|&b| b == b'\n') {
-        let start = i + off;
-        let mut j = start + 1;
-        while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r') {
-            j += 1;
-        }
-        if j < bytes.len() && bytes[j] == b'\n' {
-            let mut end = j + 1;
-            while end < bytes.len() && matches!(bytes[end], b'\n' | b'\r') {
-                end += 1;
-            }
-            return Some((start, end));
-        }
-        i = start + 1;
+/// latex.ltx `\@setref` for an undefined label: `\nfss@text{\reset@font\bfseries ??}`, a box.
+/// The empty page table of a first pass.
+fn no_pages() -> &'static HashMap<String, u32> {
+    static EMPTY: std::sync::OnceLock<HashMap<String, u32>> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(HashMap::new)
+}
+
+const UNDEFINED_REF: &str = "\\mbox{\\normalfont\\bfseries ??}";
+
+const ENUM_LABELS: [&str; 4] = ["labelenumi", "labelenumii", "labelenumiii", "labelenumiv"];
+const ENUM_COUNTERS: [&str; 4] = ["enumi", "enumii", "enumiii", "enumiv"];
+
+/// TeX's `\ignorespaces` on source text: spaces and one end of line, not a blank line.
+fn ignore_spaces(s: &str) -> &str {
+    let t = s.trim_start_matches([' ', '\t']);
+    match t.strip_prefix("\r\n").or_else(|| t.strip_prefix('\n')) {
+        Some(r) if !r.trim_start_matches([' ', '\t', '\r']).starts_with('\n') => r.trim_start_matches([' ', '\t']),
+        _ => t,
     }
-    None
 }
 
 fn format_counter(value: i32, style: &str) -> String {
@@ -1861,7 +2755,7 @@ fn today_string() -> String {
 
 /// Howard Hinnant's days-to-civil conversion (proleptic Gregorian calendar).
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -1874,12 +2768,88 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
+/// TeX's `\uppercase`/`\lowercase` on source text: letters change case, control sequence
+/// names do not (they are not character tokens). With `skip_math`, `$...$` is kept, as
+/// LaTeX's `\MakeUppercase` does.
+fn change_case(text: &str, upper: bool, skip_math: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_math = false;
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            out.push(c);
+            match chars.peek() {
+                Some(&n) if n.is_ascii_alphabetic() || n == '@' => {
+                    while let Some(&n) = chars.peek().filter(|n| n.is_ascii_alphabetic() || **n == '@') {
+                        out.push(n);
+                        chars.next();
+                    }
+                }
+                Some(&n) => {
+                    out.push(n);
+                    chars.next();
+                }
+                None => {}
+            }
+            continue;
+        }
+        if c == '$' && skip_math {
+            in_math = !in_math;
+        }
+        if in_math {
+            out.push(c);
+        } else if upper {
+            out.extend(c.to_uppercase());
+        } else {
+            out.extend(c.to_lowercase());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn ex(src: &str) -> String {
         expand(src).unwrap().into_owned()
+    }
+
+    /// The engine state after expanding `src`.
+    fn engine_after(src: &str) -> crate::engine::Engine {
+        let mut e = Expander::new(src);
+        while let Some(b) = e.input.peek() {
+            match b {
+                b'\\' => e.control().unwrap(),
+                _ => e.copy_run(),
+            }
+        }
+        e.engine
+    }
+
+    #[test]
+    fn lengths_are_registers_with_grouping() {
+        let e = engine_after("\\newlength\\a\\setlength{\\a}{2pt}\\begingroup\\setlength{\\a}{5pt}\\addtolength{\\a}{1pt}\\endgroup\\newlength\\b\\setlength{\\b}{.5\\a plus 1fil}");
+        assert_eq!(e.dimen_sp("a"), Some(2 * 65536));
+        let b = e.eqtb.glue(e.lookup("b").unwrap());
+        assert_eq!((b.width, b.stretch, b.stretch_order), (65536, 65536, 1));
+    }
+
+    #[test]
+    fn catcodes_are_engine_state() {
+        use crate::engine::Cat;
+        assert_eq!(engine_after("\\makeatletter").eqtb.catcode('@'), Cat::Letter);
+        assert_eq!(engine_after("\\begingroup\\makeatletter\\endgroup").eqtb.catcode('@'), Cat::Other);
+        assert_eq!(engine_after("\\catcode`\\|=13 x").eqtb.catcode('|'), Cat::Active);
+        assert_eq!(engine_after("\\catcode 42 = 11").eqtb.catcode('*'), Cat::Letter);
+        // With `*` a letter, `\a*b` is one control word.
+        assert_eq!(ex("\\catcode`\\*=11 \\def\\a*b{X}\\a*b"), "X");
+    }
+
+    #[test]
+    fn let_keeps_a_builtin_meaning() {
+        let out = ex("\\let\\oldemph\\emph\\def\\emph#1{[\\oldemph{#1}]}\\emph{x}");
+        assert_eq!(out, "[\\emph{x}]");
     }
 
     #[test]
@@ -1934,8 +2904,8 @@ mod tests {
     fn forward_and_backward_references() {
         let src = "See \\ref{s2} and \\eqref{e}.\\section{A}\\section{B}\\label{s2}\\begin{equation}x\\label{e}\\end{equation}Back: \\ref{s2}, \\ref{nope}";
         let out = ex(src);
-        assert!(out.starts_with("See 2 and (1)."), "{out}");
-        assert!(out.ends_with("Back: 2, ??"), "{out}");
+        assert!(out.starts_with("See 2 and \\textup{(1)}."), "{out}");
+        assert!(out.ends_with("Back: 2, \\mbox{\\normalfont\\bfseries ??}"), "{out}");
         assert!(!out.contains("\\label"));
     }
 
@@ -1949,18 +2919,24 @@ mod tests {
     fn citations_and_bibliography() {
         let src = "\\cite{k2,k1} \\cite[p.~3]{k1}\\begin{thebibliography}{9}\\bibitem{k1} One.\\bibitem[Knu]{k2} Two.\\end{thebibliography}";
         let out = ex(src);
-        assert!(out.starts_with("[Knu, 1] [1, p.~3]"), "{out}");
-        assert!(out.contains("\\section*{References}\n\\begin{enumerate}\\item[{[1]}]"));
-        assert!(out.ends_with("\\end{enumerate}"));
+        assert!(out.starts_with("[Knu,\\@ 1] [1, p.~3]"), "{out}");
+        assert!(out.contains("\\section*{References}\n\\rushtexperiodsf{1}\\sloppy\n\\begin{enumerate}[rushtexbib=9]\\item[{[1]}]"), "{out}");
+        assert!(out.ends_with("\\end{enumerate}\\rushtexperiodsf{0}\\fussy"));
     }
 
     #[test]
     fn theorems_and_proof() {
         let src = "\\newtheorem{thm}{Theorem}[section]\\newtheorem{lem}[thm]{Lemma}\\section{S}\\begin{thm}[Main]\\label{m}True.\\end{thm}\\begin{lem}Also.\\end{lem}\\begin{proof}Easy.\\end{proof}\\ref{m}";
         let out = ex(src);
-        assert!(out.contains("\\textbf{Theorem 1.1} (Main)\\textbf{.}\\hspace{0.5em}\\textit{True.}"), "{out}");
-        assert!(out.contains("\\textbf{Lemma 1.2}"), "{out}");
-        assert!(out.contains("\\textit{Proof.}\\hspace{0.5em}Easy.\\hspace{1em}$\\square$"), "{out}");
+        assert!(
+            out.contains("\\begin{rushtextheorem}\\noindent{\\normalfont\\bfseries Theorem \\textup{1.1} {\\normalfont (Main)}.}\\hspace{5pt plus 1pt minus 1pt}True."),
+            "{out}"
+        );
+        assert!(out.contains("\\normalfont\\bfseries Lemma \\textup{1.2}."), "{out}");
+        assert!(
+            out.contains("\\begin{rushtexproof}\\noindent{\\itshape Proof.}\\hspace{0.5em}Easy.\\unskip\\nobreak\\hfill\\quad$\\openbox$"),
+            "{out}"
+        );
         assert!(out.ends_with("1.1"), "{out}");
     }
 

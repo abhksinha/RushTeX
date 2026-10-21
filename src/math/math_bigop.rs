@@ -6,7 +6,6 @@
 use crate::backend::fonts::FontFamily;
 use crate::math::math_ast::MathStyle;
 use crate::math::math_box::MathBox;
-use crate::math::math_fonts::MathFontParameters;
 use crate::math::math_spacing::AtomLimits;
 
 /// 16-byte packed metrics storing TeX Appendix G Rule 13 parameters ($\xi_9..\xi_{13}$).
@@ -98,7 +97,7 @@ impl OperatorLimitSwitch {
     /// Fast operator classification for integral variants.
     #[inline(always)]
     pub fn is_integral_operator(op: &str) -> bool {
-        matches!(op, "int" | "iint" | "iiint" | "oint")
+        matches!(op, "int" | "iint" | "iiint" | "iiiint" | "idotsint" | "oint")
     }
 }
 
@@ -217,6 +216,15 @@ impl IntegralOverhangCorrector {
         single_w - INTEGRAL_KERN_FACTORS[is_display as usize] * font_size
     }
 
+    /// amsmath `\intdots@` between the two signs of `\idotsint`: three `\cdotp` a thin
+    /// space apart in display style (`\@cdots`), 1.5mu apart otherwise.
+    #[inline(always)]
+    pub fn intdots_width(font_size: f32, is_display: bool) -> f32 {
+        const CDOT_W: f32 = 0.277_779;
+        let gap = if is_display { 3.0 } else { 1.5 };
+        3.0 * CDOT_W * font_size + 2.0 * gap * font_size / 18.0
+    }
+
     /// Computes total width of single, double, or triple integral signs.
     #[inline(always)]
     pub fn total_integral_width(
@@ -226,9 +234,13 @@ impl IntegralOverhangCorrector {
         is_display: bool,
     ) -> (f32, f32) {
         let offset = Self::integral_offset(single_w, font_size, is_display);
+        if op == "idotsint" {
+            return (2.0 * single_w + Self::intdots_width(font_size, is_display) + font_size / 3.0, offset);
+        }
         let repeats = match op {
             "iint" | "oiint" => 1.0,
             "iiint" | "oiiint" => 2.0,
+            "iiiint" => 3.0,
             _ => 0.0,
         };
         (single_w + repeats * offset, offset)
@@ -245,7 +257,9 @@ impl Rule13OperatorAxis {
         if is_text_op {
             0.0
         } else {
-            axis_h - (op_h - op_d) * 0.5
+            // §749: shift_amount := half(height − depth) − axis_height, moved down.
+            use crate::backend::scaled::{half, sp_pt, to_sp};
+            sp_pt(to_sp(axis_h) - half(to_sp(op_h) - to_sp(op_d)))
         }
     }
 }
@@ -408,15 +422,14 @@ impl BigOpShiftResolver {
     pub fn resolve_limit_metrics(
         font_family: FontFamily,
         font_size: f32,
-        scale: f32,
-        params: &MathFontParameters,
+        params: &crate::math::math_fonts::MathParams,
     ) -> PackedBigOpMetrics {
         if font_family == FontFamily::ComputerModern {
             PackedBigOpMetrics::new(
-                (params.big_op_spacing1 as f32) * scale,
-                (params.big_op_spacing2 as f32) * scale,
-                (params.big_op_spacing3 as f32) * scale,
-                (params.big_op_spacing4 as f32) * scale,
+                params.big_op_spacing1,
+                params.big_op_spacing2,
+                params.big_op_spacing3,
+                params.big_op_spacing4,
             )
         } else {
             let c = crate::math::fonts::math_constants_for_family(font_family);
@@ -447,14 +460,13 @@ impl BigOpShiftResolver {
         style: MathStyle,
         sup_d: f32,
         sub_h: f32,
-        scale: f32,
-        params: &MathFontParameters,
+        params: &crate::math::math_fonts::MathParams,
         drops: (f32, f32),
     ) -> (f32, f32, f32, f32) {
         let sub_x = if has_sub { op_w - op_ic } else { op_w };
-        let x_height = (params.accent_base_height as f32) * scale;
+        let x_height = params.accent_base_height;
         let m = crate::math::math_scripts::ScriptShiftResolver::resolve(
-            has_sup, has_sub, style, false, nuc_h, nuc_d, sup_d, sub_h, x_height, scale, params, drops,
+            has_sup, has_sub, style, false, nuc_h, nuc_d, sup_d, sub_h, x_height, params, drops,
         );
         (op_w, sub_x, m.sup_shift, m.sub_shift)
     }

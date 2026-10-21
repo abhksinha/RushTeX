@@ -372,7 +372,7 @@ impl Default for HzConfig {
 /// - Zero padding bytes.
 ///
 /// ### Memory Layout (16 Bytes Total)
-/// - `line_w`: `f32` (4 bytes, offset 0..4)
+/// - `line_w_sp`: `i32` (4 bytes, offset 0..4): natural width in scaled points
 /// - `line_indent`: `f32` (4 bytes, offset 4..8)
 /// - `start_word`: `u16` (2 bytes, offset 8..10)
 /// - `word_count`: `u16` (2 bytes, offset 10..12)
@@ -384,7 +384,8 @@ impl Default for HzConfig {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(C)]
 pub struct HzLineDescriptor {
-    pub line_w: f32,
+    /// The line's natural width in scaled points: exact, as the breaker summed it.
+    pub line_w_sp: i32,
     pub line_indent: f32,
     pub start_word: u16,
     pub word_count: u16,
@@ -416,7 +417,7 @@ impl HzLineDescriptor {
         let justify_bit = if justify { Self::JUSTIFY_BIT } else { 0 };
         let prot_tenths = ((protrusion_w * 10.0).round() as u8).min(Self::PROTRUSION_MASK);
         Self {
-            line_w,
+            line_w_sp: (line_w as f64 * 65536.0).round() as i32,
             line_indent,
             start_word,
             word_count,
@@ -425,6 +426,19 @@ impl HzLineDescriptor {
             expansion_permille,
             packed_flags: justify_bit | prot_tenths,
         }
+    }
+
+    /// The natural width in points.
+    #[inline(always)]
+    pub fn line_w(&self) -> f32 {
+        (self.line_w_sp as f64 / 65536.0) as f32
+    }
+
+    /// Sets the natural width from the breaker's exact scaled points.
+    #[inline(always)]
+    pub fn with_width_sp(mut self, sp: i64) -> Self {
+        self.line_w_sp = sp as i32;
+        self
     }
 
     /// Sets the byte offsets of the hyphenation cuts in the first and last word.
@@ -2062,14 +2076,14 @@ pub fn build_breakpoints<'a>(
     while w < num_words {
         // Fast-path: SIMD/SWAR 4-word chunk discovery when safely before the line margin horizon
         if !has_custom_shape && w + 4 <= num_words {
-            let a0 = soa.attrs[w].0;
-            let a1 = soa.attrs[w + 1].0;
-            let a2 = soa.attrs[w + 2].0;
-            let a3 = soa.attrs[w + 3].0;
-            let attrs_packed = u32::from_ne_bytes([a0, a1, a2, a3]);
+            let a0 = soa.attrs[w].0 as u64;
+            let a1 = soa.attrs[w + 1].0 as u64;
+            let a2 = soa.attrs[w + 2].0 as u64;
+            let a3 = soa.attrs[w + 3].0 as u64;
+            let attrs_packed = a0 | (a1 << 16) | (a2 << 32) | (a3 << 48);
 
             // (kind & 0x06) == 0 iff kind is WordKind::Word (0) or WordKind::Space (1)
-            if (attrs_packed & 0x06060606) == 0 {
+            if (attrs_packed & 0x0006_0006_0006_0006) == 0 {
                 let base_prefix = *prefix_buf.last().unwrap();
                 let eff_base_w = base_prefix.w + pending_w;
                 while eff_base_w >= line_target {
@@ -3367,7 +3381,7 @@ mod tests {
         assert_eq!(desc.word_count, 8);
         assert!(desc.justify());
         assert_eq!(desc.expansion_permille, -12);
-        assert!((desc.line_w - 420.5).abs() < 1e-4);
+        assert!((desc.line_w() - 420.5).abs() < 1e-4);
         assert!((desc.line_indent - 18.0).abs() < 1e-4);
         assert!((desc.protrusion_w() - 1.8).abs() < 1e-2);
         assert!((desc.pdf_tz_operand() - 98.8).abs() < 1e-4);

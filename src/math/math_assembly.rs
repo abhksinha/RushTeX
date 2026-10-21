@@ -25,8 +25,8 @@ impl MathPaintEmitter {
         let start = pool.len() as u32;
         pool.push(text);
         ops.push(Paint::GlyphRun {
-            x,
-            y,
+            x: x.into(),
+            y: y.into(),
             face,
             size,
             part_start: start,
@@ -39,10 +39,10 @@ impl MathPaintEmitter {
     #[inline(always)]
     pub fn emit_rule(ops: &mut Vec<Paint>, x: f32, y: f32, w: f32, h: f32) {
         ops.push(Paint::Rule {
-            x,
-            y,
-            w,
-            h,
+            x: x.into(),
+            y: y.into(),
+            w: w.into(),
+            h: h.into(),
             fill: true,
         });
     }

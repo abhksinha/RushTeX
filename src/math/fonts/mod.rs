@@ -55,76 +55,94 @@ static STIX2_MATH_FONT_BYTES: OnceLock<Option<Vec<u8>>> = OnceLock::new();
 static FIRAMATH_FONT_BYTES: OnceLock<Option<Vec<u8>>> = OnceLock::new();
 static ASANA_MATH_FONT_BYTES: OnceLock<Option<Vec<u8>>> = OnceLock::new();
 
+/// An OpenType math font: its file name, the CTAN package directories it ships in, and,
+/// when this crate's tables are tied to one release of it, that release's glyph count.
+pub type MathFontFile = (&'static str, &'static [&'static str], Option<u16>);
+/// The glyph-id tables here (`NEWCM_*_VARIANTS`, the script glyph paths, the operator
+/// metrics) were taken from the New Computer Modern Math of TeX Live 2023 (7601 glyphs);
+/// every later release renumbers the glyphs (2024: 7668, 2025: 7831, 2026: 8603), so only
+/// that release may be read.
+pub const NEWCM_MATH_FILE: MathFontFile = ("NewCMMath-Regular.otf", &["newcomputermodern"], Some(7601));
+pub const STIX2_MATH_FILE: MathFontFile = ("STIXTwoMath-Regular.otf", &["stix2-otf", "stix", "stix-word"], None);
+pub const FIRAMATH_FILE: MathFontFile = ("FiraMath-Regular.otf", &["firamath"], None);
+pub const ASANA_MATH_FILE: MathFontFile = ("Asana-Math.otf", &["asana-math", "Asana-Math"], None);
+
+/// The texmf trees a TeX installation keeps fonts in, as kpathsea's `TEXMFHOME` and
+/// `TEXMFDIST` usually are: `$TEXMFHOME`, `$TEXMFDIST`, the user trees (`~/texmf`,
+/// `~/Library/texmf` on macOS), every TeX Live year under `/usr/local/texlive`, and the
+/// distribution packages (`/usr/share/texlive/texmf-dist`, `/usr/share/texmf`).
+fn texmf_trees() -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let mut trees: Vec<PathBuf> = ["TEXMFHOME", "TEXMFDIST"].iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        trees.push(home.join("texmf"));
+        trees.push(home.join("Library/texmf"));
+    }
+    if let Ok(years) = std::fs::read_dir("/usr/local/texlive") {
+        let mut years: Vec<PathBuf> = years.filter_map(|e| e.ok()).map(|e| e.path().join("texmf-dist")).collect();
+        // The newest year first.
+        years.sort_unstable_by(|a, b| b.cmp(a));
+        trees.extend(years);
+    }
+    trees.extend(["/usr/share/texlive/texmf-dist", "/usr/share/texmf", "/opt/homebrew/share/texmf-dist"].map(PathBuf::from));
+    trees
+}
+
+/// The bytes of math font `file`: from `$RUSHTEX_FONT_DIR` or `~/.rushtex/fonts`, then
+/// `fonts/opentype/public/<package>/` of a texmf tree, then the system font directories; the
+/// first copy of the pinned release when there is one. `None` when no installation has it.
+pub fn math_font_bytes((file, packages, glyphs): MathFontFile) -> Option<Vec<u8>> {
+    use std::path::PathBuf;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = std::env::var_os("RUSHTEX_FONT_DIR") {
+        paths.push(PathBuf::from(dir).join(file));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        paths.push(PathBuf::from(home).join(".rushtex/fonts").join(file));
+    }
+    for tree in texmf_trees() {
+        for pkg in packages {
+            paths.push(tree.join("fonts/opentype/public").join(pkg).join(file));
+        }
+    }
+    for pkg in packages {
+        paths.push(PathBuf::from("/usr/share/fonts/opentype").join(pkg).join(file));
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        paths.push(home.join("Library/Fonts").join(file));
+    }
+    paths.push(PathBuf::from("/Library/Fonts").join(file));
+    let release = |b: &Vec<u8>| glyphs.is_none() || OpenTypeFont::from_bytes(b).and_then(|f| f.num_glyphs()) == glyphs;
+    paths.iter().filter_map(|p| std::fs::read(p).ok()).find(release)
+}
+
+fn cached(cell: &'static OnceLock<Option<Vec<u8>>>, file: MathFontFile) -> Option<OpenTypeFont<'static>> {
+    cell.get_or_init(|| math_font_bytes(file)).as_ref().and_then(|b| OpenTypeFont::from_bytes(b))
+}
+
 /// Resolves the New Computer Modern Math binary font, cached globally across invocations.
 pub fn get_newcm_math_font() -> Option<OpenTypeFont<'static>> {
-    let bytes = NEWCM_MATH_FONT_BYTES.get_or_init(|| {
-        let candidates = [
-            "/usr/share/texlive/texmf-dist/fonts/opentype/public/newcomputermodern/NewCMMath-Regular.otf",
-            "/usr/share/fonts/opentype/newcomputermodern/NewCMMath-Regular.otf",
-        ];
-        for path in candidates {
-            if let Ok(b) = std::fs::read(path) {
-                return Some(b);
-            }
-        }
-        None
-    });
-    bytes.as_ref().and_then(|b| OpenTypeFont::from_bytes(b))
+    cached(&NEWCM_MATH_FONT_BYTES, NEWCM_MATH_FILE)
 }
 
 /// Resolves the STIX Two Math binary font, cached globally across invocations.
 pub fn get_stix2_math_font() -> Option<OpenTypeFont<'static>> {
-    let bytes = STIX2_MATH_FONT_BYTES.get_or_init(|| {
-        let candidates = [
-            "/usr/share/texlive/texmf-dist/fonts/opentype/public/stix2-otf/STIXTwoMath-Regular.otf",
-            "/usr/share/fonts/opentype/stix/STIXTwoMath-Regular.otf",
-            "/usr/share/fonts/opentype/stix-word/STIXMath-Regular.otf",
-        ];
-        for path in candidates {
-            if let Ok(b) = std::fs::read(path) {
-                return Some(b);
-            }
-        }
-        None
-    });
-    bytes.as_ref().and_then(|b| OpenTypeFont::from_bytes(b))
+    cached(&STIX2_MATH_FONT_BYTES, STIX2_MATH_FILE)
 }
 
 /// Resolves the Fira Math binary font, cached globally across invocations.
 pub fn get_firamath_font() -> Option<OpenTypeFont<'static>> {
-    let bytes = FIRAMATH_FONT_BYTES.get_or_init(|| {
-        let candidates = [
-            "/usr/share/texlive/texmf-dist/fonts/opentype/public/firamath/FiraMath-Regular.otf",
-            "/usr/share/fonts/opentype/firamath/FiraMath-Regular.otf",
-        ];
-        for path in candidates {
-            if let Ok(b) = std::fs::read(path) {
-                return Some(b);
-            }
-        }
-        None
-    });
-    bytes.as_ref().and_then(|b| OpenTypeFont::from_bytes(b))
+    cached(&FIRAMATH_FONT_BYTES, FIRAMATH_FILE)
 }
 
 /// Resolves the Asana Math binary font, cached globally across invocations.
 pub fn get_asana_math_font() -> Option<OpenTypeFont<'static>> {
-    let bytes = ASANA_MATH_FONT_BYTES.get_or_init(|| {
-        let candidates = [
-            "/usr/share/texlive/texmf-dist/fonts/opentype/public/Asana-Math/Asana-Math.otf",
-            "/usr/share/fonts/opentype/asana-math/Asana-Math.otf",
-        ];
-        for path in candidates {
-            if let Ok(b) = std::fs::read(path) {
-                return Some(b);
-            }
-        }
-        None
-    });
-    bytes.as_ref().and_then(|b| OpenTypeFont::from_bytes(b))
+    cached(&ASANA_MATH_FONT_BYTES, ASANA_MATH_FILE)
 }
 
 /// Dynamically resolves the active OpenType math font instance for the specified font family.
+/// Computer Modern has none: its math is set from the cmmi/cmsy/cmex TFM data, as TeX sets
+/// it, so the output never depends on which OpenType fonts are installed.
 pub fn active_math_font(family: crate::backend::fonts::FontFamily) -> Option<OpenTypeFont<'static>> {
     match family {
         crate::backend::fonts::FontFamily::Times => {
@@ -136,7 +154,7 @@ pub fn active_math_font(family: crate::backend::fonts::FontFamily) -> Option<Ope
         crate::backend::fonts::FontFamily::Palatino => {
             get_asana_math_font().or_else(get_newcm_math_font)
         }
-        _ => get_newcm_math_font(),
+        crate::backend::fonts::FontFamily::ComputerModern => None,
     }
 }
 
@@ -156,7 +174,13 @@ pub fn math_constants_for_family(family: crate::backend::fonts::FontFamily) -> &
     }
 }
 
-/// Resolves the cached `OpenTypeMathFont` instance with pre-parsed constants.
+/// The cached New Computer Modern `OpenTypeMathFont`, the fallback of the OpenType families.
+pub fn newcm_opentype_math_font() -> Option<&'static OpenTypeMathFont<'static>> {
+    NEWCM_MATH_INSTANCE.get_or_init(|| get_newcm_math_font().and_then(OpenTypeMathFont::from_font)).as_ref()
+}
+
+/// Resolves the cached `OpenTypeMathFont` instance with pre-parsed constants; `None` for
+/// Computer Modern, which is TFM-driven (see [`active_math_font`]).
 pub fn active_opentype_math_font(family: crate::backend::fonts::FontFamily) -> Option<&'static OpenTypeMathFont<'static>> {
     match family {
         crate::backend::fonts::FontFamily::Times => {
@@ -195,12 +219,7 @@ pub fn active_opentype_math_font(family: crate::backend::fonts::FontFamily) -> O
             });
             newcm.as_ref()
         }
-        _ => {
-            let newcm = NEWCM_MATH_INSTANCE.get_or_init(|| {
-                get_newcm_math_font().and_then(OpenTypeMathFont::from_font)
-            });
-            newcm.as_ref()
-        }
+        crate::backend::fonts::FontFamily::ComputerModern => None,
     }
 }
 
@@ -296,12 +315,13 @@ mod tests {
 
     #[test]
     fn test_multi_family_font_resolution_and_geometry() {
-        // ComputerModern -> NewCM
-        let cm_font = active_opentype_math_font(FontFamily::ComputerModern);
-        assert!(cm_font.is_some());
-        if let Some(f) = cm_font {
-            assert_eq!(f.constants.axis_height, 250);
-        }
+        // ComputerModern is TFM-driven (cmmi/cmsy/cmex, as in TeX): no OpenType font.
+        assert!(active_opentype_math_font(FontFamily::ComputerModern).is_none());
+        assert!(active_math_font(FontFamily::ComputerModern).is_none());
+
+        // NewCM, the OpenType families' fallback, is the pinned release.
+        let newcm = newcm_opentype_math_font().expect("NewCMMath (TeX Live 2023 release) must resolve");
+        assert_eq!(newcm.constants.axis_height, 250);
 
         // Times -> STIX2
         let times_font = active_opentype_math_font(FontFamily::Times);
@@ -387,8 +407,7 @@ mod tests {
         assert!((int_op.italic_correction_pt(10.0) - 1.85).abs() < 1e-4);
         assert!((int_op.lower_limit_offset_pt(10.0) - (-0.92)).abs() < 1e-4);
 
-        let newcm_path = "/usr/share/texlive/texmf-dist/fonts/opentype/public/newcomputermodern/NewCMMath-Regular.otf";
-        if let Ok(bytes) = std::fs::read(newcm_path) {
+                if let Some(bytes) = math_font_bytes(NEWCM_MATH_FILE) {
             let font = OpenTypeFont::from_bytes(&bytes).expect("Valid NewCM");
             let math_font = OpenTypeMathFont::from_font(font).expect("Math font");
 
@@ -424,8 +443,7 @@ mod tests {
             assert_eq!(prod_text.glyph_id, GlyphId(804));
         }
 
-        let stix_path = "/usr/share/texlive/texmf-dist/fonts/opentype/public/stix2-otf/STIXTwoMath-Regular.otf";
-        if let Ok(bytes) = std::fs::read(stix_path) {
+                if let Some(bytes) = math_font_bytes(STIX2_MATH_FILE) {
             let font = OpenTypeFont::from_bytes(&bytes).expect("Valid STIX2");
             let math_font = OpenTypeMathFont::from_font(font).expect("Math font");
 
@@ -460,8 +478,7 @@ mod tests {
 
     #[test]
     fn test_dynamic_otf_binary_parsing_if_available() {
-        let path = "/usr/share/texlive/texmf-dist/fonts/opentype/public/newcomputermodern/NewCMMath-Regular.otf";
-        if let Ok(bytes) = std::fs::read(path) {
+                if let Some(bytes) = math_font_bytes(NEWCM_MATH_FILE) {
             let font = OpenTypeFont::from_bytes(&bytes).expect("Valid OpenType font");
             assert!(font.math_table().is_some(), "Must have MATH table");
             let parsed_constants = font.parse_math_constants().expect("Must parse MathConstants");
@@ -519,8 +536,7 @@ mod tests {
         }
 
         // 5. Test interchangeable font: STIX Two Math (zero code changes!)
-        let stix_path = "/usr/share/texlive/texmf-dist/fonts/opentype/public/stix2-otf/STIXTwoMath-Regular.otf";
-        if let Ok(stix_bytes) = std::fs::read(stix_path) {
+                if let Some(stix_bytes) = math_font_bytes(STIX2_MATH_FILE) {
             let stix_font = OpenTypeFont::from_bytes(&stix_bytes).expect("Valid STIX2 font");
             assert_eq!(stix_font.glyph_for_unicode(0x1D4A5), Some(GlyphId(3416))); // Script J
             assert_eq!(stix_font.glyph_for_unicode(0x222B), Some(GlyphId(1698))); // Integral
@@ -642,7 +658,7 @@ mod tests {
         assert!(path_j.ends_with(b"h"));
 
         // 2. Typeset \mathcal{J} and verify Paint::VectorGlyph emission in uncompressed PDF
-        let doc_src = "\\documentclass{article}\n\\begin{document}\n$\\mathcal{J}$\n\\end{document}";
+        let doc_src = "\\documentclass{article}\\usepackage{times}\n\\begin{document}\n$\\mathcal{J}$\n\\end{document}";
         let parsed = crate::tex::parse(doc_src).expect("parse");
         let pages = crate::layout::layout(&parsed);
         assert!(pages[0].ops.iter().any(|op| matches!(op, crate::layout::layout_engine::Paint::VectorGlyph { glyph_id: 3416 | 2233 | 1249, .. })));
@@ -657,8 +673,7 @@ mod tests {
     fn test_dynamic_font_delimiter_resolution() {
         use crate::math::fonts::delimiters::{OpenTypeDelimKind, ResolvedDelimiter};
 
-        let newcm_path = "/usr/share/texlive/texmf-dist/fonts/opentype/public/newcomputermodern/NewCMMath-Regular.otf";
-        if let Ok(bytes) = std::fs::read(newcm_path) {
+                if let Some(bytes) = math_font_bytes(NEWCM_MATH_FILE) {
             let font = OpenTypeFont::from_bytes(&bytes).expect("Valid NewCM");
             let math_font = OpenTypeMathFont::from_font(font).expect("OpenTypeMathFont init");
 
@@ -762,8 +777,8 @@ mod tests {
 
     #[test]
     fn test_opentype_driven_layout_integration() {
-        let cm_otf = active_opentype_math_font(FontFamily::ComputerModern);
-        assert!(cm_otf.is_some(), "Must resolve NewCMMath on systems with texlive");
+        let cm_otf = newcm_opentype_math_font();
+        assert!(cm_otf.is_some(), "Must resolve NewCMMath (TeX Live 2023 release)");
         if let Some(otf) = cm_otf {
             assert_eq!(otf.constants.axis_height, 250);
             assert_eq!(otf.constants.radical_degree_bottom_raise_percent, 60);
@@ -794,7 +809,8 @@ mod tests {
     fn test_horizontal_variants_and_extensible_assemblies() {
         use crate::math::fonts::delimiters::{OpenTypeHorizKind, ResolvedHorizontal};
 
-        if let Some(otf) = active_opentype_math_font(FontFamily::ComputerModern) {
+        let otf = newcm_opentype_math_font().expect("NewCMMath (TeX Live 2023 release) must resolve");
+        {
             // 1. WideHat discrete variants: small vs large
             let hat_small = OpenTypeHorizKind::WideHat.resolve_font_horizontal(otf, 6.0, 10.0)
                 .expect("Resolve small wide hat");
@@ -846,8 +862,9 @@ mod tests {
             }
         }
 
-        // 4. Test full document layout and Paint::VectorGlyph emission for wide accents & braces
-        let doc = "\\documentclass{article}\n\\begin{document}\n$\\widehat{x^2+y^2+z^2} + \\widetilde{A+B+C} + \\overbrace{a_1 + a_2 + a_3 + a_4}^N + \\underbrace{b_1 + \\dots + b_k}_K$\n\\end{document}";
+        // 4. Full document layout in an OpenType family (Times: STIX Two Math) emits
+        // Paint::VectorGlyph for wide accents and braces; Computer Modern would use cmex.
+        let doc = "\\documentclass{article}\n\\usepackage{mathptmx}\n\\begin{document}\n$\\widehat{x^2+y^2+z^2} + \\widetilde{A+B+C} + \\overbrace{a_1 + a_2 + a_3 + a_4}^N + \\underbrace{b_1 + \\dots + b_k}_K$\n\\end{document}";
         let parsed = crate::tex::parse(doc).expect("parse wide math");
         let pages = crate::layout::layout(&parsed);
         assert!(!pages.is_empty());
@@ -890,43 +907,12 @@ mod tests {
 
         // 4. Full document layout with bold vectors, blackboard bold, and fraktur
         let doc = "\\documentclass{article}\n\\begin{document}\n$\\mathbf{v} + \\boldsymbol{\\alpha} + \\mathbb{R} + \\mathfrak{g} + \\vec{\\mathbf{v}} + \\widehat{\\mathbf{v}}$\n\\end{document}";
-        let parsed = crate::tex::parse(doc).expect("parse alphanumeric math");
-        let pages = crate::layout::layout(&parsed);
-        assert!(!pages.is_empty());
-
-        let mut found_bold_v = false;
-        let mut found_bb_r = false;
-        let mut found_bold_alpha = false;
-        let mut found_frak_g = false;
-        for op in &pages[0].ops {
-            if let crate::layout::layout_engine::Paint::VectorGlyph { glyph_id, .. } = op {
-                if *glyph_id == 2121 || *glyph_id == 2224 || *glyph_id == 3295 || *glyph_id == 3407 {
-                    found_bold_v = true;
-                }
-                if *glyph_id == 636 || *glyph_id == 1236 {
-                    found_bb_r = true;
-                }
-                if *glyph_id == 2754 || *glyph_id == 2870 || *glyph_id == 3957 || *glyph_id == 4073 {
-                    found_bold_alpha = true;
-                }
-                if *glyph_id == 2349 || *glyph_id == 3536 {
-                    found_frak_g = true;
-                }
-            }
+        // Computer Modern sets them in the fonts LaTeX selects: `\mathbf` cmbx, `\boldsymbol`
+        // cmmib, `\mathbb` msbm, `\mathfrak` eufm.
+        let pdf = crate::compile_str_opts(doc, false).expect("compile alphanumeric math");
+        let pdf = String::from_utf8_lossy(&pdf);
+        for font in ["CMBX10", "CMMIB10", "MSBM10", "EUFM10"] {
+            assert!(pdf.contains(&format!("/BaseFont/{font}")) || pdf.contains(&format!("/BaseFont /{font}")), "{font} must be used");
         }
-        assert!(found_bold_v, "Must emit Paint::VectorGlyph for bold vector v");
-        assert!(found_bb_r, "Must emit Paint::VectorGlyph for blackboard bold R");
-        assert!(found_bold_alpha, "Must emit Paint::VectorGlyph for bold alpha");
-        assert!(found_frak_g, "Must emit Paint::VectorGlyph for fraktur g");
-
-        // 5. Verify Computer Modern layout with bold vectors and apex accent positioning
-        let doc_cm = "\\documentclass{article}\n\\usepackage{computermodern}\n\\begin{document}\n$\\mathbf{v} + \\boldsymbol{\\alpha} + \\mathbb{R} + \\mathfrak{g} + \\vec{\\mathbf{v}}$\n\\end{document}";
-        let parsed_cm = crate::tex::parse(doc_cm).expect("parse cm alphanumeric math");
-        let pages_cm = crate::layout::layout(&parsed_cm);
-        assert!(!pages_cm.is_empty());
-        let found_cm_bold_v = pages_cm[0].ops.iter().any(|op| {
-            matches!(op, crate::layout::layout_engine::Paint::VectorGlyph { glyph_id: 2121, .. })
-        });
-        assert!(found_cm_bold_v, "Computer Modern must emit NewCM GID 2121 for bold vector v");
     }
 }

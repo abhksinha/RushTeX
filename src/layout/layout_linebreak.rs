@@ -152,6 +152,9 @@ enum NodeKind {
     Glue,
     Penalty,
     Disc,
+    /// An explicit kern (an italic correction): a breakpoint when glue follows, discarded
+    /// after a break (§866, §879).
+    Kern,
 }
 
 /// One item of the break list (24 bytes). `w` is the width (glue: natural width; disc:
@@ -191,8 +194,12 @@ impl Node {
         Self { kind: NodeKind::Disc, order: 0, cut, _pad: 0, item, w: pre, x: post, y: 0, pen }
     }
     #[inline]
+    fn kern(item: u32, w: i32) -> Self {
+        Self { kind: NodeKind::Kern, order: 0, cut: 0, _pad: 0, item, w, x: 0, y: 0, pen: 0 }
+    }
+    #[inline]
     fn discardable(&self) -> bool {
-        matches!(self.kind, NodeKind::Glue | NodeKind::Penalty)
+        matches!(self.kind, NodeKind::Glue | NodeKind::Penalty | NodeKind::Kern)
     }
 }
 
@@ -214,6 +221,7 @@ impl Totals {
                 self.st[n.order as usize] += n.x as i64;
                 self.sh += n.y as i64;
             }
+            NodeKind::Kern => self.w += n.w as i64,
             NodeKind::Penalty | NodeKind::Disc => {}
         }
     }
@@ -261,6 +269,33 @@ struct CutEntry {
 const _: () = assert!(core::mem::size_of::<CutEntry>() == 32);
 const CUT_CACHE_SIZE: usize = 2048;
 
+/// Most hyphenation points a [`HyphenWidths`] entry holds; words with more are measured
+/// each time.
+const HYPH_WIDTH_CUTS: usize = 5;
+const HYPH_WIDTH_CACHE_SIZE: usize = 1024;
+
+/// The discretionary widths of one hyphenated word in one face and size (64 bytes): the
+/// shaped prefix before each cut and the width the remainder takes after a break there.
+/// Words repeat, so the second pass reuses them instead of shaping each piece again.
+#[derive(Clone, Copy, Default)]
+struct HyphenWidths {
+    hash: u64,
+    size_bits: u32,
+    /// Shaped width of the whole word (without material outside its letters).
+    text_w: i32,
+    pre: i32,
+    len: u8,
+    face: u8,
+    family: u8,
+    count: u8,
+    cuts: [u8; HYPH_WIDTH_CUTS],
+    _pad: [u8; 3],
+    prefix: [i32; HYPH_WIDTH_CUTS],
+    post: [i32; HYPH_WIDTH_CUTS],
+}
+
+const _: () = assert!(core::mem::size_of::<HyphenWidths>() <= 72);
+
 /// Reusable buffers of the line breaker.
 #[derive(Default)]
 pub struct BreakScratch {
@@ -271,6 +306,8 @@ pub struct BreakScratch {
     breaks: Vec<u32>,
     /// Direct-mapped cache of pattern hyphenation results (64 KB, allocated on first use).
     cut_cache: Vec<CutEntry>,
+    /// Direct-mapped cache of hyphenated-word widths (72 KB, allocated on first use).
+    width_cache: Vec<HyphenWidths>,
 }
 
 /// Byte offsets of the hyphenation points of `text[s..e]` (offsets into `text`), from the
@@ -348,6 +385,72 @@ pub fn tex_line_break(
     pass
 }
 
+/// The lines of one broken paragraph, kept for a recompile.
+pub struct CachedBreak {
+    pub pass: u8,
+    pub lines: Box<[HzLineDescriptor]>,
+}
+
+/// Paragraphs broken in earlier compiles of a session, by [`break_key`].
+pub type BreakCache = crate::backend::backend_hash::GenerationCache<CachedBreak>;
+
+/// Hash of everything [`tex_line_break`] reads: the items of `range` (widths, glue, kinds
+/// and faces, texts for hyphenation, size runs), the parameters and the line shape. Equal
+/// keys therefore give equal lines.
+pub fn break_key(
+    soa: &ParagraphSoA<'_>,
+    range: std::ops::Range<usize>,
+    params: &BreakParams,
+    shape: &LineShape<'_>,
+    base_size: f32,
+) -> u128 {
+    let mut h = crate::backend::backend_hash::ContentHasher::new();
+    h.u64(range.start as u64);
+    h.u64(range.end as u64);
+    for i in range.clone() {
+        let [st, sh] = soa.glue[i];
+        h.u64(((soa.widths[i].to_bits() as u64) << 32) | soa.attrs[i].0 as u64);
+        h.u64(((st.to_bits() as u64) << 32) | sh.to_bits() as u64);
+        h.bytes(soa.texts[i].as_bytes());
+    }
+    for &(at, st, order) in &soa.fils {
+        h.u64(((at as u64) << 32) | st.to_bits() as u64);
+        h.u32(order as u32);
+    }
+    h.u64(soa.size_runs.len() as u64);
+    for &(at, size) in &soa.size_runs {
+        h.u64(((at as u64) << 32) | size.to_bits() as u64);
+    }
+    for v in [
+        params.pretolerance,
+        params.tolerance,
+        params.looseness,
+        params.line_penalty,
+        params.hyphen_penalty,
+        params.ex_hyphen_penalty,
+        params.adj_demerits,
+        params.double_hyphen_demerits,
+        params.final_hyphen_demerits,
+        shape.hang_after,
+    ] {
+        h.u32(v as u32);
+    }
+    for skip in [params.left_skip, params.right_skip, params.par_fill_skip] {
+        h.f32(skip.width);
+        h.f32(skip.stretch);
+        h.u32(skip.stretch_order as u32);
+    }
+    for v in [params.emergency_stretch, params.indent, shape.measure, shape.hang_indent, base_size] {
+        h.f32(v);
+    }
+    h.u32(params.family as u32);
+    h.u64(shape.par_shape.len() as u64);
+    for &(indent, len) in shape.par_shape {
+        h.u64(((indent.to_bits() as u64) << 32) | len.to_bits() as u64);
+    }
+    h.finish()
+}
+
 /// Builds the node list (§866 and the hyphenation of §891–§903 when `hyphenate`).
 fn build_nodes(
     soa: &ParagraphSoA<'_>,
@@ -365,14 +468,32 @@ fn build_nodes(
     }
     let family = params.family;
     let mut size_cursor = (base_size, if soa.size_runs.is_empty() { usize::MAX } else { 0 });
+    let mut kerns = soa.kerns.iter().skip_while(|k| (k.0 as usize) < range.start).peekable();
     for i in range.clone() {
         let attr = soa.attrs[i];
-        let w = to_sp(soa.widths[i]);
         let item = i as u32;
+        // An italic correction after the word is its own kern node.
+        let kern = match kerns.peek() {
+            Some(&&(at, k)) if at == item => {
+                kerns.next();
+                to_sp(k)
+            }
+            _ => 0,
+        };
+        let w = to_sp(soa.widths[i]) - kern;
         match attr.kind() {
             WordKind::Space => {
-                let [st, sh] = soa.glue[i];
-                nodes.push(Node::glue(item, w, to_sp(st), 0, to_sp(sh)));
+                // A tie (`~`, \nobreakspace) is `\nobreak\ `.
+                if soa.texts[i] == crate::layout::engine::TIE_TEXT {
+                    nodes.push(Node::penalty(item, INF_PENALTY));
+                }
+                match soa.fil_at(i) {
+                    Some((st, order)) => nodes.push(Node::glue(item, w, skip_stretch_sp(Skip { width: 0.0, stretch: st, stretch_order: order }), order, 0)),
+                    None => {
+                        let [st, sh] = soa.glue[i];
+                        nodes.push(Node::glue(item, w, to_sp(st), 0, to_sp(sh)));
+                    }
+                }
             }
             // Glue inside a formula is not a breakpoint (§866: `auto_breaking` is off).
             WordKind::MathSpace => {
@@ -418,16 +539,17 @@ fn build_nodes(
                     && !face.is_mono()
                     && i > range.start
                     && soa.attrs[i - 1].kind() == WordKind::Space;
-                if eligible {
-                    if i >= size_cursor.1 {
-                        size_cursor = soa.size_span(i, base_size);
-                    }
-                    if push_hyphenated(nodes, &mut scratch.cuts, &mut scratch.cut_cache, soa.texts[i], item, w, face, size_cursor.0, family, params.hyphen_penalty) {
-                        continue;
-                    }
+                if eligible && i >= size_cursor.1 {
+                    size_cursor = soa.size_span(i, base_size);
                 }
-                nodes.push(Node::boxed(item, w));
+                let caches = HyphenCaches { cuts: &mut scratch.cuts, cut_cache: &mut scratch.cut_cache, width_cache: &mut scratch.width_cache };
+                if !(eligible && push_hyphenated(nodes, caches, soa.texts[i], item, w, face, size_cursor.0, family, params.hyphen_penalty)) {
+                    nodes.push(Node::boxed(item, w));
+                }
             }
+        }
+        if kern != 0 {
+            nodes.push(Node::kern(item, kern));
         }
     }
     // \penalty10000 \parfillskip \penalty-10000 (§816).
@@ -480,13 +602,19 @@ fn hyphenatable_core(text: &str) -> Option<(usize, usize)> {
     Some((s, e))
 }
 
+/// The buffers [`push_hyphenated`] works with.
+struct HyphenCaches<'s> {
+    cuts: &'s mut Vec<usize>,
+    cut_cache: &'s mut Vec<CutEntry>,
+    width_cache: &'s mut Vec<HyphenWidths>,
+}
+
 /// Pushes `text` as boxes separated by its hyphenation discretionaries; false when the
 /// word has no hyphenation point (nothing pushed).
 #[allow(clippy::too_many_arguments)]
 fn push_hyphenated(
     nodes: &mut Vec<Node>,
-    cuts: &mut Vec<usize>,
-    cache: &mut Vec<CutEntry>,
+    caches: HyphenCaches<'_>,
     text: &str,
     item: u32,
     whole: i32,
@@ -495,27 +623,107 @@ fn push_hyphenated(
     family: FontFamily,
     pen: i32,
 ) -> bool {
-    let Some((s, e)) = hyphenatable_core(text) else { return false };
-    hyphenation_cuts(cache, text, s, e, cuts);
-    if cuts.is_empty() {
+    use crate::layout::layout_hyphen::{DEFAULT_LEFT_HYPHEN_MIN, DEFAULT_RIGHT_HYPHEN_MIN};
+    if text.len() < DEFAULT_LEFT_HYPHEN_MIN + DEFAULT_RIGHT_HYPHEN_MIN {
         return false;
     }
-    let width = |t: &str| to_sp(crate::backend::shape::word_width_pt(t, face, size, family));
-    let pre = hyphen_width(face, size, family);
-    let extra = whole - width(text);
+    let cacheable = text.len() <= u8::MAX as usize;
+    let hash = crate::layout::layout_hyphen::hash_word(text) | 1;
+    if caches.width_cache.is_empty() {
+        caches.width_cache.resize(HYPH_WIDTH_CACHE_SIZE, HyphenWidths::default());
+    }
+    // Face, family and size are folded in before the index is taken, so a word in several
+    // faces or sizes occupies several slots instead of evicting itself.
+    let mixed = (hash ^ (size.to_bits() as u64) ^ ((face as u64) << 32) ^ ((family as u64) << 40)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let slot = (mixed >> 32) as usize & (HYPH_WIDTH_CACHE_SIZE - 1);
+    let e = caches.width_cache[slot];
+    let entry = if cacheable
+        && e.hash == hash
+        && e.len as usize == text.len()
+        && e.size_bits == size.to_bits()
+        && e.face == face as u8
+        && e.family == family as u8
+    {
+        e
+    } else {
+        let key = HyphenWidths {
+            hash,
+            size_bits: size.to_bits(),
+            len: text.len() as u8,
+            face: face as u8,
+            family: family as u8,
+            ..HyphenWidths::default()
+        };
+        let Some((s, end)) = hyphenatable_core(text) else {
+            // Words without hyphenation points are remembered too (count 0).
+            if cacheable {
+                caches.width_cache[slot] = key;
+            }
+            return false;
+        };
+        hyphenation_cuts(caches.cut_cache, text, s, end, caches.cuts);
+        if caches.cuts.is_empty() {
+            if cacheable {
+                caches.width_cache[slot] = key;
+            }
+            return false;
+        }
+        let width = |t: &str| to_sp(crate::backend::shape::word_width_pt(t, face, size, family));
+        let text_w = width(text);
+        let pre = hyphen_width(face, size, family);
+        if caches.cuts.len() > HYPH_WIDTH_CUTS || !cacheable {
+            push_pieces(nodes, caches.cuts.iter().map(|&c| (c, width(&text[..c]), width(&text[c..]))), item, whole, text_w, pre, pen);
+            return true;
+        }
+        let mut fresh = HyphenWidths { text_w, pre, count: caches.cuts.len() as u8, ..key };
+        for (k, &c) in caches.cuts.iter().enumerate() {
+            fresh.cuts[k] = c as u8;
+            fresh.prefix[k] = width(&text[..c]);
+            fresh.post[k] = width(&text[c..]);
+        }
+        caches.width_cache[slot] = fresh;
+        fresh
+    };
+    let n = entry.count as usize;
+    if n == 0 {
+        return false;
+    }
+    push_pieces(
+        nodes,
+        (0..n).map(|k| (entry.cuts[k] as usize, entry.prefix[k], entry.post[k])),
+        item,
+        whole,
+        entry.text_w,
+        entry.pre,
+        pen,
+    );
+    true
+}
+
+/// Pushes the boxes and discretionaries of a hyphenated word from `(cut, shaped prefix,
+/// shaped remainder)` per hyphenation point.
+#[inline]
+fn push_pieces(
+    nodes: &mut Vec<Node>,
+    cuts: impl Iterator<Item = (usize, i32, i32)>,
+    item: u32,
+    whole: i32,
+    text_w: i32,
+    pre: i32,
+    pen: i32,
+) {
+    // The prefix ends the line when broken; the remainder is shaped afresh there, so the
+    // post-break width corrects the in-line pieces (ligatures and kerns at the cut).
+    // Material after the letters (an italic correction) stays with the post-break part.
+    let extra = whole - text_w;
     let mut prev = 0i32;
-    for &c in cuts.iter() {
-        // The prefix ends the line when broken; the remainder is shaped afresh there, so the
-        // post-break width corrects the in-line pieces (ligatures and kerns at the cut).
-        // Material after the letters (an italic correction) stays with the post-break part.
-        let prefix = width(&text[..c]);
-        let post = width(&text[c..]) + extra - (whole - prefix);
+    for (c, prefix, rest) in cuts {
+        let post = rest + extra - (whole - prefix);
         nodes.push(Node::boxed(item, prefix - prev));
         nodes.push(Node::disc(item, c as u8, pre, post, pen));
         prev = prefix;
     }
     nodes.push(Node::boxed(item, whole - prev));
-    true
 }
 
 /// One pass of `line_break` (§863–§873); true when a feasible set of breaks was found.
@@ -579,6 +787,15 @@ fn run_pass(
                 try_break(nodes, active, passive, params, shape, &background, &with_pre, p, node.pen, true, threshold, final_pass, easy_line);
                 prev_is_box = true;
             }
+            // §866 `kern_break`: an explicit kern followed by glue is a breakpoint; the glue
+            // after it is not, a kern not being able to precede a break (§868).
+            NodeKind::Kern => {
+                if nodes.get(p + 1).is_some_and(|n| n.kind == NodeKind::Glue) {
+                    try_break(nodes, active, passive, params, shape, &background, &cur, p, 0, false, threshold, final_pass, easy_line);
+                }
+                cur.add(&node);
+                prev_is_box = false;
+            }
         }
         if active.is_empty() {
             return false;
@@ -633,6 +850,7 @@ fn choose_best(active: &[Active], params: &BreakParams) -> Option<(u32, bool)> {
 /// `try_break` (§829–§860) for a break at node `p` with penalty `pi`. `cur` holds the totals
 /// of the material before the break, including a discretionary's pre-break text.
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 fn try_break(
     nodes: &[Node],
     active: &mut Vec<Active>,
@@ -852,7 +1070,7 @@ fn emit_lines(
                     first.get_or_insert(it);
                     last = Some(it);
                 }
-                NodeKind::Glue => w += nd.w as i64,
+                NodeKind::Glue | NodeKind::Kern => w += nd.w as i64,
                 _ => {}
             }
         }
@@ -880,7 +1098,7 @@ fn emit_lines(
             (Some(f), Some(l)) if f < range.end => (f, l.min(range.end - 1) + 1 - f),
             _ => (range.start, 0),
         };
-        let mut d = HzLineDescriptor::new(start as u16, count as u16, justify, 0, to_pt(w), geo_indent + indent, 0.0);
+        let mut d = HzLineDescriptor::new(start as u16, count as u16, justify, 0, to_pt(w), geo_indent + indent, 0.0).with_width_sp(w);
         d.set_cuts(head_cut, if count > 0 && start + count - 1 == brk.item as usize { tail_cut } else { 0 });
         out.push(d);
         s = b + 1;

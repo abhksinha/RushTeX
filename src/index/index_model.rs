@@ -12,6 +12,9 @@ pub struct TocEntry<'a> {
     pub level: u8,
     /// Hierarchical numbering components: `[section, subsection, subsubsection, paragraph]`.
     pub number: [u16; 4],
+    /// Whether the heading is numbered (`\c@secnumdepth`); unnumbered entries have no
+    /// `\numberline`.
+    pub numbered: bool,
     /// Title inlines.
     pub title: Vec<Inline<'a>>,
     /// Resolved 1-based page number.
@@ -22,15 +25,9 @@ impl<'a> TocEntry<'a> {
     /// Formats the hierarchical section number (e.g. "1", "1.2", "1.2.3").
     #[inline]
     pub fn format_number(&self) -> String {
-        match self.level {
-            1 => format!("{}", self.number[0]),
-            2 => format!("{}.{}", self.number[0], self.number[1]),
-            3 => format!("{}.{}.{}", self.number[0], self.number[1], self.number[2]),
-            _ => format!(
-                "{}.{}.{}.{}",
-                self.number[0], self.number[1], self.number[2], self.number[3]
-            ),
-        }
+        let mut out = Vec::with_capacity(8);
+        crate::layout::layout_engine::write_section_number(self.number, self.level, &mut out);
+        String::from_utf8(out).unwrap_or_default()
     }
 }
 
@@ -67,6 +64,8 @@ pub struct IndexRegistry<'a> {
     pub table_entries: Vec<TableEntry<'a>>,
     /// Maximum heading depth displayed in Table of Contents (default 3: down to subsubsection).
     pub tocdepth: u8,
+    /// The page of each `\label` whatsit, by its number (0: not laid out).
+    pub label_pages: Vec<u32>,
 }
 
 impl<'a> Default for IndexRegistry<'a> {
@@ -83,6 +82,7 @@ impl<'a> IndexRegistry<'a> {
             figure_entries: Vec::new(),
             table_entries: Vec::new(),
             tocdepth: 3,
+            label_pages: Vec::new(),
         }
     }
 
@@ -91,6 +91,7 @@ impl<'a> IndexRegistry<'a> {
         self.toc_entries.clear();
         self.figure_entries.clear();
         self.table_entries.clear();
+        self.label_pages.clear();
     }
 
     /// Returns `true` if no entries of any kind have been registered.

@@ -47,19 +47,26 @@ fn scan_inner<'a>(
 ) {
     for b in blocks {
         match b {
+            Block::ConfigChange(crate::tex_parser::ConfigChange::Appendix) => {
+                *section_counters = [crate::layout::layout_engine::APPENDIX_SECTION, 0, 0, 0];
+            }
             Block::Section {
                 level,
                 starred,
+                numbered,
                 title,
             } => {
                 if !starred {
-                    let lvl = (*level as usize).clamp(1, 4);
-                    section_counters[lvl - 1] += 1;
-                    section_counters[lvl..4].fill(0);
+                    if *numbered {
+                        let lvl = (*level as usize).clamp(1, 4);
+                        section_counters[lvl - 1] += 1;
+                        section_counters[lvl..4].fill(0);
+                    }
                     registry.toc_entries.push(TocEntry {
                         level: *level,
                         number: *section_counters,
-                        title: title.clone(),
+                        numbered: *numbered,
+                        title: crate::frontend::ast::section_title_parts(title).0.to_vec(),
                         page: 1,
                     });
                 }
@@ -343,7 +350,7 @@ Content on page 3.
             .iter()
             .filter_map(|op| match op {
                 // Exclude the running foot (\footskip below the text block).
-                Paint::PageNumber { page_number, y, .. } if *y > 300.0 => Some(*page_number),
+                Paint::PageNumber { page_number, y, .. } if y.to_pt() > 300.0 => Some(*page_number),
                 _ => None,
             })
             .collect();

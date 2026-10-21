@@ -164,8 +164,8 @@ impl EquationTagCollisionDisplacement {
     /// Tests whether an equation tag must be placed on a separate line.
     #[inline(always)]
     pub fn must_split_line(eq_w: f32, eqno_w: f32, line_w: f32, quad: f32) -> bool {
-        let margin = (quad * 1.0).max(12.0);
-        (eq_w + eqno_w + margin) > line_w
+        // tex.web §1199: the number needs its width plus the math quad beside the formula.
+        (eq_w + eqno_w + quad) > line_w + 0.005
     }
 }
 
@@ -262,6 +262,7 @@ impl DisplayGeometryEngine {
         is_left_tag: bool,
         has_any_tag: bool,
         base_font_size: f32,
+        text_quad: f32,
     ) -> PackedDisplayGeometry {
         let (display_w, display_indent) = DisplayShapeGeometryResolver::resolve_geometry(
             available_w,
@@ -270,10 +271,12 @@ impl DisplayGeometryEngine {
             prev_graf,
         );
 
+        // §1146: `2*quad(cur_font)`, the quad of the text font the paragraph ended in; §1199
+        // measures the number's clearance with the math quad (family 2).
         let quad = base_font_size;
         let raw_predisplay = DisplayMathParagraphBreaker::compute_predisplaysize(
             last_line_width + last_line_indent,
-            quad,
+            text_quad,
             2000.0,
         );
         let predisplaysize = EmptyParagraphDisplayFilter::filter_predisplaysize(
@@ -281,10 +284,20 @@ impl DisplayGeometryEngine {
             raw_predisplay,
         );
 
+        let must_split_tag = has_any_tag
+            && EquationTagCollisionDisplacement::must_split_line(
+                eq_w,
+                tag_w,
+                display_w,
+                quad,
+            );
+
+        // A number that goes on a line of its own leaves the formula centred alone
+        // (tex.web §1201–§1202: `e:=0`).
         let displacement = DisplayEquationCentering::compute_displacement(
             display_w,
             eq_w,
-            tag_w,
+            if must_split_tag { 0.0 } else { tag_w },
         );
 
         let use_short_skip = PreDisplayClearanceComparator::uses_short_skip(
@@ -299,14 +312,6 @@ impl DisplayGeometryEngine {
         } else {
             (base_font_size * 1.0f32, base_font_size * 1.0f32)
         };
-
-        let must_split_tag = has_any_tag
-            && EquationTagCollisionDisplacement::must_split_line(
-                eq_w,
-                tag_w,
-                display_w,
-                quad,
-            );
 
         PackedDisplayGeometry {
             display_w,
@@ -586,6 +591,7 @@ mod tests {
             30.0,
             false,
             true,
+            10.0,
             10.0,
         );
 

@@ -1,0 +1,15 @@
+%% typeset
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\font\tenrm=cmr10 \tenrm
+\baselineskip=12pt \lineskip=1pt \lineskiplimit=0pt \parindent=0pt \hsize=100pt
+\vsize=50pt \maxdepth=2pt \topskip=10pt \parskip=0pt plus 1pt
+\count30=0 \def\pages{}
+\output={\global\advance\count30 1 \xdef\pages{\pages|\the\count30:\the\ht255:\the\dp255:\the\outputpenalty:\topmark/\firstmark/\botmark:\the\insertpenalties:\ifvoid100 v\else\the\ht100\fi}\setbox0\box100 \shipout\box255}
+\skip100=6pt \dimen100=20pt \count100=1000
+\hbox{a}\mark{m1}\hbox{b}\hbox{c}\mark{m2}\hbox{d}\hbox{e}\hbox{f}\mark{m3}\hbox{g}\penalty-10000
+\hbox{x}\insert100{\hbox{fn}}\hbox{y}\penalty50 \hbox{z}\vskip 5pt plus 2pt\hbox{w}\penalty-10000
+\setbox5\vbox{\hbox{1}\hbox{2}\penalty-100\hbox{3}\hbox{4}\mark{s}\hbox{5}}
+\setbox6\vsplit5 to 25pt
+\hbox{a}\insert100{\hbox{1}\hbox{2}\hbox{3}}\hbox{b}\hbox{c}\hbox{d}\hbox{e}\penalty-10000
+\setbox7\vbox{\hsize=100pt \noindent ab\vadjust{\kern3pt}cd\mark{pm}\par}
+\hbox{q}\kern 4pt

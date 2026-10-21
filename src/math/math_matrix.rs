@@ -59,12 +59,15 @@ impl MatrixGridBuffer {
             env_kind,
             font_size,
             num_rows,
+            font_size,
         );
         let total_content_h = MatrixLayoutMetricsEngine::compute_row_baseline_offsets_and_total_height(
             &self.row_heights[..num_rows],
             &self.row_depths[..num_rows],
             &mut self.row_baseline_offsets[..num_rows],
             row_sep,
+            MatrixLayoutMetricsEngine::openup_baselineskip(env_kind, font_size),
+            &[],
         );
         (matrix_w, total_content_h)
     }
@@ -92,14 +95,17 @@ impl MatrixLayoutMetricsEngine {
             let strut_d = 0.36 * font_size;
             (strut_h, strut_d)
         } else {
-            (0.84 * font_size, 0.36 * font_size)
+            // `\strutbox`: .7 and .3 of `\baselineskip` (1.2em), as `scan_dimen` multiplies.
+            let em = crate::backend::scaled::em_mul;
+            (em(0.7, 1.2 * font_size), em(0.3, 1.2 * font_size))
         };
 
         match env_kind {
             MatrixEnvKind::Cases => {
                 // LaTeX cases uses \arraystretch = 1.2 on standard strut
-                let min_rh = 1.2 * base_rh;
-                let min_rd = 1.2 * base_rd;
+                let em = crate::backend::scaled::em_mul;
+                let min_rh = em(1.2, base_rh);
+                let min_rd = em(1.2, base_rd);
                 let row_sep = 0.0;
                 (min_rh, min_rd, row_sep)
             }
@@ -129,7 +135,7 @@ impl MatrixLayoutMetricsEngine {
 
     /// Computes canonical inter-column separation following column `col_idx`.
     #[inline(always)]
-    pub fn col_gap(env_kind: MatrixEnvKind, col_idx: usize, font_size: f32) -> f32 {
+    pub fn col_gap(env_kind: MatrixEnvKind, col_idx: usize, font_size: f32, quad: f32) -> f32 {
         match env_kind {
             // Between equation pairs `aligned` puts 2\minalignsep (20pt, measured against
             // amsmath), `alignedat` none.
@@ -141,9 +147,8 @@ impl MatrixLayoutMetricsEngine {
                 }
             }
             MatrixEnvKind::AlignedAt => 0.0,
-            MatrixEnvKind::Cases => {
-                1.0 * font_size // \quad = 1em
-            }
+            // `\quad`: 1em of the text font.
+            MatrixEnvKind::Cases => quad,
             MatrixEnvKind::Gather => {
                 1.0 * font_size // \quad = 1em
             }
@@ -168,6 +173,7 @@ impl MatrixLayoutMetricsEngine {
         env_kind: MatrixEnvKind,
         font_size: f32,
         num_rows: usize,
+        quad: f32,
     ) -> f32 {
         let num_cols = col_widths.len();
         if num_cols == 0 {
@@ -181,7 +187,7 @@ impl MatrixLayoutMetricsEngine {
 
         for c in 0..num_cols {
             col_offsets[c] = curr_x;
-            let gap = Self::col_gap(env_kind, c, font_size);
+            let gap = Self::col_gap(env_kind, c, font_size, quad);
             curr_x += col_widths[c] + gap;
         }
 
@@ -192,33 +198,63 @@ impl MatrixLayoutMetricsEngine {
             }
         } else {
             for c in 0..num_cols.saturating_sub(1) {
-                matrix_w += Self::col_gap(env_kind, c, font_size);
+                matrix_w += Self::col_gap(env_kind, c, font_size, quad);
             }
         }
 
         matrix_w
     }
 
+    /// `\baselineskip` of the rows of an amsmath display alignment, which interline glue
+    /// separates (`\openup\jot`); zero for arrays, whose rows touch.
+    #[inline(always)]
+    pub fn openup_baselineskip(env_kind: MatrixEnvKind, font_size: f32) -> f32 {
+        match env_kind {
+            MatrixEnvKind::Aligned | MatrixEnvKind::AlignedAt | MatrixEnvKind::Gather | MatrixEnvKind::Multline => {
+                1.2 * font_size
+            }
+            _ => 0.0,
+        }
+    }
+
     /// Computes cumulative row baseline offsets from top and total content height.
+    ///
+    /// With `baselineskip > 0` the rows are lines of a vertical list after `\openup` by
+    /// `row_sep` (`\jot`): `\baselineskip`, `\lineskip` (1pt) and `\lineskiplimit` (0pt)
+    /// each grow by `row_sep` (tex.web §679). Otherwise rows are stacked depth to height
+    /// with `row_sep` between them.
     #[inline(always)]
     pub fn compute_row_baseline_offsets_and_total_height(
         row_heights: &[f32],
         row_depths: &[f32],
         row_baseline_offsets: &mut [f32],
         row_sep: f32,
+        baselineskip: f32,
+        row_skips: &[f32],
     ) -> f32 {
         let num_rows = row_heights.len();
         if num_rows == 0 {
             return 0.0;
         }
 
+        // In scaled points, as TeX adds the rows (§679): f32 sums drift by a sp.
+        use crate::backend::scaled::{sp_pt, to_sp};
+        let sp = |x: f32| to_sp(x) as i64;
+        let (sep, bs, lineskip) = (sp(row_sep), sp(baselineskip), sp(baselineskip / 12.0));
+        let mut off = sp(row_heights[0]);
         row_baseline_offsets[0] = row_heights[0];
         for r in 1..num_rows {
-            row_baseline_offsets[r] =
-                row_baseline_offsets[r - 1] + row_depths[r - 1] + row_sep + row_heights[r];
+            let (pd, h) = (sp(row_depths[r - 1]), sp(row_heights[r]));
+            let dist = if baselineskip > 0.0 {
+                if bs - pd - h >= 0 { bs + sep } else { pd + h + lineskip + sep }
+            } else {
+                pd + sep + h
+            };
+            off += dist + row_skips.get(r - 1).map_or(0, |&s| sp(s));
+            row_baseline_offsets[r] = sp_pt(off as i32);
         }
 
-        row_baseline_offsets[num_rows - 1] + row_depths[num_rows - 1]
+        sp_pt((off + sp(row_depths[num_rows - 1])) as i32)
     }
 
     /// Resolves canonical alignment for a given column index.

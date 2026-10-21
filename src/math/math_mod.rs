@@ -60,7 +60,7 @@ pub use math_assembly::{
     MathGeometricTraceRecord, MathPaintEmitter,
 };
 pub use math_ast::{
-    ColAlign, CrampedStyleGovernor, FontVariantTier, MathContextFlags, MathNode, MathStyle,
+    ColAlign, CrampedStyleGovernor, FontVariantTier, MathContextFlags, MathNode, MathParams, MathStyle,
     MatrixDelim, StyleFrameStack, StyleHierarchy, StyleScaleLut, StyleTransitionLut,
     STYLE_SCALE_LUT, STYLE_TRANSITION_LUT,
 };
@@ -96,7 +96,9 @@ pub use math_fraction::{
     FractionShiftResolver, GeneralizedFractionEngine, NumeratorDenominatorAligner,
     PackedFractionMetrics, BINOMIAL_DELIMITER_CACHE,
 };
-pub use math_layout::{layout_node, measure_math, render_math, MathLayoutContext};
+pub use math_layout::{
+    display_rows, display_row_tags, is_split_display, multline_gap, layout_node, multline_rows, measure_math, inline_pair_adjust, measure_math_in, measure_display, render_math, render_math_in, render_math_shrunk, top_level_shrink, DisplayRows, MathLayoutContext,
+};
 pub use math_matrix::{
     MatrixColumnSoA, MatrixDelimBinder, MatrixGridBuffer, MatrixLayoutMetricsEngine,
     RowBaselineAligner, SparseGridCompressor, VcenterGeometryEngine,

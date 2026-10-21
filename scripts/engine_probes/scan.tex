@@ -1,0 +1,9 @@
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\def\a{x}\count1=0
+\edef\b{\scantokens{\a y}}
+\everyeof{\noexpand}\endlinechar=-1
+\edef\c{\scantokens{\a z}}
+\everyeof{}\endlinechar=13
+\catcode`\@=11 \newlinechar=`\^^J
+\def\d{\scantokens{\global\count1=1 ^^J\global\advance\count1 by 2 }}\d
+\begingroup\catcode`\%=12 \xdef\e{\scantokens{a%b}}\endgroup

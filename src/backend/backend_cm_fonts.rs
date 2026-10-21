@@ -210,6 +210,97 @@ pub static CMSY7_PROGRAM: CmFontProgram = CmFontProgram {
     compressed_stream: include_bytes!("../../assets/cm_fonts/cmsy7.flate"),
 };
 
+pub static CMMI6_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMMI6",
+    flags: 4,
+    bbox: [11, -250, 1241, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 85,
+    diff_encoding: CMMI7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmi6.flate"),
+};
+
+pub static CMMI8_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMMI8",
+    flags: 4,
+    bbox: [-24, -250, 1110, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 78,
+    diff_encoding: CMMI7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmi8.flate"),
+};
+
+pub static CMMI9_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMMI9",
+    flags: 4,
+    bbox: [-29, -250, 1075, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 74,
+    diff_encoding: CMMI7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmi9.flate"),
+};
+
+pub static CMMI12_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMMI12",
+    flags: 4,
+    bbox: [-31, -250, 1026, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 65,
+    diff_encoding: CMMI7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmmi12.flate"),
+};
+
+pub static CMSY6_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMSY6",
+    flags: 4,
+    bbox: [-4, -948, 1329, 786],
+    ascent: 750,
+    descent: -948,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 52,
+    diff_encoding: CMSY7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmsy6.flate"),
+};
+
+pub static CMSY8_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMSY8",
+    flags: 4,
+    bbox: [-30, -955, 1185, 779],
+    ascent: 750,
+    descent: -955,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 46,
+    diff_encoding: CMSY7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmsy8.flate"),
+};
+
+pub static CMSY9_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMSY9",
+    flags: 4,
+    bbox: [-29, -958, 1146, 777],
+    ascent: 750,
+    descent: -958,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 43,
+    diff_encoding: CMSY7_DIFF_ENC,
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmsy9.flate"),
+};
+
 pub static CMSY5_PROGRAM: CmFontProgram = CmFontProgram {
     name: "CMSY5",
     flags: 4,
@@ -422,6 +513,40 @@ pub static CMCSC10_PROGRAM: CmFontProgram = CmFontProgram {
 };
 
 
+pub static CMSL10_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMSL10",
+    flags: 32,
+    bbox: [-62, -250, 1123, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: -9,
+    stem_v: 79,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmsl10.flate"),
+};
+
+
+pub static CMSSBX10_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMSSBX10",
+    flags: 32,
+    bbox: [-71, -250, 1099, 780],
+    ascent: 750,
+    descent: -250,
+    cap_height: 694,
+    italic_angle: 0,
+    stem_v: 136,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmssbx10.flate"),
+};
+
+
+
+
+
+
+
+
 // ---- END GENERATED ----
 
 /// Embedded program and `/Widths` of the faces added for optical sizes and math alphabets
@@ -432,27 +557,11 @@ pub fn extra_cm_program(
     family: crate::backend::fonts::FontFamily,
 ) -> Option<(&'static CmFontProgram, &'static [u16; 128])> {
     use crate::backend::fonts::{Face, FontFamily, CMTT10_WIDTHS, EXTRA_FACE_WIDTHS};
-    let program: &'static CmFontProgram = match face {
-        Face::Mono | Face::MonoBold if family == FontFamily::ComputerModern => {
-            return Some((&CMTT10_PROGRAM, &CMTT10_WIDTHS.0));
-        }
-        Face::MathSans => &CMSS10_PROGRAM,
-        Face::MathSans8 => &CMSS8_PROGRAM,
-        Face::MathMono8 => &CMTT8_PROGRAM,
-        Face::Fraktur => &EUFM10_PROGRAM,
-        Face::Fraktur7 => &EUFM7_PROGRAM,
-        Face::Fraktur5 => &EUFM5_PROGRAM,
-        Face::BoldMathItalic => &CMMIB10_PROGRAM,
-        Face::BoldMathItalic7 => &CMMIB7_PROGRAM,
-        Face::BoldMathItalic5 => &CMMIB5_PROGRAM,
-        Face::BoldSymbol => &CMBSY10_PROGRAM,
-        Face::BoldSymbol7 => &CMBSY7_PROGRAM,
-        Face::BoldSymbol5 => &CMBSY5_PROGRAM,
-        Face::Extension7 => &CMEX7_PROGRAM,
-        Face::SmallCaps => &CMCSC10_PROGRAM,
-        _ => return None,
-    };
-    Some((program, &EXTRA_FACE_WIDTHS[face as usize - 18].0))
+    if matches!(face, Face::Mono | Face::MonoBold) && family == FontFamily::ComputerModern {
+        return Some((&CMTT10_PROGRAM, &CMTT10_WIDTHS.0));
+    }
+    let row = crate::backend::fonts::EXTRA_FACES.get((face as usize).checked_sub(18)?)?;
+    Some((row.program, &EXTRA_FACE_WIDTHS[face as usize - 18].0))
 }
 
 // =========================================================================
@@ -609,10 +718,11 @@ const fn make_cmmi_to_unicode() -> [u16; 128] {
     map[0x5E] = 0x2323; // \smile
     map[0x5F] = 0x2322; // \frown
     map[0x60] = 0x2113; // \ell
-    map[0x7B] = 0x2118; // \wp
-    map[0x7C] = 0x0131; // \imath
-    map[0x7D] = 0x0237; // \jmath
-    map[0x7E] = 0x22C8; // \bowtie
+    // OML: dotless i and j, \wp, then the \vec accent.
+    map[0x7B] = 0x0131; // \imath
+    map[0x7C] = 0x0237; // \jmath
+    map[0x7D] = 0x2118; // \wp
+    map[0x7E] = 0x20D7; // \vec
     map[0x7F] = 0x002E; // .
     map
 }
@@ -671,9 +781,9 @@ const fn make_cmsy_to_unicode() -> [u16; 128] {
     map[0x31] = 0x221E; // \infty
     map[0x32] = 0x2208; // \in
     map[0x33] = 0x220B; // \ni
-    map[0x34] = 0x25B3; // \triangle
-    map[0x35] = 0x25B3; // \bigtriangleup
-    map[0x36] = 0x25BD; // \bigtriangledown
+    map[0x34] = 0x25B3; // \bigtriangleup
+    map[0x35] = 0x25BD; // \bigtriangledown
+    map[0x36] = 0x0338; // \not (negationslash)
     map[0x37] = 0x002F; // /
     map[0x38] = 0x2200; // \forall
     map[0x39] = 0x2203; // \exists
@@ -781,12 +891,12 @@ const fn make_cmex_to_unicode() -> [u16; 128] {
     map[0x5F] = 0x22C0; // \bigvee display
     map[0x60] = 0x2210; // \coprod text
     map[0x61] = 0x2210; // \coprod display
-    map[0x62] = 0x0302; // \widehat variant 0
-    map[0x63] = 0x0302; // \widehat variant 1
-    map[0x64] = 0x0302; // \widehat variant 2
-    map[0x65] = 0x0303; // \widetilde variant 0
-    map[0x66] = 0x0303; // \widetilde variant 1
-    map[0x67] = 0x0303; // \widetilde variant 2
+    map[0x62] = 0x02C6; // \widehat variant 0
+    map[0x63] = 0x02C6; // \widehat variant 1
+    map[0x64] = 0x02C6; // \widehat variant 2
+    map[0x65] = 0x02DC; // \widetilde variant 0
+    map[0x66] = 0x02DC; // \widetilde variant 1
+    map[0x67] = 0x02DC; // \widetilde variant 2
     map[0x70] = 0x221A; // radical variant 0
     map[0x71] = 0x221A; // radical variant 1
     map[0x72] = 0x221A; // radical variant 2

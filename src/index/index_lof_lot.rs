@@ -24,7 +24,7 @@ pub(crate) fn layout_lof<'a>(
         let text_pool_start = layouter.current_page.text_pool.len() as u32;
         layouter.current_page.text_pool.push(heading_text);
         layouter.push_op(Paint::GlyphRun {
-            x: layouter.left + layouter.left_skip,
+            x: (layouter.left + layouter.left_skip).into(),
             y: layouter.y,
             face: Face::Bold,
             size: heading_size,
@@ -49,7 +49,7 @@ pub(crate) fn layout_lof<'a>(
         if !layouter.is_dry_run {
             // A. Draw Figure Tag (e.g. "Figure 1")
             layouter.push_op(Paint::FigureTag {
-                x: left_margin,
+                x: left_margin.into(),
                 y: layouter.y,
                 face: Face::Roman,
                 size: layouter.base_font_size,
@@ -72,7 +72,7 @@ pub(crate) fn layout_lof<'a>(
             let page_x = right_margin - page_w;
 
             layouter.push_op(Paint::PageNumber {
-                x: page_x,
+                x: page_x.into(),
                 y: layouter.y,
                 face: Face::Roman,
                 size: layouter.base_font_size,
@@ -94,7 +94,7 @@ pub(crate) fn layout_lof<'a>(
                 layouter.current_page.text_pool.push(".");
                 while dot_x < leader_end {
                     layouter.push_op(Paint::GlyphRun {
-                        x: dot_x,
+                        x: dot_x.into(),
                         y: layouter.y,
                         face: Face::Roman,
                         size: layouter.base_font_size,
@@ -133,7 +133,7 @@ pub(crate) fn layout_lot<'a>(
         let text_pool_start = layouter.current_page.text_pool.len() as u32;
         layouter.current_page.text_pool.push(heading_text);
         layouter.push_op(Paint::GlyphRun {
-            x: layouter.left + layouter.left_skip,
+            x: (layouter.left + layouter.left_skip).into(),
             y: layouter.y,
             face: Face::Bold,
             size: heading_size,
@@ -158,7 +158,7 @@ pub(crate) fn layout_lot<'a>(
         if !layouter.is_dry_run {
             // A. Draw Table Tag (e.g. "Table 1")
             layouter.push_op(Paint::TableTag {
-                x: left_margin,
+                x: left_margin.into(),
                 y: layouter.y,
                 face: Face::Roman,
                 size: layouter.base_font_size,
@@ -181,7 +181,7 @@ pub(crate) fn layout_lot<'a>(
             let page_x = right_margin - page_w;
 
             layouter.push_op(Paint::PageNumber {
-                x: page_x,
+                x: page_x.into(),
                 y: layouter.y,
                 face: Face::Roman,
                 size: layouter.base_font_size,
@@ -203,7 +203,7 @@ pub(crate) fn layout_lot<'a>(
                 layouter.current_page.text_pool.push(".");
                 while dot_x < leader_end {
                     layouter.push_op(Paint::GlyphRun {
-                        x: dot_x,
+                        x: dot_x.into(),
                         y: layouter.y,
                         face: Face::Roman,
                         size: layouter.base_font_size,

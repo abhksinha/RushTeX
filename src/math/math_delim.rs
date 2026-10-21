@@ -146,7 +146,7 @@ impl DelimiterSizingGovernor {
     /// $\max(2 \delta_1 \times 0.901, 2 \delta_1 - 5\text{pt})$ where $\delta_1 = \max(h - a, d + a)$.
     #[inline(always)]
     pub fn target_height(content_h: f32, content_d: f32, axis_h: f32, min_h: f32) -> f32 {
-        Self::target_height_with_shortfall(content_h, content_d, axis_h, min_h, 5.0)
+        Self::target_height_with_shortfall(content_h, content_d, axis_h, min_h, 5.0, 901)
     }
 
     /// Evaluates Rule 19 target delimiter height with explicit delimiter shortfall.
@@ -157,10 +157,11 @@ impl DelimiterSizingGovernor {
         axis_h: f32,
         min_h: f32,
         shortfall: f32,
+        factor: u16,
     ) -> f32 {
         let delta1 = (content_h - axis_h).max(content_d + axis_h).max(0.0);
         let z = 2.0 * delta1;
-        let delta = z * 0.901;
+        let delta = z * f32::from(factor) / 1000.0;
         let delta2 = z - shortfall;
         delta.max(delta2).max(min_h)
     }

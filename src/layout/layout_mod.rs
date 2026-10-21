@@ -4,10 +4,12 @@
 //! code listings, table formatting, and multi-page pagination.
 
 pub mod layout_engine;
+pub mod layout_float;
 pub mod layout_hyphen;
 pub mod layout_hyphen_trie;
 pub mod layout_hz;
 pub mod layout_linebreak;
+pub mod layout_pagebuilder;
 pub mod layout_listing;
 
 // Backward-compatible module aliases:

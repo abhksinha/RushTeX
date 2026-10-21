@@ -1,0 +1,15 @@
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\font\tenrm=cmr10 \tenrm \font\sevenrm=cmr7
+\def\a{A}\def\b{B}\def\log#1{\xdef\L{\L#1}}\def\L{}
+{\aftergroup\a\aftergroup\b \log{in}}\log{out}
+\def\x{\log{x}}{{\aftergroup\x}\log{y}}
+\textfont3=\tenrm \scriptfont3=\sevenrm
+{\textfont3=\sevenrm \xdef\inner{\fontname\textfont3}}
+\edef\outer{\fontname\textfont3,\fontname\scriptfont3,\fontname\scriptscriptfont3}
+\edef\thefont{\expandafter\noexpand\the\font}
+\edef\csn{\csname\ifincsname yes\else no\fi\endcsname}
+\edef\csm{\ifincsname yes\else no\fi}
+\setbox1\hbox{Mr.\spacefactor=1000 \count1=\spacefactor a. \count2=\spacefactor\ b}
+\setbox2\vbox{\hbox{a}\dimen3=\prevdepth \prevdepth=5pt \hbox{b}}
+\setbox3\hbox{\count4=\lastnodetype x\count5=\lastnodetype \hskip1pt\count6=\lastnodetype \kern1pt\count7=\lastnodetype \penalty5 \count8=\lastnodetype \hbox{}\count9=\lastnodetype \vrule\count10=\lastnodetype}
+\setbox4\vbox{\hbox{}\count11=\lastnodetype \vbox{}\count12=\lastnodetype}

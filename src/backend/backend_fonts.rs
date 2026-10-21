@@ -94,6 +94,27 @@ pub enum Face {
     Extension7 = 30,
     /// `\scshape` / `\textsc` (cmcsc10)
     SmallCaps = 31,
+    /// `\slshape` / `\textsl` (cmsl10)
+    Slanted = 32,
+    /// Math design size (cmmi6): OML/OMS fd files load it at its own size.
+    MathItalic6 = 33,
+    /// Math design size (cmmi8): OML/OMS fd files load it at its own size.
+    MathItalic8 = 34,
+    /// Math design size (cmmi9): OML/OMS fd files load it at its own size.
+    MathItalic9 = 35,
+    /// Math design size (cmmi12): OML/OMS fd files load it at its own size.
+    MathItalic12 = 36,
+    /// Math design size (cmsy6): OML/OMS fd files load it at its own size.
+    Symbol6 = 37,
+    /// Math design size (cmsy8): OML/OMS fd files load it at its own size.
+    Symbol8 = 38,
+    /// Math design size (cmsy9): OML/OMS fd files load it at its own size.
+    Symbol9 = 39,
+    /// `\sffamily\bfseries` (cmssbx10, ot1cmss.fd `bx/n` at every size)
+    SansBold = 40,
+    /// TS1 text symbols (`\textcopyright`, `\textasteriskcentered`): tcrm1000, the other
+    /// sizes are `OpticalMaster`s. Codes are `backend_ts1::TS1_SLOT_CODE` of the slots.
+    TextComp = 41,
 }
 
 impl Face {
@@ -101,9 +122,9 @@ impl Face {
     pub const ITALIC_MASK: u8 = 2;
     pub const MONO_MASK: u8 = 4;
 
-    /// Number of faces; `used_faces` bit masks are `u32` and `PackedWordAttr` stores 5 bits,
-    /// so this must stay <= 32.
-    pub const COUNT: usize = 32;
+    /// Number of faces; `used_faces` bit masks are `u64` and `PackedWordAttr` stores 6 bits,
+    /// so this must stay <= 64.
+    pub const COUNT: usize = 42;
 
     pub const ALL: [Face; Face::COUNT] = [
         Face::Roman,
@@ -138,6 +159,16 @@ impl Face {
         Face::BoldSymbol5,
         Face::Extension7,
         Face::SmallCaps,
+        Face::Slanted,
+        Face::MathItalic6,
+        Face::MathItalic8,
+        Face::MathItalic9,
+        Face::MathItalic12,
+        Face::Symbol6,
+        Face::Symbol8,
+        Face::Symbol9,
+        Face::SansBold,
+        Face::TextComp,
     ];
 
     #[inline(always)]
@@ -175,6 +206,16 @@ impl Face {
             29 => Face::BoldSymbol5,
             30 => Face::Extension7,
             31 => Face::SmallCaps,
+            32 => Face::Slanted,
+            33 => Face::MathItalic6,
+            34 => Face::MathItalic8,
+            35 => Face::MathItalic9,
+            36 => Face::MathItalic12,
+            37 => Face::Symbol6,
+            38 => Face::Symbol8,
+            39 => Face::Symbol9,
+            40 => Face::SansBold,
+            41 => Face::TextComp,
             _ => Face::Roman,
         }
     }
@@ -226,11 +267,7 @@ impl Face {
             return "MSBM10";
         }
         if (self as u8) >= 18 {
-            const EXTRA_NAMES: [&str; Face::COUNT - 18] = [
-                "CMSS10", "CMSS8", "CMTT8", "EUFM10", "EUFM7", "EUFM5", "CMMIB10", "CMMIB7", "CMMIB5", "CMBSY10", "CMBSY7", "CMBSY5", "CMEX7",
-                "CMCSC10",
-            ];
-            return EXTRA_NAMES[self as usize - 18];
+            return EXTRA_FACES[self as usize - 18].name;
         }
         match family {
             FontFamily::Times => {
@@ -276,17 +313,27 @@ impl Face {
 
     #[inline(always)]
     pub fn resource(self) -> &'static str {
-        const RES: [&str; Face::COUNT] = [
+        const RES: [&str; 18] = [
             "/Fr", "/Fb", "/Fi", "/Fbi", "/Fc", "/Fcb", "/Fs", "/Fz", "/Fe", "/Fmi",
             "/Fr7", "/Fr5", "/Fmi7", "/Fmi5", "/Fs7", "/Fs5", "/Fmsa", "/Fmsb",
-            "/Fss", "/Fss8", "/Ftt8", "/Fk", "/Fk7", "/Fk5", "/Fmb", "/Fmb7", "/Fmb5", "/Fsb", "/Fsb7", "/Fsb5", "/Fe7",
-            "/Fsc",
         ];
-        RES[self as usize]
+        match RES.get(self as usize) {
+            Some(r) => r,
+            None => EXTRA_FACES[self as usize - 18].resource,
+        }
     }
 
     #[inline(always)]
     pub fn with_bold(self, enable_bold: bool) -> Self {
+        match self {
+            Face::MathSans if enable_bold => return Face::SansBold,
+            Face::SansBold if !enable_bold => return Face::MathSans,
+            _ => {}
+        }
+        // cmbxsl10 is not bundled: bold wins over the slant.
+        if self == Face::Slanted {
+            return if enable_bold { Face::Bold } else { self };
+        }
         if (self as u8) >= 6 {
             return self;
         }
@@ -308,6 +355,10 @@ impl Face {
 
     #[inline(always)]
     pub fn with_italic(self, enable_italic: bool) -> Self {
+        // Italic and upright are other shapes than slanted.
+        if self == Face::Slanted {
+            return if enable_italic { Face::Italic } else { Face::Roman };
+        }
         if self.is_mono() || (self as u8) >= 6 {
             return self;
         }
@@ -329,6 +380,15 @@ impl Face {
 
     #[inline(always)]
     pub fn with_mono(self, enable_mono: bool) -> Self {
+        match self {
+            Face::MathSans if enable_mono => return Face::Mono,
+            Face::SansBold if enable_mono => return Face::MonoBold,
+            _ => {}
+        }
+        // cmsltt10 is not bundled: typewriter wins over the slant.
+        if self == Face::Slanted {
+            return if enable_mono { Face::Mono } else { self };
+        }
         if (self as u8) >= 6 {
             return self;
         }
@@ -364,11 +424,6 @@ impl Face {
     }
 
     #[inline(always)]
-    pub fn is_symbol(self) -> bool {
-        self == Face::Symbol
-    }
-
-    #[inline(always)]
     pub fn is_dingbats(self) -> bool {
         self == Face::Dingbats
     }
@@ -378,19 +433,26 @@ impl Face {
         self == Face::Extension
     }
 
-    #[inline(always)]
-    pub fn is_math_italic(self) -> bool {
-        self == Face::MathItalic
-    }
-
     /// Bit of this face in a `used_faces` mask.
     #[inline(always)]
-    pub const fn bit(self) -> u32 {
+    pub const fn bit(self) -> u64 {
         1 << (self as u8)
     }
 
+    /// Whether this is a medium-weight cmmi face.
+    #[inline(always)]
+    pub const fn is_math_italic(self) -> bool {
+        self.bit() & Face::MATH_ITALIC_MASK != 0
+    }
+
+    /// Whether this is a medium-weight cmsy face (OMS layout: `-` sits at code 0).
+    #[inline(always)]
+    pub const fn is_symbol(self) -> bool {
+        self.bit() & Face::SYMBOL_MASK != 0
+    }
+
     /// Computer Modern faces whose glyphs use OT1-style (text) ToUnicode.
-    pub const OT1_MASK: u32 = Face::Roman.bit()
+    pub const OT1_MASK: u64 = Face::Roman.bit()
         | Face::Bold.bit()
         | Face::Italic.bit()
         | Face::Roman7.bit()
@@ -403,29 +465,42 @@ impl Face {
         | Face::Fraktur.bit()
         | Face::Fraktur7.bit()
         | Face::Fraktur5.bit()
-        | Face::SmallCaps.bit();
+        | Face::SmallCaps.bit()
+        | Face::Slanted.bit()
+        | Face::SansBold.bit();
     /// Computer Modern faces in the OML (math italic) encoding.
-    pub const OML_MASK: u32 = Face::MathItalic.bit()
-        | Face::MathItalic7.bit()
-        | Face::MathItalic5.bit()
+    pub const OML_MASK: u64 = Face::MATH_ITALIC_MASK
         | Face::BoldMathItalic.bit()
         | Face::BoldMathItalic7.bit()
         | Face::BoldMathItalic5.bit();
     /// Computer Modern faces in the OMS (math symbol) encoding.
-    pub const OMS_MASK: u32 = Face::Symbol.bit()
-        | Face::Symbol7.bit()
-        | Face::Symbol5.bit()
+    pub const OMS_MASK: u64 = Face::SYMBOL_MASK
         | Face::BoldSymbol.bit()
         | Face::BoldSymbol7.bit()
         | Face::BoldSymbol5.bit();
+    /// The medium-weight cmmi faces (every design size).
+    pub const MATH_ITALIC_MASK: u64 = Face::MathItalic.bit()
+        | Face::MathItalic7.bit()
+        | Face::MathItalic5.bit()
+        | Face::MathItalic6.bit()
+        | Face::MathItalic8.bit()
+        | Face::MathItalic9.bit()
+        | Face::MathItalic12.bit();
+    /// The medium-weight cmsy faces (every design size).
+    pub const SYMBOL_MASK: u64 = Face::Symbol.bit()
+        | Face::Symbol7.bit()
+        | Face::Symbol5.bit()
+        | Face::Symbol6.bit()
+        | Face::Symbol8.bit()
+        | Face::Symbol9.bit();
     /// Faces in the OMX (math extension) encoding.
-    pub const OMX_MASK: u32 = Face::Extension.bit() | Face::Extension7.bit();
+    pub const OMX_MASK: u64 = Face::Extension.bit() | Face::Extension7.bit();
 
     /// Typewriter faces (cmtt), whose OT1 layout differs from cmr's in the ASCII range.
-    pub const OT1TT_MASK: u32 = Face::Mono.bit() | Face::MonoBold.bit() | Face::MathMono8.bit();
+    pub const OT1TT_MASK: u64 = Face::Mono.bit() | Face::MonoBold.bit() | Face::MathMono8.bit();
 }
 
-const _: () = assert!(Face::COUNT <= 32 && Face::ALL.len() == Face::COUNT);
+const _: () = assert!(Face::COUNT <= 64 && Face::ALL.len() == Face::COUNT);
 
 /// 64-byte hardware cache-line aligned font metric table.
 /// Ensures 100% L1 cache-line locality and zero cache-line boundary crossings.
@@ -966,7 +1041,7 @@ pub static WIDTH_TABLE_MAP: [&AlignedTable<128>; 72] = [
     &MSAM10_WIDTHS, &MSBM10_WIDTHS,
 ];
 
-const fn widths_from_metrics(m: &[crate::math::math_tfm::PackedGlyphMetric; 128]) -> AlignedTable<128> {
+pub(crate) const fn widths_from_metrics(m: &[crate::math::math_tfm::PackedGlyphMetric; 128]) -> AlignedTable<128> {
     let mut w = [0u16; 128];
     let mut i = 0;
     while i < 128 {
@@ -979,22 +1054,67 @@ const fn widths_from_metrics(m: &[crate::math::math_tfm::PackedGlyphMetric; 128]
 /// PDF `/Widths` (1000 units per em of the design size) for the faces past `Face::AmsB`,
 /// derived at compile time from their TFM metric tables (`math_tfm_faces`).
 pub static EXTRA_FACE_WIDTHS: [AlignedTable<128>; Face::COUNT - 18] = {
+    let mut out = [AlignedTable([0; 128]); Face::COUNT - 18];
+    let mut i = 0;
+    while i < out.len() {
+        out[i] = widths_from_metrics(EXTRA_FACES[i].metrics);
+        i += 1;
+    }
+    out
+};
+
+/// Everything the pipeline needs about one face past `Face::AmsB`, in one row: adding a
+/// font is adding a `Face` variant and its row (`scripts/fontgen/gen_one.py` makes the
+/// statics the row points at).
+pub(crate) struct ExtraFace {
+    /// PDF `/BaseFont`.
+    pub(crate) name: &'static str,
+    /// Page resource name.
+    pub(crate) resource: &'static str,
+    /// TFM metrics (w, h, d, ic).
+    pub(crate) metrics: &'static [crate::math::math_tfm::PackedGlyphMetric; 128],
+    /// The embedded Type 1C program.
+    pub(crate) program: &'static crate::backend::backend_cm_fonts::CmFontProgram,
+    /// Exact TFM widths and fontdimens of a text font.
+    pub(crate) fix: Option<&'static crate::backend::backend_cm_fix::FixMetrics>,
+    /// Its own ToUnicode map, for fonts outside the OT1/OML/OMS layouts (TS1, T1).
+    pub(crate) tounicode: Option<&'static [u16; 128]>,
+    /// Shaped as text: its ligature/kern program and encoding.
+    pub(crate) text: Option<(&'static crate::backend::backend_ligkern::LigKernTable, crate::backend::backend_shape::TextEncoding)>,
+}
+
+pub(crate) static EXTRA_FACES: [ExtraFace; Face::COUNT - 18] = {
+    use crate::backend::backend_cm_fix as fix;
+    use crate::backend::backend_cm_fonts as cmf;
+    use crate::backend::backend_ligkern as lk;
+    use crate::backend::backend_shape::TextEncoding;
+    use crate::backend::backend_ts1 as ts1;
     use crate::math::math_tfm_faces as t;
     [
-        widths_from_metrics(&t::CMSS10_METRICS),
-        widths_from_metrics(&t::CMSS8_METRICS),
-        widths_from_metrics(&t::CMTT8_METRICS),
-        widths_from_metrics(&t::EUFM10_METRICS),
-        widths_from_metrics(&t::EUFM7_METRICS),
-        widths_from_metrics(&t::EUFM5_METRICS),
-        widths_from_metrics(&t::CMMIB10_METRICS),
-        widths_from_metrics(&t::CMMIB7_METRICS),
-        widths_from_metrics(&t::CMMIB5_METRICS),
-        widths_from_metrics(&t::CMBSY10_METRICS),
-        widths_from_metrics(&t::CMBSY7_METRICS),
-        widths_from_metrics(&t::CMBSY5_METRICS),
-        widths_from_metrics(&t::CMEX7_METRICS),
-        widths_from_metrics(&t::CMCSC10_METRICS),
+    /* MathSans */ ExtraFace { name: "CMSS10", resource: "/Fss", metrics: &t::CMSS10_METRICS, program: &cmf::CMSS10_PROGRAM, fix: Some(&fix::CMSS10_FIX), tounicode: None, text: Some((&lk::CMSS10, TextEncoding::Ot1)) },
+    /* MathSans8 */ ExtraFace { name: "CMSS8", resource: "/Fss8", metrics: &t::CMSS8_METRICS, program: &cmf::CMSS8_PROGRAM, fix: None, tounicode: None, text: None },
+    /* MathMono8 */ ExtraFace { name: "CMTT8", resource: "/Ftt8", metrics: &t::CMTT8_METRICS, program: &cmf::CMTT8_PROGRAM, fix: None, tounicode: None, text: None },
+    /* Fraktur */ ExtraFace { name: "EUFM10", resource: "/Fk", metrics: &t::EUFM10_METRICS, program: &cmf::EUFM10_PROGRAM, fix: None, tounicode: None, text: None },
+    /* Fraktur7 */ ExtraFace { name: "EUFM7", resource: "/Fk7", metrics: &t::EUFM7_METRICS, program: &cmf::EUFM7_PROGRAM, fix: None, tounicode: None, text: None },
+    /* Fraktur5 */ ExtraFace { name: "EUFM5", resource: "/Fk5", metrics: &t::EUFM5_METRICS, program: &cmf::EUFM5_PROGRAM, fix: None, tounicode: None, text: None },
+    /* BoldMathItalic */ ExtraFace { name: "CMMIB10", resource: "/Fmb", metrics: &t::CMMIB10_METRICS, program: &cmf::CMMIB10_PROGRAM, fix: None, tounicode: None, text: None },
+    /* BoldMathItalic7 */ ExtraFace { name: "CMMIB7", resource: "/Fmb7", metrics: &t::CMMIB7_METRICS, program: &cmf::CMMIB7_PROGRAM, fix: None, tounicode: None, text: None },
+    /* BoldMathItalic5 */ ExtraFace { name: "CMMIB5", resource: "/Fmb5", metrics: &t::CMMIB5_METRICS, program: &cmf::CMMIB5_PROGRAM, fix: None, tounicode: None, text: None },
+    /* BoldSymbol */ ExtraFace { name: "CMBSY10", resource: "/Fsb", metrics: &t::CMBSY10_METRICS, program: &cmf::CMBSY10_PROGRAM, fix: None, tounicode: None, text: None },
+    /* BoldSymbol7 */ ExtraFace { name: "CMBSY7", resource: "/Fsb7", metrics: &t::CMBSY7_METRICS, program: &cmf::CMBSY7_PROGRAM, fix: None, tounicode: None, text: None },
+    /* BoldSymbol5 */ ExtraFace { name: "CMBSY5", resource: "/Fsb5", metrics: &t::CMBSY5_METRICS, program: &cmf::CMBSY5_PROGRAM, fix: None, tounicode: None, text: None },
+    /* Extension7 */ ExtraFace { name: "CMEX7", resource: "/Fe7", metrics: &t::CMEX7_METRICS, program: &cmf::CMEX7_PROGRAM, fix: None, tounicode: None, text: None },
+    /* SmallCaps */ ExtraFace { name: "CMCSC10", resource: "/Fsc", metrics: &t::CMCSC10_METRICS, program: &cmf::CMCSC10_PROGRAM, fix: Some(&fix::CMCSC10_FIX), tounicode: None, text: Some((&lk::CMCSC10, TextEncoding::Ot1NoFfSlots)) },
+    /* Slanted */ ExtraFace { name: "CMSL10", resource: "/Fsl", metrics: &t::CMSL10_METRICS, program: &cmf::CMSL10_PROGRAM, fix: Some(&fix::CMSL10_FIX), tounicode: None, text: Some((&lk::CMSL10, TextEncoding::Ot1)) },
+    /* MathItalic6 */ ExtraFace { name: "CMMI6", resource: "/Fmi6", metrics: &t::CMMI6_METRICS, program: &cmf::CMMI6_PROGRAM, fix: None, tounicode: None, text: None },
+    /* MathItalic8 */ ExtraFace { name: "CMMI8", resource: "/Fmi8", metrics: &t::CMMI8_METRICS, program: &cmf::CMMI8_PROGRAM, fix: None, tounicode: None, text: None },
+    /* MathItalic9 */ ExtraFace { name: "CMMI9", resource: "/Fmi9", metrics: &t::CMMI9_METRICS, program: &cmf::CMMI9_PROGRAM, fix: None, tounicode: None, text: None },
+    /* MathItalic12 */ ExtraFace { name: "CMMI12", resource: "/Fmi12", metrics: &t::CMMI12_METRICS, program: &cmf::CMMI12_PROGRAM, fix: None, tounicode: None, text: None },
+    /* Symbol6 */ ExtraFace { name: "CMSY6", resource: "/Fs6", metrics: &t::CMSY6_METRICS, program: &cmf::CMSY6_PROGRAM, fix: None, tounicode: None, text: None },
+    /* Symbol8 */ ExtraFace { name: "CMSY8", resource: "/Fs8", metrics: &t::CMSY8_METRICS, program: &cmf::CMSY8_PROGRAM, fix: None, tounicode: None, text: None },
+    /* Symbol9 */ ExtraFace { name: "CMSY9", resource: "/Fs9", metrics: &t::CMSY9_METRICS, program: &cmf::CMSY9_PROGRAM, fix: None, tounicode: None, text: None },
+    /* SansBold */ ExtraFace { name: "CMSSBX10", resource: "/Fssb", metrics: &t::CMSSBX10_METRICS, program: &cmf::CMSSBX10_PROGRAM, fix: Some(&fix::CMSSBX10_FIX), tounicode: None, text: Some((&lk::CMSSBX10, TextEncoding::Ot1)) },
+    /* TextComp */ ExtraFace { name: "SFRM1000", resource: "/Ftc", metrics: &ts1::TCRM1000_METRICS, program: &ts1::TCRM1000_PROGRAM, fix: Some(&ts1::TCRM1000_FIX), tounicode: Some(&ts1::TS1_TOUNICODE), text: None },
     ]
 };
 
@@ -1111,6 +1231,8 @@ pub fn resolve_digit_units(family: FontFamily, font_face: Face) -> u32 {
         }
     } else {
         match family {
+            // cmbx10 digits are 0.575 em.
+            FontFamily::ComputerModern if font_face.is_bold() => 575,
             FontFamily::Times | FontFamily::Palatino | FontFamily::ComputerModern => 500,
             FontFamily::Helvetica => 556,
         }

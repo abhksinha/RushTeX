@@ -236,64 +236,52 @@ const ZERO_METRIC: crate::math::math_tfm::GlyphMetric =
     crate::math::math_tfm::GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 };
 
 /// Measures the rendered typographic width in points for a given math character and face.
+/// The design-size text master a Computer Modern text-font glyph in math is set in at
+/// `size` (`\mathrm`, `\mathbf`, `\mathit`, `\mathtt`, logos): LaTeX loads cmr8, cmbx7,
+/// ... from the `.fd` sizes, as for text. `None` when the face's own font applies.
+#[inline]
+pub fn math_text_master(face: Face, size: f32, family: metrics::FontFamily) -> Option<(Face, crate::backend::optical::OpticalMaster)> {
+    use crate::backend::optical::OpticalMaster;
+    let text_face = match face {
+        Face::Roman | Face::Roman7 | Face::Roman5 => Face::Roman,
+        Face::Bold | Face::Italic | Face::Mono | Face::TextComp => face,
+        _ => return None,
+    };
+    match (face, OpticalMaster::select(family, text_face, size)) {
+        // cmr7 and cmr5 are faces of their own.
+        (Face::Roman7, Some(OpticalMaster::Cmr7)) | (Face::Roman5, Some(OpticalMaster::Cmr5)) => None,
+        (_, m) => m.map(|m| (text_face, m)),
+    }
+}
+
+/// TFM metric of `code` in a cmsy face of any design size.
+#[inline]
+fn cm_symbol_metric(face: Face, code: u8) -> crate::math::math_tfm::GlyphMetric {
+    crate::math::math_tfm_faces::cm_face_metric(face, code).unwrap_or(ZERO_METRIC)
+}
+
+/// The font code of `ch` in a Computer Modern face: cmsy holds the minus sign at code 0,
+/// where ASCII `-` would land.
+#[inline]
+pub fn cm_code(ch: char, face: Face) -> Option<u8> {
+    let sym = face.is_symbol();
+    match ch as u32 {
+        0x2D | 0x2212 if sym => Some(0x00),
+        c if c < 128 => Some(c as u8),
+        _ if sym => metrics::unicode_to_symbol_byte(ch).map(|b| if b == 0x2D { 0x00 } else { b }),
+        _ => None,
+    }
+}
+
 #[inline(always)]
 pub fn measure_char(ch: char, face: Face, size: f32, family: metrics::FontFamily) -> f32 {
     let scale = size * 0.001;
     if family == metrics::FontFamily::ComputerModern {
-        let code = ch as u32;
-        if code < 128 {
-            let c = code as u8;
-            match face {
-                Face::MathItalic => return cmmi10_metric(c).w * scale,
-                Face::MathItalic7 => return cmmi7_metric(c).w * scale,
-                Face::MathItalic5 => return cmmi5_metric(c).w * scale,
-                Face::Italic => return cmti10_metric(c).w * scale,
-                Face::Bold => return cmbx10_metric(c).w * scale,
-                Face::Roman => return cmr10_metric(c).w * scale,
-                Face::Roman7 => return cmr7_metric(c).w * scale,
-                Face::Roman5 => return cmr5_metric(c).w * scale,
-                Face::AmsA => return msam10_metric(c).w * scale,
-                Face::AmsB => return msbm10_metric(c).w * scale,
-                f if f == Face::Mono || crate::math::math_tfm_faces::is_alphabet_face(f) => {
-                    let m = crate::math::math_tfm_faces::cm_face_metric(f, c).unwrap_or(ZERO_METRIC);
-                    return m.w * scale;
-                }
-                Face::Symbol => {
-                    let sc = if c == 0x2D { 0x00 } else { c };
-                    return cmsy10_metric(sc).w * scale;
-                }
-                Face::Symbol7 => {
-                    let sc = if c == 0x2D { 0x00 } else { c };
-                    return cmsy7_metric(sc).w * scale;
-                }
-                Face::Symbol5 => {
-                    let sc = if c == 0x2D { 0x00 } else { c };
-                    return cmsy5_metric(sc).w * scale;
-                }
-                _ => {}
-            }
-        }
-        if face == Face::Symbol || face == Face::Symbol7 || face == Face::Symbol5 {
-            if ch == '-' || ch == '−' {
-                let w = match face {
-                    Face::Symbol7 => cmsy7_metric(0x00).w,
-                    Face::Symbol5 => cmsy5_metric(0x00).w,
-                    _ => cmsy10_metric(0x00).w,
-                };
-                return w * scale;
-            }
-            if let Some(byte) = metrics::unicode_to_symbol_byte(ch) {
-                let code = if byte == 0x2D { 0x00 } else { byte };
-                let w = match face {
-                    Face::Symbol7 => cmsy7_metric(code).w,
-                    Face::Symbol5 => cmsy5_metric(code).w,
-                    _ => cmsy10_metric(code).w,
-                };
-                return w * scale;
-            }
+        if let Some(d) = cm_code(ch, face).and_then(|c| crate::math::math_tfm::glyph_dims(face, c, size, family)) {
+            return d.w;
         }
     }
-    if matches!(face, Face::Symbol | Face::Symbol7 | Face::Symbol5) {
+    if face.is_symbol() {
         if let Some(code) = metrics::unicode_to_symbol_byte(ch) {
             let units = metrics::SYMBOL_WIDTHS[code as usize];
             return (units as f32) * scale;
@@ -604,6 +592,269 @@ pub fn math_font_parameters(family: metrics::FontFamily) -> &'static MathFontPar
     }
 }
 
+/// Appendix G parameters of the 6pt math fonts (cmsy6, and cmex7: amsmath loads cmex7 below
+/// 8pt), from their TFM files.
+pub static CM_MATH_PARAMS_6PT: MathFontParameters = MathFontParameters {
+    axis_height: 250,
+    rule_thickness: 49,
+    num1: 813,
+    num2: 392,
+    num3: 485,
+    denom1: 864,
+    denom2: 429,
+    sup1: 503,
+    sup2: 420,
+    sup3: 287,
+    sub1: 167,
+    sub2: 333,
+    sup_drop: 412,
+    sub_drop: 83,
+    delim1: 1983,
+    delim2: 1350,
+    big_op_spacing1: 111,
+    big_op_spacing2: 167,
+    big_op_spacing3: 200,
+    big_op_spacing4: 611,
+    big_op_spacing5: 143,
+    rad_clearance_display: 156,
+    rad_clearance_text: 61,
+    frac_clearance_display: 146,
+    frac_clearance_text: 49,
+    sub_sup_gap: 194,
+    accent_base_height: 431,
+    matrix_row_spacing: 1200,
+    matrix_col_spacing: 1000,
+    quad: 1278,
+    _reserved: [0; 4],
+};
+
+/// Appendix G parameters of the 8pt math fonts (cmsy8 and cmex8), from their TFM files.
+pub static CM_MATH_PARAMS_8PT: MathFontParameters = MathFontParameters {
+    axis_height: 250,
+    rule_thickness: 45,
+    num1: 696,
+    num2: 409,
+    num3: 457,
+    denom1: 749,
+    denom2: 392,
+    sup1: 415,
+    sup2: 353,
+    sup3: 285,
+    sub1: 125,
+    sub2: 250,
+    sup_drop: 396,
+    sub_drop: 62,
+    delim1: 1487,
+    delim2: 1138,
+    big_op_spacing1: 111,
+    big_op_spacing2: 167,
+    big_op_spacing3: 200,
+    big_op_spacing4: 608,
+    big_op_spacing5: 125,
+    rad_clearance_display: 153,
+    rad_clearance_text: 56,
+    frac_clearance_display: 135,
+    frac_clearance_text: 45,
+    sub_sup_gap: 180,
+    accent_base_height: 431,
+    matrix_row_spacing: 1200,
+    matrix_col_spacing: 1000,
+    quad: 1063,
+    _reserved: [0; 4],
+};
+
+/// Appendix G parameters of the 9pt math fonts (cmsy9 and cmex9), from their TFM files.
+pub static CM_MATH_PARAMS_9PT: MathFontParameters = MathFontParameters {
+    axis_height: 250,
+    rule_thickness: 42,
+    num1: 647,
+    num2: 410,
+    num3: 450,
+    denom1: 678,
+    denom2: 339,
+    sup1: 480,
+    sup2: 425,
+    sup3: 287,
+    sub1: 111,
+    sub2: 176,
+    sup_drop: 352,
+    sub_drop: 56,
+    delim1: 2656,
+    delim2: 1011,
+    big_op_spacing1: 111,
+    big_op_spacing2: 167,
+    big_op_spacing3: 200,
+    big_op_spacing4: 605,
+    big_op_spacing5: 111,
+    rad_clearance_display: 150,
+    rad_clearance_text: 53,
+    frac_clearance_display: 127,
+    frac_clearance_text: 42,
+    sub_sup_gap: 169,
+    accent_base_height: 431,
+    matrix_row_spacing: 1200,
+    matrix_col_spacing: 1000,
+    quad: 1028,
+    _reserved: [0; 4],
+};
+
+/// TeX's math font parameters at one size (§700–§702) in points. Under Computer Modern they
+/// are exact: the sigmas are fam 2's fontdimens (cmsy at its `.fd` size), the xis fam 3's
+/// (amsmath's `<-8>cmex7<8>cmex8<9>cmex9<10->cmex10`), each scaled by `store_scaled` (§571),
+/// so every value is a whole number of scaled points. Other families scale their tables.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MathParams {
+    pub axis_height: f32,
+    pub rule_thickness: f32,
+    pub num1: f32,
+    pub num2: f32,
+    pub num3: f32,
+    pub denom1: f32,
+    pub denom2: f32,
+    pub sup1: f32,
+    pub sup2: f32,
+    pub sup3: f32,
+    pub sub1: f32,
+    pub sub2: f32,
+    pub sup_drop: f32,
+    pub sub_drop: f32,
+    pub delim1: f32,
+    pub delim2: f32,
+    pub big_op_spacing1: f32,
+    pub big_op_spacing2: f32,
+    pub big_op_spacing3: f32,
+    pub big_op_spacing4: f32,
+    pub big_op_spacing5: f32,
+    pub rad_clearance_display: f32,
+    pub rad_clearance_text: f32,
+    pub frac_clearance_display: f32,
+    pub frac_clearance_text: f32,
+    pub sub_sup_gap: f32,
+    pub accent_base_height: f32,
+    pub matrix_row_spacing: f32,
+    pub matrix_col_spacing: f32,
+    pub quad: f32,
+}
+
+impl MathParams {
+    pub fn at(family: metrics::FontFamily, size: f32) -> MathParams {
+        if family == metrics::FontFamily::ComputerModern {
+            return Self::cm(size);
+        }
+        let p = math_font_parameters(family);
+        let k = size * 0.001;
+        MathParams {
+            axis_height: p.axis_height as f32 * k,
+            rule_thickness: p.rule_thickness as f32 * k,
+            num1: p.num1 as f32 * k,
+            num2: p.num2 as f32 * k,
+            num3: p.num3 as f32 * k,
+            denom1: p.denom1 as f32 * k,
+            denom2: p.denom2 as f32 * k,
+            sup1: p.sup1 as f32 * k,
+            sup2: p.sup2 as f32 * k,
+            sup3: p.sup3 as f32 * k,
+            sub1: p.sub1 as f32 * k,
+            sub2: p.sub2 as f32 * k,
+            sup_drop: p.sup_drop as f32 * k,
+            sub_drop: p.sub_drop as f32 * k,
+            delim1: p.delim1 as f32 * k,
+            delim2: p.delim2 as f32 * k,
+            big_op_spacing1: p.big_op_spacing1 as f32 * k,
+            big_op_spacing2: p.big_op_spacing2 as f32 * k,
+            big_op_spacing3: p.big_op_spacing3 as f32 * k,
+            big_op_spacing4: p.big_op_spacing4 as f32 * k,
+            big_op_spacing5: p.big_op_spacing5 as f32 * k,
+            rad_clearance_display: p.rad_clearance_display as f32 * k,
+            rad_clearance_text: p.rad_clearance_text as f32 * k,
+            frac_clearance_display: p.frac_clearance_display as f32 * k,
+            frac_clearance_text: p.frac_clearance_text as f32 * k,
+            sub_sup_gap: p.sub_sup_gap as f32 * k,
+            accent_base_height: p.accent_base_height as f32 * k,
+            matrix_row_spacing: p.matrix_row_spacing as f32 * k,
+            matrix_col_spacing: p.matrix_col_spacing as f32 * k,
+            quad: p.quad as f32 * k,
+        }
+    }
+
+    fn cm(size: f32) -> MathParams {
+        use crate::backend::backend_tfm as t;
+        let sy = match size {
+            s if s < 5.5 => &t::CMSY5_TFM,
+            s if s < 6.5 => &t::CMSY6_TFM,
+            s if s < 7.5 => &t::CMSY7_TFM,
+            s if s < 8.5 => &t::CMSY8_TFM,
+            s if s < 9.5 => &t::CMSY9_TFM,
+            _ => &t::CMSY10_TFM,
+        };
+        let ex = match size {
+            s if s < 7.5 => &t::CMEX7_TFM,
+            s if s < 8.5 => &t::CMEX8_TFM,
+            s if s < 9.5 => &t::CMEX9_TFM,
+            _ => &t::CMEX10_TFM,
+        };
+        let sc = crate::backend::scaled::Scaler::at_pt(size);
+        let sy = |n| sc.scale(sy.param(n));
+        let ex = |n| sc.scale(ex.param(n));
+        let pt = |v: i32| v as f32 / 65536.0;
+        let theta = ex(8);
+        let x_height = sy(5);
+        let k = size * 0.001;
+        MathParams {
+            axis_height: pt(sy(22)),
+            rule_thickness: pt(theta),
+            num1: pt(sy(8)),
+            num2: pt(sy(9)),
+            num3: pt(sy(10)),
+            denom1: pt(sy(11)),
+            denom2: pt(sy(12)),
+            sup1: pt(sy(13)),
+            sup2: pt(sy(14)),
+            sup3: pt(sy(15)),
+            sub1: pt(sy(16)),
+            sub2: pt(sy(17)),
+            sup_drop: pt(sy(18)),
+            sub_drop: pt(sy(19)),
+            delim1: pt(sy(20)),
+            delim2: pt(sy(21)),
+            big_op_spacing1: pt(ex(9)),
+            big_op_spacing2: pt(ex(10)),
+            big_op_spacing3: pt(ex(11)),
+            big_op_spacing4: pt(ex(12)),
+            big_op_spacing5: pt(ex(13)),
+            // §737: the radical's clearance.
+            rad_clearance_display: pt(theta + x_height.abs() / 4),
+            rad_clearance_text: pt(theta + theta.abs() / 4),
+            // §744: the fraction's clearance.
+            frac_clearance_display: pt(3 * theta),
+            frac_clearance_text: pt(theta),
+            // §759: the gap between superscript and subscript.
+            sub_sup_gap: pt(4 * theta),
+            accent_base_height: pt(x_height),
+            matrix_row_spacing: CM_MATH_PARAMS.matrix_row_spacing as f32 * k,
+            matrix_col_spacing: CM_MATH_PARAMS.matrix_col_spacing as f32 * k,
+            quad: pt(sy(6)),
+        }
+    }
+}
+
+/// Computer Modern math parameters of the fonts LaTeX loads at `size` points (cmsy for the
+/// sigma parameters, cmex for the xi ones): the 10pt designs serve 10pt and up.
+#[inline]
+pub fn math_font_parameters_sized(family: metrics::FontFamily, size: f32) -> &'static MathFontParameters {
+    if family != metrics::FontFamily::ComputerModern {
+        return math_font_parameters(family);
+    }
+    match size {
+        s if s < 5.5 => &CM_MATH_PARAMS_5PT,
+        s if s < 6.5 => &CM_MATH_PARAMS_6PT,
+        s if s < 7.5 => &CM_MATH_PARAMS_7PT,
+        s if s < 8.5 => &CM_MATH_PARAMS_8PT,
+        s if s < 9.5 => &CM_MATH_PARAMS_9PT,
+        _ => &CM_MATH_PARAMS,
+    }
+}
+
 /// Resolves the 64-byte aligned TeX Appendix G mathematical parameters for a given font family and style in O(1) time.
 #[inline(always)]
 pub fn math_font_parameters_styled(family: metrics::FontFamily, style: MathStyle) -> &'static MathFontParameters {
@@ -703,44 +954,76 @@ pub fn mathcode_char(raw: u16) -> u8 {
     (raw & 0xFF) as u8
 }
 
-/// Maps a base face and math style to the optical face for Computer Modern.
-/// In TeX math mode:
-/// - Display / Text (tier 0): 10pt (CMR10, CMMI10, CMSY10)
-/// - Script (tier 1): 7pt (CMR7, CMMI7, CMSY7)
-/// - ScriptScript (tier 2): 5pt (CMR5, CMMI5, CMSY5)
-#[inline(always)]
-pub fn resolve_optical_face(face: Face, style: MathStyle, family: metrics::FontFamily) -> Face {
+/// The Computer Modern face LaTeX loads for a math family at `size` points, from the size
+/// ranges of the font definitions (fontmath.ltx, omlcmm.fd, omscmsy.fd, ot1cmr.fd,
+/// ot1cmss.fd, ot1cmtt.fd, ueuf.fd, amsfonts): cmmi has designs at 5-9, 10 (also 10.95) and
+/// 12 (12pt and up); cmsy at 5-9 and 10 (10pt and up); cmr7/cmr5 are faces of their own and
+/// the other cmr sizes are text masters of `Face::Roman`; cmss/cmtt use their 8pt designs up
+/// to 8pt; eufm, cmmib and cmbsy are bundled at 5, 7 and 10pt, so the nearest design is used.
+/// `face` may already be a sized face of its family.
+#[inline]
+pub fn resolve_optical_face(face: Face, size: f32, family: metrics::FontFamily) -> Face {
     if family != metrics::FontFamily::ComputerModern {
         return face;
     }
-    match style {
-        MathStyle::Display | MathStyle::CrampedDisplay | MathStyle::Text | MathStyle::CrampedText => {
-            face
+    let pick = |small: Face, mid: Face, base: Face| {
+        if size < 6.5 {
+            small
+        } else if size < 9.5 {
+            mid
+        } else {
+            base
         }
-        // LaTeX font definitions at 10pt: cmss/cmtt use their 8pt designs for <5-8>
-        // (ot1cmss.fd, ot1cmtt.fd); eufm, cmmib and cmbsy have 7pt and 5pt designs.
-        MathStyle::Script | MathStyle::CrampedScript => match face {
-            Face::Roman => Face::Roman7,
-            Face::MathItalic => Face::MathItalic7,
-            Face::Symbol => Face::Symbol7,
-            Face::Mono => Face::MathMono8,
-            Face::MathSans => Face::MathSans8,
-            Face::Fraktur => Face::Fraktur7,
-            Face::BoldMathItalic => Face::BoldMathItalic7,
-            Face::BoldSymbol => Face::BoldSymbol7,
-            _ => face,
+    };
+    match face {
+        Face::MathItalic
+        | Face::MathItalic5
+        | Face::MathItalic6
+        | Face::MathItalic7
+        | Face::MathItalic8
+        | Face::MathItalic9
+        | Face::MathItalic12 => match size {
+            s if s < 5.5 => Face::MathItalic5,
+            s if s < 6.5 => Face::MathItalic6,
+            s if s < 7.5 => Face::MathItalic7,
+            s if s < 8.5 => Face::MathItalic8,
+            s if s < 9.5 => Face::MathItalic9,
+            s if s < 11.5 => Face::MathItalic,
+            _ => Face::MathItalic12,
         },
-        MathStyle::ScriptScript | MathStyle::CrampedScriptScript => match face {
-            Face::Roman => Face::Roman5,
-            Face::MathItalic => Face::MathItalic5,
-            Face::Symbol => Face::Symbol5,
-            Face::Mono => Face::MathMono8,
-            Face::MathSans => Face::MathSans8,
-            Face::Fraktur => Face::Fraktur5,
-            Face::BoldMathItalic => Face::BoldMathItalic5,
-            Face::BoldSymbol => Face::BoldSymbol5,
-            _ => face,
+        Face::Symbol | Face::Symbol5 | Face::Symbol6 | Face::Symbol7 | Face::Symbol8 | Face::Symbol9 => match size {
+            s if s < 5.5 => Face::Symbol5,
+            s if s < 6.5 => Face::Symbol6,
+            s if s < 7.5 => Face::Symbol7,
+            s if s < 8.5 => Face::Symbol8,
+            s if s < 9.5 => Face::Symbol9,
+            _ => Face::Symbol,
         },
+        Face::Roman | Face::Roman7 | Face::Roman5 => match size {
+            s if s < 5.5 => Face::Roman5,
+            s if (6.5..7.5).contains(&s) => Face::Roman7,
+            _ => Face::Roman,
+        },
+        Face::Mono | Face::MathMono8 => {
+            if size < 8.5 {
+                Face::MathMono8
+            } else {
+                Face::Mono
+            }
+        }
+        Face::MathSans | Face::MathSans8 => {
+            if size < 8.5 {
+                Face::MathSans8
+            } else {
+                Face::MathSans
+            }
+        }
+        Face::Fraktur | Face::Fraktur7 | Face::Fraktur5 => pick(Face::Fraktur5, Face::Fraktur7, Face::Fraktur),
+        Face::BoldMathItalic | Face::BoldMathItalic7 | Face::BoldMathItalic5 => {
+            pick(Face::BoldMathItalic5, Face::BoldMathItalic7, Face::BoldMathItalic)
+        }
+        Face::BoldSymbol | Face::BoldSymbol7 | Face::BoldSymbol5 => pick(Face::BoldSymbol5, Face::BoldSymbol7, Face::BoldSymbol),
+        _ => face,
     }
 }
 
@@ -774,6 +1057,10 @@ pub fn cm_alphabet_face(face: Face, ch: char) -> Option<(Face, u8)> {
     if (0x1D7E2..0x1D7EC).contains(&u) {
         return Some((Face::MathSans, b'0' + (u - 0x1D7E2) as u8));
     }
+    // TS1 symbols are addressed by code (slot - 128).
+    if face == Face::TextComp && ch.is_ascii() {
+        return Some((face, ch as u8));
+    }
     if !ch.is_ascii_alphanumeric() {
         return None;
     }
@@ -795,7 +1082,6 @@ pub fn cm_alphabet_pair(
     face_override: Option<Face>,
     prev: char,
     curr: char,
-    style: MathStyle,
     font_size: f32,
 ) -> Option<(bool, f32)> {
     let base = face_override.unwrap_or(Face::MathItalic);
@@ -804,9 +1090,9 @@ pub fn cm_alphabet_pair(
     if fa != fb {
         return None;
     }
-    let face = resolve_optical_face(fa, style, metrics::FontFamily::ComputerModern);
+    let face = resolve_optical_face(fa, font_size, metrics::FontFamily::ComputerModern);
     let keep_ic = !crate::math::math_tfm_faces::is_text_font_face(face);
-    Some((keep_ic, crate::math::math_tfm_faces::cm_face_kern(face, ca, cb) * font_size))
+    Some((keep_ic, crate::math::math_tfm_faces::cm_face_kern(face, ca, cb, font_size)))
 }
 
 /// Face of a digit string (`MathNode::Number`) under a math-alphabet switch in Computer
@@ -873,6 +1159,38 @@ pub fn symbol_italic_correction_family(code: u8, family: metrics::FontFamily) ->
     }
 }
 
+/// [`char_height_depth`] of the ASCII characters of one face, computed on first use. Line
+/// heights scan every character of every word, so they read this table instead.
+pub fn ascii_height_depth_table(face: Face, family: metrics::FontFamily) -> &'static [(f32, f32); 128] {
+    use std::sync::OnceLock;
+    const FAMILIES: usize = 4;
+    static TABLES: [OnceLock<[(f32, f32); 128]>; FAMILIES * Face::COUNT] = [const { OnceLock::new() }; FAMILIES * Face::COUNT];
+    TABLES[family as usize * Face::COUNT + face as usize]
+        .get_or_init(|| std::array::from_fn(|c| char_height_depth(c as u8 as char, face, family)))
+}
+
+/// Height and depth of `ch` in points at `size`, exact for Computer Modern (the TFM of the
+/// face, or of the design-size master LaTeX loads at that size).
+pub fn char_hd(ch: char, face: Face, size: f32, family: metrics::FontFamily) -> (f32, f32) {
+    if family == metrics::FontFamily::ComputerModern {
+        if let Some(d) = cm_code(ch, face).and_then(|c| crate::math::math_tfm::glyph_dims(face, c, size, family)) {
+            return (d.h, d.d);
+        }
+    }
+    let (h, d) = char_height_depth(ch, face, family);
+    (h * size * 0.001, d * size * 0.001)
+}
+
+/// Italic correction of `ch` in points at `size`, exact for Computer Modern.
+pub fn char_ic(ch: char, face: Face, size: f32, family: metrics::FontFamily) -> f32 {
+    if family == metrics::FontFamily::ComputerModern {
+        if let Some(d) = cm_code(ch, face).and_then(|c| crate::math::math_tfm::glyph_dims(face, c, size, family)) {
+            return d.ic;
+        }
+    }
+    italic_correction(ch, face, family) * size * 0.001
+}
+
 /// Computes accurate typographic ink height and depth in 1000-units-per-em.
 #[inline(always)]
 pub fn char_height_depth(ch: char, face: Face, family: metrics::FontFamily) -> (f32, f32) {
@@ -922,7 +1240,8 @@ pub fn char_height_depth(ch: char, face: Face, family: metrics::FontFamily) -> (
                     return (m.h, m.d);
                 }
                 f if f == Face::Mono || crate::math::math_tfm_faces::is_alphabet_face(f) => {
-                    let m = crate::math::math_tfm_faces::cm_face_metric(f, c).unwrap_or(ZERO_METRIC);
+                    let sc = if f.is_symbol() && c == 0x2D { 0x00 } else { c };
+                    let m = crate::math::math_tfm_faces::cm_face_metric(f, sc).unwrap_or(ZERO_METRIC);
                     return (m.h, m.d);
                 }
                 Face::Symbol => {
@@ -943,18 +1262,14 @@ pub fn char_height_depth(ch: char, face: Face, family: metrics::FontFamily) -> (
                 _ => {}
             }
         }
-        if matches!(face, Face::Symbol | Face::Symbol7 | Face::Symbol5) {
+        if face.is_symbol() {
             if let Some(byte) = metrics::unicode_to_symbol_byte(ch) {
                 let sc = if byte == 0x2D { 0x00 } else { byte };
-                let m = match face {
-                    Face::Symbol7 => cmsy7_metric(sc),
-                    Face::Symbol5 => cmsy5_metric(sc),
-                    _ => cmsy10_metric(sc),
-                };
+                let m = cm_symbol_metric(face, sc);
                 return (m.h, m.d);
             }
         }
-    } else if matches!(face, Face::Symbol | Face::Symbol7 | Face::Symbol5) {
+    } else if face.is_symbol() {
         if let Some(byte) = metrics::unicode_to_symbol_byte(ch) {
             return symbol_height_depth_family(byte, family);
         }
@@ -1234,7 +1549,7 @@ pub fn big_op_metrics(op: &str, _family: metrics::FontFamily) -> BigOpMetrics {
         op,
         "lim" | "max" | "min" | "sup" | "inf" | "gcd" | "det" | "liminf" | "limsup" | "Pr"
     );
-    let is_integral = matches!(op, "int" | "iint" | "iiint" | "oint");
+    let is_integral = matches!(op, "int" | "iint" | "iiint" | "iiiint" | "idotsint" | "oint");
 
     if is_text_op {
         BigOpMetrics {
@@ -1655,51 +1970,34 @@ impl CmAccentRecord {
 
     /// Resolves the concrete glyph face, byte code, and unscaled dimensions.
     #[inline(always)]
-    pub fn resolve_metric(&self, target_w: f32, font_size: f32) -> (Face, u8, f32, f32) {
+    /// `ext` is the cmex face of the current size (amsmath's cmex7 below text size).
+    pub fn resolve_metric(&self, target_w: f32, font_size: f32, ext: Face) -> (Face, u8, f32, f32, f32) {
+        // Exact TFM dimensions of the accent's font at the current size (§738, §709).
+        let dims = |face: Face, code: u8| {
+            crate::math::math_tfm::face_tfm(face)
+                .map_or(crate::math::math_tfm::GlyphDims { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }, |t| {
+                    crate::math::math_tfm::GlyphDims::of(t, code, font_size)
+                })
+        };
         if self.is_wide {
-            let m_v1 = crate::math::math_tfm::cmex10_metric(self.wide_variants[1]);
-            let w_v1 = m_v1.w * (font_size * 0.001);
-            if target_w >= w_v1 {
-                let m_v2 = crate::math::math_tfm::cmex10_metric(self.wide_variants[2]);
-                let w_v2 = m_v2.w * (font_size * 0.001);
-                if target_w >= w_v2 {
-                    (Face::Extension, self.wide_variants[2], m_v2.w * (font_size * 0.001), m_v2.h * (font_size * 0.001))
-                } else {
-                    (Face::Extension, self.wide_variants[1], m_v1.w * (font_size * 0.001), m_v1.h * (font_size * 0.001))
+            // §738: the widest variant no wider than the nucleus (the first one regardless).
+            let mut code = self.wide_variants[0];
+            for &next in &self.wide_variants[1..] {
+                if dims(ext, next).w > target_w {
+                    break;
                 }
-            } else {
-                let m_v0 = crate::math::math_tfm::cmex10_metric(self.wide_variants[0]);
-                (Face::Extension, self.wide_variants[0], m_v0.w * (font_size * 0.001), m_v0.h * (font_size * 0.001))
+                code = next;
             }
+            let m = dims(ext, code);
+            (ext, code, m.w, m.h, m.ic)
         } else {
-            let (face, w, h) = match self.face {
-                Face::Roman => {
-                    let m = crate::math::math_tfm::cmr10_metric(self.code);
-                    (Face::Roman, m.w, m.h)
-                }
-                Face::MathItalic => {
-                    let m = crate::math::math_tfm::cmmi10_metric(self.code);
-                    (Face::MathItalic, m.w, m.h)
-                }
-                Face::Symbol => {
-                    let m = crate::math::math_tfm::cmsy10_metric(self.code);
-                    (Face::Symbol, m.w, m.h)
-                }
-                Face::Extension => {
-                    let m = crate::math::math_tfm::cmex10_metric(self.code);
-                    (Face::Extension, m.w, m.h)
-                }
-                Face::AmsA => {
-                    let m = crate::math::math_tfm::msam10_metric(self.code);
-                    (Face::AmsA, m.w, m.h)
-                }
-                Face::AmsB => {
-                    let m = crate::math::math_tfm::msbm10_metric(self.code);
-                    (Face::AmsB, m.w, m.h)
-                }
-                _ => (Face::Roman, 0.0, 0.0),
+            let face = match self.face {
+                f @ (Face::Roman | Face::MathItalic | Face::Symbol | Face::Extension | Face::AmsA | Face::AmsB) => f,
+                _ => return (Face::Roman, self.code, 0.0, 0.0, 0.0),
             };
-            (face, self.code, w * (font_size * 0.001), h * (font_size * 0.001))
+            let sized = resolve_optical_face(face, font_size, crate::font_metrics::FontFamily::ComputerModern);
+            let m = dims(sized, self.code);
+            (face, self.code, m.w, m.h, m.ic)
         }
     }
 }

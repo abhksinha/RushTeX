@@ -7,15 +7,16 @@
 //!
 //! - **Zero-Allocation Slicing**: Code blocks borrow directly from the input document slice (`&'a str`),
 //!   preserving raw whitespace, tabs, and indentation without heap reallocations.
-//! - **Monospace Metric Fast-Path**: Uses the PDF Standard-14 `Courier` typeface (`Face::Mono`),
-//!   where every character has an exact constant advance width of 600 units (0.6 em).
+//! - **TeX semantics**: `verbatim` is LaTeX's `\@verbatim` (a trivlist of one line box per
+//!   source line in the typewriter face), and `lstlisting` follows the `listings` package
+//!   defaults (the document font in fixed columns of 0.6em, `\medskipamount` above and below).
 //! - **Configurable Syntax Options**:
 //!   - `\begin{verbatim} ... \end{verbatim}`: Standard raw literal block.
 //!   - `\begin{lstlisting}[language=...] ... \end{lstlisting}`: Structured code listings.
 //!   - `\texttt{...}`: Inline monospace text.
 //!   - `\verb|...|`: Delimited inline verbatim text.
-//! - **Pagination & Layout**: Automatically paginates long multi-page code listings across page
-//!   breaks with clean padding, left accent bars, and optional line number gutters.
+//! - **Pagination & Layout**: every line is a box for the page builder, so listings break
+//!   across pages where TeX would break them.
 //!
 //! ## Public APIs
 //!
@@ -29,27 +30,30 @@
 pub struct ListingOptions<'a> {
     /// Optional programming language name (e.g. `"Rust"`, `"Python"`).
     pub language: Option<&'a str>,
-    /// Monospace font size in points (`pt`). Defaults to `9.0`.
+    /// Font size in points; `0.0` (the default) is the document's size.
     pub font_size: f32,
-    /// Number of spaces per tab stop. Defaults to `4`.
+    /// Number of columns per tab stop. Defaults to `8`, as in `listings`.
     pub tab_spaces: u8,
-    /// Whether to print line numbers in a left gutter.
+    /// Whether to print line numbers left of the text (`numbers=left`).
     pub show_line_numbers: bool,
-    /// Whether to render a framing border around the code block. Defaults to `true`.
+    /// Whether to draw a frame around the listing (`frame=single`). Defaults to `false`.
     pub frame: bool,
-    /// Whether to render a vertical accent bar on the left edge. Defaults to `true`.
-    pub left_accent_bar: bool,
+    /// A LaTeX `verbatim` environment rather than an `lstlisting`.
+    pub verbatim: bool,
+    /// `basicstyle` selects the typewriter face; `listings` uses the document font otherwise.
+    pub mono: bool,
 }
 
 impl<'a> Default for ListingOptions<'a> {
     fn default() -> Self {
         Self {
             language: None,
-            font_size: 9.0,
-            tab_spaces: 4,
+            font_size: 0.0,
+            tab_spaces: 8,
             show_line_numbers: false,
-            frame: true,
-            left_accent_bar: true,
+            frame: false,
+            verbatim: false,
+            mono: false,
         }
     }
 }
@@ -61,20 +65,24 @@ pub struct CodeListingData<'a> {
     pub raw_code: &'a str,
     /// Display and formatting options.
     pub options: ListingOptions<'a>,
+    /// The environment starts in vertical mode (after a blank line), so a trivlist adds
+    /// `\partopsep` to `\topsep`.
+    pub in_vmode: bool,
 }
 
 impl<'a> CodeListingData<'a> {
-    /// Constructs a new code listing block with default options.
+    /// Constructs a LaTeX `verbatim` block.
     pub fn new(raw_code: &'a str) -> Self {
         Self {
             raw_code,
-            options: ListingOptions::default(),
+            options: ListingOptions { verbatim: true, mono: true, ..ListingOptions::default() },
+            in_vmode: false,
         }
     }
 
     /// Constructs a code listing block with explicit options.
     pub fn with_options(raw_code: &'a str, options: ListingOptions<'a>) -> Self {
-        Self { raw_code, options }
+        Self { raw_code, options, in_vmode: false }
     }
 
     /// Returns an iterator over the lines of the code listing.
@@ -123,9 +131,18 @@ pub fn parse_listing_options<'a>(raw_options: &'a str) -> ListingOptions<'a> {
                         options.tab_spaces = ts.clamp(1, 32) as u8;
                     }
                 }
-                "fontsize" | "basicstyle" => {
+                "fontsize" => {
                     if let Ok(fs) = value.parse::<f32>() {
                         options.font_size = fs.max(4.0);
+                    }
+                }
+                "basicstyle" => {
+                    options.mono = value.contains("\\ttfamily");
+                    // The size commands at 10pt (LaTeX's `size10.clo`).
+                    for (cmd, pt) in [("\\tiny", 5.0), ("\\scriptsize", 7.0), ("\\footnotesize", 8.0), ("\\small", 9.0)] {
+                        if value.contains(cmd) {
+                            options.font_size = pt;
+                        }
                     }
                 }
                 _ => {}
@@ -170,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_parse_listing_options() {
-        assert_eq!(std::mem::size_of::<ListingOptions>(), 24);
+        assert!(std::mem::size_of::<ListingOptions>() <= 32);
         let opts = parse_listing_options("[language=Rust, numbers=left, tabsize=2]");
         assert_eq!(opts.language, Some("Rust"));
         assert!(opts.show_line_numbers);

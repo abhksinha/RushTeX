@@ -1,0 +1,72 @@
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\^=7 \catcode`\_=8 \catcode`\$=3 \catcode`\~=13
+\font\tenrm=cmr10 \font\sevenrm=cmr7 \font\fiverm=cmr5
+\font\teni=cmmi10 \font\seveni=cmmi7 \font\fivei=cmmi5
+\font\tensy=cmsy10 \font\sevensy=cmsy7 \font\fivesy=cmsy5
+\font\tenex=cmex10
+\textfont0=\tenrm \scriptfont0=\sevenrm \scriptscriptfont0=\fiverm
+\textfont1=\teni \scriptfont1=\seveni \scriptscriptfont1=\fivei
+\textfont2=\tensy \scriptfont2=\sevensy \scriptscriptfont2=\fivesy
+\textfont3=\tenex \scriptfont3=\tenex \scriptscriptfont3=\tenex
+\skewchar\teni='177 \skewchar\seveni='177 \skewchar\fivei='177
+\skewchar\tensy='60 \skewchar\sevensy='60 \skewchar\fivesy='60
+\tenrm
+\mathcode`\+="202B \mathcode`\=="303D \mathcode`\-="2200 \mathcode`\,="613B
+\mathcode`\(="4028 \mathcode`\)="5029 \mathcode`\[="405B \mathcode`\]="505D \mathcode`\<="313C
+\mathcode`\|="026A
+\delcode`\(="028300 \delcode`\)="029301 \delcode`\[="05B302 \delcode`\]="05D303 \delcode`\.=0 \delcode`\|="26A30C
+\thinmuskip=3mu \medmuskip=4mu plus 2mu minus 4mu \thickmuskip=5mu plus 5mu
+\scriptspace=0.5pt \nulldelimiterspace=1.2pt \delimiterfactor=901 \delimitershortfall=5pt
+\binoppenalty=700 \relpenalty=500 \mathsurround=1pt
+\mathchardef\alpha="010B \mathchardef\sum="1350 \mathchardef\intop="1352 \mathchardef\cdot="2201
+\mathchardef\lim="0141 \mathchardef\prime="0230
+\def\sqrt{\radical"270370 } \def\hat{\mathaccent"705E } \def\vec{\mathaccent"017E } \def\bar{\mathaccent"7016 }
+\def\langle{\delimiter"426830A } \def\rangle{\delimiter"526930B }
+\setbox0\hbox{$x$}
+\setbox1\hbox{$x+y=z$}
+\setbox2\hbox{$x^2$}
+\setbox3\hbox{$x_i$}
+\setbox4\hbox{$x_i^2$}
+\setbox5\hbox{${a\over b}$}
+\setbox6\hbox{$\displaystyle{a+1\over b-1}$}
+\setbox7\hbox{$\sqrt{x}$}
+\setbox8\hbox{$\displaystyle\sqrt{x^2+y^2}$}
+\setbox9\hbox{$\sum_{i=1}^n x_i$}
+\setbox10\hbox{$\displaystyle\sum_{i=1}^n x_i$}
+\setbox11\hbox{$\left(x\over y\right)$}
+\setbox12\hbox{$\left(\displaystyle{a\over b}\right)$}
+\setbox13\hbox{$\hat a + \vec v$}
+\setbox14\hbox{$f(x)=\alpha\cdot\beta$}
+\setbox15\hbox{$a\atop b$}
+\setbox16\hbox{$a\above 1pt b$}
+\setbox17\hbox{$(a\mathbin{*}b)$}
+\setbox18\hbox{$\mathop{\rm lim}\limits_{x}$}
+\setbox19\hbox{$\intop_0^1 f\,dx$}
+\setbox20\hbox{$\displaystyle\intop\nolimits_0^1$}
+\setbox21\hbox{$\left[a\middle| b\right]$}
+\setbox22\hbox{$x\mskip 6mu y\mkern-3mu z$}
+\setbox23\hbox{$\mathchoice{D}{T}{S}{SS}{}^{\mathchoice{D}{T}{S}{SS}}$}
+\setbox24\hbox{$\scriptstyle a+b$}
+\setbox25\hbox{$\overline{ab}\underline{cd}$}
+\setbox26\hbox{$\vcenter{\hbox{A}}$}
+\setbox27\hbox{$-x$}
+\setbox28\hbox{$a,b$}
+\setbox29\hbox{$\left\langle x\right\rangle$}
+\setbox30\hbox{$\displaystyle\left(\sum_{i=1}^n{x_i\over y_i}\right)$}
+\setbox31\hbox{$x^{y^z}$}
+\setbox32\hbox{$\bar x_1$}
+\setbox33\hbox{$\displaystyle {1\over2}\left[ x \right]$}
+\setbox34\hbox{a $b$ c}
+\hsize=200pt \parindent=10pt \parfillskip=0pt plus 1fil
+\baselineskip=12pt \lineskip=1pt \lineskiplimit=0pt
+\abovedisplayskip=12pt plus 3pt minus 9pt \belowdisplayskip=12pt plus 3pt minus 9pt
+\abovedisplayshortskip=0pt plus 3pt \belowdisplayshortskip=7pt plus 3pt minus 4pt
+\predisplaypenalty=10000 \postdisplaypenalty=0 \tolerance=200
+\setbox35\vbox{Text before $$x+y\eqno(1)$$ after.}
+\setbox36\vbox{A long line of text to see how wide it goes $$a=b\leqno(2)$$}
+\setbox37\vbox{\noindent$$\sum_{i=1}^n i={n(n+1)\over2}$$}
+\setbox38\vbox{Short $$x$$ par.}
+\count1=\prevgraf
+\setbox39\vbox{Text $$\halign{#\hfil&&\quad#\cr a&b\cr ccc&d\cr}\count3=5 $$ after.}
+\count2=\prevgraf
+\begingroup\globaldefs=1 \count5=7 \def\gd{x}\endgroup
+{\globaldefs=-1 \global\count6=3 \gdef\ge{y}}

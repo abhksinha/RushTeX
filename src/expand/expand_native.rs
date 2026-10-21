@@ -5,7 +5,7 @@
 //! `frontend_parser.rs`; symbol-table commands are checked via [`crate::math::lookup_symbol`].
 //! Kept sorted for binary search.
 
-pub(crate) static NATIVE_COMMANDS: [&str; 336] = [
+pub(crate) static NATIVE_COMMANDS: [&str; 338] = [
     "Big", "Bigg", "Biggl", "Biggm", "Biggr", "Bigl", "Bigm", "Bigr", "Bmatrix", "Delta", "Gamma",
     "Lambda", "Leftarrow", "Leftrightarrow", "Omega", "Phi", "Pi", "Pr", "Psi", "Rightarrow",
     "Sigma", "Theta", "Upsilon", "Uskewed", "Vmatrix", "Xi", "acute", "align", "alignat",
@@ -20,7 +20,7 @@ pub(crate) static NATIVE_COMMANDS: [&str; 336] = [
     "eqalign", "eqalignno", "equation", "equiv", "eta", "exists", "figure", "forall", "frac",
     "frak", "frenchspacing", "fussy", "gamma", "gather", "gathered", "gcd", "ge", "genfrac", "geq",
     "gets", "grave", "halign", "hangafter", "hangindent", "hat", "hbar", "hbox", "hphantom",
-    "hrule", "hsize", "hspace", "iiint", "iint", "in", "includegraphics", "indent", "inf", "infty",
+    "hrule", "hsize", "hspace", "idotsint", "iiiint", "iiint", "iint", "in", "includegraphics", "indent", "inf", "infty",
     "int", "iota", "item", "itemindent", "itemize", "itemsep", "jot", "kappa", "labelsep",
     "lambda", "lastlinefit", "ldots", "le", "left", "leftarrow", "leftmargin", "leftrightarrow",
     "leftskip", "leq", "leqalignno", "lim", "liminf", "limsup", "linewidth", "listoffigures",

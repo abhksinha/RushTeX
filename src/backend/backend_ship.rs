@@ -61,6 +61,17 @@ pub struct DocFont {
     pub name: String,
     pub size: i64,
     pub widths: [i32; 256],
+    /// A font without a map entry: drawn from its PK bitmaps as a Type 3 font.
+    pub pk: Option<PkFont>,
+}
+
+/// A bitmap font as shipped: its PK file's resolution, `get_pk_font_scale`, and the
+/// characters the pages used (pdfTeX's `pdf_char_marked`), as a 256-bit set.
+#[derive(Debug, Clone)]
+pub struct PkFont {
+    pub dpi: i32,
+    pub scale: i64,
+    pub used: [u64; 4],
 }
 
 /// Objects written so far and where each starts.
@@ -113,6 +124,25 @@ struct MapEntry<'m> {
     file: Option<&'m str>,
     slant: i32,
     extend: i32,
+}
+
+/// The TFM names `pdftex.map` gives an entry, as sorted FNV-1a hashes: whether a font is
+/// scalable (mapfile.c `isscalable`) is then a binary search, the map text not kept.
+pub fn map_names(map: &[u8]) -> Vec<u64> {
+    let mut names: Vec<u64> = map
+        .split(|&c| c == b'\n' || c == b'\r')
+        .filter_map(|l| l.split(|c| c.is_ascii_whitespace()).find(|t| !t.is_empty()))
+        .filter(|n| !matches!(n[0], b'%' | b'#' | b'*' | b';'))
+        .map(fnv)
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// FNV-1a.
+pub fn fnv(s: &[u8]) -> u64 {
+    s.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
 }
 
 /// `pdftex.map`'s lines by TFM name, indexed once per document instead of searched per font.
@@ -411,6 +441,11 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
     for (i, f) in fonts.iter().enumerate() {
         let Some(f) = f else { continue };
         font_obj[i] = next;
+        if let Some(pk) = &f.pk {
+            let data = files(&format!("{}.{}pk", f.name, pk.dpi)).unwrap_or_default();
+            next = d.write_type3(next, i, f, pk, &data);
+            continue;
+        }
         d.write_font(next, f, &map, files, to_unicode);
         next += 4;
     }
@@ -561,6 +596,101 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
 impl Doc {
     /// The font, its descriptor, its program and its ToUnicode map as objects `id` to
     /// `id + 3`.
+    /// writet3.c `writepk` and `writet3`: font `f` (engine font `n`) as a Type 3 font of its
+    /// PK characters, the font dictionary at `id`, one glyph procedure per character after
+    /// it; the next free object.
+    fn write_type3(&mut self, id: usize, n: usize, f: &DocFont, pk: &PkFont, data: &[u8]) -> usize {
+        use crate::backend::backend_pk::{pk_char_width, pk_chars};
+        let chars = pk_chars(data, &pk.used).unwrap_or_default();
+        let size = pdf_font_size(f.size);
+        let mut widths = [0i64; 256];
+        let mut procs = [0usize; 256];
+        let mut bbox = [0i64; 4];
+        let mut next = id + 1;
+        let mut glyph = Vec::new();
+        let mut packed = Vec::new();
+        let mut deflate = crate::backend::backend_deflate::DeflateCompressor::new();
+        for (k, c) in chars.iter().enumerate() {
+            let w = pk_char_width(f.widths[c.code as usize] as i64, size, pk.scale);
+            widths[c.code as usize] = w;
+            let null = c.width < 1 || c.height < 1;
+            let (cw, ch, xoff, yoff) = if null { ((w as f64 / 100.0).round() as i64, 1, 0, 0) } else { (c.width as i64, c.height as i64, c.xoff as i64, c.yoff as i64) };
+            let (llx, lly) = (-xoff, yoff - ch + 1);
+            let (urx, ury) = (cw + llx + 1, ch + lly);
+            // `update_bbox`
+            bbox = if k == 0 { [llx, lly, urx, ury] } else { [bbox[0].min(llx), bbox[1].min(lly), bbox[2].max(urx), bbox[3].max(ury)] };
+            glyph.clear();
+            print_real(&mut glyph, w, 2);
+            glyph.extend_from_slice(format!(" 0 {llx} {lly} {urx} {ury} d1\n").as_bytes());
+            if !null {
+                glyph.extend_from_slice(format!("q\n{cw} 0 0 {ch} {llx} {lly} cm\nBI\n/W {cw}\n/H {ch}\n/IM true\n/BPC 1\n/D [1 0]\nID ").as_bytes());
+                let (bytes, words) = (((cw + 7) / 8) as usize, ((cw + 15) / 16) as usize);
+                for row in c.raster.chunks(words) {
+                    for (j, &word) in row.iter().enumerate() {
+                        glyph.push((word >> 8) as u8);
+                        if j + 1 < words || 2 * words == bytes {
+                            glyph.push(word as u8);
+                        }
+                    }
+                }
+                glyph.extend_from_slice(b"\nEI\nQ\n");
+            }
+            packed.clear();
+            deflate.compress_zlib(&glyph, &mut packed);
+            self.stream(next, b"", &packed, true);
+            procs[c.code as usize] = next;
+            next += 1;
+        }
+        let bit = |i: usize| pk.used[i / 64] >> (i % 64) & 1 == 1;
+        let first = (0..256).find(|&i| bit(i)).unwrap_or(0);
+        let last = (first..256).rev().find(|&i| bit(i)).unwrap_or(first);
+        self.begin(id);
+        self.buf.extend_from_slice(b"<< /Type /Font /Subtype /Type3 /Name /F");
+        print_int(&mut self.buf, n as i64);
+        self.buf.extend_from_slice(b" /FontMatrix [");
+        print_real(&mut self.buf, pk.scale, 5);
+        self.buf.extend_from_slice(b" 0 0 ");
+        print_real(&mut self.buf, pk.scale, 5);
+        self.buf.extend_from_slice(format!(" 0 0] /FontBBox [ {} {} {} {} ] /Resources << /ProcSet [ /PDF /ImageB ] >> /FirstChar {first} /LastChar {last} /Widths [", bbox[0], bbox[1], bbox[2], bbox[3]).as_bytes());
+        for &w in &widths[first..=last] {
+            print_real(&mut self.buf, w, 2);
+            self.buf.push(b' ');
+        }
+        // The encoding names each character with a procedure `/a<code>`, `.notdef` between.
+        self.buf.extend_from_slice(b"] /Encoding << /Type /Encoding /Differences [");
+        print_int(&mut self.buf, first as i64);
+        let mut notdef = false;
+        for (i, &p) in procs.iter().enumerate().take(last + 1).skip(first) {
+            if p == 0 {
+                if !notdef || i == first {
+                    if i != first {
+                        self.buf.push(b' ');
+                        print_int(&mut self.buf, i as i64);
+                    }
+                    self.buf.extend_from_slice(b"/.notdef");
+                    notdef = true;
+                }
+            } else {
+                if notdef {
+                    self.buf.push(b' ');
+                    print_int(&mut self.buf, i as i64);
+                    notdef = false;
+                }
+                self.buf.extend_from_slice(format!("/a{i}").as_bytes());
+            }
+        }
+        self.buf.extend_from_slice(b"] >> /CharProcs <<");
+        for (i, &p) in procs.iter().enumerate() {
+            if p != 0 {
+                self.buf.extend_from_slice(format!(" /a{i} ").as_bytes());
+                self.reference(p);
+            }
+        }
+        self.buf.extend_from_slice(b" >> >>\n");
+        self.end();
+        next
+    }
+
     fn write_font(&mut self, id: usize, f: &DocFont, map: &std::collections::HashMap<&str, &str>, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode) {
         let program = crate::backend::backend_optical::program_by_name(&f.name);
         let entry = map.get(f.name.as_str()).map(|l| map_entry(l));

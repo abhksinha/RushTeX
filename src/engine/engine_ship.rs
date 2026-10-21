@@ -30,6 +30,9 @@ const PDF_GEN_TO_UNICODE: u32 = 81;
 const PDF_MINOR_VERSION: u32 = 67;
 const PDF_LINK_MARGIN: u32 = 25;
 const PDF_DEST_MARGIN: u32 = 26;
+/// `\pdfdecimaldigits` and `\pdfpkresolution` (integer slots).
+const PDF_DECIMAL_DIGITS: u32 = 58;
+const PDF_PK_RESOLUTION: u32 = 61;
 
 /// `pdf_font_num` of a font not yet shipped.
 const NOT_USED: u16 = u16::MAX;
@@ -38,13 +41,17 @@ const NOT_USED: u16 = u16::MAX;
 /// `pdf_init_font`): the earlier-used font of the same file name at another size, else `f`
 /// itself; an expanded copy shares its base's (which is set up first). That font's size
 /// gives the shared `/Widths`. Searched once per font.
-fn font_base(base: &mut Vec<u16>, fonts: &[Font], micro: &Micro, f: u16) -> u16 {
+fn font_base(base: &mut Vec<u16>, fonts: &[Font], micro: &Micro, pk: &[i64], f: u16) -> u16 {
     if base.len() < fonts.len() {
         base.resize(fonts.len(), NOT_USED);
     }
     if base[f as usize] == NOT_USED && fonts[f as usize].expand != 0 {
-        let b = font_base(base, fonts, micro, micro.expand(f).blink);
+        let b = font_base(base, fonts, micro, pk, micro.expand(f).blink);
         base[f as usize] = b;
+    }
+    // A bitmap font shares with no other size (pdftex.web `pdf_init_font`: `isscalable`).
+    if base[f as usize] == NOT_USED && pk.get(f as usize).is_some_and(|&s| s != 0) {
+        base[f as usize] = f;
     }
     if base[f as usize] == NOT_USED {
         let name = &fonts[f as usize].name;
@@ -84,8 +91,11 @@ struct Walk<'a> {
     text: TextState,
     out: Vec<u8>,
     page_height: i64,
-    /// The font each font shares its PDF object with (`NOT_USED` before its first use).
+    /// The font each font shares its PDF object with (`NOT_USED` before its first use), the
+    /// characters used of each, and each font's PK scale (0 for a scalable font).
     base: &'a mut Vec<u16>,
+    used: &'a mut Vec<[u64; 4]>,
+    pk: &'a [i64],
     /// Resource names (`/F<base>`), made when a font is first used on the page.
     names: Vec<String>,
     colors: &'a mut ColorStacks,
@@ -188,12 +198,18 @@ impl Walk<'_> {
         if self.names.len() <= f as usize {
             self.names.resize(f as usize + 1, String::new());
         }
-        let base = font_base(self.base, self.fonts, self.micro, f);
+        let base = font_base(self.base, self.fonts, self.micro, self.pk, f);
+        if self.used.len() <= base as usize {
+            self.used.resize(base as usize + 1, [0; 4]);
+        }
+        self.used[base as usize][c as usize / 64] |= 1 << (c % 64);
         if self.names[f as usize].is_empty() {
             self.names[f as usize] = format!("/F{base}");
         }
         // pdf_set_font: `Tf` only when the shared font or the size changes.
         self.text.set_font(&mut self.out, base as u32, &self.names[f as usize], font.size as i64);
+        // An expanded copy is scalable as its base is (the copy's own name has no map entry).
+        self.text.pk_scale = self.pk.get(base as usize).copied().unwrap_or(0);
         // An automatically expanded copy is its base drawn through a scaled text matrix.
         let ea = if font.expand != 0 && self.micro.expand(f).auto { font.expand as i64 } else { 0 };
         self.text.char_ex(&mut self.out, c, w as i64, h as i64, self.page_height - v as i64, ea);
@@ -600,7 +616,10 @@ impl Machine<'_, '_> {
     /// `height` tall.
     fn walk_box(&mut self, bx: BoxRec, page: Option<i32>, height: i32, h: i32, v: i32) -> Walked {
         let dimen = |m: &Self, slot| m.dimen_param(slot);
+        self.classify_fonts();
         let mut base = std::mem::take(&mut self.page.font_base);
+        let mut used = std::mem::take(&mut self.page.font_used);
+        let pk = std::mem::take(&mut self.page.font_pk);
         let mut colors = std::mem::take(&mut self.colors);
         let mut pdf_doc = std::mem::take(&mut self.pdf_doc);
         let (link_margin, dest_margin) = (dimen(self, PDF_LINK_MARGIN), dimen(self, PDF_DEST_MARGIN));
@@ -610,7 +629,7 @@ impl Machine<'_, '_> {
             me.show(me.e.toks.get(super::engine_token::Span { start: a as u32, end: b as u32 }), &mut s);
             s
         };
-        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new() };
+        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new() };
         // `pdf_out_colorstack_startpage`, at the page's origin.
         if page.is_some() {
             for (mode, s) in walk.colors.page_start() {
@@ -621,9 +640,44 @@ impl Machine<'_, '_> {
         walk.text.end_text(&mut walk.out);
         let walked = Walked { content: walk.out, annots: walk.annots, group: walk.group, images: walk.images, forms: walk.forms };
         self.page.font_base = base;
+        self.page.font_used = used;
+        self.page.font_pk = pk;
         self.colors = colors;
         self.pdf_doc = pdf_doc;
         walked
+    }
+
+    /// mapfile.c `isscalable` for the fonts loaded since the last shipout: a font with a map
+    /// entry (or one of the built-in programs) is scalable; another is drawn from PK bitmaps
+    /// at `\pdfpkresolution`, its scale fixed now.
+    fn classify_fonts(&mut self) {
+        let n = self.e.fonts.list.len();
+        if self.page.font_pk.len() >= n {
+            return;
+        }
+        if self.page.map_names.is_none() {
+            let map = self.read_file.as_ref().and_then(|r| r("pdftex.map")).unwrap_or_default();
+            self.page.map_names = Some(crate::backend::backend_ship::map_names(&map));
+        }
+        let int = |m: &Self, slot| m.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot });
+        let res = match int(self, PDF_PK_RESOLUTION) {
+            0 => 600,
+            r => r.clamp(72, 8000),
+        } as i64;
+        let dd = int(self, PDF_DECIMAL_DIGITS).clamp(0, 4) as u32;
+        let names = self.page.map_names.as_deref().unwrap_or(&[]);
+        for f in &self.e.fonts.list[self.page.font_pk.len()..] {
+            let mapped = names.binary_search(&crate::backend::backend_ship::fnv(f.name.as_bytes())).is_ok() || crate::backend::backend_optical::program_by_name(&f.name).is_some();
+            let size = crate::backend::backend_pdftex::pdf_font_size(f.size as i64);
+            self.page.font_pk.push(if mapped || f.name.is_empty() { 0 } else { crate::backend::backend_pk::pk_font_scale(size, res, dd) });
+        }
+    }
+
+    fn pk_resolution(&self) -> i32 {
+        match self.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot: PDF_PK_RESOLUTION }) {
+            0 => 600,
+            r => r.clamp(72, 8000),
+        }
     }
 
     /// The document so far as a PDF: the shipped pages and the fonts they use.
@@ -641,6 +695,11 @@ impl Machine<'_, '_> {
                     name: f.name.clone(),
                     size: f.size as i64,
                     widths: std::array::from_fn(|c| f.dims(c as u8).map_or(0, |d| d[0])),
+                    pk: self.page.font_pk.get(i).filter(|&&s| s != 0).map(|&scale| crate::backend::backend_ship::PkFont {
+                        dpi: crate::backend::backend_pk::pk_dpi(f.size as i64, f.design as i64, self.pk_resolution()),
+                        scale,
+                        used: self.page.font_used.get(i).copied().unwrap_or_default(),
+                    }),
                 })
             })
             .collect();

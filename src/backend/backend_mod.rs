@@ -16,6 +16,7 @@ pub mod backend_optical;
 pub mod backend_pdf;
 pub mod backend_pdftex;
 pub mod backend_pdfread;
+pub mod backend_pk;
 pub mod backend_png;
 pub mod backend_scaled;
 pub mod backend_tfm;

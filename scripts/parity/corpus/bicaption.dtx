@@ -1,0 +1,1914 @@
+% \iffalse meta-comment
+% 
+% This is file `bicaption.dtx'.
+% 
+% Copyright (C) 2010-2023 Axel Sommerfeldt (axel.sommerfeldt@f-m.fm)
+% 
+% --------------------------------------------------------------------------
+% 
+% This work may be distributed and/or modified under the
+% conditions of the LaTeX Project Public License, either version 1.3
+% of this license or (at your option) any later version.
+% The latest version of this license is in
+%   http://www.latex-project.org/lppl.txt
+% and version 1.3 or later is part of all distributions of LaTeX
+% version 2003/12/01 or later.
+% 
+% This work has the LPPL maintenance status "maintained".
+% 
+% This Current Maintainer of this work is Axel Sommerfeldt.
+% 
+% This work consists of the files
+%   caption.ins, caption.dtx, caption-light.dtx, caption2.dtx, caption3.dtx,
+%   caption-ams-smf.dtx, caption-beamer.dtx, caption-elsarticle.dtx,
+%   caption-koma.dtx, caption-memoir.dtx, caption-ntg.dtx,
+%   caption-thesis.dtx, bicaption.dtx, ltcaption.dtx, subcaption.dtx,
+% the derived files
+%   caption.sty, caption-light.sty, caption2.sty, caption3.sty,
+%   caption-ams-smf.sto, caption-beamer.sto, caption-elsarticle.sto,
+%   caption-koma.sto, caption-memoir.sto, caption-ntg.sto,
+%   caption-thesis.sto, bicaption.sty, ltcaption.sty, subcaption.sty.
+% 
+% \fi
+%
+% \CheckSum{642}
+%
+% \iffalse
+%<*driver>
+\NeedsTeXFormat{LaTeX2e}[1994/12/01]
+\ProvidesFile{bicaption.drv}[2023/07/10 v1.6 Adds a bilingual caption feature to the caption package]
+%\errorcontextlines=3
+%
+\documentclass[german,english]{captiondoc}
+\hypersetup{pdfkeywords={LaTeX, package, bicaption}}
+%
+\usepackage[T1]{fontenc}
+\usepackage[german,english]{babel}
+%\usepackage{selinput}\SelectInputMappings{adieresis={ä},germandbls={ß}}
+\usepackage[utf8]{inputenc}
+%
+\usepackage{bicaption}[2023/02/19]
+\usepackage{subcaption}[2023/02/19]
+%
+\begin{document}
+  \DocInput{bicaption.dtx}
+\end{document}
+%</driver>
+% \fi
+%
+% \def\thispackage{the \pkg{bicaption} package}
+% \def\Thispackage{The \pkg{bicaption} package}
+%
+% \GetFileInfo{bicaption.drv}
+% \let\docdate\filedate
+% \let\docversion\fileversion
+% \GetFileInfo{bicaption.sty}
+%
+% \title{\texorpdfstring{\Thispackage\thanks{%^^A
+%          This package has version number \docversion.}}%^^A
+%        {The bicaption package}}
+% \author{Axel Sommerfeldt\\
+%         \url{https://gitlab.com/axelsommerfeldt/caption}}
+% \date{\docdate}
+% \maketitle
+% 
+% \begin{abstract}
+% This package supports the typesetting of bilangual captions.
+% \end{abstract}
+%
+% \setcounter{tocdepth}{2}
+% \tableofcontents
+%
+% \clearpage
+% \section{Loading the package}
+% \label{sec:loading}
+%
+% This package will be loaded by
+% \begin{quote}
+%   |\usepackage|\oarg{options}|{bicaption}|\quad.
+% \end{quote}
+% The options for \thispackage\ are the same ones as for the \pkg{caption}
+% package and specify settings which are used for the second language \emph{additionally}.
+% In fact
+% \begin{quote}
+%   |\usepackage|\oarg{options}|{bicaption}|
+% \end{quote}
+% is identical to
+% \begin{quote}
+%   |\usepackage{bicaption}|\\
+%   |\bicaptionsetup{}|\marg{options}\quad.
+% \end{quote}
+%
+% When used with the \pkg{babel} or \pkg{polyglossia} package, the
+% \pkg{bicaption} package should be loaded \emph{after} it, so the main
+% language will be set automatically. See \autoref{sec:babel} for details.
+%
+% \pagebreak[3]
+% \section{Setting options}
+% \label{sec:options}
+%
+% \DescribeMacro\bicaptionsetup
+% \NEWfeature*{v1.6}
+% The |\bicaptionsetup| command sets options specifically for bilingual captions.
+%
+% \begin{quote}
+%   |\bicaptionsetup|\marg{options for 1st language}\marg{options for 2nd language}
+% \end{quote}
+% sets options which will be used for the first or second heading
+% of the bilingual captions \emph{additionally} to the ones which are setup for the
+% specific floating environment.
+%
+% \medskip
+%
+% To limit bilingual options to specific environments one can use
+% an optional argument for |\bi|\-|caption|\-|setup|, e.g.:
+% \begin{quote}
+%   |\bicaptionsetup[figure]{|\ldots|}{|\ldots|}|
+% \end{quote}
+% will limit the settings to the bilingual headings of |figure| environments only.
+%
+% \bigskip
+%
+% Options specified with |\use|\-|package[|\ldots|]{bi|\-|cap|\-|tion}| and
+% |\bi|\-|cap|\-|tion|\-|setup{|\ldots|}{|\ldots|}| will override the ones specified by
+% |\cap|\-|tion|\-|setup{|\ldots|}| and |\cap|\-|tion|\-|setup[fig|\-|ure]{|\ldots|}|
+% (same for `table'). So finally we have the following order how
+% settings for bilingual captions are applied:
+% \begin{enumerate}
+% \item Global settings
+%  {\small(|\usepackage[|\ldots|]{caption}| and |\captionsetup{|\ldots|}|)}
+% \item Environmental settings
+%  {\small(|\captionsetup[figure|\emph{ -or- }|table]{|\ldots|}|)}
+% \item Local settings
+%  {\small(|\captionsetup{|\ldots|}| inside |figure| or |table| environment)}
+% \item Custom bilingual settings
+%  {\small(|\usepackage[|\ldots|]{bicaption}| and |\bicaptionsetup{|\ldots|}{|\ldots|}|)}
+% \item Environmental bilingual settings
+%  {\small(|\bicaptionsetup[figure|\emph{ -or- }|table]{|\ldots|}{|\ldots|}|)}
+% \end{enumerate}
+% \pagebreak[3]
+% An example:
+% \begin{quote}
+%   |\usepackage[labelsep=quad,indention=10pt]{caption}|\\
+%   |\usepackage[labelfont=bf]{bicaption}|\\
+%   |\captionsetup[table]{labelfont=it,position=top}|
+% \end{quote}
+% causes the second heading of the bilingual caption inside |table| environments
+% to be typeset with the settings
+% \begin{quote}
+%   |labelsep=quad,indention=10pt,position=top,labelfont=bf|~.
+% \end{quote}
+%
+% \begin{background}
+% Internally the |\bi|\-|caption|\-|setup| uses the |\caption|\-|setup| command, i.e.
+% \begin{quote}
+%   |\bicaptionsetup|\marg{options for 1st language}\marg{options for 2nd language}
+% \end{quote}
+% is identical to
+% \begin{quote}
+%   |\captionsetup[bi-first]|\marg{options for 1st language}\\
+%   |\captionsetup[bi-second]|\marg{options for 2nd language}
+% \end{quote}
+% and
+% \begin{quote}
+%   |\bicaptionsetup[figure]{|\ldots|}{|\ldots|}|
+% \end{quote}
+% is identical to
+% \begin{quote}
+%   |\captionsetup[figure][bi-first]{|\ldots|}|\\
+%   |\captionsetup[figure][bi-second]{|\ldots|}| \quad .
+% \end{quote}
+% Prior to \version{1.6} of this package this was the way options had to be specified.
+% This still works (and will continue to work in the future), but is not recommended,
+% |\bi|\-|caption|\-|setup| should be used instead.
+% \end{background}
+%
+% \section{Additional options}
+% \label{sec:additional-options}
+%
+% These options are available additional to the ones offered by the
+% \pkg{caption} package:
+%
+% \begin{Options}{language=}
+%   \item[lang=]
+%   Sets the language of the caption, e.g.
+%   \begin{quote}|\use|\-|package|\-|[lang=eng|\-|lish]{bi|\-|caption}|\end{quote}
+%   will typeset the second caption of bilingual captions in English.
+%   (The language will be set with |\select|\-|caption|\-|language| internally,
+%    see \autoref{sec:babel} for details.)
+%
+%   \item[bi-lang=]
+%   Causes a selection of the headings of bilingual captions.
+%   \begin{quote}|\captionsetup{bi-lang=both}|\end{quote}
+%   will cause that both caption headings are being typeset.\\
+%   (This is the default.)
+%   \begin{quote}|\captionsetup{bi-lang=first}|\end{quote}
+%   will cause that only the \emph{first} heading is being typeset, and
+%   \begin{quote}|\captionsetup{bi-lang=second}|\end{quote}
+%   will cause that only the \emph{second} heading is being typeset.
+%
+%   \item[bi-slc=]
+%   \begin{quote}|\captionsetup{bi-slc=|\meta{bool}|}|\end{quote}
+%   switches the common single-line-check |on| or |off|, i.e.~when switched on
+%   only a single check will be done for both captions, and the result will affect
+%   both captions afterwards. So if only one caption is longer than a single line,
+%   both captions will be treated as if they are longer than a single line, even if
+%   the second one isn't. (The default is |on|.)
+%
+%   \item[bi-swap=]
+%   \begin{quote}|\captionsetup{bi-swap}|\end{quote}
+%   will swap the primary and secondary language,
+%   making the first language the second one and vice versa. (The default is |false|.)
+%
+%   \item[bi-separator=]
+%   \NEWfeature{v1.3}
+%   The vertical distance between the first and second bilingual caption is usually
+%   determined by the \TeX\ skips set by |\normal|\-|size| which is applied right
+%   before both captions get typesetted.
+%   (This behaviour is inherited from the original \LaTeX\ code for |\caption| which
+%   applies |\normal|\-|size| right before |\@make|\-|caption|, too.)
+%   \begin{quote}|\captionsetup{bi-separator=|\meta{name}|}|\end{quote}
+%   will select an additional separator between first and second bilingual caption.
+%   You could choose one of the following: `none' (which is the default one
+%   and could also be addressed as `default'), `smallskip', `medskip',
+%   `largeskip', or a self-defined one using
+%   \DescribeMacro{\DeclareBiCaption-\\Separator}
+%   \begin{quote}|\DeclareBiCaptionSeparator|\marg{name}\marg{code}\end{quote}
+%   Examples:
+%   \begin{quote}
+%     |\captionsetup{bi-separator=smallskip}|
+%   \end{quote}
+%   will put a |\smallskip| between the two bilingual captions.
+%   \begin{quote}
+%     |\DeclareBiCaptionSeparator{hrule}{\hrule}|\\
+%     |\captionsetup{bi-separator=hrule}|
+%   \end{quote}
+%   will draw a horizontal line between the two bilingual captions.
+%   \begin{quote}
+%     |\DeclareBiCaptionSeparator{3pt}{\vspace{3pt}}|\\
+%     |\captionsetup{bi-separator=3pt}|
+%   \end{quote}
+%   will place |3pt| extra vertical space between the two bilingual captions.
+%   \par\medskip
+%   \textit{Note:} In contrast to the original \LaTeX\ code for |\caption| the
+%   \pkg{caption} package does not apply |\normal|\-|size| directly
+%   but will apply the caption font definition |normal|\-|size| instead
+%   (which is usually defined as |\normal|\-|size|).
+%   Therefore the vertical space between both captions
+%   could also be influenced by redefining it, e.g.:
+%   |\Declare|\-|Caption|\-|Font{normal|\-|size}{|\ldots|}|
+% \end{Options}
+%
+% \emph{Important:}
+% All options starting with `bi-' must be applied using |\caption|\-|setup| and
+% \emph{NOT} using |\bi|\-|caption|\-|setup|.
+% This is because they do not alter the setting of the caption for the 1st or 2nd language specifically,
+% but instead alter the behaviour how bilingual captions are set in general.
+%
+% \section{The \cs{bicaption} commands}
+% \label{sec:bicaption}
+%
+% \DescribeMacro\bicaption
+% Bilingual captions will be typeset by
+% \begin{quote}
+%   |\bicaption|\oarg{list entry \#1}\marg{heading \#1}\\
+%   |          |\oarg{list entry \#2}\marg{heading \#2}\\
+%   |\bicaption*|\marg{heading \#1}\marg{heading \#2}
+% \end{quote}
+% The |\label| should be placed either after this command, or inside the first heading.
+%
+% \medskip
+%
+% Just like in |\caption| an empty \meta{list entry} will suppress the entry in the list of figures or tables, for example
+% \begin{quote}
+%   |\bicaption[]|\marg{heading \#1}|[]|\marg{heading \#2}
+% \end{quote}
+% suppresses both entries.
+%
+% \medskip
+%
+% \DescribeMacro\bicaptionbox
+% Bilingual caption boxes will be typeset by
+% \begin{quote}
+%   |\bicaptionbox|\oarg{list entry \#1}\marg{heading \#1}\\
+%   |             |\oarg{list entry \#2}\marg{heading \#2}\\
+%   |             |\oarg{width}\oarg{inner-pos}\marg{contents}\\
+%   |\bicaptionbox*|\marg{heading \#1}\marg{heading \#2}\\
+%   |              |\oarg{width}\oarg{inner-pos}\marg{contents}
+% \end{quote}
+% The |\label| should be placed inside the first heading.
+%
+% \begingroup\small
+% (For a description of the optional parameters \meta{width} and \meta{inner-pos}
+% please take a look at the \pkg{caption} package documentation,
+% \cs{captionbox}.)
+% \endgroup
+%
+% \pagebreak[3]
+% \section{Customising lists}
+% \label{sec:lists}
+%
+% \DescribeMacro{list=}
+% As default both caption texts will be insert into the List of Figures or List of Tables.
+% To suppress the second entry just pass the option |list=off| to the \pkg{bicaption}
+% package, e.g.:
+% \begin{quote}
+%   |\usepackage[lang=english,|\ldots|,list=off]{bicaption}|
+% \end{quote}
+% or
+% \begin{quote}
+%   |\usepackage[|\ldots|]{bicaption}|\\
+%   \ldots\\
+%   |\bicaptionsetup{}{list=off}|
+% \end{quote}
+%
+% \pagebreak[3]
+% \DescribeMacro{listtype+=}
+% Another option is separating the lists. For that purpose the option
+% \begin{quote}
+%   |listtype+=|\meta{list type extension}
+% \end{quote}
+% can be used to tell the \pkg{bicaption} package to use a different list
+% for the second caption text.
+% The given value will be appended to the current environment type;
+% for example with |listtype+=X| the list entries will be put into the list
+% responsible for the types
+% |figureX| ($=$ |figure| $+$ |X|), |tableX| ($=$ |table| $+$ |X|) etc.
+%
+% Such a \meta{list type} can be defined using |\Declare|\-|Floating|\-|Environment|
+% offered by the \pkg{newfloat} package, but some document classes
+% or other packages offer macros for defining new floating environment types
+% (and their corresponding lists) as well.
+%
+% \pagebreak[3]
+% A sample document:
+% \begin{quote}
+%   |\documentclass[a4paper]{article}|\\
+%   ||\\
+%   |% Use "ngerman" as 1st language, "english" as 2nd one|\\
+%   |\usepackage[english,ngerman]{babel}|\\
+%   ||\\
+%   |% Load the bicaption package with 2nd language set to|\\
+%   |% "english", and list type "figureEnglish" or "tableEnglish"|\\
+%   |\usepackage[lang=english,listtype+=English]{bicaption}|\\
+%   ||\\
+%   |\usepackage{newfloat}|\\
+%   |% Define type "figureEnglish" and \listoffigureEnglish|\\
+%   |\DeclareFloatingEnvironment[fileext=lof2]{figureEnglish}|\\
+%   |                   [Figure][List of Figures]|\\
+%   |% Define type "tableEnglish" and \listoftableEnglish|\\
+%   |\DeclareFloatingEnvironment[fileext=lot2]{tableEnglish}|\\
+%   |                   [Table][List of Tables]|\\
+%   ||\\
+%   |\begin{document}|\\
+%   ||\\
+%   |\listoffigures        % typeset "Abbildungsverzeichnis"|\\
+%   |\listoffigureEnglish  % typeset "List of Figures"|\\
+%   ||\\
+%   |\begin{figure}|\\
+%   |  \centering|\\
+%   |  A placeholder for an image or whatever|\\
+%   |  \bicaption{Deutscher Text}{English text}|\\
+%   |\end{figure}|\\
+%   ||\\
+%   |\end{document}|
+% \end{quote}
+%
+% \pagebreak[3]
+% A different approach is using one list for both languages, but with different formatting.
+% Since the \pkg{caption} package does not offer options and commands for
+% customising the format of the lists, one need an additional package for this purpose,
+% for example the \pkg{titletoc} package:
+%
+% \begin{quote}
+%   |\documentclass[a4paper]{article}|\\
+%   ||\\
+%   |% Use "ngerman" as 1st language, "english" as 2nd one|\\
+%   |\usepackage[english,ngerman]{babel}|\\
+%   ||\\
+%   |% Load the bicaption package with 2nd language set to|\\
+%   |% "english", and list type "figure2" or "table2"|\\
+%   |\usepackage[lang=english,listtype+=2]{bicaption}|\\
+%   ||\\
+%   |% We load the titletoc package for customising lists|\\
+%   |% Note: Loading titletoc should be done prior|\\
+%   |% defining additional floating environments with|\\
+%   |% \DeclareFloatingEnvironment|\\
+%   |\usepackage{titletoc}|\\
+%   ||\\
+%   |\usepackage{newfloat}|\\
+%   |% Define the new floating environment type "figure2"|\\
+%   |% Use the same file extension as for "figure" (.lof) here|\\
+%   |\DeclareFloatingEnvironment[fileext=lof]{figure2}|\\
+%   |% Define the new floating environment type "table2"|\\
+%   |% Use the same file extension as for "table" (.lot) here|\\
+%   |\DeclareFloatingEnvironment[fileext=lot]{table2}|\\
+%   ||\\
+%   |% We use the titletoc package for customising "figure2"|\\
+%   |% which is appropriate for the second language captions|\\
+%  \iffalse
+%   |\contentsuse{figure2}{lof}|\\
+%  \fi
+%   |\titlecontents{figure2}[3.8em]|\\
+%   |  {} % no above code|\\
+%   |  {} % empty numbered entry format|\\
+%   |  {} % empty numberless entry format|\\
+%   |  {} % empty filler page format|\\
+%   ||\\
+%   |\begin{document}|\\
+%   ||\\
+%   |\renewcommand\listfigurename|\\
+%   |  {Abbildungsverzeichnis / List of Figures}|\\
+%   |\listoffigures|\\
+%   ||\\
+%   |\begin{figure}|\\
+%   |  \centering|\\
+%   |  A placeholder for an image or whatever|\\
+%   |  \bicaption{Deutscher Text}{English text}|\\
+%   |\end{figure}|\\
+%   ||\\
+%   |\end{document}|
+% \end{quote}
+%
+% \section{Language Selection}
+% \label{sec:babel}
+%
+% For language selection \thispackage\ uses two macros internally:
+%
+% \medskip
+%
+% \DescribeMacro\captionmainlanguage
+% |\caption|\-|main|\-|lan|\-|guage| contains the main language, for example
+% `french' or `german'.
+% If not set manually, \thispackage\ will try to obtain this setting from
+% the \pkg{babel} or \pkg{polyglossia} package after the preamble of
+% the document, i.e.~at |\begin{doc|\-|u|\-|ment}|.
+%
+% So if you are using either \pkg{babel} or \pkg{polyglossia}, and want to inherit
+% the main language setting from it, then simply forget about the
+% |\caption|\-|main|\-|lan|\-|guage| stuff and skip the rest of the section.
+%
+% \pagebreak[3]
+% Otherwise one can define |\caption|\-|main|\-|lan|\-|guage| manually, e.g.:
+% \begin{quote}
+%   |\newcommand\captionmainlanguage{french}|\\
+%   |\usepackage[lang=english]{bicaption}|
+% \end{quote}
+%
+% \pagebreak[3]
+% Note: Prior to \version{1.5} |\caption|\-|main|\-|language| needed to be defined
+% \emph{before} loading \thispackage. Since \version{1.5} is could be defined either
+% before or after loading \thispackage.
+%
+% \medskip
+%
+% \DescribeMacro\selectcaptionlanguage
+% \NEWfeature*{v1.1}
+% |\select|\-|caption|\-|lan|\-|guage| will be used internally  to select the language:
+% \begin{quote}
+%   |\selectcaptionlanguage|\marg{font-or-list-entry}\marg{language}
+% \end{quote}
+% For setting the language of the caption \meta{font-or-list-entry} will be |\@first|\-|of|\-|two|,
+% for setting the language of the list entry \meta{font-or-list-entry} will be
+% |\@second|\-|of|\-|two|.~\footnote{\cs{@firstoftwo} and \cs{@secondoftwo} are defined
+% in the \LaTeX\ kernel and simply pick either the 1st or 2nd argument.}
+% It defaults to |\select@lan|\-|guage| (caption) or |\select|\-|lan|\-|guage| (list entry)
+% offered by the \pkg{babel} and \pkg{polyglossia} package:
+% \begin{quote}
+%   |\providecommand*\selectcaptionlanguage[2]{%|\\
+%   |  #1{\select@language}{\selectlanguage}{#2}}|
+% \end{quote}
+% If you need to alter this, just either define |\select|\-|caption|\-|lan|\-|guage| prior
+% loading \thispackage, or redefine it afterwards.
+%
+% \pagebreak[3]
+% Example document using \pkg{babel}:
+% \begin{quote}
+%   |\documentclass[a4paper]{article}|\\
+%   ||\\
+%   |% Use "ngerman" as 1st language, "english" as 2nd one|\\
+%   |\usepackage[english,ngerman]{babel}|\\
+%   ||\\
+%   |% Add custom translations to babel|\\
+%   |\addto\captionsgerman{%|\\
+%   |% \renewcommand\whatevername{Wasauchimmer}%|\\
+%   |% |\ldots\\
+%   |}|\\
+%   |\addto\captionsenglish{%|\\
+%   |% \renewcommand\whatevername{Whatever}%|\\
+%   |% |\ldots\\
+%   |}|\\
+%   ||\\
+%   |% Load the bicaption package with 2nd language set to|\\
+%   |% "english"|\\
+%   |\usepackage[lang=english]{bicaption}|\\
+%   ||\\
+%   |\begin{document}|\\
+%   ||\\
+%   |\begin{figure}|\\
+%   |  \centering|\\
+%   |  A placeholder for an image or whatever|\\
+%   |  \bicaption{Deutscher Text}{English text}|\\
+%   |\end{figure}|\\
+%   ||\\
+%   |\end{document}|
+% \end{quote}
+%
+% \pagebreak[3]
+% The same example document but using a custom implementation of
+% |\caption|\-|main|\-|language| and |\select|\-|caption|\-|language|
+% instead of \pkg{babel}:
+% \begin{quote}
+%   |\documentclass[a4paper]{article}|\\
+%   ||\\
+%   |% Load the bicaption package with 2nd language set to|\\
+%   |% "english"|\\
+%   |\usepackage[lang=english]{bicaption}|\\
+%   ||\\
+%   |% Set "german" as main bi-caption language|\\
+%   |\newcommand\captionmainlanguage{german}|\\
+%   ||\\
+%   |% Declare an own language switching mechanism|\\
+%   |% for bi-captions (instead of using babel)|\\
+%   |\renewcommand\selectcaptionlanguage[2]{%|\\
+%   |  \csname captions#2\endcsname}|\\
+%   |\newcommand\captionsgerman{%|\\
+%   |  \renewcommand\figurename{Abbildung}%|\\
+%   |  \renewcommand\tablename{Tabelle}%|\\
+%   |% \renewcommand\whatevername{Wasauchimmer}%|\\
+%   |% |\ldots\\
+%   |}|\\
+%   |\newcommand\captionsenglish{%|\\
+%   |  \renewcommand\figurename{Figure}%|\\
+%   |  \renewcommand\tablename{Table}%|\\
+%   |% \renewcommand\whatevername{Whatever}%|\\
+%   |% |\ldots\\
+%   |}|\\
+%   ||\\
+%   |\begin{document}|\\
+%   ||\\
+%   |\begin{figure}|\\
+%   |  \centering|\\
+%   |  A placeholder for an image or whatever|\\
+%   |  \bicaption{Deutscher Text}{English text}|\\
+%   |\end{figure}|\\
+%   ||\\
+%   |\end{document}|
+% \end{quote}
+%
+% \pagebreak[3]
+% \NEWfeature{v1.5}
+% Since \version{1.5} a warning is issued if the main language could neither be
+% detected automatically nor was it set explicitly by the user.
+% If you really don't want to set languages for bi-captions but are annoyed by
+% the warning you could trick the \pkg{bicaption} by defining a custom
+% dummy language-selection mechanism, e.g.:
+% \begin{quote}
+%   |\newcommand\captionmainlanguage{dummy}|\\
+%   |\renewcommand\selectcaptionlanguage[2]{}|\\
+% \end{quote}
+%
+% \medskip
+%
+% \pagebreak[3]
+% \DescribeMacro{\DeclareCaption-\\LangOption}
+% \NEWfeature*{v1.2}
+% For internal implementation reasons the selection of language will be done delayed,
+% i.e.~not done immediately at |lang=|\meta{language}. So if you do
+% \begin{quote}
+%   |\bicaptionsetup{}{lang=ngerman,labelsep=quad}|
+% \end{quote}
+% the language |ngerman| will only be stored internally, and the label separator will
+% be set to |quad| afterwards. Some time later, right before the caption is actually
+% typeset, the language will be set to |ngerman|.
+%
+% \pagebreak[3]
+% Usually this is no problem, but think of options which will be overwritten by the
+% language selection, or options which act on the language currently set, for example
+% \begin{quote}
+%   |\bicaptionsetup{}{lang=ngerman,name=Bild}|\quad.
+% \end{quote}
+% |lang=ngerman| changes the environment name to ``Abbildung'', and |name=Bild|
+% changes the environment name to ``Bild''. One would expect that the name is
+% finally ``Bild'', but because of the delayed nature of |lang=ngerman| it will
+% be ``Abbildung'' instead, at least if we don't take action about this.
+%
+% \pagebreak[3]
+% For that reason the command
+% \begin{quote}
+%   |\DeclareCaptionLangOption|\marg{caption option name}
+% \end{quote}
+% is offered. Options handled this way will be applied twice if used after the |lang=|
+% option, when the option is actually used, and right after the language is selected.
+%
+% \begin{quote}
+%   |\DeclareCaptionLangOption{name}|
+% \end{quote}
+% will be done by \thispackage\ automatically, since the environment name will usually
+% be overwritten by a language selection. So actually
+% \begin{quote}
+%   |\bicaptionsetup{}{lang=ngerman,name=Bild}|
+% \end{quote}
+% will give the expected result, i.e. the environment name is typeset as ``Bild''.
+%
+% \section{Required packages}
+% \label{sec:caption}
+%
+% \NEWfeature{v1.4}
+% Starting with version $1.4$ the \pkg{bicaption} package requires at least version $3.2$
+% of the \pkg{caption} package and loads it automatically.
+% (Older versions of the \pkg{bicaption} package have required exactly the version of the
+% \pkg{caption} package which was released with it.)
+%
+% \pagebreak[3]
+% If you need to use a specific version of the \pkg{caption} package you need to load it
+% \emph{before} the \pkg{bicaption} package, e.g.:
+% \begin{quote}
+%   |\usepackage[| \ldots |]{caption}[=v3.5]|\\
+%   |\usepackage[| \ldots |]{bicaption}|
+% \end{quote}
+%
+% \pagebreak[3]
+% Note that there are limitations if an older version of the \pkg{caption} package
+% is used:
+% \begin{itemize}
+%   \item Full support of list entries of the \env{lstlisting} environment
+%         (offered by the \pkg{listings} package) needs at least \pkg{caption} \version{3.6}.
+% \end{itemize}
+%
+% \section{Supported packages}
+% \label{sec:packages}
+%
+% The \pkg{bicaption} package was adapted to the following packages which deals with captions, too:
+% \pkg{listings}~\cite{listings}, \pkg{longtable}~\cite{longtable}, and \pkg{subcaption}~\cite{subcaption}.
+%
+% \subsection{Support of the listings package}
+% \label{sec:listings}
+%
+% \NEWfeature{v1.5}
+% If the \pkg{listings} package~\cite{listings} is loaded, the \pkg{listings} options \opt{caption1}
+% and \opt{caption2} are available additionally, where option \opt{caption1} specifies the
+% caption of the first language and \opt{caption2} of the second one.
+%
+% \pagebreak[3]
+% Example document, using distinctive lists for each language:
+% \begin{quote}
+%   |\documentclass[a4paper]{article}|\\
+%   |\usepackage{graphicx}|\\
+%   ||\\
+%   |% Use "ngerman" as 1st language, "english" as 2nd one|\\
+%   |\usepackage[english,ngerman]{babel}|\\
+%   ||\\
+%   |% Load the bicaption package with 2nd language set to|\\
+%   |% "english", and list type "figureEnglish" or "tableEnglish"|\\
+%   |\usepackage[lang=english,listtype+=English,font=it]{bicaption}|\\
+%   |\captionsetup{slc=off} % do not center short captions|\\
+%   ||\\
+%   |\usepackage{listings}|\\
+%   ||\\
+%   |% Set German names|\\
+%   |\addto\captionsgerman{%|\\
+%   |  \renewcommand\lstlistingname{Quelltext}%|\\
+%   |  \renewcommand\lstlistlistingname{Quelltextverzeichnis}%|\\
+%   |}|\\
+%   |\AtBeginDocument{\captionsgerman}% or load listings before babel|\\
+%   ||\\
+%   |% Set English names|\\
+%   |\addto\captionsenglish{%|\\
+%   |  \renewcommand\lstlistingname{Listing}%|\\
+%   |  \renewcommand\lstlistlistingname{List of Listings}%|\\
+%   |}|\\
+%   ||\\
+%   |\usepackage{newfloat}|\\
+%   |% Define the new floating environment type "lstlistingEnglish"|\\
+%   |% (just to get an extra list for English listing captions)|\\
+%   |\DeclareFloatingEnvironment[fileext=lol2]{lstlistingEnglish}|\\
+%   |                           [Listing][List of Listings]|\\
+%   ||\\
+%   |\begin{document}|\\
+%   ||\\
+%   |\lstlistoflistings        % German|\\
+%   |\listoflstlistingEnglish  % English|\\
+%   ||\\
+%   |\clearpage|\\
+%   ||\\
+%   |\begin{lstlisting}|\\
+%   |      [language=C,|\\
+%   |       caption1=Deutscher Titel,|\\
+%   |       caption2=English Title]|\\
+%   |  int main()|\\
+%   |  {|\\
+%   |      printf( "Hello world!\n" );|\\
+%   |      return 0;|\\
+%   |  }|\\
+%   |\end{lstlisting}|\\
+%   ||\\
+%   |\end{document}|
+% \end{quote}
+%
+% \subsection{Support of the longtable package}
+% \label{sec:longtable}
+%
+% If the \pkg{longtable} package~\cite{longtable} is loaded, |\bicaption| is available
+% in the \env{longtable} environment as well, e.g.:
+% \begin{quote}
+%   |\documentclass[a4paper]{article}|\\
+%   ||\\
+%   |% Use "ngerman" as 1st language, "english" as 2nd one|\\
+%   |\usepackage[english,ngerman]{babel}|\\
+%   ||\\
+%   |% Load the bicaption package with 2nd language set to|\\
+%   |% "english"|\\
+%   |\usepackage[lang=english]{bicaption}|\\
+%   ||\\
+%   |\usepackage{longtable}|\\
+%   ||\\
+%   |\begin{document}|\\
+%   ||\\
+%   |\begin{longtable}{ll}|\\
+%   |  \bicaption{Deutscher Titel}{English Title}\\|\\
+%   |  A & B \\|\\
+%   |  C & D \\|\\
+%   |  |\ldots\\
+%   |\end{longtable}|\\
+%   ||\\
+%   |\end{document}|
+% \end{quote}
+%
+% \subsection{Support of the subcaption package}
+% \label{sec:subcaption}
+%
+% If the \pkg{subcaption} package~\cite{subcaption} is loaded, these commands are available
+% additionally:
+%
+% \smallskip
+%
+% \pagebreak[3]
+% \DescribeMacro\bisubcaption
+% Bilingual sub-captions will be typeset by
+% \begin{quote}
+%   |\bisubcaption|\oarg{list entry \#1}\marg{heading \#1}\\
+%   |             |\oarg{list entry \#2}\marg{heading \#2}\\
+%   |\bisubcaption*|\marg{heading \#1}\marg{heading \#2}
+% \end{quote}
+% The |\label| should be placed either after this command, or inside the first heading.
+%
+% \pagebreak[3]
+% \DescribeMacro\bisubcaptionbox
+% Bilingual sub-caption boxes will be typeset by
+% \begin{quote}
+%   |\bisubcaptionbox|\oarg{list entry \#1}\marg{heading \#1}\\
+%   |                |\oarg{list entry \#2}\marg{heading \#2}\\
+%   |                |\oarg{width}\oarg{inner-pos}\marg{contents}\\
+%   |\bisubcaptionbox*|\marg{heading \#1}\marg{heading \#2}\\
+%   |                 |\oarg{width}\oarg{inner-pos}\marg{contents}
+% \end{quote}
+% The |\label| should be placed inside the first heading.
+%
+% \begingroup\small
+% (For a description of the optional parameters \meta{width} and \meta{inner-pos}
+% please take a look at the \pkg{subcaption} package documentation,
+% \cs{subcaptionbox}.)
+% \endgroup
+%
+% \pagebreak[3]
+% \subsubsection{A sample document}
+%
+% \begin{quote}
+%   |\documentclass[english,ngerman]{article}|\\
+%   |\usepackage{selinput}|\\
+%   |\SelectInputMappings{adieresis={ä},germandbls={ß}}|\\
+%   ||\\
+%   |\usepackage{babel}|\\
+%   |\usepackage[lang=english,font=it]{bicaption}|\\
+% \iffalse
+%   |\usepackage[format=hang,list=on]{subcaption}|\\
+% \else
+%   |\usepackage[format=hang]{subcaption}|\\
+% \fi
+%   ||\\
+%   |\begin{document}|\\
+%   ||\\
+% \iffalse
+%   |\listoffigures|\\
+%   ||\\
+% \fi
+%   |\begin{figure}[!htb]|\\
+%   |  \centering|\\
+%   |  \bisubcaptionbox|\\
+%   |    {Teilabbildung A\label{fig:test:A}}|\\
+%   |    {Subfigure A}[0.4\textwidth]{IMAGE}%|\\
+%   |  \qquad|\\
+%   |  \bisubcaptionbox|\\
+%   |    {Teilabbildung langer Titel B\label{fig:test:B}}|\\
+%   |    {Subfigure long title B}[0.4\textwidth]{IMAGE}%|\\
+%   |  \bicaption{Deutscher Titel}{English Title}|\\
+%   |  \label{fig:test}|\\
+%   |\end{figure}|\\
+%   ||\\
+% \iffalse
+%   |\captionsetup{bi-lang=2nd}|\\
+%   ||\\
+%   |\begin{figure}[!htb]|\\
+%   |  \centering|\\
+%   |  \bisubcaptionbox|\\
+%   |    {Teilabbildung A\label{fig:test2:A}}|\\
+%   |    {Subfigure A}[0.4\textwidth]{IMAGE}%|\\
+%   |  \qquad|\\
+%   |  \bisubcaptionbox|\\
+%   |    {Teilabbildung langer Titel B\label{fig:test2:B}}|\\
+%   |    {Subfigure long title B}[0.4\textwidth]{IMAGE}%|\\
+%   |  \bicaption{Deutscher Titel}{English Title}|\\
+%   |  \label{fig:test2}|\\
+%   |\end{figure}|\\
+%   ||\\
+% \fi
+%   |\captionsetup{bi-lang=both}|\\
+%   ||\\
+%   |\begin{figure}[!htb]|\\
+%   |  \centering|\\
+%   |  \bisubcaptionbox[A]|\\
+%   |    {Und eine gaaaanz lange Caption: Teilabbildung A}|\\
+%   |    {Subfigure A}[0.4\textwidth]{IMAGE}%|\\
+%   |  \qquad|\\
+%   |  \bisubcaptionbox[B]|\\
+%   |    {Teilabbildung B}|\\
+%   |    {Subfigure B}[0.4\textwidth]{IMAGE}%|\\
+%   |  \bicaption[Abbildungsverzeichnistitel]|\\
+%   |    {Und eine noch viel viel viel|\\
+%   |     längere deutsche Beschriftung: Deutscher Titel}|\\
+%   |    {Short English heading}|\\
+%   |\end{figure}|\\
+%   ||\\
+%   |\captionsetup{bi-slc=off}|\\
+%   ||\\
+%   |\begin{figure}[!htb]|\\
+%   |  \centering|\\
+%   |  \bisubcaptionbox[A]|\\
+%   |    {Und eine gaaaanz lange Caption: Teilabbildung A}|\\
+%   |    {Subfigure A}[0.4\textwidth]{IMAGE}%|\\
+%   |  \qquad|\\
+%   |  \bisubcaptionbox[B]|\\
+%   |    {Teilabbildung B}|\\
+%   |    {Subfigure B}[0.4\textwidth]{IMAGE}%|\\
+%   |  \bicaption[Abbildungsverzeichnistitel]|\\
+%   |    {Und eine noch viel viel viel|\\
+%   |     längere deutsche Beschriftung: Deutscher Titel}|\\
+%   |    {Short English heading}|\\
+%   |\end{figure}|\\
+%   ||\\
+%   |\captionsetup{slc=off}|\\
+%   ||\\
+%   |\begin{figure}[!htb]|\\
+%   |  \centering|\\
+%   |  \bisubcaptionbox[A]|\\
+%   |    {Und eine gaaaanz lange Caption: Teilabbildung A}|\\
+%   |    {Subfigure A}[0.4\textwidth]{IMAGE}%|\\
+%   |  \qquad|\\
+%   |  \bisubcaptionbox[B]|\\
+%   |    {Teilabbildung B}|\\
+%   |    {Subfigure B}[0.4\textwidth]{IMAGE}%|\\
+%   |  \bicaption[Abbildungsverzeichnistitel]|\\
+%   |    {Und eine noch viel viel viel|\\
+%   |     längere deutsche Beschriftung: Deutscher Titel}|\\
+%   |    {Short English heading}|\\
+%   |\end{figure}|\\
+%   ||\\
+%   |\end{document}|
+% \end{quote}
+%
+% \pagebreak[3]
+% \bicaptionsetup{lang=german}{lang=english,font=it}
+% \captionsetup[sub]{format=hang,list=on}
+%
+% \iffalse
+% \listoffigures
+% \bigskip
+% \fi
+%
+% \begin{minipage}{\linewidth}
+%   \setcaptiontype{figure}
+%   \centering
+%   \bisubcaptionbox
+%     {Teilabbildung A\label{fig:test:A}}
+%     {Subfigure A}[0.4\textwidth]{IMAGE}%
+%   \qquad
+%   \bisubcaptionbox
+%     {Teilabbildung langer Titel B\label{fig:test:B}}
+%     {Subfigure long title B}[0.4\textwidth]{IMAGE}%
+%   \bicaption{Deutscher Titel}{English Title}
+%   \label{fig:test}
+% \end{minipage}
+%
+% \iffalse
+% \bigskip
+% \captionsetup{bi-lang=2nd}
+%
+% \begin{minipage}{\linewidth}
+%   \setcaptiontype{figure}
+%   \centering
+%   \bisubcaptionbox
+%     {Teilabbildung A\label{fig:test2:A}}
+%     {Subfigure A}[0.4\textwidth]{IMAGE}%
+%   \qquad
+%   \bisubcaptionbox
+%     {Teilabbildung langer Titel B\label{fig:test2:B}}
+%     {Subfigure long title B}[0.4\textwidth]{IMAGE}%
+%   \bicaption{Deutscher Titel}{English Title}
+%   \label{fig:test2}
+% \end{minipage}
+% \fi
+%
+% \bigskip
+% \captionsetup{bi-lang=both}
+%
+% \begin{minipage}{\linewidth}
+%   \setcaptiontype{figure}
+%   \centering
+%   \bisubcaptionbox[A]
+%     {Und eine gaaaanz lange Caption: Teilabbildung A}
+%     {Subfigure A}[0.4\textwidth]{IMAGE}%
+%   \qquad
+%   \bisubcaptionbox[B]
+%     {Teilabbildung B}
+%     {Subfigure B}[0.4\textwidth]{IMAGE}%
+%   \bicaption[Abbildungsverzeichnistitel]
+%     {Und eine noch viel viel viel
+%      längere deutsche Beschriftung: Deutscher Titel}
+%     {Short English heading}
+% \end{minipage}
+%
+% \bigskip
+% \captionsetup{bi-slc=off}
+%
+% \begin{minipage}{\linewidth}
+%   \setcaptiontype{figure}
+%   \centering
+%   \bisubcaptionbox[A]
+%     {Und eine gaaaanz lange Caption: Teilabbildung A}
+%     {Subfigure A}[0.4\textwidth]{IMAGE}%
+%   \qquad
+%   \bisubcaptionbox[B]
+%     {Teilabbildung B}
+%     {Subfigure B}[0.4\textwidth]{IMAGE}%
+%   \bicaption[Abbildungsverzeichnistitel]
+%     {Und eine noch viel viel viel
+%      längere deutsche Beschriftung: Deutscher Titel}
+%     {Short English heading}
+% \end{minipage}
+%
+% \bigskip
+% \captionsetup{slc=off}
+%
+% \begin{minipage}{\linewidth}
+%   \setcaptiontype{figure}
+%   \centering
+%   \bisubcaptionbox[A]
+%     {Und eine gaaaanz lange Caption: Teilabbildung A}
+%     {Subfigure A}[0.4\textwidth]{IMAGE}%
+%   \qquad
+%   \bisubcaptionbox[B]
+%     {Teilabbildung B}
+%     {Subfigure B}[0.4\textwidth]{IMAGE}%
+%   \bicaption[Abbildungsverzeichnistitel]
+%     {Und eine noch viel viel viel
+%      längere deutsche Beschriftung: Deutscher Titel}
+%     {Short English heading}
+% \end{minipage}
+%
+% \iffalse
+% --------------------------------------------------------------------------- %
+% \fi
+%
+% \StopEventually{%^^A
+% \begin{thebibliography}{9}
+%
+%   \bibitem{caption}
+%   Axel Sommerfeldt:\\
+%   \href{http://www.ctan.org/pkg/caption}%
+%        {\emph{Customising captions of floating environments}},\\
+%   2022/01/07
+%
+%   \bibitem{listings}
+%   Carsten Heinz \& Brooks Moses:\\
+%   \href{http://www.ctan.org/pkg/listings}%
+%        {\emph{The Listings Package}},\\
+%   2007/02/22
+%
+%   \bibitem{longtable}
+%   David Carlisle:\\
+%   \href{http://www.ctan.org/pkg/longtable}%
+%        {\emph{The longtable package}},\\
+%   2004/02/01
+%
+%   \bibitem{subcaption}
+%   Axel Sommerfeldt:\\
+%   \href{http://www.ctan.org/pkg/subcaption}%
+%        {\emph{The subcaption package}},\\
+%   2022/01/07
+%
+%   \bibitem{TLC2}
+%   Frank Mittelbach and Michel Goossens:\\
+%   \newblock {\em The {\LaTeX} Companion (2nd.~Ed.)},\\
+%   \newblock Addison-Wesley, 2004.
+%
+% \end{thebibliography}
+% }
+%
+% \iffalse
+% --------------------------------------------------------------------------- %
+% \fi
+%
+% \DoNotIndex{\\,\_,\ ,\@@par}
+% \DoNotIndex{\@bsphack}
+% \DoNotIndex{\@car,\@cdr,\@classoptionslist,\@cons,\@currext,\@currname}
+% \DoNotIndex{\@ehc,\@ehd,\@empty,\@esphack,\@expandtwoargs}
+% \DoNotIndex{\@for,\@firstofone,\@firstoftwo}
+% \DoNotIndex{\@gobble,\@gobblefour,\@gobbletwo,\@hangfrom}
+% \DoNotIndex{\if@minipage,\@ifnextchar,\@ifpackagelater,\@ifpackageloaded}
+% \DoNotIndex{\@ifstar,\@ifundefined,\@latex@error,\@namedef,\@nameuse}
+% \DoNotIndex{\@onlypreamble,\@parboxrestore,\@plus,\@ptionlist}
+% \DoNotIndex{\@removeelement,\@restorepar,\@secondoftwo,\@setpar}
+% \DoNotIndex{\@tempa,\@tempboxa,\@tempdima,\@tempdimb,\@tempdimc,\@tempb,\@tempc}
+% \DoNotIndex{\@testopt}
+% \DoNotIndex{\@undefined,\@unprocessedoptions,\@unusedoptionlist}
+% \DoNotIndex{\p@,\z@}
+% \DoNotIndex{\active,\addtocounter,\addtolength,\advance,\aftergroup}
+% \DoNotIndex{\baselineskip,\begin,\begingroup,\bfseries,\box}
+% \DoNotIndex{\catcode,\centering,\changes,\csname,\def,\divide,\do,\downarrow}
+% \DoNotIndex{\edef,\else,\empty,\end,\endcsname,\endgraf,\endgroup,\expandafter}
+% \DoNotIndex{\fi,\footnotesize,\global}
+% \DoNotIndex{\hangindent,\hbox,\hfil,\hsize,\hskip,\hspace,\hss}
+% \DoNotIndex{\ifcase,\ifdim,\ifnum,\ifodd,\ifvoid,\ifvmode}
+% \DoNotIndex{\ifx,\ignorespaces,\itshape}
+% \DoNotIndex{\kernel@ifnextchar}
+% \DoNotIndex{\Large,\large,\leavevmode,\leftmargini,\leftskip,\let,\linewidth}
+% \DoNotIndex{\llap,\long,\m@ne,\margin,\mdseries,\message}
+% \DoNotIndex{\newcommand,\newdimen,\newlength,\newline,\newif,\newsavebox}
+% \DoNotIndex{\next,\nobreak,\nobreakspace,\noexpand,\noindent,\numberline}
+% \DoNotIndex{\normalcolor,\normalfont,\normalsize,\or,\par,\parbox,\parfillskip}
+% \DoNotIndex{\parindent,\parskip,\prevdepth,\protect,\protected@edef,\protected@write}
+% \DoNotIndex{\providecommand,\quad}
+% \DoNotIndex{\raggedleft,\raggedright,\relax,\renewcommand,\RequirePackage}
+% \DoNotIndex{\rightskip,\rmfamily}
+% \DoNotIndex{\sbox,\scriptsize,\scshape,\setbox,\setlength,\sffamily,\slshape}
+% \DoNotIndex{\small,\string,\space,\strut}
+% \DoNotIndex{\textheight,\the,\toks@,\typeout,\ttfamily}
+% \DoNotIndex{\unvbox,\uparrow,\upshape,\usebox,\usepackage}
+% \DoNotIndex{\value,\vbox,\vsize,\vskip,\wd,\width,\z@skip}
+% \DoNotIndex{\AtBeginDocument,\AtEndOfPackage,\CurrentOption,\DeclareOption}
+% \DoNotIndex{\ExecuteOptions,\GenericWarning,\IfFileExists,\InputIfFileExists}
+% \DoNotIndex{\NeedsTeXFormat,\MessageBreak}
+% \DoNotIndex{\PackageError,\PackageInfo,\PackageWarning,\PackageWarningNoLine}
+% \DoNotIndex{\PassOptionsToPackage,\ProcessOptions,\ProvidesPackage}
+%
+% \iffalse
+% --------------------------------------------------------------------------- %
+% \fi
+%
+% \setlength{\parskip}{0pt plus 1pt}
+% \changes{v0.1}{2010/07/13}{Initial version}
+% \changes{v0.2}{2010/07/13}{Check for caption package added}
+% \changes{v0.3}{2010/07/13}{Usage of \cs{caption@applyfont} added}
+% \changes{v0.4}{2010/07/13}{``Singlelinecheck'' fixed}
+% \changes{v0.5}{2010/07/13}{Options \opt{bi-first} and \opt{bi-second} added}
+% \changes{v0.6}{2010/07/13}{Option \opt{bi-slc} added}
+% \changes{v0.7}{2010/07/13}{Option \opt{bi-lang} added}
+% \changes{v0.8}{2010/09/04}{Adapted to current version of the caption kernel}
+% \changes{v0.9}{2010/09/17}{Option \opt{bi-swap} added}
+% \changes{v0.9a}{2011/07/13}{Warning regarding \pkg{babel} package added}
+%
+% \newcommand*\Note[2][Note]{\par{\small\emph{#1:} #2}}
+%
+% \iffalse
+% --------------------------------------------------------------------------- %
+% \fi
+%
+% \clearpage
+% \section{The implementation}
+%
+% \iffalse
+%<*package>
+% \fi
+%
+% \subsection{Identification}
+%
+% We need at least \LaTeX2e\ version 1994/12/01.
+%    \begin{macrocode}
+\NeedsTeXFormat{LaTeX2e}[1994/12/01]
+%    \end{macrocode}
+%
+% Bypass the release declarations in case the \LaTeX\ kernel doesn’t know how to deal with them
+% (as suggested by \url{https://www.latex-project.org/publications/2018-FMi-TUB-tb122mitt-version-rollback.pdf}).
+%    \begin{macrocode}
+\providecommand\DeclareRelease[3]{}
+\providecommand\DeclareCurrentRelease[2]{}
+%    \end{macrocode}
+%
+% Declare all supported releases.
+%    \begin{macrocode}
+\DeclareCurrentRelease{v1}{2011/07/13}
+%    \end{macrocode}
+%
+% Identify the current version of the package.
+%    \begin{macrocode}
+\ProvidesPackage{bicaption}[2023/02/19 v1.6 Bilingual Captions (AR)]
+%    \end{macrocode}
+%
+% Since we base on the \pkg{caption} package we load it here.
+%    \begin{macrocode}
+\RequirePackage{caption}[2011/11/10] % we need at least v3.2e
+%    \end{macrocode}
+%
+% \bigskip
+%
+% \pagebreak[3]
+% \subsection{Initial code}
+%
+% \begin{macro}{\bicaption@Info}
+%  |\bicaption@Info|\marg{message}
+%    \begin{macrocode}
+\newcommand*\bicaption@Info[1]{%
+  \PackageInfo{bicaption}{#1}}
+%    \end{macrocode}
+% \end{macro}
+% \begin{macro}{\bicaption@InfoNoLine}
+%  |\bicaption@InfoNoLine|\marg{message}\par
+%  \Note{The \cs{@gobble} at the end of the 2nd argument of
+%   \cs{PackageInfo} suppresses the line number info.
+%   See TLC2\cite{TLC2}, A.4.7, p885 for details.}
+%    \begin{macrocode}
+\newcommand*\bicaption@InfoNoLine[1]{%
+  \PackageInfo{bicaption}{#1\@gobble}}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bicaption@Warning}
+%  |\bicaption@Warning|\marg{message}
+%    \begin{macrocode}
+\newcommand*\bicaption@Warning[1]{%
+  \bicaption@WarningNoLine{#1\on@line}}
+%    \end{macrocode}
+% \end{macro}
+% \begin{macro}{\bicaption@WarningNoLine}
+%  |\bicaption@WarningNoLine|\marg{message}
+%    \begin{macrocode}
+\newcommand*\bicaption@WarningNoLine[1]{%
+  \PackageWarning{bicaption}{#1.^^J\bicaption@wh\@gobbletwo}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\newcommand*\bicaption@wh{%
+  See the `bicaption' package documentation for explanation.}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bicaption@Error}
+%  |\bicaption@Error|\marg{message}
+%    \begin{macrocode}
+\newcommand*\bicaption@Error[1]{%
+  \PackageError{bicaption}{#1}{\caption@@eh{bicaption}}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\providecommand*\caption@@eh[1]{%
+  If you do not understand this error, please take a closer look\MessageBreak
+  at the documentation of the `#1' package, especially the\MessageBreak
+  section about errors.\MessageBreak\@ehc}
+%    \end{macrocode}
+% \end{macro}
+%
+% \pagebreak[3]
+% \subsection{Declaration of options}
+%
+% The option |bi-lang| will setup which language(s) will actually be typeset,
+% the first one, the second one, or both of them.
+%    \begin{macrocode}
+\newcount\bicaption@lang
+\DeclareCaptionOption{bi-lang}{%
+  \caption@ifinlist{#1}{0,all,both}{%
+    \bicaption@lang=0\relax
+  }{\caption@ifinlist{#1}{1,1st,first}{%
+    \bicaption@lang=1\relax
+  }{\caption@ifinlist{#1}{2,2nd,second}{%
+    \bicaption@lang=2\relax
+  }{%
+    \bicaption@Error{Undefined bi-lang value `#1'}%
+  }}}}
+%    \end{macrocode}
+%
+% The option |bi-singlelinecheck| will setup if a single check will be used
+% for both languages (|=on|),
+% or if both languages will be checked individually (|=off|).
+%    \begin{macrocode}
+\DeclareCaptionOption{bi-singlelinecheck}[1]{%
+  \caption@set@bool\bicaption@ifslc{#1}}
+\DeclareCaptionOption{bi-slc}[1]{%
+  \caption@set@bool\bicaption@ifslc{#1}}
+%    \end{macrocode}
+%
+% The option |bi-swap| will swap the primary and secondary language,
+% making the first language the second one and vice versa.
+%    \begin{macrocode}
+\DeclareCaptionOption{bi-swap}[1]{%
+  \caption@set@bool\bicaption@ifswap{#1}}
+%    \end{macrocode}
+%
+% The option |bi-separator| will setup the separator between
+% the two bi-lingual captions.
+%    \begin{macrocode}
+\DeclareCaptionOption{bi-separator}[1]{%
+  \caption@set{biseparator}{#1}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\providecommand*\caption@set[2]{%
+  \@ifundefined{caption@#1@#2}%
+    {\caption@Error{Undefined #1 `#2'}}%
+    {\expandafter\let\csname caption@#1\expandafter\endcsname\csname caption@#1@#2\endcsname}}
+%    \end{macrocode}
+%
+% \begin{macro}{\DeclareBiCaptionSeparator}
+% \changes{v1.3}{2020/10/25}{This macro added}
+%   |\DeclareBiCaptionSeparator|\marg{name}\marg{code}
+%    \begin{macrocode}
+\newcommand\DeclareBiCaptionSeparator[2]{%
+  \caption@decl{biseparator}{#1}{#2}}
+\@onlypreamble\DeclareBiCaptionSeparator
+%    \end{macrocode}
+%    \begin{macrocode}
+\providecommand*\caption@decl[2]{%
+  \global\long\expandafter\def\csname caption@#1@#2\endcsname}
+%    \end{macrocode}
+% \end{macro}
+%
+% There are four pre-defined separators, called `none',
+% `smallskip', `medskip', and `bigskip'.
+%    \begin{macrocode}
+\DeclareBiCaptionSeparator{none}{}
+\DeclareBiCaptionSeparator{smallskip}{\smallskip}
+\DeclareBiCaptionSeparator{medskip}{\medskip}
+\DeclareBiCaptionSeparator{bigskip}{\bigskip}
+%    \end{macrocode}
+%
+% The default separator usually maps to `none'.
+%    \begin{macrocode}
+\caption@ifundefined\SetCaptionDefault
+  {\def\caption@biseparator@default{\caption@biseparator@none}}
+  {\SetCaptionDefault{biseparator}{none}}
+%    \end{macrocode}
+%
+% The option |lang=|\meta{language} will setup the language of the caption.
+% We can't set the language immediately because otherwise we will get in trouble, e.g. when
+% using the \pkg{microtype} package via |\usepackage[babel]{microtype}|.
+% So we store the selected language to |\bicaption@language| instead and will set it later on.
+% But this has a drawback, option settings which will be overwritten by the selection of
+% the language do not work correctly anymore. Therefore we will save specific options
+% and set them (again) after setting the language.
+%    \begin{macrocode}
+\DeclareCaptionOption{lang}{%
+  \caption@ifundefined\bicaption@language
+    \bicaption@language@setupkeys
+    \relax
+  \edef\bicaption@language{#1}%
+  \let\bicaption@language@setoptions\@empty
+  \global\let\bicaption@language@value\bicaption@language}
+%    \end{macrocode}
+% Map |language=| to |lang=|.
+%    \begin{macrocode}
+\let\KV@caption@language\KV@caption@lang
+%    \end{macrocode}
+%
+% \begin{macro}{\DeclareCaptionLangOption}
+% \changes{v1.2}{2016/03/27}{This macro added}
+% |\DeclareCaptionLangOption|\marg{option key}\par
+% Saves the gives \meta{option key} to the list |\bicaption@language@keylist|.
+% These options will be stored and set (again) after setting the language.
+%    \begin{macrocode}
+\newcommand*\bicaption@language@keylist{}
+%    \end{macrocode}
+%    \begin{macrocode}
+\newcommand*\DeclareCaptionLangOption[1]{%
+  \@ifundefined{KV@caption@#1}%
+    {\bicaption@Error{Undefined caption option `#1'}}%
+    {\@cons\bicaption@language@keylist{{#1}}}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\let\DeclareCaptionLanguageOption\DeclareCaptionLangOption
+%    \end{macrocode}
+%    \begin{macrocode}
+\newcommand*\bicaption@language@setupkeys{%
+  \def\@elt##1{%
+    \expandafter\let\csname KV@bicaption@##1\expandafter\endcsname
+                    \csname KV@caption@##1\endcsname
+    \@namedef{KV@caption@##1}{\bicaption@KV{##1}}}%
+  \bicaption@language@keylist
+  \let\@elt\relax}
+%    \end{macrocode}
+%    \begin{macrocode}
+\newcommand\bicaption@KV[2]{%
+  \@bicaption@KV{#1}{#2}%
+  \l@addto@macro\bicaption@language@setoptions{%
+    \@bicaption@KV{#1}{#2}}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\newcommand\@bicaption@KV[1]{%
+  \@nameuse{KV@bicaption@#1}}
+%    \end{macrocode}
+% \end{macro}
+%
+% The only option affected I'm aware off is the |name=| option, so this will be saved
+% and set later on.
+%    \begin{macrocode}
+\DeclareCaptionLangOption{name}
+%    \end{macrocode}
+%
+% \begin{macro}{\bicaption@selectlanguage}
+% \changes{v1.0}{2011/08/31}{Starred variant added}
+% \changes{v1.1}{2012/04/09}{Support of \cs{selectcaptionlanguage} added}
+% \changes{v1.1}{2016/03/25}{Patching of \cs{caption@applyfont} replaced by \cs{caption@beginhook}}
+% \changes{v1.1}{2016/03/27}{Usage of \cs{bicaption@language@setoptions} added}
+% |\bicaption@selectlanguage|\marg{font-or-list-entry}\par
+% Set the language (stored in |\bi|\-|caption@lan|\-|guage|)
+% via |\select|\-|bi|\-|caption|\-|lan|\-|guage|.
+%    \begin{macrocode}
+\newcommand*\bicaption@selectlanguage[1]{%
+  \caption@ifundefined\bicaption@language{}{%
+    \expandafter\selectcaptionlanguage\expandafter#1\expandafter
+      {\bicaption@language}%
+    \bicaption@language@setoptions}}
+%    \end{macrocode}
+% |\caption@beginhook| (of the \pkg{caption} package kernel) will be extended here
+% so the language setting will actually take effect.
+%    \begin{macrocode}
+\g@addto@macro\caption@beginhook{%
+  \bicaption@selectlanguage\@firstoftwo}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\selectcaptionlanguage}
+% |\selectcaptionlanguage|\marg{font-or-list-entry}\marg{language}
+% will finally be used to set up the language.
+%    \begin{macrocode}
+\providecommand*\selectcaptionlanguage[1]{%
+  #1\select@language\selectlanguage}
+%    \end{macrocode}
+% \end{macro}
+%
+% \pagebreak[3]
+% \subsection{Execution of options}
+%
+% Setup default values for |bi-lang|, |bi-single|\-|line|\-|check|,
+% |bi-swap|, and |bi-separator|.
+%    \begin{macrocode}
+\caption@ExecuteOptions{caption}{bi-lang=0,bi-slc=1,bi-swap=0,bi-separator=default}
+%    \end{macrocode}
+%
+% Set the language for the first caption.
+% (Since \version{1.5a} we do this |\At|\-|Begin|\-|Document| so
+% |\caption|\-|main|\-|language| could be defined \emph{after} loading the
+% \pkg{bicaption} package or \pkg{babel} or \pkg{polyglossia}
+% could be loaded \emph{after} the \pkg{bicaption} package.)
+%    \begin{macrocode}
+\AtBeginDocument{%
+  \ifcsname captionmainlanguage\endcsname
+    \bicaption@InfoNoLine{%
+      Main language is set to \captionmainlanguage}%
+  \else
+    \bicaption@setmainlanguage
+  \fi
+%    \end{macrocode}
+%    \begin{macrocode}
+  \ifcsname captionmainlanguage\endcsname
+    \captionsetup*[bi-first]{lang=\captionmainlanguage}%
+  \else
+    \ifcsname bicaption@language@value\endcsname % option "lang=" was used
+      \expandafter\bicaption@Warning
+    \else
+      \expandafter\bicaption@Info
+    \fi
+      {Main language is not set}%
+  \fi}
+%    \end{macrocode}
+%
+% \begin{macro}{\bicaption@setmainlanguage}
+% \changes{v1.5a}{2011/08/31}{This macro added as encapsulation of setting \cs{captionmainlanguage}}
+% |\bicaption@setmainlanguage| is used to define
+% |\caption|\-|main|\-|language| if not already done.
+%    \begin{macrocode}
+\newcommand*\bicaption@setmainlanguage{%
+  \ifcsname bbl@main@language\endcsname
+    \bicaption@InfoNoLine{%
+      babel found, main language is \bbl@main@language}%
+    \let\captionmainlanguage\bbl@main@language
+  \else\ifcsname xpg@main@language\endcsname
+    \bicaption@InfoNoLine{%
+      polyglossia found, main language is \xpg@main@language}%
+    \let\captionmainlanguage\xpg@main@language
+  \fi\fi}
+\@onlypreamble\bicaption@setmainlanguage
+%    \end{macrocode}
+% \end{macro}
+%
+% We use |\caption@Process|\-|Options| here to add the options to the `|bi-second|' option
+% list instead of executing them immediately.
+%    \begin{macrocode}
+\caption@SetupOptions{bicaption}{\captionsetup*[bi-second]{#2}}%
+\caption@ProcessOptions*{bicaption}
+%    \end{macrocode}
+%
+% \pagebreak[3]
+% \subsection{Main code}
+%
+% \begin{macro}{\caption@addcontentsline}
+% \changes{v1.0}{2011/08/31}{Redefinition of \cs{caption@kernel@addcontentsline} added}
+% \changes{v1.0b}{2012/01/15}{\cs{caption@kernel@addcontentsline} changed to \cs{caption@addcontentsline}}
+% \changes{v1.1}{2016/02/01}{Adaption to \pkg{longtable} package added}
+% We patch |\caption@add|\-|contents|\-|line| (of the \pkg{caption} package kernel)
+% so |bi|\-|caption@add|\-|contents|\-|line| will be used for bilingual captions instead.
+%    \begin{macrocode}
+\let\bicaption@addcontentsline@ORI\caption@addcontentsline
+\renewcommand*\caption@addcontentsline[2]{%
+%    \end{macrocode}
+%    \begin{macrocode}
+  \bicaption@LT@setup
+  \global\let\bicaption@LT@setup\relax
+%    \end{macrocode}
+%    \begin{macrocode}
+  \caption@ifundefined\bicaption@lentry
+    {\bicaption@addcontentsline@ORI{#1}{#2}}%
+    {\expandafter\bicaption@addcontentsline\expandafter
+       {\bicaption@lentry}{#1}{#2}%
+     \global\let\bicaption@lentry\@undefined}}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bicaption@addcontentsline}
+% \changes{v1.0}{2011/08/31}{This macro added}
+% \changes{v1.1}{2013/03/10}{Bugfix: Delayed usage of \cs{caption@addsubcontentslines} added}
+% |\bicaption@addcontentsline|\marg{list entry \#2}\marg{type}\marg{list entry \#1}\par
+% Typeset both captions using the original version of |\caption@add|\-|contents|\-|line|.
+%    \begin{macrocode}
+\newcommand\bicaption@addcontentsline[3]{%
+  \begingroup
+    \let\caption@addsubcontentslines\@gobble
+%    \end{macrocode}
+% Execute the options setup with |\captionsetup[bi]{|\ldots|}|.
+%    \begin{macrocode}
+    \caption@setoptions{bi}%
+%    \end{macrocode}
+% Do the first list entry, if requested.
+%    \begin{macrocode}
+    \ifnum\bicaption@lang=2\relax \else
+      \begingroup
+        \caption@setoptions{bi-first}%
+        \bicaption@@addcontentsline{#2}{#3}%
+      \endgroup
+    \fi
+%    \end{macrocode}
+% Do the second list entry, if requested.
+%    \begin{macrocode}
+    \ifnum\bicaption@lang=1\relax \else
+      \begingroup
+        \caption@setoptions{bi-second}%
+        \bicaption@@addcontentsline{#2}{#1}%
+      \endgroup
+    \fi
+%    \end{macrocode}
+%    \begin{macrocode}
+  \endgroup
+  \caption@addsubcontentslines{#2}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\newcommand*\bicaption@@addcontentsline[2]{%
+  \caption@ifcontentsline{#2}{%
+    \bicaption@selectlanguage\@secondoftwo
+    \bicaption@addcontentsline@ORI{#1}{#2}}}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\caption@@make}
+% \changes{v1.4}{2020/12/25}{Fallback code of \cs{caption@@make@} added}
+% We redefine |\caption@@make| (of the \pkg{caption} package kernel)
+% so |\bi|\-|caption@@make| will be used for bilingual captions instead.
+%    \begin{macrocode}
+\caption@ifundefined\caption@@make@
+  {\let\caption@@make@\caption@@make}
+  {}
+%    \end{macrocode}
+%    \begin{macrocode}
+\renewcommand\caption@@make[2]{%
+  \caption@ifundefined\bicaption@text
+    {\begingroup
+       \caption@@make@{#1}{#2}%
+     \endgroup}%
+    {\expandafter\bicaption@@make\expandafter
+       {\bicaption@text}{#1}{#2}%
+     \global\let\bicaption@text\@undefined}%
+%    \end{macrocode}
+%    \begin{macrocode}
+  \@nameuse{caption@@make@epilogue}}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bicaption@@make}
+% \changes{v1.1}{2015/09/16}{\cs{bicaption@label} replaced by \cs{caption@thelabel}}
+% \changes{v1.3}{2020/10/25}{Usage of \cs{caption@biseparator} added}
+% \changes{v1.4}{2020/12/25}{Definitions of \cs{bicaption@slc} and \cs{caption@setsinglelinecheck} added (fallback)}
+% \changes{v1.4a}{2020/12/26}{Clearance of \cs{caption@thelabel} replaced by \cs{bicaption@clrlabel}}
+% |\bicaption@@make|\marg{text \#2}\marg{label}\marg{text \#1}\par
+% Typeset both captions using the original version of \cs{caption@@make}.
+%    \begin{macrocode}
+\newcommand\bicaption@@make[3]{%
+%    \end{macrocode}
+% Execute the options setup with |\captionsetup[bi]{|\ldots|}|.
+%    \begin{macrocode}
+  \caption@setoptions{bi}%
+%    \end{macrocode}
+% Perform the common single-line-check for both captions, if requested.
+%    \begin{macrocode}
+  \ifnum\bicaption@lang=0\relax
+    \bicaption@ifslc
+      {\bicaption@slc{#2}{#3}{}{\caption@setsinglelinecheck0}%
+       \bicaption@slc{#2}{#1}{}{\caption@setsinglelinecheck0}}%
+      {}%
+  \fi
+%    \end{macrocode}
+% Typeset the first caption, if requested.
+% (Otherwise we only apply the label of it.)
+%    \begin{macrocode}
+  \ifnum\bicaption@lang=2\relax
+    \caption@thelabel
+    \let\bicaption@tempa\relax
+  \else
+    \begingroup
+      \caption@setoptions{bi-first}%
+      \caption@@make@{#2}{#3}%
+    \endgroup
+    \def\bicaption@tempa{\bicaption@separator\caption@biseparator}%
+  \fi
+%    \end{macrocode}
+% Typeset the second caption, if requested.
+%    \begin{macrocode}
+  \ifnum\bicaption@lang=1\relax
+  \else
+    \bicaption@tempa
+    \begingroup
+      \caption@setoptions{bi-second}%
+      \caption@@make@{#2}{#1}%
+    \endgroup
+  \fi
+%    \end{macrocode}
+%    \begin{macrocode}
+  \global\bicaption@clrlabel}
+%    \end{macrocode}
+%    \begin{macrocode}
+\newcommand*\bicaption@separator{\par}
+%    \end{macrocode}
+%    \begin{macrocode}
+\caption@ifundefined\caption@@slc
+  {\newcommand\bicaption@slc{\caption@slc}}
+  {\newcommand\bicaption@slc[2]{\caption@@slc{#1}{#2}{\captionwidth}}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\providecommand*\caption@setsinglelinecheck{%
+  \caption@set@bool\caption@ifslc}
+%    \end{macrocode}
+% \end{macro}
+%
+% \pagebreak[3]
+% \subsubsection{The \cs{bicaption} commands}
+%
+% \begin{macro}{\bicaptionsetup}
+% \changes{v1.6}{2022/04/18}{This macro added}
+% |\bicaptionsetup*|\oarg{type}\marg{keyval-list of options 1}\marg{keyval-list of options 2}\\
+% applies the given list of options.
+%    \begin{macrocode}
+\newcommand*\bicaptionsetup{%
+  \caption@teststar\@bicaptionsetup*{}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\newcommand*\@bicaptionsetup[1]{%
+  \kernel@ifnextchar[%]
+    {\bicaption@setup@options{#1}}%
+    {\bicaption@setup*}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\def\bicaption@setup@options#1[#2]{%
+  \bicaption@setup{#1[{#2}]}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\newcommand*\bicaption@setup[2]{%
+  \captionsetup#1[bi-first]{#2}%
+  \captionsetup#1[bi-second]}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bicaption}
+% |\bicaption*|\oarg{list entry \#1}\marg{text \#1}\oarg{list entry \#2}\marg{text \#2}
+%    \begin{macrocode}
+\newcommand\bicaption{\@bicaption\caption}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bicaptionbox}
+% \changes{v1.0}{2011/08/31}{This macro added}
+% |\bicaptionbox*|\oarg{entry \#1}\marg{text \#1}\oarg{entry \#2}\marg{text \#2}%
+%                    \oarg{\ldots}\marg{\ldots}
+%    \begin{macrocode}
+\newcommand\bicaptionbox{\@bicaption\captionbox}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bisubcaption}
+% |\bisubcaption*|\oarg{list entry \#1}\marg{text \#1}\oarg{list entry \#2}\marg{text \#2}
+%    \begin{macrocode}
+\newcommand\bisubcaption{\@bicaption\subcaption}
+\let\subbicaption\bisubcaption
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bisubcaptionbox}
+% |\bisubcaptionbox*|\oarg{entry \#1}\marg{text \#1}\oarg{entry \#2}\marg{text \#2}%
+%                    \oarg{\ldots}\marg{\ldots}
+%    \begin{macrocode}
+\newcommand\bisubcaptionbox{\@bicaption\subcaptionbox}
+\let\subbicaptionbox\bisubcaptionbox
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\@bicaption}
+% \changes{v1.0}{2011/08/31}{Optional parameter \meta{list entry \#2} added}
+% \changes{v1.1}{2015/09/16}{\cs{bicaption@getlabel} replaced by \cs{caption@getlabel}}
+% \changes{v1.4}{2020/12/25}{Usage of \cs{caption@getlabel} replaced by \cs{bicaption@getlabel}}
+% |\@bicaption|\marg{cmd}*\oarg{entry \#1}\marg{text \#1}\oarg{entry \#2}\marg{text \#2}\ldots
+%    \begin{macrocode}
+\newcommand*\@bicaption[1]{%
+  \@ifstar
+    {\def\bicaption@cmd{\bicaption@star{#1}}%
+     \@@bicaption}%
+    {\def\bicaption@cmd{#1}%
+     \caption@dblarg\@@@bicaption}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\newcommand\@@bicaption[1]{%
+  \@@@@bicaption{}{#1}[]}
+%    \end{macrocode}
+%    \begin{macrocode}
+\long\def\@@@bicaption[#1]#2{%
+  \caption@dblarg{\@@@@bicaption{#1}{#2}}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\long\def\@@@@bicaption#1#2[#3]#4{%
+  \bicaption@getlabel{#2}%
+  \bicaption@ifswap
+    {\bicaption@set{#1}{#2}%
+     \bicaption@cmd[{#3}]{#4}}%
+    {\bicaption@set{#3}{#4}%
+     \bicaption@cmd[{#1}]{#2}}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\long\def\bicaption@star#1[#2]{#1*}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bicaption@getlabel}
+% \changes{v1.0}{2011/09/03}{\cs{label} can have optional arguments now}
+% \changes{v1.4}{2020/12/25}{This macro re-added}
+%   |\bicaption@getlabel|\marg{text}\\
+%   gets the label command out of the given caption text and stores it to |\caption@the|\-|label|.
+%   It uses |\caption@get|\-|label| for this purpose which interface unfortunately has changed over time.
+%   (Changing the interface was a bad idea in the first place but now it is as it is).
+%    \begin{macrocode}
+\@ifundefined{caption@getlabel}{%
+%    \end{macrocode}
+%    \begin{macrocode}
+  \newcommand\bicaption@getlabel[1]{%  caption3 < v1.7
+    \bicaption@@getlabel#1\label{}\@nil}
+%    \end{macrocode}
+%    \begin{macrocode}
+  \long\def\bicaption@@getlabel#1\label#2#3\@nil{%
+    \def\@tempa{#2}%
+    \ifx\@tempa\@empty
+      \let\caption@thelabel\relax
+    \else
+      \def\@tempb{*}%
+      \ifx\@tempa\@tempb
+        \def\caption@thelabel{\label*}%
+        \bicaption@@@getlabel#3\@nil
+      \else
+        \def\caption@thelabel{\label}%
+        \bicaption@@@getlabel{#2}#3\@nil
+      \fi
+    \fi}
+%    \end{macrocode}
+%    \begin{macrocode}
+  \long\def\bicaption@@@getlabel#1#2\@nil{%
+    \def\@tempa{#1}%
+    \def\@tempb{[}%
+    \ifx\@tempa\@tempb
+      \bicaption@@@@getlabel#1#2\@nil
+    \else
+      \l@addto@macro\caption@thelabel{{#1}}%
+    \fi}
+%    \end{macrocode}
+%    \begin{macrocode}
+  \long\def\bicaption@@@@getlabel[#1]#2\@nil{%
+    \l@addto@macro\caption@thelabel{[{#1}]}%
+    \bicaption@@@getlabel#2\@nil}
+%    \end{macrocode}
+%    \begin{macrocode}
+}{\@ifundefined{caption@@@@getlabel}{%
+%    \end{macrocode}
+%    \begin{macrocode}
+  \newcommand\bicaption@getlabel[1]{%  caption3 >= v1.7
+    \caption@getlabel#1\label{}\@nil}
+%    \end{macrocode}
+%    \begin{macrocode}
+}{%
+%    \end{macrocode}
+%    \begin{macrocode}
+  \newcommand*\bicaption@getlabel{%    caption3 >= v2.0
+    \caption@getlabel}
+%    \end{macrocode}
+%    \begin{macrocode}
+}}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bicaption@clrlabel}
+% \changes{v1.4a}{2020/12/26}{This macro added}
+%   |\bicaption@clrlabel|\\
+%   resets |\caption@the|\-|label| to |\relax|.
+%    \begin{macrocode}
+\@ifundefined{caption@clrlabel}{%
+%    \end{macrocode}
+%    \begin{macrocode}
+  \newcommand*\bicaption@clrlabel{\let\caption@thelabel\relax} %  caption3 < v2.3
+%    \end{macrocode}
+%    \begin{macrocode}
+}{%
+%    \end{macrocode}
+%    \begin{macrocode}
+  \newcommand*\bicaption@clrlabel{\caption@clrlabel}           %  caption3 >= v2.3
+%    \end{macrocode}
+%    \begin{macrocode}
+}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bicaption@set}
+% \changes{v1.6}{2022/04/18}{This macro renamed from \cs{bicaption@setup} to \cs{bicaption@set}}
+% |\bicaption@set|\marg{list-entry}\marg{text}\\
+% initiates the bilingual caption typesetting by storing the extra texts into
+% |\bi|\-|caption@l|\-|entry| and |\bi|\-|caption@text|.
+%    \begin{macrocode}
+\newcommand\bicaption@set[2]{%
+  \def\bicaption@lentry{#1}%
+  \def\bicaption@text{\ignorespaces #2}}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\bicaption@clear}
+% |\bicaption@clear|\\
+% clears the stuff stored by |\bicaption@set|.
+%    \begin{macrocode}
+\newcommand*\bicaption@clear{%
+  \let\bicaption@lentry\@undefined
+  \let\bicaption@text\@undefined}
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\caption@freeze}
+% \changes{v1.0}{2011/08/31}{Redefinition of \cs{caption@freeze} added}
+% \changes{v1.5c}{2022/04/18}{\cs{@ifnextchar} replaced by \cs{kernel@ifnextchar}}
+% To make |\bicaption| work inside |SCfigure| and |FPfigure| environments we need to add
+% |\bi|\-|caption| to |\caption@freeze|.
+%    \begin{macrocode}
+\AtBeginDocument{%
+  \ifx\caption@freeze\@undefined \else
+    \g@addto@macro\caption@freeze{%
+      \let\caption@frozen@bicaption\bicaption
+      \def\bicaption{%
+        \caption@withoptargs\caption@SC@bicaption}%
+      \long\def\caption@SC@bicaption#1#2{%
+        \kernel@ifnextchar[%]
+          {\caption@SC@bi@caption{#1}{#2}}%
+          {\caption@SC@bi@caption@{#1}{#2}}}%
+      \long\def\caption@SC@bi@caption#1#2[#3]#4{%
+        \caption@@freeze{\bicaption#1{#2}[{#3}]{#4}}%
+        \ignorespaces}%
+      \long\def\caption@SC@bi@caption@#1#2#3{%
+        \caption@@freeze{\bicaption#1{#2}{#3}}%
+        \ignorespaces}%
+      \l@addto@macro\caption@warmup{%
+        \let\bicaption\caption@frozen@bicaption}}%
+  \fi}
+%    \end{macrocode}
+% \end{macro}
+%
+% \changes{v1.1}{2013/05/02}{Definition of \cs{bicaption@listof} removed}
+%
+% \subsection{Support of the listings package}
+% \changes{v1.5}{2021/01/04}{Support of the \pkg{listings} package added}
+%
+%    \begin{macrocode}
+\caption@IfPackageLoaded{listings}[2004/02/13 v1.2]{%
+%    \end{macrocode}
+%
+% If the \pkg{listings} package is loaded, we define the new options `caption1' and `caption2'.
+%    \begin{macrocode}
+  \lst@Key{caption1}\relax{%
+    \lstKV@OptArg[{#1}]{#1}{%
+      \bicaption@ifswap
+        {\bicaption@set{##1}{##2}}%
+        {\def\lst@@caption{##1}\def\lst@caption{##2}}}%
+    \let\lst@title\@empty}%
+%    \end{macrocode}
+%    \begin{macrocode}
+  \lst@Key{caption2}\relax{%
+    \lstKV@OptArg[{#1}]{#1}{%
+      \bicaption@ifswap
+        {\def\lst@@caption{##1}\def\lst@caption{##2}}%
+        {\bicaption@set{##1}{##2}}}%
+    \let\lst@title\@empty}%
+%    \end{macrocode}
+%    \begin{macrocode}
+  \lst@AddToHookExe{TextStyle}{%
+    \bicaption@clear}%
+%    \end{macrocode}
+%
+%    \begin{macrocode}
+}{}
+%    \end{macrocode}
+%
+% \subsection{Support of the longtable package}
+%
+% \begin{macro}{\LT@bicaption}
+% \changes{v1.1}{2016/01/31}{Adaption to \pkg{longtable} package added}
+% Same as |\@bicaption| but for |longtable| (offered by the \pkg{longtable} package).
+% |\bi|\-|caption@LT|\-|setup| will be executed later on, inside |\LT@make|\-|caption|
+% offered by the \pkg{caption} package.
+%    \begin{macrocode}
+\newcommand\LT@bicaption{%
+  \noalign\bgroup
+    \@ifstar
+      {\gdef\bicaption@cmd{\LT@c@ption\@gobble}%
+       \LT@@bicaption}%
+      {\gdef\bicaption@cmd{\LT@c@ption\@firstofone}%
+       \caption@dblarg\LT@@@bicaption}}
+\newcommand\LT@@bicaption[1]{%
+  \LT@@@@bicaption{}{#1}[]}
+%    \end{macrocode}
+%    \begin{macrocode}
+\long\def\LT@@@bicaption[#1]#2{%
+  \caption@dblarg{\LT@@@@bicaption{#1}{#2}}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\long\def\LT@@@@bicaption#1#2[#3]#4{%
+  \gdef\bicaption@LTsetup{%
+    \bicaption@getlabel{#2}%
+    \bicaption@LT@setup}%
+  \gdef\bicaption@LT@setup{%
+    \bicaption@ifswap
+      {\bicaption@set{#1}{#2}}%
+      {\bicaption@set{#3}{#4}}}%
+  \bicaption@ifswap
+    {\egroup\bicaption@cmd[{#3}]{#4}}%
+    {\egroup\bicaption@cmd[{#1}]{#2}}}
+%    \end{macrocode}
+%    \begin{macrocode}
+\let\bicaption@LTsetup\relax
+\let\bicaption@LT@setup\relax
+%    \end{macrocode}
+% \end{macro}
+%
+% \begin{macro}{\caption@LT@setup}
+% \changes{v1.1}{2016/01/31}{Adaption to \pkg{longtable} package added}
+% \changes{v1.4}{2020/12/25}{Fallback code for \pkg{caption} package \version{3.2} added}
+% Execute the stuff defined by \cs{LT@bicaption} to prepare the typesetting
+% of the \pkg{longtable} bilingual caption.
+%    \begin{macrocode}
+\caption@ifundefined\caption@LT@setup{%
+  % Fallback code for caption v3.2
+  \captionsetup*[longtable]{bicaption-lt-setup}
+  \DeclareCaptionOptionNoValue{bicaption-lt-setup}{%
+    \bicaption@LTsetup
+    \global\let\bicaption@LTsetup\relax}
+}{%
+  \g@addto@macro\caption@LT@setup{%
+    \bicaption@LTsetup
+    \global\let\bicaption@LTsetup\relax}
+}
+%    \end{macrocode}
+% \end{macro}
+%
+% \iffalse
+%</package>
+% \fi
+%
+% \iffalse
+% --------------------------------------------------------------------------- %
+% \fi
+%
+% \Finale
+%
+\endinput
+

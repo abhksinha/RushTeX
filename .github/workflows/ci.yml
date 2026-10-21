@@ -1,4 +1,4 @@
-name: CI & Mathematical Parity Differential Testing
+name: CI
 
 on:
   push:
@@ -9,60 +9,65 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # The math glyph tables are taken from New Computer Modern Math of TeX Live 2023
+  # (`NEWCM_MATH_FILE` in src/math/fonts/mod.rs): the tests need that exact release.
+  NEWCM_URL: https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2023/tlnet-final/archive/newcomputermodern.tar.xz
+  NEWCM_SHA256: aaf4451dfa25760bd6e15ae78ecd6f7d4fb99c70baac81982b3575a22c0c579a
 
 jobs:
-  test_and_verify_parity:
-    name: Build, Unit Tests & 300-DPI Perceptual Parity Suite
+  build_and_test:
+    name: Build, unit tests, clippy
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Codebase
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy
 
-      - name: Setup Rust Dependency Cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Install TeX Live and Rendering Tooling
+      - name: Pinned NewCMMath (TeX Live 2023)
+        run: |
+          mkdir -p "$HOME/.rushtex/fonts" "$RUNNER_TEMP/newcm"
+          curl -fsSL "$NEWCM_URL" | tar -xJ -C "$RUNNER_TEMP/newcm"
+          f=$(find "$RUNNER_TEMP/newcm" -name NewCMMath-Regular.otf | head -1)
+          echo "$NEWCM_SHA256  $f" | sha256sum -c -
+          cp "$f" "$HOME/.rushtex/fonts/"
+
+      - name: Release build
+        run: cargo build --release
+
+      - name: Unit tests
+        run: cargo test --release
+
+      - name: Clippy
+        run: cargo clippy --release -- -D warnings
+
+  # Zero-shift parity compares against pdfLaTeX, so it needs the TeX Live the references were
+  # made with. Until CI pins one, it reports without gating.
+  parity:
+    name: Zero-shift parity vs pdfLaTeX (report only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: TeX Live
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            texlive-latex-base \
-            texlive-latex-recommended \
-            texlive-latex-extra \
-            texlive-fonts-recommended \
-            poppler-utils \
-            python3-pip \
-            python3-numpy \
-            python3-pil \
-            python3-scipy
+            texlive-latex-base texlive-latex-recommended texlive-latex-extra \
+            texlive-fonts-recommended texlive-science lmodern
 
-      - name: Compile RushTeX (Release Build)
-        run: cargo build --release --verbose
+      - name: Engine format
+        run: RT_FMT=target/parity/pdflatex.rfmt RT_FORMAT=pdflatex.ini cargo test --release --lib format_smoke -- --ignored --nocapture
 
-      - name: Run Full Rust Test Suite (146+ Tests)
-        run: cargo test --verbose
-
-      - name: Run Clippy Linter
-        run: cargo clippy -- -D warnings
-
-      - name: Execute Automated Differential Regression Harness (300 DPI)
-        run: |
-          python3 scripts/differential_parity_harness.py \
-            --suite all \
-            --dpi 300 \
-            --ci \
-            --save-all \
-            --diff-dir comparison/diff
-
-      - name: Upload Differential Parity Heatmaps & Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: differential-parity-heatmaps-300dpi
-          path: comparison/diff/*.png
-          if-no-files-found: ignore
+      - name: Zero check, all documents
+        run: uv run scripts/parity/parity.py zero --engine --pixels --all

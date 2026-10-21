@@ -87,6 +87,37 @@ pub struct TableData<'a> {
     pub caption_above: bool,
     /// `\centering` was given in the enclosing float.
     pub centered: bool,
+    /// Placement of a `table` float (`FLOAT_*` bits); 0 for a tabular in the text.
+    pub placement: u8,
+}
+
+/// `h`: here, in the text.
+pub const FLOAT_HERE: u8 = 1;
+/// `t`: at the top of a page.
+pub const FLOAT_TOP: u8 = 2;
+/// `b`: at the bottom of a page.
+pub const FLOAT_BOTTOM: u8 = 4;
+/// `p`: on a page of floats.
+pub const FLOAT_PAGE: u8 = 8;
+/// `!`: ignore the fraction limits.
+pub const FLOAT_FORCE: u8 = 16;
+
+/// The placement bits of a float specifier such as `htbp`; LaTeX's default `tbp` when empty.
+pub fn parse_float_placement(spec: &str) -> u8 {
+    let mut bits = 0;
+    for c in spec.chars() {
+        bits |= match c {
+            'h' => FLOAT_HERE,
+            't' => FLOAT_TOP,
+            'b' => FLOAT_BOTTOM,
+            'p' => FLOAT_PAGE,
+            '!' => FLOAT_FORCE,
+            // float.sty `H`: exactly here.
+            'H' => FLOAT_HERE | FLOAT_FORCE,
+            _ => 0,
+        };
+    }
+    if bits & !FLOAT_FORCE == 0 { bits | FLOAT_TOP | FLOAT_BOTTOM | FLOAT_PAGE } else { bits }
 }
 
 /// Row ranges `[start, end)` of the `longtable` head and foot boxes delimited by

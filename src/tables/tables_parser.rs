@@ -24,7 +24,7 @@ pub(crate) fn parse_table_float<'a>(
     open_offset: usize,
 ) -> Result<Block<'a>, ParseError> {
     p.skip_hws();
-    let _ = p.parse_optional_brackets()?;
+    let placement = crate::tables::tables_model::parse_float_placement(&p.parse_optional_brackets()?.concat());
     let mut caption = None;
     let mut caption_above = false;
     let mut centered = false;
@@ -79,6 +79,7 @@ pub(crate) fn parse_table_float<'a>(
         tdata.caption = caption;
         tdata.caption_above = caption_above;
         tdata.centered = centered;
+        tdata.placement = placement;
         Ok(Block::Table(tdata))
     } else {
         // Fallback empty table
@@ -94,6 +95,7 @@ pub(crate) fn parse_table_float<'a>(
             caption,
             caption_above,
             centered,
+            placement,
         })))
     }
 }
@@ -302,6 +304,7 @@ fn parse_table_body<'a>(
         caption,
         caption_above,
         centered: false,
+        placement: 0,
     })))
 }
 

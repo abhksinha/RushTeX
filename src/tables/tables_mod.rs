@@ -145,7 +145,7 @@ G & H & I \\
     #[test]
     fn test_floating_table_with_caption() {
         let src = r#"
-\documentclass{article}
+\documentclass{article}\usepackage{times}
 \begin{document}
 \begin{table}[htbp]
 \caption{System Performance Benchmark Results}
@@ -173,7 +173,8 @@ C & D \\
         assert!(!pdf.is_empty());
         assert!(pdf.starts_with(b"%PDF-1.4"));
         let raw = String::from_utf8_lossy(&pdf);
-        // Drop TJ kern displacements (`)<number>(`) so kerned words read as plain text.
+        // Read TJ displacements (`)<number>(`) as text: interword glue (below -100/1000 em)
+        // is a space, kerns are dropped.
         let mut pdf_str = String::with_capacity(raw.len());
         let mut rest: &str = &raw;
         while let Some(pos) = rest.find(')') {
@@ -183,6 +184,9 @@ C & D \\
                 .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
                 .unwrap_or(after.len());
             if num_len > 0 && after[num_len..].starts_with('(') {
+                if after[..num_len].parse::<f32>().is_ok_and(|n| n < -100.0) {
+                    pdf_str.push(' ');
+                }
                 rest = &after[num_len + 1..];
             } else {
                 pdf_str.push(')');

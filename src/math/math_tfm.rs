@@ -541,46 +541,6 @@ pub fn cmmi_skew_kern(ch: char) -> f32 {
     }
 }
 
-/// Returns the pairwise letter kern between two CMMI characters in points.
-#[inline(always)]
-pub fn cmmi_pair_kern(c1: char, c2: char, tier: u8, font_size: f32) -> f32 {
-    match (c1, c2) {
-        ('d', 'f') => {
-            let k = match tier {
-                0 | 1 => -0.166667,
-                2 => -0.184525,
-                _ => -0.208338,
-            };
-            k * font_size
-        }
-        ('d', 'j') => {
-            let k = match tier {
-                0 | 1 => -0.111112,
-                2 => -0.123016,
-                _ => -0.138891,
-            };
-            k * font_size
-        }
-        ('d', 'Y') => {
-            let k = match tier {
-                0 | 1 => 0.055555,
-                2 => 0.061508,
-                _ => 0.069446,
-            };
-            k * font_size
-        }
-        ('d', 'Z') => {
-            let k = match tier {
-                0 | 1 => -0.055555,
-                2 => -0.061508,
-                _ => -0.069446,
-            };
-            k * font_size
-        }
-        _ => 0.0,
-    }
-}
-
 pub static CMBX10_METRICS: [PackedGlyphMetric; 128] = [
     PackedGlyphMetric { w: 11332, h: 11241, d: 0, ic: 0 }, // 0x00
     PackedGlyphMetric { w: 15701, h: 11241, d: 0, ic: 0 }, // 0x01
@@ -2136,4 +2096,112 @@ pub fn msbm10_metric(code: u8) -> GlyphMetric {
     } else {
         GlyphMetric { w: 0.0, h: 0.0, d: 0.0, ic: 0.0 }
     }
+}
+
+/// The TFM of a Computer Modern face at its design size; `None` for faces without one.
+pub fn face_tfm(face: crate::backend::fonts::Face) -> Option<&'static crate::backend::backend_tfm::Tfm> {
+    use crate::backend::backend_tfm as t;
+    use crate::backend::fonts::Face as F;
+    Some(match face {
+        F::Roman => &t::CMR10_TFM,
+        F::Roman7 => &t::CMR7_TFM,
+        F::Roman5 => &t::CMR5_TFM,
+        F::Bold => &t::CMBX10_TFM,
+        F::Italic => &t::CMTI10_TFM,
+        F::Mono => &t::CMTT10_TFM,
+        F::MathItalic => &t::CMMI10_TFM,
+        F::MathItalic7 => &t::CMMI7_TFM,
+        F::MathItalic5 => &t::CMMI5_TFM,
+        F::MathItalic6 => &t::CMMI6_TFM,
+        F::MathItalic8 => &t::CMMI8_TFM,
+        F::MathItalic9 => &t::CMMI9_TFM,
+        F::MathItalic12 => &t::CMMI12_TFM,
+        F::Symbol => &t::CMSY10_TFM,
+        F::Symbol7 => &t::CMSY7_TFM,
+        F::Symbol5 => &t::CMSY5_TFM,
+        F::Symbol6 => &t::CMSY6_TFM,
+        F::Symbol8 => &t::CMSY8_TFM,
+        F::Symbol9 => &t::CMSY9_TFM,
+        F::Extension => &t::CMEX10_TFM,
+        F::Extension7 => &t::CMEX7_TFM,
+        F::AmsA => &t::MSAM10_TFM,
+        F::AmsB => &t::MSBM10_TFM,
+        F::MathSans => &t::CMSS10_TFM,
+        F::MathSans8 => &t::CMSS8_TFM,
+        F::MathMono8 => &t::CMTT8_TFM,
+        F::Fraktur => &t::EUFM10_TFM,
+        F::Fraktur7 => &t::EUFM7_TFM,
+        F::Fraktur5 => &t::EUFM5_TFM,
+        F::BoldMathItalic => &t::CMMIB10_TFM,
+        F::BoldMathItalic7 => &t::CMMIB7_TFM,
+        F::BoldMathItalic5 => &t::CMMIB5_TFM,
+        F::BoldSymbol => &t::CMBSY10_TFM,
+        F::BoldSymbol7 => &t::CMBSY7_TFM,
+        F::BoldSymbol5 => &t::CMBSY5_TFM,
+        F::SmallCaps => &t::CMCSC10_TFM,
+        F::Slanted => &t::CMSL10_TFM,
+        F::SansBold => &t::CMSSBX10_TFM,
+        _ => return None,
+    })
+}
+
+/// The TFM of a text design-size master (the TS1 masters have none here).
+pub fn master_tfm(m: crate::backend::optical::OpticalMaster) -> Option<&'static crate::backend::backend_tfm::Tfm> {
+    use crate::backend::backend_tfm as t;
+    use crate::backend::optical::OpticalMaster as M;
+    Some(match m {
+        M::Cmr5 => &t::CMR5_TFM,
+        M::Cmr6 => &t::CMR6_TFM,
+        M::Cmr7 => &t::CMR7_TFM,
+        M::Cmr8 => &t::CMR8_TFM,
+        M::Cmr9 => &t::CMR9_TFM,
+        M::Cmr12 => &t::CMR12_TFM,
+        M::Cmr17 => &t::CMR17_TFM,
+        M::Cmbx5 => &t::CMBX5_TFM,
+        M::Cmbx6 => &t::CMBX6_TFM,
+        M::Cmbx7 => &t::CMBX7_TFM,
+        M::Cmbx8 => &t::CMBX8_TFM,
+        M::Cmbx9 => &t::CMBX9_TFM,
+        M::Cmbx12 => &t::CMBX12_TFM,
+        M::Cmti7 => &t::CMTI7_TFM,
+        M::Cmti8 => &t::CMTI8_TFM,
+        M::Cmti9 => &t::CMTI9_TFM,
+        M::Cmti12 => &t::CMTI12_TFM,
+        M::Cmtt8 => &t::CMTT8_TFM,
+        M::Cmtt9 => &t::CMTT9_TFM,
+        M::Cmtt12 => &t::CMTT12_TFM,
+        _ => return None,
+    })
+}
+
+/// Width, height, depth and italic correction of one character in points, exact: the TFM
+/// fix_words scaled to the font's size as TeX's `store_scaled` does (§571). Every value is a
+/// whole number of scaled points, which an `f32` holds exactly below 256pt.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GlyphDims {
+    pub w: f32,
+    pub h: f32,
+    pub d: f32,
+    pub ic: f32,
+}
+
+impl GlyphDims {
+    /// Height and depth do not go below zero: in math every character is measured inside a
+    /// box (`clean_box`, or `hpack` in §760), which starts at zero height and depth (§649).
+    #[inline]
+    pub fn of(tfm: &crate::backend::backend_tfm::Tfm, code: u8, size: f32) -> Self {
+        let [w, h, d, ic] = tfm.dims_sp(code, &crate::backend::scaled::Scaler::at_pt(size));
+        const K: f32 = 1.0 / 65536.0;
+        GlyphDims { w: w as f32 * K, h: h.max(0) as f32 * K, d: d.max(0) as f32 * K, ic: ic as f32 * K }
+    }
+}
+
+/// Exact dimensions of `code` in `face` at `size`: a text face at another size uses its
+/// design-size master (`math_text_master`), as LaTeX's `.fd` sizes load cmr8, cmbx7, ...
+pub fn glyph_dims(face: crate::backend::fonts::Face, code: u8, size: f32, family: crate::backend::fonts::FontFamily) -> Option<GlyphDims> {
+    let tfm = match crate::math::math_fonts::math_text_master(face, size, family) {
+        Some((_, m)) => master_tfm(m)?,
+        None => face_tfm(face)?,
+    };
+    Some(GlyphDims::of(tfm, code, size))
 }

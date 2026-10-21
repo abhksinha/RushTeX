@@ -101,14 +101,13 @@ impl ScriptShiftResolver {
         sup_d: f32,
         sub_h: f32,
         x_height: f32,
-        scale: f32,
-        params: &crate::math::math_fonts::MathFontParameters,
+        params: &crate::math::math_fonts::MathParams,
         drops: (f32, f32),
     ) -> PackedScriptMetrics {
         // Rule 18a: Candidate superscript shift
         let sup_idx = SCRIPT_STYLE_TO_SUP_IDX[(style as usize) & 7] as usize;
         let sup_param = [params.sup2, params.sup1, params.sup3][sup_idx];
-        let sup_shift_std = (sup_param as f32) * scale;
+        let sup_shift_std = sup_param;
         let sup_drop = drops.0;
         let mut sup_shift = if is_char {
             sup_shift_std
@@ -118,7 +117,7 @@ impl ScriptShiftResolver {
 
         // Rule 18b: Candidate subscript shift
         let sub_param = [params.sub1, params.sub2][has_sup as usize];
-        let sub_shift_std = (sub_param as f32) * scale;
+        let sub_shift_std = sub_param;
         let sub_drop = drops.1;
         let mut sub_shift = if is_char {
             sub_shift_std
@@ -143,7 +142,7 @@ impl ScriptShiftResolver {
         // Rule 18e: Clearance constraint between superscript bottom and subscript top
         if has_sup && has_sub {
             let gap = (sup_shift - sup_d) - (-sub_shift + sub_h);
-            let min_clearance = (params.sub_sup_gap as f32) * scale;
+            let min_clearance = params.sub_sup_gap;
             if gap < min_clearance {
                 let shortfall = min_clearance - gap;
                 sub_shift += shortfall;

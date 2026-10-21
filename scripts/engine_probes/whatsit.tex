@@ -1,0 +1,12 @@
+%% typeset
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\font\tenrm=cmr10 \tenrm \pdfoutput=1
+\baselineskip=12pt \parindent=0pt \hsize=100pt \vsize=50pt \maxdepth=2pt \topskip=10pt
+\count30=0 \def\x{X}
+\output={\global\advance\count30 1 \shipout\box255}
+\openout5=wtest \write5{a\the\count30\x}\hbox{p\write5{b\the\count30 \noexpand\x}\special{sp\x}\pdfliteral{q\x}\pdfliteral shipout page{\the\count30}}\def\x{Y}
+\hbox{\pdfcolorstack0 push{1 g}\pdfsave\pdfsetmatrix{1 0 0 1}\pdfrestore\pdfcolorstack0 pop}\penalty-10000
+\setbox3\hbox{\write5{never}}
+\write5{c\the\count30\x\lastkern\the\lastpenalty}\closeout5\hbox{r}\kern3pt\penalty-10000
+\immediate\openin1=wtest \read1 to\la \read1 to\lb \read1 to\lc \read1 to\ld
+\setbox4\hbox{a\setlanguage5 b}\setbox6\hbox{\count9=\lastpenalty}

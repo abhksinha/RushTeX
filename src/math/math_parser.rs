@@ -6,7 +6,7 @@
 use crate::backend::fonts::Face;
 use crate::frontend::ast::PackedColor;
 use crate::math::math_ast::{
-    BigOpData, ColAlign, DelimitedData, MathChoiceData, MathNode, MathSkip, MathStyle, MatrixData,
+    BigOpData, ColAlign, DelimitedData, MathChoiceData, MathNode, MathSkip, MathStyle, MatrixData, MatrixExtras,
     MatrixDelim, MatrixEnvKind, DELIMITER_OPT_NONE, OP_LIMITS_BOXED_NUCLEUS, OP_LIMITS_DISPLAY,
     OP_LIMITS_LIMITS, OP_LIMITS_MODE_MASK, OP_LIMITS_NOLIMITS, FRACTION_OPT_EXACT, FRACTION_OPT_NOAXIS,
     FRACTION_OPT_DELIMITED, FRACTION_OPT_NONE, FRACTION_OPT_NORULE,
@@ -24,11 +24,21 @@ pub struct MathParser<'a> {
     spliced_row: bool,
     /// `\definecolor` names of the document, for `\color` and `\textcolor`.
     colors: Vec<(&'a str, PackedColor)>,
+    /// Set by `\notag`/`\nonumber` inside the current alignment row.
+    notag_seen: bool,
+    /// Alignment environments open around the current position.
+    env_depth: u8,
+    /// Set when a `split` nested in another alignment was just parsed.
+    split_in_cell: bool,
+    /// `\delimiterfactor` and `\delimitershortfall` (pt; NaN: the font's) in force.
+    pub delim_params: (u16, f32),
+    /// amsmath `\multlinegap` (pt) in force.
+    pub multline_gap: f32,
 }
 
 impl<'a> MathParser<'a> {
     pub fn new(src: &'a str) -> Self {
-        Self { src, pos: 0, spliced_row: false, colors: Vec::new() }
+        Self { src, pos: 0, spliced_row: false, colors: Vec::new(), notag_seen: false, env_depth: 0, split_in_cell: false, delim_params: (901, f32::NAN), multline_gap: 10.0 }
     }
 
     /// The colour argument of `\color`/`\textcolor`: `[model]{spec}` or `{expression}`;
@@ -99,10 +109,13 @@ impl<'a> MathParser<'a> {
     }
 
     #[inline(always)]
+    /// Skips spaces and comments (`%` to the end of the line, TeX's category 14).
     fn skip_ws(&mut self) {
         while let Some(ch) = self.peek_char() {
             if ch.is_whitespace() {
                 self.pos += ch.len_utf8();
+            } else if ch == '%' {
+                self.pos += self.remaining().find('\n').map_or(self.remaining().len(), |p| p + 1);
             } else {
                 break;
             }
@@ -165,7 +178,9 @@ impl<'a> MathParser<'a> {
                 }
             }
 
-            if let Some(env_name) = stop_at_cell {
+            // The structural commands below all start with `\` (or `&`): most tokens skip them.
+            let lead = self.remaining().as_bytes()[0];
+            if let (Some(env_name), b'&' | b'\\') = (stop_at_cell, lead) {
                 if self.remaining().starts_with("&")
                     || self.remaining().starts_with("\\\\")
                     || self.remaining().starts_with("\\crcr")
@@ -176,12 +191,12 @@ impl<'a> MathParser<'a> {
                 }
             }
 
-            if self.at_right_delimiter() {
+            if lead == b'\\' && self.at_right_delimiter() {
                 break;
             }
 
             // TeXbook Chapter 19: Display equation numbering (\eqno / \leqno)
-            if self.remaining().starts_with("\\eqno") || self.remaining().starts_with("\\leqno") {
+            if lead == b'\\' && (self.remaining().starts_with("\\eqno") || self.remaining().starts_with("\\leqno")) {
                 let is_left = self.eat("\\leqno");
                 if !is_left {
                     self.eat("\\eqno");
@@ -203,7 +218,7 @@ impl<'a> MathParser<'a> {
             }
 
             // LaTeX \tag{...} and \tag*{...}
-            if self.remaining().starts_with("\\tag") {
+            if lead == b'\\' && self.remaining().starts_with("\\tag") {
                 self.eat("\\tag");
                 let starred = self.eat("*");
                 let tag_node = self.parse_text_arg();
@@ -258,26 +273,28 @@ impl<'a> MathParser<'a> {
             }
 
             // LaTeX \label{...}, \notag, \nonumber
-            if self.remaining().starts_with("\\label") {
+            if lead == b'\\' && self.remaining().starts_with("\\label") {
                 self.eat("\\label");
                 let _label_key = self.parse_mandatory_arg();
                 continue;
             }
-            if self.remaining().starts_with("\\notag") || self.remaining().starts_with("\\nonumber") {
+            if lead == b'\\' && (self.remaining().starts_with("\\notag") || self.remaining().starts_with("\\nonumber")) {
                 if !self.eat("\\notag") {
                     self.eat("\\nonumber");
                 }
+                self.notag_seen = true;
                 continue;
             }
 
             // Batch 1: Item 51 - InfixFractionParser & Item 52 - FractionOptionDecoder
             let rem = self.remaining();
-            let is_candidate = rem.starts_with("\\over")
+            let is_candidate = lead == b'\\'
+                && (rem.starts_with("\\over")
                 || rem.starts_with("\\atop")
                 || rem.starts_with("\\above")
                 || rem.starts_with("\\choose")
                 || rem.starts_with("\\brace")
-                || rem.starts_with("\\brack");
+                || rem.starts_with("\\brack"));
 
             if is_candidate {
                 // plain.tex: `\choose`, `\brace` and `\brack` are `\atopwithdelims` with fixed
@@ -376,7 +393,7 @@ impl<'a> MathParser<'a> {
                         num: Box::new(num),
                         den: Box::new(den),
                         has_rule: frac_rule,
-                        options,
+                        options: options | crate::math::math_ast::FRACTION_OPT_INNER,
                         thickness,
                     };
 
@@ -643,10 +660,24 @@ impl<'a> MathParser<'a> {
                 MathNode::Row(mut nodes) if nodes.len() == 1 => nodes.pop().unwrap(),
                 other => other,
             }
-        } else if let Some(primary) = self.parse_single_atom() {
+        } else if let Some(primary) = self.parse_arg_atom() {
             primary
         } else {
             MathNode::Row(Vec::new())
+        }
+    }
+
+    /// An undelimited macro argument or script: one token, so `\frac12` and `x^12` take a
+    /// single digit.
+    fn parse_arg_atom(&mut self) -> Option<MathNode<'a>> {
+        self.skip_ws();
+        match self.peek_char() {
+            Some(c) if c.is_ascii_digit() => {
+                let start = self.pos;
+                self.pos += 1;
+                Some(MathNode::Number(&self.src[start..self.pos]))
+            }
+            _ => self.parse_single_atom(),
         }
     }
 
@@ -689,7 +720,8 @@ impl<'a> MathParser<'a> {
         if ch.is_ascii_digit() {
             let start = self.pos;
             while let Some(c) = self.peek_char() {
-                if c.is_ascii_digit() || c == '.' {
+                // Digits only: `.` is its own math character (mathcode "013A, cmmi).
+                if c.is_ascii_digit() {
                     self.pos += c.len_utf8();
                 } else {
                     break;
@@ -892,7 +924,12 @@ impl<'a> MathParser<'a> {
                         rows,
                         delim: MatrixDelim::None,
                         env_kind,
-                        col_alignments: vec![ColAlign::Center],
+                        col_alignments: Box::new([ColAlign::Center]),
+                        numbered_env: false,
+                        display_env: false,
+                        notag_mask: 0,
+                        split: false,
+                        extras: None,
                     }))),
                 };
                 return Some(MathNode::FamilyChoice(Box::new((
@@ -959,6 +996,7 @@ impl<'a> MathParser<'a> {
             }
 
             "boxed" => Some(MathNode::Boxed(Box::new(self.parse_mandatory_arg()))),
+            "openbox" | "qedsymbol" => Some(MathNode::OpenBox),
 
             // xcolor. `\textcolor{c}{x}` is `{\color{c}x}`: the braces make an Ord atom.
             "textcolor" => {
@@ -997,9 +1035,16 @@ impl<'a> MathParser<'a> {
                     other => MathNode::SubSup { nucleus: Box::new(other), sub: post_sub, sup: post_sup },
                 };
                 // The leading `\hbox to\dimen@{}` is an Ord atom of the enclosing list, so the
-                // two atoms are spliced in.
+                // two atoms are spliced in; scripts that follow are the `\mathop`'s limits.
                 self.spliced_row = true;
-                Some(MathNode::Row(vec![MathNode::Row(Vec::new()), MathNode::SideSet(Box::new((op, pre, post)))]))
+                let parts = Box::new((op, pre, post));
+                Some(MathNode::Row(vec![
+                    MathNode::SideSetLead(parts.clone()),
+                    MathNode::OpLimits {
+                        content: Box::new(MathNode::SideSet(parts)),
+                        mode: OP_LIMITS_DISPLAY | OP_LIMITS_BOXED_NUCLEUS,
+                    },
+                ]))
             }
 
             "sf" => {
@@ -1103,9 +1148,9 @@ impl<'a> MathParser<'a> {
                     options: FRACTION_OPT_DELIMITED,
                     thickness: -1.0,
                 };
-                Some(MathNode::Delimited(Box::new(DelimitedData::new(
+                Some(genfrac_ord(MathNode::Delimited(Box::new(DelimitedData::new(
                     "(", ")", frac,
-                ))))
+                )))))
             }
             "dbinom" => {
                 let num = Box::new(self.parse_mandatory_arg());
@@ -1121,9 +1166,9 @@ impl<'a> MathParser<'a> {
                     style: MathStyle::Display,
                     content: Box::new(frac),
                 };
-                Some(MathNode::Delimited(Box::new(DelimitedData::new(
+                Some(genfrac_ord(MathNode::Delimited(Box::new(DelimitedData::new(
                     "(", ")", scope,
-                ))))
+                )))))
             }
             "tbinom" => {
                 let num = Box::new(self.parse_mandatory_arg());
@@ -1139,9 +1184,9 @@ impl<'a> MathParser<'a> {
                     style: MathStyle::Text,
                     content: Box::new(frac),
                 };
-                Some(MathNode::Delimited(Box::new(DelimitedData::new(
+                Some(genfrac_ord(MathNode::Delimited(Box::new(DelimitedData::new(
                     "(", ")", scope,
-                ))))
+                )))))
             }
 
             // Continued fraction `\cfrac{num}{den}`
@@ -1248,6 +1293,19 @@ impl<'a> MathParser<'a> {
             }
 
             // Operator name (\operatorname, \operatorname*)
+            "varlimsup" | "varliminf" | "varinjlim" | "varprojlim" => {
+                let kind = match cmd {
+                    "varlimsup" => 0,
+                    "varliminf" => 1,
+                    "varinjlim" => 2,
+                    _ => 3,
+                };
+                let lim = Box::new(MathNode::StyleChange { face: Face::Roman, content: Box::new(parse_math_str("lim")) });
+                Some(MathNode::OpLimits {
+                    content: Box::new(MathNode::VarLim { kind, lim }),
+                    mode: OP_LIMITS_DISPLAY | OP_LIMITS_BOXED_NUCLEUS,
+                })
+            }
             "operatorname" => {
                 let _starred = self.eat("*");
                 let inner = Box::new(self.parse_mandatory_arg());
@@ -1288,13 +1346,23 @@ impl<'a> MathParser<'a> {
                 })
             }
             "smash" => {
+                // amsmath `\smash[t]` keeps the depth, `\smash[b]` the height.
+                self.skip_ws();
+                let smash = if self.eat("[") {
+                    let rest = self.remaining();
+                    let close = rest.find(']').unwrap_or(rest.len());
+                    let opt = &rest[..close];
+                    self.pos += (close + 1).min(rest.len());
+                    match opt.trim() {
+                        "t" => 1,
+                        "b" => 2,
+                        _ => 3,
+                    }
+                } else {
+                    3
+                };
                 let content = Box::new(self.parse_mandatory_arg());
-                Some(MathNode::DimensionBox {
-                    content,
-                    zero_width: false,
-                    shift_left: false,
-                    zero_height_depth: true,
-                })
+                Some(MathNode::DimensionBox { content, zero_width: false, shift_left: false, smash })
             }
             "rlap" => {
                 let content = Box::new(self.parse_mandatory_arg());
@@ -1302,7 +1370,7 @@ impl<'a> MathParser<'a> {
                     content,
                     zero_width: true,
                     shift_left: false,
-                    zero_height_depth: false,
+                    smash: 0,
                 })
             }
             "llap" => {
@@ -1311,7 +1379,7 @@ impl<'a> MathParser<'a> {
                     content,
                     zero_width: true,
                     shift_left: true,
-                    zero_height_depth: false,
+                    smash: 0,
                 })
             }
 
@@ -1419,9 +1487,9 @@ impl<'a> MathParser<'a> {
                 }
 
                 if !open_arg.is_empty() || !close_arg.is_empty() {
-                    Some(MathNode::Delimited(Box::new(DelimitedData::new(
+                    Some(genfrac_ord(MathNode::Delimited(Box::new(DelimitedData::new(
                         open_arg, close_arg, core,
-                    ))))
+                    )))))
                 } else {
                     Some(core)
                 }
@@ -1430,7 +1498,21 @@ impl<'a> MathParser<'a> {
             // Radical `\sqrt[deg]{rad}`
             "sqrt" => {
                 self.skip_ws();
+                let (mut up, mut left) = (0i8, 0i8);
                 let degree = if self.eat("[") {
+                    // amsmath `\root`: `\uproot` and `\leftroot` lead the degree, in either order.
+                    loop {
+                        self.skip_ws();
+                        let slot = if self.eat("\\uproot") {
+                            &mut up
+                        } else if self.eat("\\leftroot") {
+                            &mut left
+                        } else {
+                            break;
+                        };
+                        self.skip_ws();
+                        *slot = self.raw_brace_arg().trim().parse::<i8>().unwrap_or(0);
+                    }
                     let deg = self.parse_expression(Some("]"));
                     self.eat("]");
                     Some(Box::new(deg))
@@ -1438,7 +1520,7 @@ impl<'a> MathParser<'a> {
                     None
                 };
                 let radicand = Box::new(self.parse_mandatory_arg());
-                Some(MathNode::Radical { degree, radicand })
+                Some(MathNode::Radical { degree, radicand, up, left })
             }
 
             // Dirac reduced Planck constant
@@ -1457,7 +1539,7 @@ impl<'a> MathParser<'a> {
             }
 
             // Integrals (default limits to the right)
-            "int" | "iint" | "iiint" | "oint" | "oiint" | "oiiint" => Some(MathNode::BigOp(Box::new(BigOpData {
+            "int" | "iint" | "iiint" | "iiiint" | "idotsint" | "oint" | "oiint" | "oiiint" => Some(MathNode::BigOp(Box::new(BigOpData {
                 op: cmd,
                 sub: None,
                 sup: None,
@@ -1475,9 +1557,9 @@ impl<'a> MathParser<'a> {
                 } else {
                     ")"
                 };
-                Some(MathNode::Delimited(Box::new(DelimitedData::new(
-                    open, close, content,
-                ))))
+                let mut data = DelimitedData::new(open, close, content);
+                (data.factor, data.shortfall) = self.delim_params;
+                Some(MathNode::Delimited(Box::new(data)))
             }
 
             // Batch 1: Item 56 - MiddleDelimiterSupport `\middle |`
@@ -1543,14 +1625,39 @@ impl<'a> MathParser<'a> {
             // `\dotso`/`\dotsc` add a thin space before punctuation, closing delimiters and the
             // end of the formula; `\dots` picks centered dots before a binary or relation.
             "ldots" => Some(MathNode::Ellipsis(crate::math::math_ast::EllipsisKind::Low)),
+            "hdotsfor" => {
+                self.skip_ws();
+                let mut space = 1.0;
+                if self.eat("[") {
+                    let start = self.pos;
+                    while !self.is_eof() && !self.remaining().starts_with(']') {
+                        self.pos += 1;
+                    }
+                    space = self.src[start..self.pos].trim().parse().unwrap_or(1.0);
+                    self.eat("]");
+                    self.skip_ws();
+                }
+                let cols = self.raw_brace_arg().trim().parse::<u8>().unwrap_or(1).max(1);
+                Some(MathNode::HDotsFor { cols, space })
+            }
             "vdots" => Some(MathNode::Ellipsis(crate::math::math_ast::EllipsisKind::Vertical)),
             "ddots" => Some(MathNode::Ellipsis(crate::math::math_ast::EllipsisKind::Diagonal)),
             "cdots" | "dotsb" | "dotsm" | "dotsi" | "dotso" | "dotsc" | "dots" => {
                 use crate::math::math_ast::EllipsisKind;
                 let next = self.dots_lookahead();
+                // amsmath: `\dotsb` and `\dotsm` are `\cdots`, whose `\extrap@` adds `\,`
+                // before punctuation, a closing delimiter or the end of the formula;
+                // `\dotsi` is `\!\@cdots`.
+                if cmd == "dotsi" {
+                    return Some(MathNode::Row(vec![
+                        MathNode::Space(MathSkip::Mu(-3.0)),
+                        MathNode::Ellipsis(EllipsisKind::Centered),
+                    ]));
+                }
                 let (kind, thin) = match cmd {
-                    "cdots" => (EllipsisKind::Centered, next != DotsNext::Other && next != DotsNext::BinRel),
-                    "dotsb" | "dotsm" | "dotsi" => (EllipsisKind::Centered, false),
+                    "cdots" | "dotsb" | "dotsm" => {
+                        (EllipsisKind::Centered, next != DotsNext::Other && next != DotsNext::BinRel)
+                    }
                     "dotsc" => (EllipsisKind::Low, matches!(next, DotsNext::SemiOrPeriod | DotsNext::Closing)),
                     "dotso" => (EllipsisKind::Low, next == DotsNext::Closing),
                     _ => match next {
@@ -1578,6 +1685,23 @@ impl<'a> MathParser<'a> {
                     accent: cmd,
                     nucleus,
                 })
+            }
+            // amsmath's capitalised accents are the lowercase ones (`\def\Hat{\hat}`).
+            "Hat" | "Check" | "Tilde" | "Acute" | "Grave" | "Dot" | "Ddot" | "Breve" | "Bar" | "Vec" => {
+                let accent = match cmd {
+                    "Hat" => "hat",
+                    "Check" => "check",
+                    "Tilde" => "tilde",
+                    "Acute" => "acute",
+                    "Grave" => "grave",
+                    "Dot" => "dot",
+                    "Ddot" => "ddot",
+                    "Breve" => "breve",
+                    "Bar" => "bar",
+                    _ => "vec",
+                };
+                let nucleus = Box::new(self.parse_mandatory_arg());
+                Some(MathNode::Accent { accent, nucleus })
             }
             "underaccent" => {
                 // The first argument names the accent glyph (`{\tilde}`); it must not be
@@ -1639,9 +1763,22 @@ impl<'a> MathParser<'a> {
             }
 
             // Font switches
+            // amsmath `\text` keeps the current text font.
             "text" => {
                 let node = self.parse_text_arg();
-                Some(node)
+                Some(match node {
+                    MathNode::StyleChange { face: Face::Roman, content } => MathNode::TextFont(content),
+                    MathNode::Row(parts) => MathNode::Row(
+                        parts
+                            .into_iter()
+                            .map(|p| match p {
+                                MathNode::StyleChange { face: Face::Roman, content } => MathNode::TextFont(content),
+                                other => other,
+                            })
+                            .collect(),
+                    ),
+                    other => other,
+                })
             }
             "mathrm" => {
                 let content = Box::new(join_ligature_letters(self.parse_mandatory_arg()));
@@ -1657,6 +1794,7 @@ impl<'a> MathParser<'a> {
                     content,
                 })
             }
+            "pmb" => Some(MathNode::Pmb(Box::new(self.parse_mandatory_arg()))),
             "boldsymbol" | "bm" => {
                 let content = Box::new(self.parse_mandatory_arg());
                 Some(MathNode::StyleChange {
@@ -1728,7 +1866,13 @@ impl<'a> MathParser<'a> {
                         vec![ColAlign::Left, ColAlign::Left],
                     ),
                     "alignedat" | "alignat" | "alignat*" => {
-                        let _ = self.parse_ident_arg();
+                        // An undelimited macro argument: a group or one token (`alignat*}3`).
+                        self.skip_ws();
+                        if self.src[self.pos..].starts_with('{') {
+                            let _ = self.parse_ident_arg();
+                        } else if let Some(ch) = self.peek_char() {
+                            self.pos += ch.len_utf8();
+                        }
                         (
                             MatrixDelim::None,
                             MatrixEnvKind::AlignedAt,
@@ -1773,6 +1917,15 @@ impl<'a> MathParser<'a> {
                     _ => (MatrixDelim::None, MatrixEnvKind::Matrix, Vec::new()),
                 };
                 let matrix_node = self.parse_matrix_body(env, delim, env_kind, col_alignments);
+                self.split_in_cell = env == "split" && self.env_depth >= 1;
+                if self.env_depth >= 1 && matches!(env, "align" | "align*" | "alignat" | "alignat*" | "flalign" | "flalign*") {
+                    // Starred, `\align@` clears `\@eqnswtrue` globally: the outer row goes
+                    // unnumbered too.
+                    if env.ends_with('*') {
+                        self.notag_seen = true;
+                    }
+                    return Some(MathNode::InnerAlign(Box::new(matrix_node)));
+                }
                 Some(matrix_node)
             }
 
@@ -1867,7 +2020,7 @@ impl<'a> MathParser<'a> {
                 MathNode::Row(mut nodes) if nodes.len() == 1 => nodes.pop().unwrap(),
                 other => other,
             }
-        } else if let Some(atom) = self.parse_single_atom() {
+        } else if let Some(atom) = self.parse_arg_atom() {
             atom
         } else {
             MathNode::Row(Vec::new())
@@ -1932,41 +2085,27 @@ impl<'a> MathParser<'a> {
         let raw = &self.src[start..self.pos];
         self.eat("}");
 
-        let mut nodes = Vec::new();
-        let bytes = raw.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i].is_ascii_whitespace() {
-                nodes.push(MathNode::Space(MathSkip::TextSpace));
-                while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-                    i += 1;
-                }
-            } else {
-                let w_start = i;
-                while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
-                    i += 1;
-                }
-                let word = &raw[w_start..i];
-                nodes.push(MathNode::Symbol {
-                    kind: MathAtomKind::Ord,
-                    face: Face::Roman,
-                    glyph: word,
-                    code: None,
-                    mathcode: 0,
-                });
+        // `$...$` inside the text is a formula of its own; the text around it is in roman.
+        let mut parts = Vec::new();
+        let mut rest = raw;
+        while let Some(open) = unescaped_dollar(rest) {
+            let after = &rest[open + 1..];
+            let Some(close) = unescaped_dollar(after) else { break };
+            if open > 0 {
+                parts.push(text_words(&rest[..open]));
             }
+            let mut inner = MathParser::new(&after[..close]);
+            inner.colors = self.colors.clone();
+            parts.push(MathNode::Formula(Box::new(inner.parse_expression(None))));
+            rest = &after[close + 1..];
         }
-
-        let content = if nodes.len() == 1 {
-            nodes.pop().unwrap()
-        } else {
-            MathNode::Row(nodes)
-        };
-
-        MathNode::StyleChange {
-            face: Face::Roman,
-            content: Box::new(content),
+        if parts.is_empty() {
+            return text_words(raw);
         }
+        if !rest.is_empty() {
+            parts.push(text_words(rest));
+        }
+        MathNode::Row(parts)
     }
 
     /// Scans an optional dimension value (e.g. `1pt`, `0.5em`) for `\above` and delimiter options.
@@ -2012,6 +2151,9 @@ impl<'a> MathParser<'a> {
             ',' => return DotsNext::Comma,
             ';' | '.' => return DotsNext::SemiOrPeriod,
             ')' | ']' => return DotsNext::Closing,
+            // `&` ends an alignment cell: TeX inserts the v-template, which starts with the
+            // cell's closing `$` (`\extra@`'s end-of-formula case).
+            '&' => return DotsNext::Closing,
             '+' | '=' | '<' | '>' | '-' | '*' | ':' => return DotsNext::BinRel,
             '\\' => {}
             _ => return DotsNext::Other,
@@ -2117,11 +2259,17 @@ impl<'a> MathParser<'a> {
             self.skip_ws();
             self.scan_skip_unit(v)
         };
+        let mut skip = skip;
         for keyword in ["plus", "minus"] {
             self.skip_ws();
             if self.eat(keyword) {
                 self.skip_ws();
-                let _ = self.scan_skip_component();
+                let start = self.pos;
+                let v = self.scan_skip_component();
+                // Finite mu stretch can stretch a paragraph line; other parts are not kept.
+                if let (MathSkip::Mu(mu), "plus", true) = (skip, keyword, self.src[start..self.pos].trim_end().ends_with("mu")) {
+                    skip = MathSkip::MuGlue(mu, v);
+                }
             }
         }
         skip
@@ -2196,7 +2344,26 @@ impl<'a> MathParser<'a> {
         env_kind: MatrixEnvKind,
         col_alignments: Vec<ColAlign>,
     ) -> MathNode<'a> {
+        self.env_depth = self.env_depth.saturating_add(1);
+        let node = self.parse_matrix_rows(env_name, delim, env_kind, col_alignments);
+        self.env_depth -= 1;
+        node
+    }
+
+    fn parse_matrix_rows(
+        &mut self,
+        env_name: Option<&str>,
+        delim: MatrixDelim,
+        env_kind: MatrixEnvKind,
+        col_alignments: Vec<ColAlign>,
+    ) -> MathNode<'a> {
         let mut rows = Vec::with_capacity(4);
+        // amsmath numbers every row of `align`, `alignat` and `gather` unless `\notag`.
+        let numbered_env = matches!(env_name, Some("align" | "alignat" | "gather"));
+        let display_env =
+            numbered_env || matches!(env_name, Some("align*" | "alignat*" | "gather*" | "multline" | "multline*"));
+        let mut notag_mask = 0u64;
+        let mut row_skips: Vec<f32> = Vec::new();
 
         while !self.is_eof() {
             self.skip_ws();
@@ -2221,6 +2388,7 @@ impl<'a> MathParser<'a> {
 
             let mut row = Vec::with_capacity(4);
             let mut col_idx = 0usize;
+            let outer_notag = std::mem::replace(&mut self.notag_seen, false);
             loop {
                 self.skip_ws();
                 if self.is_eof() {
@@ -2241,24 +2409,46 @@ impl<'a> MathParser<'a> {
                     self.skip_group();
                     continue;
                 }
+                self.split_in_cell = false;
                 let mut cell = self.parse_cell_expression_opt(env_name);
+                // amsmath `\rendsplit@` under `\ifinalign@` (the `align` family; centertags):
+                // a `split` alone in a cell spans it and the next.
+                let mut split_tail = None;
+                if std::mem::take(&mut self.split_in_cell)
+                    && col_idx.is_multiple_of(2)
+                    && matches!(env_name, Some("align" | "align*" | "alignat" | "alignat*" | "flalign" | "flalign*"))
+                {
+                    // A `\tag` after it stays with the row: it goes on the second cell.
+                    let (inner, tag) = match std::mem::replace(&mut cell, MathNode::Row(Vec::new())) {
+                        MathNode::Tagged { formula, tag, is_left, starred } => (*formula, Some((tag, is_left, starred))),
+                        other => (other, None),
+                    };
+                    let retag = |n: MathNode<'a>, tag: Option<(Box<MathNode<'a>>, bool, bool)>| match tag {
+                        Some((tag, is_left, starred)) => MathNode::Tagged { formula: Box::new(n), tag, is_left, starred },
+                        None => n,
+                    };
+                    let lone = match inner {
+                        MathNode::Row(mut v) if v.len() == 1 && matches!(v[0], MathNode::Matrix(_)) => v.pop().ok_or(MathNode::Row(Vec::new())),
+                        m @ MathNode::Matrix(_) => Ok(m),
+                        other => Err(other),
+                    };
+                    match lone {
+                        Ok(m) => {
+                            cell = MathNode::SplitLead(Box::new(m.clone()));
+                            split_tail = Some(retag(MathNode::SplitTail(Box::new(m)), tag));
+                        }
+                        Err(other) => cell = retag(other, tag),
+                    }
+                }
 
                 // AMS Parity: prepend empty Ord atom `{}` for operator spacing:
-                // 1. In `aligned` odd columns (col 1, 3, 5...), LaTeX uses `${}#$`.
-                //    If cell starts with a Rel or Bin, `{}` gives it its left clearance.
-                // 2. In `multline` subsequent rows (row > 0), binary operators like `+`
-                //    must retain binary operator spacing instead of unary promotion.
+                // 1. In `aligned` odd columns (col 1, 3, 5...), LaTeX uses `${}#$`: the empty
+                //    Ord spaces whatever atom starts the cell (Rel, Bin, Op, Inner).
+                // 2. Every `multline` line is `$\displaystyle{}#$` (`\multline@`): a leading
+                //    Op gets a thin space, a Bin stays binary.
                 let needs_phantom_ord = match env_kind {
-                    MatrixEnvKind::Aligned | MatrixEnvKind::AlignedAt => {
-                        (col_idx % 2 == 1)
-                            && matches!(
-                                cell.first_atom_kind(),
-                                MathAtomKind::Rel | MathAtomKind::Bin
-                            )
-                    }
-                    MatrixEnvKind::Multline => {
-                        !rows.is_empty() && cell.first_atom_kind() == MathAtomKind::Bin
-                    }
+                    MatrixEnvKind::Aligned | MatrixEnvKind::AlignedAt => col_idx % 2 == 1,
+                    MatrixEnvKind::Multline => true,
                     _ => false,
                 };
 
@@ -2273,18 +2463,53 @@ impl<'a> MathParser<'a> {
                     }
                 }
 
+                // `\hdotsfor` is a `\multicolumn`: the columns it spans hold empty cells.
+                let span = match &cell {
+                    MathNode::HDotsFor { cols, .. } => *cols,
+                    MathNode::Row(v) => match v.as_slice() {
+                        [MathNode::HDotsFor { cols, .. }] => *cols,
+                        _ => 1,
+                    },
+                    _ => 1,
+                };
                 row.push(cell);
                 col_idx += 1;
+                if let Some(tail) = split_tail {
+                    row.push(tail);
+                    col_idx += 1;
+                }
+                for _ in 1..span {
+                    row.push(MathNode::Row(Vec::new()));
+                    col_idx += 1;
+                }
                 self.skip_ws();
                 if self.eat("&") {
                     continue;
                 }
-                if !self.eat("\\\\") && !self.eat("\\crcr") {
+                if self.eat("\\\\") {
+                    // amsmath `\math@cr`: `\\*` forbids a break; `[dim]` adds
+                    // `\noalign{\vskip dim}` below the row.
+                    self.eat("*");
+                    let rest = self.remaining().trim_start();
+                    if let Some(arg) = rest.strip_prefix('[') {
+                        if let Some(end) = arg.find(']') {
+                            if let Some(dim) = crate::doc_config::parse_dimension_pt(arg[..end].trim()) {
+                                row_skips.resize(rows.len() + 1, 0.0);
+                                row_skips[rows.len()] = dim;
+                            }
+                            self.pos = self.src.len() - arg.len() + end + 1;
+                        }
+                    }
+                } else if !self.eat("\\crcr") {
                     self.eat("\\cr");
                 }
                 break;
             }
+            let row_notag = std::mem::replace(&mut self.notag_seen, outer_notag);
             if !row.is_empty() {
+                if row_notag && rows.len() < 64 {
+                    notag_mask |= 1 << rows.len();
+                }
                 rows.push(row);
             }
         }
@@ -2293,7 +2518,15 @@ impl<'a> MathParser<'a> {
             rows,
             delim,
             env_kind,
-            col_alignments,
+            col_alignments: col_alignments.into_boxed_slice(),
+            numbered_env,
+            display_env,
+            notag_mask,
+            // Inside another alignment's cell (`\ifinner`) amsmath's `split` is
+            // `\split@aligned`: an `aligned`.
+            split: env_name == Some("split") && self.env_depth == 1,
+            extras: (!row_skips.is_empty() || self.multline_gap != 10.0)
+                .then(|| Box::new(MatrixExtras { row_skips, multline_gap: self.multline_gap })),
         }))
     }
 
@@ -2355,9 +2588,15 @@ pub fn parse_math_str<'a>(src: &'a str) -> MathNode<'a> {
 }
 
 /// [`parse_math_str`] with the document's `\definecolor` names in scope.
-pub fn parse_math_str_with_colors<'a>(src: &'a str, colors: &[(&'a str, PackedColor)]) -> MathNode<'a> {
+pub fn parse_math_str_with_colors<'a>(
+    src: &'a str,
+    colors: &[(&'a str, PackedColor)],
+    params: &crate::math::MathParams,
+) -> MathNode<'a> {
     let mut parser = MathParser::new(src);
     parser.colors.extend_from_slice(colors);
+    parser.delim_params = params.delim;
+    parser.multline_gap = params.multline_gap;
     parser.parse_expression(None)
 }
 
@@ -2441,7 +2680,7 @@ static MATH_MACROS: [(&str, &str); 29] = [
     ("Longrightarrow", r"\Relbar\joinrel\Rightarrow"),
     ("Relbar", r"\mathrel{=}"),
     ("bmod", r"\nonscript\mskip-\medmuskip\mkern5mu\mathbin{\mathrm{mod}}\mkern5mu\nonscript\mskip-\medmuskip"),
-    ("colon", r"\mskip2mu\mathpunct{}\nonscript\mkern-\thinmuskip\mathord{:}\mskip6mu"),
+    ("colon", r"\mskip2mu\mathpunct{}\nonscript\mkern-\thinmuskip\mathord{:}\mskip6mu plus1mu"),
     ("hookleftarrow", r"\leftarrow\joinrel\rhook"),
     ("hookrightarrow", r"\lhook\joinrel\rightarrow"),
     ("iff", r"\;\Longleftrightarrow\;"),
@@ -2483,6 +2722,144 @@ enum DotsNext {
     Closing,
     BinRel,
     Other,
+}
+
+/// amsmath's `\genfrac` (and `\binom`, `\dbinom`, `\tbinom` built on it) is
+/// `{\begingroup..\endgroup\@@atopwithdelims..}`: the braces make the Inner fraction an Ord.
+fn genfrac_ord(node: MathNode<'_>) -> MathNode<'_> {
+    MathNode::Coerce {
+        kind: MathAtomKind::Ord,
+        content: Box::new(node),
+    }
+}
+
+/// The words of `\text{...}` source in roman, separated by interword spaces; a space
+/// after a sentence end (space factor 2000 or more) gets the extra space.
+/// The words of a `\text` argument: groups, the NFSS font switches (`\normalfont`,
+/// `\ttfamily`, `\bfseries`, `\itshape`, and `\texttt`-style commands on the next group),
+/// `\char`, escaped specials, and interword spaces by the space factor. Each run of one
+/// face is a `StyleChange`, so its spaces are that font's.
+fn text_words<'s>(raw: &'s str) -> MathNode<'s> {
+    fn push<'s>(runs: &mut Vec<(Face, Vec<MathNode<'s>>)>, face: Face, node: MathNode<'s>) {
+        match runs.last_mut() {
+            Some((f, nodes)) if *f == face => nodes.push(node),
+            _ => runs.push((face, vec![node])),
+        }
+    }
+    let bytes = raw.as_bytes();
+    let mut runs: Vec<(Face, Vec<MathNode<'s>>)> = Vec::new();
+    let word = |glyph| MathNode::Symbol { kind: MathAtomKind::Ord, face: Face::Roman, glyph, code: None, mathcode: 0 };
+    let (mut face, mut stack, mut pending) = (Face::Roman, Vec::new(), None);
+    let mut sf = 1000u16;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                stack.push(face);
+                face = pending.take().unwrap_or(face);
+                i += 1;
+            }
+            b'}' => {
+                face = stack.pop().unwrap_or(Face::Roman);
+                i += 1;
+            }
+            b if b.is_ascii_whitespace() => {
+                push(&mut runs, face, MathNode::Space(if sf >= 2000 { MathSkip::TextSpaceExtra } else { MathSkip::TextSpace }));
+                sf = 1000;
+                while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+            }
+            b'\\' => {
+                let name_start = i + 1;
+                let mut end = name_start;
+                while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+                    end += 1;
+                }
+                if end == name_start {
+                    // A control symbol: `\ ` is a space, `\%` and the like print the character.
+                    let Some(c) = raw[name_start..].chars().next() else { break };
+                    i = name_start + c.len_utf8();
+                    if c.is_ascii_whitespace() {
+                        push(&mut runs, face, MathNode::Space(MathSkip::TextSpace));
+                        sf = 1000;
+                    } else if c.is_ascii_punctuation() && !matches!(c, ',' | ';' | ':' | '!' | '/') {
+                        push(&mut runs, face, word(&raw[name_start..i]));
+                        sf = 1000;
+                    }
+                    continue;
+                }
+                let name = &raw[name_start..end];
+                i = end;
+                if name == "char" {
+                    let digits = raw[i..].trim_start();
+                    i = bytes.len() - digits.len();
+                    let n = digits.bytes().take_while(u8::is_ascii_digit).count();
+                    if let Ok(code) = digits[..n].parse::<u8>() {
+                        if let Some(glyph) = ascii_glyph(code) {
+                            push(&mut runs, face, word(glyph));
+                            sf = 1000;
+                        }
+                    }
+                    i += n;
+                } else {
+                    let switch = match name {
+                        "normalfont" | "rmfamily" | "upshape" | "mdseries" | "textrm" | "textup" | "textnormal" | "textmd" => Some(Face::Roman),
+                        "ttfamily" | "texttt" => Some(Face::Mono),
+                        "bfseries" | "textbf" => Some(Face::Bold),
+                        "itshape" | "textit" | "em" | "emph" => Some(Face::Italic),
+                        "slshape" | "textsl" => Some(Face::Slanted),
+                        _ => None,
+                    };
+                    match switch {
+                        Some(f) if name.starts_with("text") || name == "emph" => pending = Some(f),
+                        Some(f) => face = f,
+                        None => {}
+                    }
+                }
+                while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+            }
+            _ => {
+                let w_start = i;
+                while i < bytes.len() && !bytes[i].is_ascii_whitespace() && !matches!(bytes[i], b'{' | b'}' | b'\\') {
+                    sf = crate::layout::layout_hz::update_space_factor(sf, bytes[i], false);
+                    i += 1;
+                }
+                push(&mut runs, face, word(&raw[w_start..i]));
+            }
+        }
+    }
+    let mut parts: Vec<MathNode<'s>> = runs
+        .into_iter()
+        .map(|(face, mut nodes)| {
+            for n in &mut nodes {
+                if let MathNode::Symbol { face: f, .. } = n {
+                    *f = face;
+                }
+            }
+            let content = if nodes.len() == 1 { nodes.pop().unwrap() } else { MathNode::Row(nodes) };
+            MathNode::StyleChange { face, content: Box::new(content) }
+        })
+        .collect();
+    match parts.len() {
+        0 => MathNode::StyleChange { face: Face::Roman, content: Box::new(MathNode::Row(Vec::new())) },
+        1 => parts.pop().unwrap(),
+        _ => MathNode::Row(parts),
+    }
+}
+
+/// The printable ASCII character `code` as a static one-character string.
+fn ascii_glyph(code: u8) -> Option<&'static str> {
+    const ASCII: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    (32..127).contains(&code).then(|| &ASCII[(code - 32) as usize..(code - 31) as usize])
+}
+
+/// The byte offset of the first `$` in `s` not escaped as `\$`.
+fn unescaped_dollar(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    (0..b.len()).find(|&i| b[i] == b'$' && (i == 0 || b[i - 1] != b'\\'))
 }
 
 #[cfg(test)]

@@ -20,6 +20,10 @@
 //!    ```bash
 //!    rushtex input.tex --no-compress -o uncompressed.pdf
 //!    ```
+//! 5. **Watch Mode** (recompile on every save, reusing unchanged paragraphs and pages):
+//!    ```bash
+//!    rushtex --watch input.tex [-o output.pdf]
+//!    ```
 
 #![forbid(unsafe_code)]
 
@@ -32,7 +36,11 @@ fn main() -> ExitCode {
     let mut input_file_path: Option<PathBuf> = None;
     let mut output_file_path: Option<PathBuf> = None;
     let mut dump_ast = false;
+    let mut dump_expanded = false;
+    let mut dump_gaps = false;
     let mut enable_compression = true;
+    let mut threads = false;
+    let mut watch = false;
 
     while let Some(argument) = cli_arguments.next() {
         match argument.as_str() {
@@ -44,7 +52,11 @@ fn main() -> ExitCode {
                 }
             },
             "--no-compress" => enable_compression = false,
+            "--threads" => threads = true,
+            "--watch" => watch = true,
             "--ast" => dump_ast = true,
+            "--expand" => dump_expanded = true,
+            "--gaps" => dump_gaps = true,
             "-h" | "--help" => {
                 print_help();
                 return ExitCode::SUCCESS;
@@ -78,7 +90,7 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
         let mut pdf_bytes = Vec::new();
-        let page_count = match rushtex::compile_into_opts_counted(&source_content, &mut pdf_bytes, enable_compression) {
+        let page_count = match rushtex::compile_into_with(&source_content, &mut pdf_bytes, rushtex::CompileOptions { compress: enable_compression, threads }) {
             Ok(count) => count,
             Err(err) => {
                 eprintln!("{err}");
@@ -103,6 +115,38 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
+    if dump_gaps {
+        return match std::fs::read_to_string(&input_path) {
+            Ok(source_content) => {
+                print!("{}", rushtex::gap_report(&source_content));
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("{}", rushtex::Error::Io(err));
+                ExitCode::from(1)
+            }
+        };
+    }
+
+    if dump_expanded {
+        return match std::fs::read_to_string(&input_path) {
+            Ok(source_content) => match rushtex::expand::expand(&source_content) {
+                Ok(expanded) => {
+                    print!("{expanded}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("{}", rushtex::Error::from(err));
+                    ExitCode::from(1)
+                }
+            },
+            Err(err) => {
+                eprintln!("{}", rushtex::Error::Io(err));
+                ExitCode::from(1)
+            }
+        };
+    }
+
     if dump_ast {
         match std::fs::read_to_string(&input_path) {
             Ok(source_content) => match rushtex::expand::expand(&source_content)
@@ -125,7 +169,13 @@ fn main() -> ExitCode {
         }
     }
 
-    match rushtex::compile_file_opts(&input_path, output_file_path.as_deref(), enable_compression) {
+    let options = rushtex::CompileOptions { compress: enable_compression, threads };
+    if watch {
+        let output = output_file_path.unwrap_or_else(|| input_path.with_extension("pdf"));
+        return watch_and_compile(&input_path, &output, options);
+    }
+
+    match rushtex::compile_file_with(&input_path, output_file_path.as_deref(), options) {
         Ok(report) => {
             let page_unit = if report.page_count == 1 {
                 "page"
@@ -148,6 +198,57 @@ fn main() -> ExitCode {
     }
 }
 
+/// How often `--watch` looks at the source's modification time.
+#[cfg(not(target_arch = "wasm32"))]
+const WATCH_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Compiles `input` to `output` now and again whenever the file changes, until killed.
+/// One [`rushtex::Session`] serves every compile, so a save redoes only what changed. The
+/// PDF is written to a temporary file and renamed over `output`, so a viewer never reads
+/// half of it.
+#[cfg(not(target_arch = "wasm32"))]
+fn watch_and_compile(input: &std::path::Path, output: &std::path::Path, options: rushtex::CompileOptions) -> ExitCode {
+    let mut session = rushtex::Session::new();
+    let mut pdf = Vec::new();
+    let mut partial = output.as_os_str().to_owned();
+    partial.push(".part");
+    let partial = PathBuf::from(partial);
+    let modified = || std::fs::metadata(input).and_then(|m| m.modified()).ok();
+    let mut seen = None;
+    eprintln!("[WATCH] {} -> {} (Ctrl-C to stop)", input.display(), output.display());
+    loop {
+        let now = modified();
+        if now.is_some() && now != seen {
+            seen = now;
+            let start = std::time::Instant::now();
+            let compiled = std::fs::read_to_string(input)
+                .map_err(rushtex::Error::Io)
+                .and_then(|source| session.compile_into(&source, &mut pdf, options))
+                .and_then(|pages| {
+                    std::fs::write(&partial, &pdf)?;
+                    std::fs::rename(&partial, output)?;
+                    Ok(pages)
+                });
+            match compiled {
+                Ok(pages) => eprintln!(
+                    "[DONE] {} {} in {:.1} ms",
+                    pages,
+                    if pages == 1 { "page" } else { "pages" },
+                    start.elapsed().as_secs_f64() * 1e3
+                ),
+                Err(err) => eprintln!("{err}"),
+            }
+        }
+        std::thread::sleep(WATCH_POLL);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn watch_and_compile(_input: &std::path::Path, _output: &std::path::Path, _options: rushtex::CompileOptions) -> ExitCode {
+    eprintln!("[ERROR] --watch needs a file system");
+    ExitCode::from(2)
+}
+
 fn print_help() {
     eprintln!(
         "\
@@ -157,12 +258,19 @@ USAGE:
   rushtex <file.tex> [-o out.pdf]
   rushtex --ast <file.tex>
   rushtex <file.tex> --no-compress -o out.pdf
+  rushtex --watch <file.tex> [-o out.pdf]
   cat file.tex | rushtex > out.pdf
 
 OPTIONS:
   -o, --output <path>    Output PDF file path (default: <file>.pdf)
   --no-compress          Disable FlateDecode stream compression for debugging
+  --threads              Write pages on a second thread (faster wall time on long
+                         documents, slightly more CPU)
+  --watch                Recompile whenever the file changes; unchanged paragraphs
+                         and pages are reused from the previous compile
   --ast                  Dump internal AST representation to stdout
+  --expand               Print the source after macro expansion to stdout
+  --gaps                 List unsupported commands, environments and errors (no PDF)
   -h, --help             Display this help message
 
 DOCUMENT STRUCTURE:

@@ -139,3 +139,21 @@ Found and fixed on the way:
       the `\@lastruleclass` rules for adjacent rules and `\cmidrule`s).
 - [x] Page number centred on the text block (`\hfil\thepage\hfil`), not the page: it was
       8pt left of pdfLaTeX.
+
+## 8. Vertical list, floats and pages (math survey)
+
+- [x] `\prevdepth` interline glue (§679) for paragraph lines, headings and displays; line
+      height and depth come from the TFM metrics.
+- [x] Display skips (§1199–1206), with the number on its own line when it does not fit
+      (§1205); align/gather rows are lines with `\openup\jot`, numbered per row, `\notag`.
+- [x] Float placement `h`/`t`/deferred/float page (`layout_float.rs`); `[placement]` parsed.
+- [x] TeX's page builder (`layout_pagebuilder.rs`): breakpoint costs with club, widow,
+      broken, `\@secpenalty`, `\postdisplaypenalty`, `\maxdepth`; glue shrinks on overfull
+      pages; TOC page numbers are corrected. All 10 page breaks of the survey match.
+- [x] `\maketitle` and the article TOC per article.cls.
+- [x] Matrix/cases delimiters follow Rule 19 (one repeat too tall before).
+- [x] `\TeX`, `\LaTeX`, `\ `, `~` as glue, text accents through `\accent`, `\usepackage{a,b}`.
+- [x] No NewCMMath fallback with Computer Modern.
+- [ ] Shrink of `\floatsep`/`\textfloatsep`; display glue that `\addvspace` removes before a
+      heading still counts as shrink.
+- [ ] `\flushbottom` (page stretch) for twoside classes.

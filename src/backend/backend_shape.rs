@@ -26,7 +26,7 @@ use crate::backend::backend_ligkern::{self as cm, LigKernTable};
 
 /// How a font addresses its glyphs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TextEncoding {
+pub(crate) enum TextEncoding {
     /// OT1 (Computer Modern text fonts with the `ff`…`ffl` ligature slots 0x0B–0x0F).
     Ot1,
     /// OT1 layout of `cmr5`, whose slots 0x0B–0x0F hold arrows/quotes instead of ligatures.
@@ -43,6 +43,9 @@ pub enum Glyph {
     /// A character the font program does not cover; it interrupts ligatures and kerns and is
     /// emitted and measured exactly as unshaped text.
     Raw(char),
+    /// An accented letter built as TeX's `\\accent` does (tex.web §1123–§1125): the accent
+    /// glyph over the base glyph, as wide as the base. Interrupts ligatures and kerns.
+    Accent { base: u8, accent: u8 },
 }
 
 /// A text face together with its ligature/kern program and code-indexed advance widths.
@@ -52,6 +55,11 @@ pub struct TextFont {
     widths: &'static [u16],
     /// Exact TFM widths, when the font has them (Computer Modern).
     fix: Option<&'static crate::backend::backend_cm_fix::FixMetrics>,
+    /// The TFM data the PDF `/Widths` of `widths` are written from (see
+    /// [`crate::backend::scaled::exact_widths`]).
+    pdf_exact: Option<crate::backend::scaled::ExactWidths>,
+    /// The font's TFM (heights and parameters for `\accent`), Computer Modern only.
+    tfm: Option<&'static crate::backend::backend_tfm::Tfm>,
     encoding: TextEncoding,
     face: Face,
     family: FontFamily,
@@ -77,12 +85,13 @@ pub fn text_font(family: FontFamily, face: Face) -> Option<TextFont> {
             (FontFamily::ComputerModern, Face::Roman5) => {
                 (&cm::CMR5, &metrics::CMR5_WIDTHS.0, TextEncoding::Ot1NoFfSlots)
             }
-            // cmcsc10 has no f-ligatures; slots 0x0B–0x0F hold arrows and quotes as in cmr5.
-            (FontFamily::ComputerModern, Face::SmallCaps) => (
-                &cm::CMCSC10,
-                &metrics::EXTRA_FACE_WIDTHS[Face::SmallCaps as usize - 18].0,
-                TextEncoding::Ot1NoFfSlots,
-            ),
+            // The faces past `Face::AmsB` that are text fonts (cmss10, cmcsc10, ...): their own
+            // kerns and ligatures (tex.web §1036). cmcsc10 has no f-ligature slots.
+            (FontFamily::ComputerModern, f) if (f as usize) >= 18 => {
+                let row = &metrics::EXTRA_FACES[f as usize - 18];
+                let (lk, enc) = row.text?;
+                (lk, &metrics::EXTRA_FACE_WIDTHS[f as usize - 18].0, enc)
+            }
             (FontFamily::Times, Face::Roman) => {
                 (&afm::TIMES_ROMAN, &afm::TIMES_ROMAN_WIDTHS, TextEncoding::WinAnsi)
             }
@@ -119,6 +128,8 @@ pub fn text_font(family: FontFamily, face: Face) -> Option<TextFont> {
         program,
         widths,
         fix: crate::backend::scaled::fix_metrics(family, face, 10.0),
+        pdf_exact: crate::backend::scaled::exact_widths(widths),
+        tfm: if family == FontFamily::ComputerModern { crate::math::math_tfm::face_tfm(face) } else { None },
         encoding,
         face,
         family,
@@ -134,6 +145,8 @@ pub fn text_font_at(family: FontFamily, face: Face, size: f32) -> Option<TextFon
             program: m.ligkern()?,
             widths: m.widths(),
             fix: Some(m.fix()),
+            pdf_exact: Some(crate::backend::scaled::ExactWidths::of_master(m)),
+            tfm: crate::math::math_tfm::master_tfm(m),
             encoding: if m.no_ff_slots() { TextEncoding::Ot1NoFfSlots } else { TextEncoding::Ot1 },
             face,
             family,
@@ -158,6 +171,27 @@ pub fn word_width_pt(text: &str, face: Face, size: f32, family: FontFamily) -> f
         }
     }
     text_units_at(text, face, size, family) * size * 0.001
+}
+
+/// The italic correction (`\/`) after `word` of `face` at `size`, in points: that of the
+/// word's last glyph after ligatures (tex.web §1113 takes the tail character node, so
+/// `ffi` uses the ligature's correction, not `i`'s); 0 after a character the font lacks.
+pub fn word_italic_correction_pt(word: &str, face: Face, size: f32, family: FontFamily) -> f32 {
+    let code = match text_font_at(family, face, size) {
+        Some(font) => {
+            let mut last = None;
+            font.shape(word, |g, _| last = Some(g));
+            match last {
+                Some(Glyph::Code(code) | Glyph::Accent { base: code, .. }) => code as char,
+                _ => return 0.0,
+            }
+        }
+        None => match word.chars().next_back() {
+            Some(c) => c,
+            None => return 0.0,
+        },
+    };
+    crate::backend::scaled::italic_correction_pt(family, face, size, code)
 }
 
 /// [`text_units`] for `face` at `size` pt.
@@ -217,7 +251,7 @@ impl TextFont {
 
     /// Runs the ligature/kern program over `text` (a word without spaces), calling
     /// `sink(glyph, kern)` for every output glyph, where `kern` is the implicit kern that
-    /// follows the glyph, in 1/10000 em. Allocation-free.
+    /// follows the glyph, as a TFM fix_word (2^-20 em). Allocation-free.
     #[inline]
     pub fn shape<F: FnMut(Glyph, i32)>(&self, text: &str, mut sink: F) {
         // TFM ligature programs here only use `=:` (op 0): the pair is replaced by the
@@ -243,7 +277,7 @@ impl TextFont {
                             pending = Some(lig);
                             continue;
                         }
-                        sink(Glyph::Code(left), self.program.kern_units(left, code));
+                        sink(Glyph::Code(left), self.program.kern_fix(left, code));
                     }
                     pending = Some(code);
                 }
@@ -251,7 +285,10 @@ impl TextFont {
                     if let Some(left) = pending.take() {
                         sink(Glyph::Code(left), 0);
                     }
-                    sink(Glyph::Raw(c), 0);
+                    match ot1_accented(c).filter(|_| self.encoding != TextEncoding::WinAnsi) {
+                        Some((base, accent)) => sink(Glyph::Accent { base, accent }, 0),
+                        None => sink(Glyph::Raw(c), 0),
+                    }
                 }
             }
         }
@@ -267,16 +304,16 @@ impl TextFont {
         let mut raw: u32 = 0;
         self.shape(text, |g, kern| {
             match g {
-                Glyph::Code(code) => tenths += self.glyph_units(code) as i32 * 10,
+                Glyph::Code(code) | Glyph::Accent { base: code, .. } => tenths += self.glyph_units(code) as i32 * 10,
                 Glyph::Raw(c) => raw += metrics::char_units_family(c, self.face, self.family) as u32,
             }
-            tenths += kern;
+            tenths += crate::backend::backend_ligkern::fix_to_tenths(kern);
         });
         tenths as f32 * 0.1 + raw as f32
     }
 
-    /// Shaped width of `text` at `size` pt, in scaled points. Computer Modern glyph widths
-    /// are the TFM fix_words scaled as TeX scales them; kerns keep their 1/10000 em.
+    /// Shaped width of `text` at `size` pt, in scaled points: glyph widths and kerns are the
+    /// TFM fix_words scaled as TeX scales them (§571).
     #[inline]
     pub fn width_sp(&self, text: &str, size: f32) -> i32 {
         let Some(fix) = self.fix else {
@@ -285,16 +322,43 @@ impl TextFont {
         let scaler = crate::backend::scaled::Scaler::at_pt(size);
         let size_sp = crate::backend::scaled::to_sp(size) as i64;
         let mut sp: i64 = 0;
-        let mut kern_tenths: i64 = 0;
         let mut raw: u32 = 0;
         self.shape(text, |g, kern| {
             match g {
-                Glyph::Code(code) => sp += scaler.scale(fix.widths[code as usize & 127] as i32) as i64,
+                Glyph::Code(code) | Glyph::Accent { base: code, .. } => {
+                    sp += scaler.scale(fix.widths[code as usize & 127] as i32) as i64
+                }
                 Glyph::Raw(c) => raw += metrics::char_units_family(c, self.face, self.family) as u32,
             }
-            kern_tenths += kern as i64;
+            if kern != 0 {
+                sp += scaler.scale(kern) as i64;
+            }
         });
-        (sp + (kern_tenths * size_sp + 5000).div_euclid(10000) + (raw as i64 * size_sp + 500) / 1000) as i32
+        (sp + (raw as i64 * size_sp + 500) / 1000) as i32
+    }
+
+    /// Height and depth of the hbox TeX packs from `text` (§653), in scaled points: the
+    /// largest TFM height and depth among its glyphs, an accented glyph's accent raised by
+    /// the base's height over the x-height (§1123). `None` without TFM data or for a glyph
+    /// outside the font.
+    pub fn height_depth_sp(&self, text: &str, scaler: &crate::backend::scaled::Scaler) -> Option<(i32, i32)> {
+        let tfm = self.tfm?;
+        let x_height = tfm.param(5);
+        let (mut h, mut d, mut ok) = (0i32, 0i32, true);
+        self.shape(text, |g, _| match g {
+            Glyph::Code(code) => {
+                h = h.max(tfm.height(code));
+                d = d.max(tfm.depth(code));
+            }
+            Glyph::Accent { base, accent } => {
+                let bh = tfm.height(base);
+                h = h.max(bh).max(tfm.height(accent) + (bh - x_height).max(0));
+                d = d.max(tfm.depth(base));
+            }
+            Glyph::Raw(_) => ok = false,
+        });
+        // Scaling is monotonic, so the largest fix_word gives the largest dimension.
+        ok.then(|| (scaler.scale(h), scaler.scale(d)))
     }
 
     /// [`Self::width_sp`] in points.
@@ -303,10 +367,68 @@ impl TextFont {
         crate::backend::scaled::to_pt(self.width_sp(text, size) as i64)
     }
 
+    /// Placement of an `\\accent` in 1/10000 em: (offset of the accent glyph from the
+    /// base glyph's origin, rise). The accent is centred on the base and raised by the base's
+    /// height above the x-height, shifted along the slant (tex.web §1125); a cedilla hangs
+    /// below the base unraised.
+    pub fn accent_placement(&self, base: u8, accent: u8) -> (i32, i32) {
+        let em = |fix_word: i64| (fix_word * 10000 + (1 << 19)) >> 20;
+        let (w_b, w_a, slant, x) = match self.fix {
+            Some(f) => (
+                em(f.widths[base as usize & 127] as i64),
+                em(f.widths[accent as usize & 127] as i64),
+                f.params[0] as f64 / (1u64 << 20) as f64,
+                em(f.params[4] as i64),
+            ),
+            None => (self.glyph_units(base) as i64 * 10, self.glyph_units(accent) as i64 * 10, 0.0, 4306),
+        };
+        let (h_units, _) = crate::math::math_fonts::char_height_depth(base as char, self.face, self.family);
+        let h = (h_units * 10.0).round() as i64;
+        let rise = if accent == 0x18 { 0 } else { h - x };
+        let delta = (w_b - w_a) / 2 + (rise as f64 * slant).round() as i64;
+        (delta as i32, rise as i32)
+    }
+
+    /// `\accent` (tex.web §1123–§1125) in scaled points at `scaler`'s size: the kern before
+    /// the accent and the accent's rise. The accent is raised by the base's height less the
+    /// x-height and moved along the slant: `round((w - a)/2 + h t - x s)`; a cedilla hangs
+    /// centred below the base, unraised. `None` without TFM data.
+    pub fn accent_sp(&self, base: u8, accent: u8, scaler: &crate::backend::scaled::Scaler) -> Option<(i64, i64)> {
+        let t = self.tfm?;
+        let (w, a, h) = (scaler.scale(t.width(base)) as f64, scaler.scale(t.width(accent)) as f64, scaler.scale(t.height(base)));
+        let x = scaler.scale(t.param(5));
+        // §575 keeps the slant as a fix_word over 16, a pure number in units of 2^-16.
+        let slant = (t.param(1) >> 4) as f64 / 65536.0;
+        if accent == 0x18 {
+            return Some((((w - a) / 2.0).round() as i64, 0));
+        }
+        let delta = ((w - a) / 2.0 + h as f64 * slant - x as f64 * slant).round() as i64;
+        Some((delta, (h - x) as i64))
+    }
+
     /// Advance width of glyph `code` in 1000-units/em.
     #[inline(always)]
     pub fn glyph_units(&self, code: u8) -> u16 {
         self.widths.get(code as usize).copied().unwrap_or(0)
+    }
+
+    /// TeX width of glyph `code` in scaled points: the TFM fix_word scaled by `scaler`
+    /// (§571), or the AFM width for fonts without TFM data.
+    #[inline(always)]
+    pub fn glyph_sp(&self, code: u8, scaler: &crate::backend::scaled::Scaler, size_sp: i64) -> i64 {
+        match self.fix {
+            Some(m) => scaler.scale(m.widths[code as usize & 127] as i32) as i64,
+            None => (self.glyph_units(code) as i64 * size_sp + 500) / 1000,
+        }
+    }
+
+    /// Advance of glyph `code` in 1/10000 em as the font's PDF `/Widths` declare it.
+    #[inline(always)]
+    pub fn glyph_tenths(&self, code: u8) -> i64 {
+        match self.pdf_exact {
+            Some(m) => crate::backend::scaled::width_tenths(m, code, 0),
+            None => self.glyph_units(code) as i64 * 10,
+        }
     }
 }
 
@@ -359,6 +481,238 @@ fn ot1_code(c: char, has_ff_slots: bool) -> Option<u8> {
     })
 }
 
+/// OT1 has no accented letters: TeX builds them with `\\accent` (OT1enc.def), base and
+/// accent glyph. Returns (base code, accent code) of a precomposed letter.
+#[inline]
+fn ot1_accented(c: char) -> Option<(u8, u8)> {
+    Some(match c {
+        'À' => (b'A', 0x12),
+        'à' => (b'a', 0x12),
+        'È' => (b'E', 0x12),
+        'è' => (b'e', 0x12),
+        'Ì' => (b'I', 0x12),
+        'ì' => (0x10, 0x12),
+        'Ò' => (b'O', 0x12),
+        'ò' => (b'o', 0x12),
+        'Ù' => (b'U', 0x12),
+        'ù' => (b'u', 0x12),
+        'Ỳ' => (b'Y', 0x12),
+        'ỳ' => (b'y', 0x12),
+        'Ǹ' => (b'N', 0x12),
+        'ǹ' => (b'n', 0x12),
+        'Ẁ' => (b'W', 0x12),
+        'ẁ' => (b'w', 0x12),
+        'Á' => (b'A', 0x13),
+        'á' => (b'a', 0x13),
+        'É' => (b'E', 0x13),
+        'é' => (b'e', 0x13),
+        'Í' => (b'I', 0x13),
+        'í' => (0x10, 0x13),
+        'Ó' => (b'O', 0x13),
+        'ó' => (b'o', 0x13),
+        'Ú' => (b'U', 0x13),
+        'ú' => (b'u', 0x13),
+        'Ý' => (b'Y', 0x13),
+        'ý' => (b'y', 0x13),
+        'Ć' => (b'C', 0x13),
+        'ć' => (b'c', 0x13),
+        'Ǵ' => (b'G', 0x13),
+        'ǵ' => (b'g', 0x13),
+        'Ḱ' => (b'K', 0x13),
+        'ḱ' => (b'k', 0x13),
+        'Ĺ' => (b'L', 0x13),
+        'ĺ' => (b'l', 0x13),
+        'Ń' => (b'N', 0x13),
+        'ń' => (b'n', 0x13),
+        'Ŕ' => (b'R', 0x13),
+        'ŕ' => (b'r', 0x13),
+        'Ś' => (b'S', 0x13),
+        'ś' => (b's', 0x13),
+        'Ź' => (b'Z', 0x13),
+        'ź' => (b'z', 0x13),
+        'Ẃ' => (b'W', 0x13),
+        'ẃ' => (b'w', 0x13),
+        'Â' => (b'A', 0x5E),
+        'â' => (b'a', 0x5E),
+        'Ê' => (b'E', 0x5E),
+        'ê' => (b'e', 0x5E),
+        'Î' => (b'I', 0x5E),
+        'î' => (0x10, 0x5E),
+        'Ô' => (b'O', 0x5E),
+        'ô' => (b'o', 0x5E),
+        'Û' => (b'U', 0x5E),
+        'û' => (b'u', 0x5E),
+        'Ŷ' => (b'Y', 0x5E),
+        'ŷ' => (b'y', 0x5E),
+        'Ĉ' => (b'C', 0x5E),
+        'ĉ' => (b'c', 0x5E),
+        'Ĝ' => (b'G', 0x5E),
+        'ĝ' => (b'g', 0x5E),
+        'Ŝ' => (b'S', 0x5E),
+        'ŝ' => (b's', 0x5E),
+        'Ẑ' => (b'Z', 0x5E),
+        'ẑ' => (b'z', 0x5E),
+        'Ĥ' => (b'H', 0x5E),
+        'ĥ' => (b'h', 0x5E),
+        'Ĵ' => (b'J', 0x5E),
+        'ĵ' => (0x11, 0x5E),
+        'Ŵ' => (b'W', 0x5E),
+        'ŵ' => (b'w', 0x5E),
+        'Ä' => (b'A', 0x7F),
+        'ä' => (b'a', 0x7F),
+        'Ë' => (b'E', 0x7F),
+        'ë' => (b'e', 0x7F),
+        'Ï' => (b'I', 0x7F),
+        'ï' => (0x10, 0x7F),
+        'Ö' => (b'O', 0x7F),
+        'ö' => (b'o', 0x7F),
+        'Ü' => (b'U', 0x7F),
+        'ü' => (b'u', 0x7F),
+        'Ÿ' => (b'Y', 0x7F),
+        'ÿ' => (b'y', 0x7F),
+        'ẗ' => (b't', 0x7F),
+        'Ḧ' => (b'H', 0x7F),
+        'ḧ' => (b'h', 0x7F),
+        'Ẅ' => (b'W', 0x7F),
+        'ẅ' => (b'w', 0x7F),
+        'Ã' => (b'A', 0x7E),
+        'ã' => (b'a', 0x7E),
+        'Ẽ' => (b'E', 0x7E),
+        'ẽ' => (b'e', 0x7E),
+        'Ĩ' => (b'I', 0x7E),
+        'ĩ' => (0x10, 0x7E),
+        'Õ' => (b'O', 0x7E),
+        'õ' => (b'o', 0x7E),
+        'Ũ' => (b'U', 0x7E),
+        'ũ' => (b'u', 0x7E),
+        'Ỹ' => (b'Y', 0x7E),
+        'ỹ' => (b'y', 0x7E),
+        'Ñ' => (b'N', 0x7E),
+        'ñ' => (b'n', 0x7E),
+        'Ā' => (b'A', 0x16),
+        'ā' => (b'a', 0x16),
+        'Ē' => (b'E', 0x16),
+        'ē' => (b'e', 0x16),
+        'Ī' => (b'I', 0x16),
+        'ī' => (0x10, 0x16),
+        'Ō' => (b'O', 0x16),
+        'ō' => (b'o', 0x16),
+        'Ū' => (b'U', 0x16),
+        'ū' => (b'u', 0x16),
+        'Ȳ' => (b'Y', 0x16),
+        'ȳ' => (b'y', 0x16),
+        'Ḡ' => (b'G', 0x16),
+        'ḡ' => (b'g', 0x16),
+        'Ȧ' => (b'A', 0x5F),
+        'ȧ' => (b'a', 0x5F),
+        'Ė' => (b'E', 0x5F),
+        'ė' => (b'e', 0x5F),
+        'İ' => (b'I', 0x5F),
+        'Ȯ' => (b'O', 0x5F),
+        'ȯ' => (b'o', 0x5F),
+        'Ẏ' => (b'Y', 0x5F),
+        'ẏ' => (b'y', 0x5F),
+        'Ċ' => (b'C', 0x5F),
+        'ċ' => (b'c', 0x5F),
+        'Ġ' => (b'G', 0x5F),
+        'ġ' => (b'g', 0x5F),
+        'Ṅ' => (b'N', 0x5F),
+        'ṅ' => (b'n', 0x5F),
+        'Ṙ' => (b'R', 0x5F),
+        'ṙ' => (b'r', 0x5F),
+        'Ṡ' => (b'S', 0x5F),
+        'ṡ' => (b's', 0x5F),
+        'Ṫ' => (b'T', 0x5F),
+        'ṫ' => (b't', 0x5F),
+        'Ż' => (b'Z', 0x5F),
+        'ż' => (b'z', 0x5F),
+        'Ḋ' => (b'D', 0x5F),
+        'ḋ' => (b'd', 0x5F),
+        'Ḣ' => (b'H', 0x5F),
+        'ḣ' => (b'h', 0x5F),
+        'Ẇ' => (b'W', 0x5F),
+        'ẇ' => (b'w', 0x5F),
+        'Ă' => (b'A', 0x15),
+        'ă' => (b'a', 0x15),
+        'Ĕ' => (b'E', 0x15),
+        'ĕ' => (b'e', 0x15),
+        'Ĭ' => (b'I', 0x15),
+        'ĭ' => (0x10, 0x15),
+        'Ŏ' => (b'O', 0x15),
+        'ŏ' => (b'o', 0x15),
+        'Ŭ' => (b'U', 0x15),
+        'ŭ' => (b'u', 0x15),
+        'Ğ' => (b'G', 0x15),
+        'ğ' => (b'g', 0x15),
+        'Ǎ' => (b'A', 0x14),
+        'ǎ' => (b'a', 0x14),
+        'Ě' => (b'E', 0x14),
+        'ě' => (b'e', 0x14),
+        'Ǐ' => (b'I', 0x14),
+        'ǐ' => (0x10, 0x14),
+        'Ǒ' => (b'O', 0x14),
+        'ǒ' => (b'o', 0x14),
+        'Ǔ' => (b'U', 0x14),
+        'ǔ' => (b'u', 0x14),
+        'Č' => (b'C', 0x14),
+        'č' => (b'c', 0x14),
+        'Ǧ' => (b'G', 0x14),
+        'ǧ' => (b'g', 0x14),
+        'Ǩ' => (b'K', 0x14),
+        'ǩ' => (b'k', 0x14),
+        'Ľ' => (b'L', 0x14),
+        'ľ' => (b'l', 0x14),
+        'Ň' => (b'N', 0x14),
+        'ň' => (b'n', 0x14),
+        'Ř' => (b'R', 0x14),
+        'ř' => (b'r', 0x14),
+        'Š' => (b'S', 0x14),
+        'š' => (b's', 0x14),
+        'Ť' => (b'T', 0x14),
+        'ť' => (b't', 0x14),
+        'Ž' => (b'Z', 0x14),
+        'ž' => (b'z', 0x14),
+        'Ď' => (b'D', 0x14),
+        'ď' => (b'd', 0x14),
+        'Ȟ' => (b'H', 0x14),
+        'ȟ' => (b'h', 0x14),
+        'ǰ' => (0x11, 0x14),
+        'Ő' => (b'O', 0x7D),
+        'ő' => (b'o', 0x7D),
+        'Ű' => (b'U', 0x7D),
+        'ű' => (b'u', 0x7D),
+        'Ȩ' => (b'E', 0x18),
+        'ȩ' => (b'e', 0x18),
+        'Ç' => (b'C', 0x18),
+        'ç' => (b'c', 0x18),
+        'Ģ' => (b'G', 0x18),
+        'ģ' => (b'g', 0x18),
+        'Ķ' => (b'K', 0x18),
+        'ķ' => (b'k', 0x18),
+        'Ļ' => (b'L', 0x18),
+        'ļ' => (b'l', 0x18),
+        'Ņ' => (b'N', 0x18),
+        'ņ' => (b'n', 0x18),
+        'Ŗ' => (b'R', 0x18),
+        'ŗ' => (b'r', 0x18),
+        'Ş' => (b'S', 0x18),
+        'ş' => (b's', 0x18),
+        'Ţ' => (b'T', 0x18),
+        'ţ' => (b't', 0x18),
+        'Ḑ' => (b'D', 0x18),
+        'ḑ' => (b'd', 0x18),
+        'Ḩ' => (b'H', 0x18),
+        'ḩ' => (b'h', 0x18),
+        'Å' => (b'A', 0x17),
+        'å' => (b'a', 0x17),
+        'Ů' => (b'U', 0x17),
+        'ů' => (b'u', 0x17),
+        'ẙ' => (b'y', 0x17),
+        'ẘ' => (b'w', 0x17),
+        _ => return None,
+    })
+}
+
 /// WinAnsiEncoding code of a non-ASCII character (`fi`/`fl` in their ligature slots).
 #[inline]
 fn winansi_code(c: char) -> Option<u8> {
@@ -406,7 +760,7 @@ mod tests {
 
     fn glyphs(font: &TextFont, text: &str) -> Vec<(Glyph, i32)> {
         let mut out = Vec::new();
-        font.shape(text, |g, k| out.push((g, k)));
+        font.shape(text, |g, k| out.push((g, crate::backend::backend_ligkern::fix_to_tenths(k))));
         out
     }
 
@@ -443,8 +797,11 @@ mod tests {
     #[test]
     fn non_program_chars_interrupt_shaping() {
         let f = text_font(FontFamily::ComputerModern, Face::Roman).unwrap();
+        let g = glyphs(&f, "f\u{20ac}i");
+        assert_eq!(g, vec![(Glyph::Code(b'f'), 0), (Glyph::Raw('€'), 0), (Glyph::Code(b'i'), 0)]);
+        // An accented letter is the OT1 letter with the accent glyph over it (\accent).
         let g = glyphs(&f, "f\u{e9}i");
-        assert_eq!(g, vec![(Glyph::Code(b'f'), 0), (Glyph::Raw('é'), 0), (Glyph::Code(b'i'), 0)]);
+        assert_eq!(g[1].0, Glyph::Accent { base: b'e', accent: 0x13 });
         let u = glyphs(&f, "\u{201c}x\u{2014}");
         assert_eq!(u[0].0, Glyph::Code(0x5C));
         assert_eq!(u[2].0, Glyph::Code(0x7C));

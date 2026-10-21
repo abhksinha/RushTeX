@@ -1,7 +1,7 @@
 //! Layout calculation, multi-page streaming, and vector painting for tables.
 
 use crate::backend::fonts::Face;
-use crate::layout::engine::{explode_inlines_into_family, CellLineRange, CellSpan, Layouter, Paint, CELL_PAD};
+use crate::layout::engine::{explode_inlines_into_family, CellLineRange, CellSpan, Layouter, Paint, CELL_PAD, Sp};
 use crate::tables::tables_model::{LtSections, TableData, TableRow, TableRule};
 use crate::tables::tables_spec::{ColAlign, ColSpec};
 
@@ -190,7 +190,7 @@ pub(crate) fn layout_table<'a>(
             // Top of the float box: where a strut-high line above the current
             // baseline would start.
             let float_top = layouter.y + 0.7 * layouter.base_leading;
-            let d_cap = render_caption(layouter, caption_inls, float_top, None);
+            let d_cap = render_caption(layouter, caption_inls, float_top, None, false);
             // \belowcaptionskip is followed by the tabular's paragraph line.
             layouter.y -= d_cap + interline_to_baseline(Some(d_cap), est_tab_h, layouter.base_leading) - est_tab_h;
         }
@@ -239,10 +239,10 @@ pub(crate) fn layout_table<'a>(
         let rule_t = ARRAY_RULE_WIDTH;
         if !layouter.is_dry_run {
             layouter.push_op(Paint::Rule {
-                x: origin_x,
-                y: y_top - rule_t,
-                w: table_w,
-                h: rule_t,
+                x: origin_x.into(),
+                y: (y_top - rule_t),
+                w: table_w.into(),
+                h: rule_t.into(),
                 fill: true,
             });
         }
@@ -253,8 +253,8 @@ pub(crate) fn layout_table<'a>(
     if !table_data.caption_above {
         if let Some(caption_inls) = table_data.caption.as_deref() {
             // Depth of the tabular's \vcenter box below its baseline.
-            let d_tab = ((table_top - y_top) * 0.5 - axis).max(0.0);
-            let d_cap = render_caption(layouter, caption_inls, y_top, Some(d_tab));
+            let d_tab = ((table_top - y_top).to_pt() * 0.5 - axis).max(0.0);
+            let d_cap = render_caption(layouter, caption_inls, y_top, Some(d_tab), false);
             y_top = layouter.y - d_cap;
         }
     }
@@ -350,7 +350,7 @@ fn paint_prepared_row<'a, 'doc>(
     origin_x: f32,
     table_w: f32,
     rule_right: bool,
-    y_top: &mut f32,
+    y_top: &mut Sp,
     row_h: f32,
     row_math_collector: &[&'doc crate::math::MathNode<'a>],
     with_rules: bool,
@@ -365,10 +365,10 @@ fn paint_prepared_row<'a, 'doc>(
         let rule_t = ARRAY_RULE_WIDTH;
         if !layouter.is_dry_run {
             layouter.push_op(Paint::Rule {
-                x: origin_x,
-                y: *y_top - rule_t,
-                w: table_w,
-                h: rule_t,
+                x: origin_x.into(),
+                y: (*y_top - rule_t),
+                w: table_w.into(),
+                h: rule_t.into(),
                 fill: true,
             });
         }
@@ -404,10 +404,10 @@ fn paint_prepared_row<'a, 'doc>(
             let rule_x = x - rule_t * 0.5;
             if !layouter.is_dry_run {
                 layouter.push_op(Paint::Rule {
-                    x: rule_x,
+                    x: rule_x.into(),
                     y: row_bottom,
-                    w: rule_t,
-                    h: row_h,
+                    w: rule_t.into(),
+                    h: row_h.into(),
                     fill: true,
                 });
             }
@@ -436,10 +436,10 @@ fn paint_prepared_row<'a, 'doc>(
         // Draw right vertical rule for multicolumn
         if cell.rule_right && !layouter.is_dry_run {
             layouter.push_op(Paint::Rule {
-                x: x + item_w - rule_t * 0.5,
+                x: (x + item_w - rule_t * 0.5).into(),
                 y: row_bottom,
-                w: rule_t,
-                h: row_h,
+                w: rule_t.into(),
+                h: row_h.into(),
                 fill: true,
             });
         }
@@ -450,10 +450,10 @@ fn paint_prepared_row<'a, 'doc>(
 
     if rule_right && !layouter.is_dry_run {
         layouter.push_op(Paint::Rule {
-            x: origin_x + table_w - rule_t * 0.5,
+            x: (origin_x + table_w - rule_t * 0.5).into(),
             y: row_bottom,
-            w: rule_t,
-            h: row_h,
+            w: rule_t.into(),
+            h: row_h.into(),
             fill: true,
         });
     }
@@ -544,7 +544,7 @@ fn emit_table_rules<'a>(
     origin_x: f32,
     col_offsets: &[f32],
     table_w: f32,
-    y_top: &mut f32,
+    y_top: &mut Sp,
 ) {
     let m = RuleMetrics::of(layouter);
     for (i, rule) in rules.iter().enumerate() {
@@ -570,7 +570,7 @@ fn emit_table_rules<'a>(
                 }
                 _ => (origin_x, table_w),
             };
-            layouter.push_op(Paint::Rule { x, y: *y_top - h, w, h, fill: true });
+            layouter.push_op(Paint::Rule { x: x.into(), y: (*y_top - h), w: w.into(), h: h.into(), fill: true });
         }
         *y_top -= h + below;
     }
@@ -611,7 +611,7 @@ fn paint_lt_section<'a, 'doc>(
     rows: &'doc [TableRow<'a>],
     range: (u16, u16),
     geom: &TableGeom<'_>,
-    y_top: &mut f32,
+    y_top: &mut Sp,
     collector: &mut Vec<&'doc crate::math::MathNode<'a>>,
 ) {
     let n = geom.cols.len();
@@ -639,7 +639,7 @@ fn layout_longtable<'a>(layouter: &mut Layouter<'a>, table_data: &TableData<'a>,
     let lt = table_data.lt_sections;
     let n = geom.cols.len();
     let mut collector: Vec<&crate::math::MathNode<'a>> = Vec::new();
-    let strut_dp = 0.3 * layouter.base_leading;
+    let strut_dp = crate::backend::scaled::em_mul(0.3, layouter.base_leading);
     let m = RuleMetrics::of(layouter);
 
     let head = lt.head;
@@ -681,7 +681,7 @@ fn layout_longtable<'a>(layouter: &mut Layouter<'a>, table_data: &TableData<'a>,
     if table_data.caption_above {
         if let Some(caption_inls) = table_data.caption.as_deref() {
             let float_top = layouter.y + STRUT_HT_FRAC * layouter.base_leading;
-            let d_cap = render_caption(layouter, caption_inls, float_top, None);
+            let d_cap = render_caption(layouter, caption_inls, float_top, None, false);
             layouter.y -= d_cap;
         }
     }
@@ -767,7 +767,7 @@ fn layout_longtable<'a>(layouter: &mut Layouter<'a>, table_data: &TableData<'a>,
     // 7. Caption below.
     if !table_data.caption_above {
         if let Some(caption_inls) = table_data.caption.as_deref() {
-            let d_cap = render_caption(layouter, caption_inls, y_top, Some(0.0));
+            let d_cap = render_caption(layouter, caption_inls, y_top, Some(0.0), false);
             y_top = layouter.y - d_cap;
         }
     }
@@ -825,6 +825,23 @@ fn soa_ink_extent(soa: &crate::layout::engine::ParagraphSoA<'_>, start: usize, e
     (h * size * 0.001, d * size * 0.001)
 }
 
+/// Height and depth of a caption line's hbox: its words' ink and its formulas' boxes.
+fn caption_line_extent(layouter: &Layouter<'_>, start: usize, end: usize, size: f32, math: &[&crate::math::MathNode<'_>]) -> (f32, f32) {
+    let soa = &layouter.cell_words_soa;
+    let (mut h, mut d) = soa_ink_extent(soa, start, end, size);
+    for i in start..end {
+        if !soa.attrs[i].is_math() {
+            continue;
+        }
+        if let Some(&node) = soa.get_math_idx(i).and_then(|m| math.get(m)) {
+            let b = crate::math::measure_math(node, size, layouter.font_family, crate::math::MathStyle::Text);
+            h = h.max(b.h);
+            d = d.max(b.d);
+        }
+    }
+    (h, d)
+}
+
 /// Distance from the bottom of a box of depth `prev_depth` (or from the top of
 /// the enclosing vbox when `None`) down to the baseline of a following box of
 /// height `h`: TeX's interline glue with `\baselineskip`, `\lineskiplimit = 0pt`
@@ -842,19 +859,25 @@ fn interline_to_baseline(prev_depth: Option<f32>, h: f32, baselineskip: f32) -> 
 
 /// Width of the caption label `\fnum@table` = `\tablename~\thetable` followed by
 /// the `:` that `\@makecaption` appends.
-fn caption_label_width(layouter: &Layouter<'_>, n: u32, size: f32) -> f32 {
+fn caption_label_width(layouter: &Layouter<'_>, n: u32, size: f32, name: &str) -> f32 {
+    // `\fnum@figure`: the name, `\nobreakspace` (an interword space), the number; then ':'.
+    use crate::backend::scaled::{font_dimen_sp, sp_pt, to_sp};
     let fam = layouter.font_family;
-    let scale = size * 0.001;
-    let mut digits = 1u32;
-    let mut v = n / 10;
-    while v > 0 {
-        digits += 1;
+    let word = |w: &str| to_sp(crate::backend::shape::word_width_pt(w, Face::Roman, size, fam)) as i64;
+    let mut digits = [0u8; 10];
+    let mut i = digits.len();
+    let mut v = n;
+    loop {
+        i -= 1;
+        digits[i] = b'0' + (v % 10) as u8;
         v /= 10;
+        if v == 0 {
+            break;
+        }
     }
-    let units = crate::font_metrics::string_units_family("Table:", Face::Roman, fam)
-        + crate::font_metrics::resolve_space_units(fam, Face::Roman)
-        + digits * crate::font_metrics::resolve_digit_units(fam, Face::Roman);
-    units as f32 * scale
+    let number = std::str::from_utf8(&digits[i..]).unwrap_or("0");
+    let sp = word(name) + font_dimen_sp(fam, Face::Roman, size, 2) + word(number) + word(":");
+    sp_pt(sp as i32)
 }
 
 /// Typesets a table caption following latex.ltx `\@makecaption`:
@@ -866,21 +889,28 @@ fn caption_label_width(layouter: &Layouter<'_>, n: u32, size: f32) -> f32 {
 /// and `prev_depth` that material's depth (TeX's `\prevdepth`; `None` at the top
 /// of the float box). On exit `layouter.y` is the caption's last baseline and the
 /// returned value is that line's depth.
-fn render_caption<'a, 'doc>(
+///
+/// With `figure` the label is "Figure n:" with the figure number the caller counted.
+pub(crate) fn render_caption<'a, 'doc>(
     layouter: &mut Layouter<'a>,
     caption_inls: &'doc [crate::frontend::ast::Inline<'a>],
-    top: f32,
+    top: Sp,
     prev_depth: Option<f32>,
+    figure: bool,
 ) -> f32 {
-    layouter.table_counter += 1;
-    let n = layouter.table_counter;
+    let n = if figure {
+        layouter.figure_counter
+    } else {
+        layouter.table_counter += 1;
+        layouter.table_counter
+    };
     let size = layouter.base_font_size;
     let leading = layouter.base_leading;
     // After a page break the caption starts the float box at the top of the new page;
     // `top` still points at the previous page.
     let top = if layouter.ensure_room(leading * 2.0) { layouter.y + 0.7 * leading } else { top };
 
-    if layouter.current_tbl_idx < layouter.registry.table_entries.len() {
+    if !figure && layouter.current_tbl_idx < layouter.registry.table_entries.len() {
         layouter.registry.table_entries[layouter.current_tbl_idx].page =
             layouter.current_page_number();
         layouter.current_tbl_idx += 1;
@@ -889,14 +919,14 @@ fn render_caption<'a, 'doc>(
     let fam = layouter.font_family;
     let hsize = (layouter.right - layouter.right_skip) - (layouter.left + layouter.left_skip);
     let origin_x = layouter.left + layouter.left_skip;
-    let label_w = caption_label_width(layouter, n, size);
+    let label_w = caption_label_width(layouter, n, size, if figure { "Figure" } else { "Table" });
     // The space after ':' carries space factor 2000 (\nonfrenchspacing), so it
     // gets the font's extra space (fontdimen 7) on top of the interword space.
-    let mut gap_units = crate::font_metrics::resolve_space_units(fam, Face::Roman);
+    let mut gap = crate::backend::scaled::font_dimen_sp(fam, Face::Roman, size, 2);
     if !layouter.french_spacing {
-        gap_units += crate::font_metrics::resolve_extra_space_units(fam, Face::Roman);
+        gap += crate::backend::scaled::font_dimen_sp(fam, Face::Roman, size, 7);
     }
-    let lead_w = label_w + gap_units as f32 * size * 0.001;
+    let lead_w = crate::backend::scaled::sp_pt((crate::backend::scaled::to_sp(label_w) as i64 + gap) as i32);
 
     // Word 0 is a placeholder reserving the label's width so that line breaking
     // sees the label as the start of the caption paragraph.
@@ -925,13 +955,15 @@ fn render_caption<'a, 'doc>(
     // First caption baseline: \vskip\abovecaptionskip, then interline glue
     // against the material above.
     let first = layouter.cell_lines[0];
-    let (h_first, _) = soa_ink_extent(
-        &layouter.cell_words_soa,
+    let (h_first, _) = caption_line_extent(
+        layouter,
         first.start_word as usize,
         (first.start_word + first.word_count) as usize,
         size,
+        &cap_math,
     );
-    let h_label = bytes_extent_units(b"Table0:", false).0 * size * 0.001;
+    let label_ext = bytes_extent_units(if figure { b"Figure0:" } else { b"Table0:" }, false);
+    let (h_label, d_label) = (label_ext.0 * size * 0.001, label_ext.1 * size * 0.001);
     let h_first = h_first.max(h_label);
     layouter.y = top - ABOVE_CAPTION_SKIP - interline_to_baseline(prev_depth, h_first, leading);
 
@@ -941,8 +973,9 @@ fn render_caption<'a, 'doc>(
         let line = layouter.cell_lines[idx];
         let start = line.start_word as usize;
         let stop = start + line.word_count as usize;
-        let (_, d) = soa_ink_extent(&layouter.cell_words_soa, start, stop, size);
-        last_depth = d;
+        let (_, d) = caption_line_extent(layouter, start, stop, size, &cap_math);
+        // The label is in the first line's box.
+        last_depth = if start == 0 { d.max(d_label) } else { d };
         if idx > 0 {
             layouter.y -= leading;
         }
@@ -954,7 +987,7 @@ fn render_caption<'a, 'doc>(
         let mut word_x = x;
         let mut painted = line;
         if start == 0 {
-            layouter.push_op(Paint::TableCaptionTag { x, y, size, n });
+            layouter.push_op(if figure { Paint::CaptionTag { x: x.into(), y, size, n } } else { Paint::TableCaptionTag { x: x.into(), y, size, n } });
             word_x += lead_w;
             painted.start_word = 1;
             painted.word_count = (stop - 1) as u16;

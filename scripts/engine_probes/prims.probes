@@ -1,0 +1,11 @@
+\L
+\meaning\inner|\outer
+\meaning\thefont
+\expandafter\string\csn|\csm
+\the\count1,\the\count2,\the\wd1
+\the\ht2,\the\dp2
+\iffontchar\tenrm`A Y\else N\fi\iffontchar\tenrm200 Y\else N\fi
+\the\count4,\the\count5,\the\count6,\the\count7,\the\count8,\the\count9,\the\count10,\the\count11,\the\count12
+\pdfmatch{^(|dvips|ps2pdf)$}{}\pdfmatch{b+}{abbbc}\pdfmatch{x}{abc}\pdfmatch{(ab}{ab}
+\pdfmatch{a|ab|abc}{xabcd}\pdflastmatch0|\pdflastmatch1|\pdfmatch icase{(a+)(b*)}{xAAbB}\pdflastmatch1/\pdflastmatch2
+\pdfmatch{([0-9]{2,3})-([[:alpha:]]+)}{a12345-xY9}\pdflastmatch0|\pdflastmatch2|\pdflastmatch3|\pdfmatch subcount 1{(a)(b)}{ab}\pdflastmatch1

@@ -1,0 +1,23 @@
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6 \catcode`\^=7
+\font\tenrm=cmr10 \tenrm
+\baselineskip=12pt \lineskip=1pt \lineskiplimit=0pt
+\setbox0\hbox{Hello world}
+\setbox1\hbox to 100pt{A\hfil B}
+\setbox2\hbox spread 5pt{x\hskip 3pt plus 2pt y}
+\setbox3\vbox{\hbox{Ag}\hbox{yx}\kern2pt\hrule height 1pt depth 0.5pt}
+\setbox4\vtop{\hbox{Ag}\hbox{yx}}
+\setbox5\hbox{\raise2pt\hbox{a}\lower3pt\hbox{b}\vrule width 1pt}
+\setbox6\copy0 \wd6=50pt
+\setbox7\hbox{\unhcopy0\unskip.}
+\setbox8\hbox{Mr. Smith. Yes! a,b}
+\setbox9\hbox to 10pt{Wide text here}
+\count1=\badness
+\setbox10\vbox to 50pt{\hbox{a}\vfil\hbox{b}}
+\setbox11\hbox{\setbox12\hbox{q}\box12\box12}
+\setbox13\vbox{\moveright 5pt\hbox{m}\hbox{n}}
+\setbox14\hbox{\hbox{a}\setbox15\lastbox \kern\wd15}
+\setbox16\hbox{\leaders\hrule\hskip 20pt \cleaders\hbox{.}\hskip 10pt}
+\setbox17\vbox{\hbox{a}\penalty 50 \count2=\lastpenalty \kern 3pt \dimen2=\lastkern}
+{\setbox18\hbox{local}}
+\global\setbox19\hbox{\global\setbox20\hbox{inner}}
+\boxmaxdepth=1pt \setbox21\vbox{\hbox{y}}

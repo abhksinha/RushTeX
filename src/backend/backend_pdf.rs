@@ -27,8 +27,10 @@
 //! - [`emit_into_consume`]: Serializes pages while progressively deallocating each page's display list.
 
 use crate::font_metrics::{Face, FontFamily};
-use crate::backend::backend_shape::{self as shape, Glyph, TextFont};
+use crate::backend::backend_shape::{self as shape, Glyph};
+use crate::backend::backend_pdftex::TextState;
 use crate::backend::optical::OpticalMaster;
+use crate::backend::scaled::{Scaler, Sp};
 use crate::page_layout::{Marker, Page, Paint, GLYPH_RUN_COUNT_MASK, GLYPH_RUN_SHAPED, PAGE_H, PAGE_W};
 use crate::Error;
 
@@ -150,17 +152,162 @@ pub(crate) struct FinishedPageMeta {
     pub(crate) height: f32,
 }
 
+/// The size each font is first used at, by [`FontSizes::slot`]: pdfTeX writes a font's
+/// `/Widths` from the TeX font that first registered it (`pdf_use_font`, writefont.c
+/// `create_charwidth_array`), so cmbx12 first set at 14.4pt has 443.8 where 12pt gives 443.7.
+#[derive(Clone, Copy)]
+pub(crate) struct FontSizes([i32; Face::COUNT + OpticalMaster::COUNT]);
+
+impl FontSizes {
+    const fn new() -> Self {
+        Self([0; Face::COUNT + OpticalMaster::COUNT])
+    }
+
+    #[inline(always)]
+    fn slot(face: Face, master: Option<OpticalMaster>) -> usize {
+        match master {
+            Some(m) => Face::COUNT + m as usize,
+            None => face as usize,
+        }
+    }
+
+    /// Records `op`'s font size unless the font was used before; returns the slot it set.
+    #[inline]
+    fn note(&mut self, op: &Paint, family: FontFamily) -> Option<(u8, i32)> {
+        let (face, size) = match *op {
+            Paint::GlyphRun { face, size, .. }
+            | Paint::Marker { face, size, .. }
+            | Paint::PageNumber { face, size, .. }
+            | Paint::SectionNumber { face, size, .. }
+            | Paint::FigureTag { face, size, .. }
+            | Paint::TableTag { face, size, .. }
+            | Paint::EquationNumber { face, size, .. } => (face, size),
+            Paint::CaptionTag { size, .. } | Paint::TableCaptionTag { size, .. } => (Face::Roman, size),
+            _ => return None,
+        };
+        let i = Self::slot(face, text_op_master(op, family));
+        if self.0[i] != 0 {
+            return None;
+        }
+        self.0[i] = crate::backend::scaled::to_sp(size);
+        Some((i as u8, self.0[i]))
+    }
+
+    #[inline]
+    fn apply(&mut self, firsts: &[(u8, i32)]) {
+        for &(i, z) in firsts {
+            let e = &mut self.0[i as usize];
+            if *e == 0 {
+                *e = z;
+            }
+        }
+    }
+}
+
 pub(crate) struct PageStreamAccumulator<'w> {
     buf: &'w mut Vec<u8>,
     offsets: Vec<usize>,
     page_metas: Vec<FinishedPageMeta>,
-    doc_used_faces: u32,
+    doc_used_faces: u64,
     doc_used_masters: u32,
+    font_sizes: FontSizes,
     cid_set: CidBitSet,
     uncompressed_stream: Vec<u8>,
     compressed_stream: Vec<u8>,
     compressor: crate::deflate_compress::DeflateCompressor,
     enable_compression: bool,
+    /// Content streams written by earlier compiles in a [`crate::Session`], by [`page_key`].
+    /// The stream (and DEFLATE) depend only on the page, so a hit is byte-identical to
+    /// writing it again.
+    pub(crate) page_cache: Option<PageCache>,
+}
+
+/// Page content streams as written (compressed or not), by [`page_key`].
+pub type PageCache = crate::backend::backend_hash::GenerationCache<CachedPage>;
+
+/// What a page contributes to the document once built: its content stream and the
+/// font usage `push_page` scans its ops for. A cache hit skips both the build and the scan.
+pub struct CachedPage {
+    pub(crate) stream: Box<[u8]>,
+    faces: u64,
+    masters: u32,
+    cids: Box<[u16]>,
+    /// The fonts this page uses first within itself, with their sizes, in draw order.
+    firsts: Box<[(u8, i32)]>,
+}
+
+/// Hash of everything [`build_stream_into`] reads from a page (its paint ops, its text and
+/// font family), and whether the stream is compressed: equal keys give equal streams.
+fn page_key(page: &Page<'_>, compressed: bool) -> u128 {
+    let mut h = crate::backend::backend_hash::ContentHasher::new();
+    h.u32(compressed as u32 | (page.font_family as u32) << 8);
+    h.u64(page.ops.len() as u64);
+    for op in &page.ops {
+        let xy = |h: &mut crate::backend::backend_hash::ContentHasher, tag: u32, x: Sp, y: Sp, size: f32, face: u32| {
+            h.u64((tag as u64) << 32 | face as u64);
+            h.u64(((x.0 as u32 as u64) << 32) | y.0 as u32 as u64);
+            h.f32(size);
+        };
+        match *op {
+            Paint::GlyphRun { x, y, face, size, part_start, part_count, word_spacing } => {
+                xy(&mut h, 0, x, y, size, face as u32);
+                h.u64(((part_start as u64) << 32) | part_count as u64);
+                h.f32(word_spacing);
+            }
+            Paint::Marker { x, y, face, size, marker } => {
+                xy(&mut h, 1, x, y, size, face as u32);
+                let (tag, n) = match marker {
+                    Marker::Bullet => (0, 0),
+                    Marker::Dash => (1, 0),
+                    Marker::Asterisk => (2, 0),
+                    Marker::MiddleDot => (3, 0),
+                    Marker::Number(n) => (4, n),
+                    Marker::ParenNumber(n) => (5, n),
+                    Marker::Alpha(n) => (6, n),
+                    Marker::AlphaDot(n) => (7, n),
+                    Marker::Roman(n) => (8, n),
+                    Marker::UpperRoman(n) => (9, n),
+                    Marker::UpperAlpha(n) => (10, n),
+                };
+                h.u64((tag as u64) << 32 | n as u64);
+            }
+            Paint::Rule { x, y, w, h: height, fill } => {
+                xy(&mut h, 2, x, y, 0.0, fill as u32);
+                h.u64(((w.0 as u32 as u64) << 32) | height.0 as u32 as u64);
+            }
+            Paint::CaptionTag { x, y, size, n } => xy(&mut h, 3, x, y, size, n),
+            Paint::TableCaptionTag { x, y, size, n } => xy(&mut h, 4, x, y, size, n),
+            Paint::PageNumber { x, y, face, size, page_number } => {
+                xy(&mut h, 5, x, y, size, face as u32);
+                h.u32(page_number);
+            }
+            Paint::SectionNumber { x, y, face, size, number, level } => {
+                xy(&mut h, 6, x, y, size, face as u32);
+                h.u64((number[0] as u64) | (number[1] as u64) << 16 | (number[2] as u64) << 32 | (number[3] as u64) << 48);
+                h.u32(level as u32);
+            }
+            Paint::FigureTag { x, y, face, size, n } => {
+                xy(&mut h, 7, x, y, size, face as u32);
+                h.u32(n);
+            }
+            Paint::TableTag { x, y, face, size, n } => {
+                xy(&mut h, 8, x, y, size, face as u32);
+                h.u32(n);
+            }
+            Paint::EquationNumber { x, y, face, size, n } => {
+                xy(&mut h, 9, x, y, size, face as u32);
+                h.u32(n);
+            }
+            Paint::Color { color } => h.u64(10 << 32 | color.0 as u64),
+            Paint::VectorGlyph { x, y, size, glyph_id } => xy(&mut h, 11, x, y, size, glyph_id as u32),
+            Paint::CidGlyphRun { x, y, size, glyph_id } => xy(&mut h, 12, x, y, size, glyph_id as u32),
+        }
+    }
+    h.u64(page.text_pool.len() as u64);
+    for t in &page.text_pool {
+        h.bytes(t.as_bytes());
+    }
+    h.finish()
 }
 
 impl<'w> PageStreamAccumulator<'w> {
@@ -176,27 +323,18 @@ impl<'w> PageStreamAccumulator<'w> {
             page_metas: Vec::with_capacity(32),
             doc_used_faces: 0,
             doc_used_masters: 0,
+            font_sizes: FontSizes::new(),
             cid_set: CidBitSet::new(),
             uncompressed_stream: Vec::with_capacity(16384),
             compressed_stream: Vec::with_capacity(16384),
             compressor: crate::deflate_compress::DeflateCompressor::new(),
             enable_compression,
+            page_cache: None,
         }
     }
 
     pub(crate) fn push_page(&mut self, page: &mut Page<'_>) {
         self.doc_used_faces |= page.used_faces;
-        for op in &page.ops {
-            let (faces, masters) = op_font_usage(op, page.font_family);
-            self.doc_used_faces |= faces;
-            self.doc_used_masters |= masters;
-            if let Paint::VectorGlyph { glyph_id, .. } | Paint::CidGlyphRun { glyph_id, .. } = op {
-                self.cid_set.insert(*glyph_id);
-            }
-        }
-
-        self.uncompressed_stream.clear();
-        build_stream_into(page, &mut self.uncompressed_stream, true);
 
         let content_id = (3 + self.page_metas.len()) as u32;
         let idx = content_id as usize;
@@ -208,20 +346,75 @@ impl<'w> PageStreamAccumulator<'w> {
         write_u64(self.buf, content_id as u64);
         self.buf.extend_from_slice(b" 0 obj\n");
 
+        let key = self.page_cache.as_ref().map(|_| page_key(page, self.enable_compression));
+        let cached = match (key, self.page_cache.as_mut()) {
+            (Some(key), Some(cache)) => cache.get(key),
+            _ => None,
+        };
+        let stream: &[u8] = match cached {
+            Some(c) => {
+                // The scan below ran when this page was first built; its result
+                // is part of the entry, so a hit costs no walk over the ops.
+                self.doc_used_faces |= c.faces;
+                self.doc_used_masters |= c.masters;
+                self.font_sizes.apply(&c.firsts);
+                for gid in &c.cids {
+                    self.cid_set.insert(*gid);
+                }
+                &c.stream
+            }
+            None => {
+                let mut faces = 0;
+                let mut masters = 0;
+                let mut cids: Vec<u16> = Vec::new();
+                let mut own = FontSizes::new();
+                let mut firsts: Vec<(u8, i32)> = Vec::new();
+                for op in &page.ops {
+                    if let Some(first) = own.note(op, page.font_family) {
+                        firsts.push(first);
+                    }
+                    let (f, m) = op_font_usage(op, page.font_family);
+                    faces |= f;
+                    masters |= m;
+                    if let Paint::VectorGlyph { glyph_id, .. } | Paint::CidGlyphRun { glyph_id, .. } = op {
+                        self.cid_set.insert(*glyph_id);
+                        if self.page_cache.is_some() {
+                            cids.push(*glyph_id);
+                        }
+                    }
+                }
+                self.doc_used_faces |= faces;
+                self.doc_used_masters |= masters;
+                self.font_sizes.apply(&firsts);
+                self.uncompressed_stream.clear();
+                build_stream_into(page, &mut self.uncompressed_stream, true);
+                let stream = if self.enable_compression {
+                    self.compressed_stream.clear();
+                    self.compressor.compress_zlib(&self.uncompressed_stream, &mut self.compressed_stream);
+                    &self.compressed_stream
+                } else {
+                    &self.uncompressed_stream
+                };
+                if let (Some(key), Some(cache)) = (key, self.page_cache.as_mut()) {
+                    cids.sort_unstable();
+                    cids.dedup();
+                    cache.insert(key, CachedPage { stream: stream.as_slice().into(), faces, masters, cids: cids.into_boxed_slice(), firsts: firsts.into_boxed_slice() });
+                }
+                stream
+            }
+        };
         if self.enable_compression {
-            self.compressed_stream.clear();
-            self.compressor.compress_zlib(&self.uncompressed_stream, &mut self.compressed_stream);
             self.buf.extend_from_slice(b"<< /Filter /FlateDecode /Length ");
-            write_i64(self.buf, self.compressed_stream.len() as i64);
+            write_i64(self.buf, stream.len() as i64);
             self.buf.extend_from_slice(b" >>\nstream\n");
-            self.buf.extend_from_slice(&self.compressed_stream);
+            self.buf.extend_from_slice(stream);
             self.buf.extend_from_slice(b"\nendstream\nendobj\n");
         } else {
             self.buf.extend_from_slice(b"<< /Length ");
-            write_i64(self.buf, self.uncompressed_stream.len() as i64);
+            write_i64(self.buf, stream.len() as i64);
             self.buf.extend_from_slice(b" >>\nstream\n");
-            self.buf.extend_from_slice(&self.uncompressed_stream);
-            if !self.uncompressed_stream.ends_with(b"\n") {
+            self.buf.extend_from_slice(stream);
+            if !stream.ends_with(b"\n") {
                 self.buf.push(b'\n');
             }
             self.buf.extend_from_slice(b"endstream\nendobj\n");
@@ -232,8 +425,9 @@ impl<'w> PageStreamAccumulator<'w> {
             height: page.height,
         });
 
-        page.ops = Vec::new();
-        page.text_pool = Vec::new();
+        // Cleared, not freed: the layouter recycles the page with its capacity.
+        page.ops.clear();
+        page.text_pool.clear();
     }
 
     pub(crate) fn finish(
@@ -249,6 +443,7 @@ impl<'w> PageStreamAccumulator<'w> {
             font_family,
             self.doc_used_faces,
             self.doc_used_masters,
+            self.font_sizes,
             &math_cids,
             self.enable_compression,
         )?;
@@ -283,8 +478,9 @@ fn finish_streaming_pdf(
     offsets: Vec<usize>,
     metas: &[FinishedPageMeta],
     font_family: FontFamily,
-    doc_used_faces: u32,
+    doc_used_faces: u64,
     doc_used_masters: u32,
+    font_sizes: FontSizes,
     math_cids: &[u16],
     enable_compression: bool,
 ) -> Result<(), Error> {
@@ -333,7 +529,8 @@ fn finish_streaming_pdf(
             if is_cm_embedded {
                 font_descriptor_ids[face_idx] = next_font_id;
                 font_file_ids[face_idx] = next_font_id + 1;
-                next_font_id += 2;
+                // A face with its own ToUnicode map has it right after its font file.
+                next_font_id += 2 + own_tounicode(face).is_some() as u32;
             }
         }
     }
@@ -342,7 +539,7 @@ fn finish_streaming_pdf(
 
     let mut tounicode_ids = TounicodeIds { ot1: 0, ot1tt: 0, oml: 0, oms: 0, omx: 0, msam: 0, msbm: 0 };
     if font_family == FontFamily::ComputerModern {
-        let has_ot1 = (doc_used_faces & Face::OT1_MASK & !Face::OT1TT_MASK) != 0 || master_ids.used & !OpticalMaster::TT_MASK != 0;
+        let has_ot1 = (doc_used_faces & Face::OT1_MASK & !Face::OT1TT_MASK) != 0 || master_ids.used & !(OpticalMaster::TT_MASK | OpticalMaster::TS1_MASK) != 0;
         if has_ot1 {
             tounicode_ids.ot1 = next_font_id;
             next_font_id += 1;
@@ -406,6 +603,7 @@ fn finish_streaming_pdf(
     };
 
     let mut writer = Writer::from_existing(destination_buffer, offsets);
+    writer.font_sizes = font_sizes;
 
     if metas.is_empty() {
         writer.obj(3, |w| {
@@ -498,12 +696,14 @@ fn emit_into_internal(
     destination_buffer.reserve((pages.len() * if enable_compression { 3500 } else { 7000 }).max(16384));
     let total_pages = pages.len().max(1);
 
-    let mut doc_used_faces = 0u32;
+    let mut doc_used_faces = 0u64;
     let mut doc_used_masters = 0u32;
     let mut cid_set = CidBitSet::new();
+    let mut font_sizes = FontSizes::new();
     for page in pages.as_slice().iter().take(total_pages) {
         doc_used_faces |= page.used_faces;
         for op in &page.ops {
+            font_sizes.note(op, page.font_family);
             let (faces, masters) = op_font_usage(op, page.font_family);
             doc_used_faces |= faces;
             doc_used_masters |= masters;
@@ -522,6 +722,7 @@ fn emit_into_internal(
     let num_fonts = (doc_used_faces.count_ones() + doc_used_masters.count_ones()) as usize;
 
     let mut writer = Writer::new(destination_buffer, total_pages, num_fonts * 3 + 12);
+    writer.font_sizes = font_sizes;
     writer.write_all(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
 
     let catalog_id = 1u32;
@@ -560,7 +761,8 @@ fn emit_into_internal(
             if is_cm_embedded {
                 font_descriptor_ids[face_idx] = next_font_id;
                 font_file_ids[face_idx] = next_font_id + 1;
-                next_font_id += 2;
+                // A face with its own ToUnicode map has it right after its font file.
+                next_font_id += 2 + own_tounicode(face).is_some() as u32;
             }
         }
     }
@@ -569,7 +771,7 @@ fn emit_into_internal(
 
     let mut tounicode_ids = TounicodeIds { ot1: 0, ot1tt: 0, oml: 0, oms: 0, omx: 0, msam: 0, msbm: 0 };
     if font_family == FontFamily::ComputerModern {
-        let has_ot1 = (doc_used_faces & Face::OT1_MASK & !Face::OT1TT_MASK) != 0 || master_ids.used & !OpticalMaster::TT_MASK != 0;
+        let has_ot1 = (doc_used_faces & Face::OT1_MASK & !Face::OT1TT_MASK) != 0 || master_ids.used & !(OpticalMaster::TT_MASK | OpticalMaster::TS1_MASK) != 0;
         if has_ot1 {
             tounicode_ids.ot1 = next_font_id;
             next_font_id += 1;
@@ -811,7 +1013,7 @@ fn emit_into_internal(
 #[allow(clippy::too_many_arguments)]
 fn emit_font_objects(
     writer: &mut Writer,
-    doc_used_faces: u32,
+    doc_used_faces: u64,
     font_family: FontFamily,
     font_object_ids: &[u32; Face::COUNT],
     font_descriptor_ids: &[u32; Face::COUNT],
@@ -833,9 +1035,13 @@ fn emit_font_objects(
     for (face_idx, &id) in font_object_ids.iter().enumerate() {
         if (doc_used_faces & (1 << face_idx)) != 0 {
             let face = Face::from_u8(face_idx as u8);
+            writer.widths_size = writer.font_sizes.0[FontSizes::slot(face, None)];
             if let Some((program, widths)) = crate::backend::cm_fonts::extra_cm_program(face, font_family) {
                 let bit = face.bit();
-                let tounicode = if bit & Face::OML_MASK != 0 {
+                let own = own_tounicode(face);
+                let tounicode = if own.is_some() {
+                    font_file_ids[face_idx] + 1
+                } else if bit & Face::OML_MASK != 0 {
                     oml_tounicode_id
                 } else if bit & Face::OMS_MASK != 0 {
                     oms_tounicode_id
@@ -853,6 +1059,9 @@ fn emit_font_objects(
                     tounicode_id: (tounicode > 0).then_some(tounicode),
                 };
                 write_embedded_cm_font(writer, ids, program, widths, false);
+                if let Some(map) = own {
+                    emit_tounicode_cmap(writer, tounicode, map, &mut Vec::new());
+                }
                 continue;
             }
             if font_family == FontFamily::ComputerModern {
@@ -1179,7 +1388,7 @@ fn emit_font_objects(
 /// The font an op's text is set in, as `(face bit, master bit)`: a text op set in a
 /// design-size master uses only that master, so the face's 10pt font is not embedded for it.
 #[inline]
-fn op_font_usage(op: &Paint, family: FontFamily) -> (u32, u32) {
+fn op_font_usage(op: &Paint, family: FontFamily) -> (u64, u32) {
     if let Some(m) = text_op_master(op, family) {
         return (0, 1 << m as u8);
     }
@@ -1203,6 +1412,11 @@ fn op_font_usage(op: &Paint, family: FontFamily) -> (u32, u32) {
 fn text_op_master(op: &Paint, family: FontFamily) -> Option<OpticalMaster> {
     let (face, size) = match op {
         Paint::GlyphRun { face, size, part_count, .. } if part_count & GLYPH_RUN_SHAPED != 0 => (*face, *size),
+        // Unshaped text-face runs (math `\mathrm`, `\mathbf`, scripts in cmr) use the
+        // design-size master too; their widths were measured from it.
+        Paint::GlyphRun { face, size, .. } => {
+            return crate::math::math_fonts::math_text_master(*face, *size, family).map(|(_, m)| m);
+        }
         Paint::Marker { face, size, .. }
         | Paint::PageNumber { face, size, .. }
         | Paint::SectionNumber { face, size, .. }
@@ -1222,19 +1436,30 @@ struct MasterFontIds {
 }
 
 impl MasterFontIds {
-    /// Reserves three objects (font, descriptor, program) per used master.
+    /// Objects per master: font, descriptor and program, then its own ToUnicode map if any.
+    #[inline]
+    fn objects(m: OpticalMaster) -> u32 {
+        3 + m.own_tounicode().is_some() as u32
+    }
+
+    /// Reserves the objects of every used master.
     fn allocate(used: u32, family: FontFamily, next_id: &mut u32) -> Self {
         let used = if family == FontFamily::ComputerModern { used } else { 0 };
         let first_id = *next_id;
-        *next_id += 3 * used.count_ones();
-        Self { used, first_id }
+        let ids = Self { used, first_id };
+        *next_id += ids.ids().map(|(m, _)| Self::objects(m)).sum::<u32>();
+        ids
     }
 
     fn ids(&self) -> impl Iterator<Item = (OpticalMaster, u32)> + '_ {
         (0..OpticalMaster::COUNT as u8)
             .filter(|i| self.used & (1 << i) != 0)
-            .enumerate()
-            .map(|(k, i)| (OpticalMaster::from_u8(i), self.first_id + 3 * k as u32))
+            .map(OpticalMaster::from_u8)
+            .scan(self.first_id, |next, m| {
+                let id = *next;
+                *next += Self::objects(m);
+                Some((m, id))
+            })
     }
 
     fn write_resources(&self, out: &mut Vec<u8>) {
@@ -1249,7 +1474,15 @@ impl MasterFontIds {
 
     fn emit(&self, writer: &mut Writer, ot1_tounicode_id: u32, tt_tounicode_id: u32) {
         for (m, id) in self.ids() {
-            let tu = if m.is_typewriter() { tt_tounicode_id } else { ot1_tounicode_id };
+            writer.widths_size = writer.font_sizes.0[FontSizes::slot(Face::Roman, Some(m))];
+            let own = m.own_tounicode();
+            let tu = if own.is_some() {
+                id + 3
+            } else if m.is_typewriter() {
+                tt_tounicode_id
+            } else {
+                ot1_tounicode_id
+            };
             let ids = CmFontObjectIds {
                 font_id: id,
                 descriptor_id: id + 1,
@@ -1257,6 +1490,9 @@ impl MasterFontIds {
                 tounicode_id: (tu > 0).then_some(tu),
             };
             write_embedded_cm_font(writer, ids, m.program(), m.widths(), false);
+            if let Some(map) = own {
+                emit_tounicode_cmap(writer, tu, map, &mut Vec::new());
+            }
         }
     }
 }
@@ -1269,20 +1505,38 @@ struct CmFontObjectIds {
     tounicode_id: Option<u32>,
 }
 
-fn build_widths_block(widths: &[u16; 128]) -> Vec<u8> {
+fn build_widths_block(widths: &[u16; 128], size_sp: i32) -> Vec<u8> {
     let mut b = Vec::with_capacity(512);
     b.extend_from_slice(b" /FirstChar 0 /LastChar 127 /Widths [");
-    for &width in widths.iter() {
+    // pdfTeX writes TFM widths to 0.1 unit; integer widths would drift glyphs along a run.
+    let exact = crate::backend::scaled::exact_widths(widths);
+    for (code, &width) in widths.iter().enumerate() {
         b.push(b' ');
-        write_i64(&mut b, width as i64);
+        match exact {
+            Some(m) if width != 0 => {
+                let t = crate::backend::scaled::width_tenths(m, code as u8, size_sp);
+                write_i64(&mut b, t / 10);
+                if t % 10 != 0 {
+                    b.push(b'.');
+                    b.push(b'0' + (t % 10) as u8);
+                }
+            }
+            _ => write_i64(&mut b, width as i64),
+        }
     }
     b.extend_from_slice(b" ]");
     b
 }
 
-fn get_cached_cm_widths_block(widths: &[u16; 128]) -> std::borrow::Cow<'static, [u8]> {
+fn get_cached_cm_widths_block(widths: &[u16; 128], size_sp: i32) -> std::borrow::Cow<'static, [u8]> {
     use std::borrow::Cow;
     use std::sync::OnceLock;
+    // The cached blocks are at the design size; another first-use size rounds differently.
+    if let Some(m) = crate::backend::scaled::exact_widths(widths) {
+        if size_sp != 0 && size_sp != m.design_sp() {
+            return Cow::Owned(build_widths_block(widths, size_sp));
+        }
+    }
     use crate::backend::backend_fonts::*;
     static CMR10_W: OnceLock<Vec<u8>> = OnceLock::new();
     static CMBX10_W: OnceLock<Vec<u8>> = OnceLock::new();
@@ -1300,36 +1554,36 @@ fn get_cached_cm_widths_block(widths: &[u16; 128]) -> std::borrow::Cow<'static, 
     static MSBM10_W: OnceLock<Vec<u8>> = OnceLock::new();
 
     let block: &'static Vec<u8> = if std::ptr::eq(widths, &CMR10_WIDTHS.0) {
-        CMR10_W.get_or_init(|| build_widths_block(widths))
+        CMR10_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMBX10_WIDTHS.0) {
-        CMBX10_W.get_or_init(|| build_widths_block(widths))
+        CMBX10_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMTI10_WIDTHS.0) {
-        CMTI10_W.get_or_init(|| build_widths_block(widths))
+        CMTI10_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMMI10_WIDTHS.0) {
-        CMMI10_W.get_or_init(|| build_widths_block(widths))
+        CMMI10_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMSY10_WIDTHS.0) {
-        CMSY10_W.get_or_init(|| build_widths_block(widths))
+        CMSY10_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMEX10_WIDTHS.0) {
-        CMEX10_W.get_or_init(|| build_widths_block(widths))
+        CMEX10_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMR7_WIDTHS.0) {
-        CMR7_W.get_or_init(|| build_widths_block(widths))
+        CMR7_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMR5_WIDTHS.0) {
-        CMR5_W.get_or_init(|| build_widths_block(widths))
+        CMR5_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMMI7_WIDTHS.0) {
-        CMMI7_W.get_or_init(|| build_widths_block(widths))
+        CMMI7_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMMI5_WIDTHS.0) {
-        CMMI5_W.get_or_init(|| build_widths_block(widths))
+        CMMI5_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMSY7_WIDTHS.0) {
-        CMSY7_W.get_or_init(|| build_widths_block(widths))
+        CMSY7_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &CMSY5_WIDTHS.0) {
-        CMSY5_W.get_or_init(|| build_widths_block(widths))
+        CMSY5_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &MSAM10_WIDTHS.0) {
-        MSAM10_W.get_or_init(|| build_widths_block(widths))
+        MSAM10_W.get_or_init(|| build_widths_block(widths, 0))
     } else if std::ptr::eq(widths, &MSBM10_WIDTHS.0) {
-        MSBM10_W.get_or_init(|| build_widths_block(widths))
+        MSBM10_W.get_or_init(|| build_widths_block(widths, 0))
     } else {
         // Cold path (once per face per document): the optical-size / math-alphabet faces.
-        return Cow::Owned(build_widths_block(widths));
+        return Cow::Owned(build_widths_block(widths, size_sp));
     };
     Cow::Borrowed(block.as_slice())
 }
@@ -1410,7 +1664,7 @@ fn write_embedded_cm_font(
     widths: &[u16; 128],
     with_encoding: bool,
 ) {
-    let widths_block = get_cached_cm_widths_block(widths);
+    let widths_block = get_cached_cm_widths_block(widths, writer.widths_size);
     writer.obj(ids.font_id, |w| {
         w.write_all(b"<< /Type /Font /Subtype /Type1 /BaseFont /");
         w.write_all(program.name.as_bytes());
@@ -1496,7 +1750,7 @@ fn write_hex4(out: &mut [u8], val: u16) {
     out[5] = b'>';
 }
 
-fn build_tounicode_cmap_bytes(map: &[u16; 128]) -> Vec<u8> {
+pub(crate) fn build_tounicode_cmap_bytes(map: &[u16; 128]) -> Vec<u8> {
     let mut s = Vec::with_capacity(1500);
     s.extend_from_slice(b"/CIDInit /ProcSet findresource begin\n");
     s.extend_from_slice(b"12 dict begin\nbegincmap\n");
@@ -1582,6 +1836,12 @@ fn get_cached_tounicode_cmap(map: &[u16; 128]) -> &'static [u8] {
         static FALLBACK: OnceLock<Vec<u8>> = OnceLock::new();
         FALLBACK.get_or_init(|| build_tounicode_cmap_bytes(map))
     }
+}
+
+/// The ToUnicode map a face carries itself (TS1), `None` for the shared OT1/OML/OMS maps.
+#[inline]
+fn own_tounicode(face: Face) -> Option<&'static [u16; 128]> {
+    crate::backend::fonts::EXTRA_FACES.get((face as usize).checked_sub(18)?)?.tounicode
 }
 
 fn emit_tounicode_cmap(writer: &mut Writer, id: u32, map: &[u16; 128], _s: &mut Vec<u8>) {
@@ -1742,77 +2002,36 @@ fn fallback_unicode_for_glyph(gid: u16) -> Option<u32> {
     }
 }
 
-/// Writes `word` followed by an interword space inside an open PDF string. With
-/// `space_units` set (inside a `TJ` array), the space is a horizontal displacement
-/// of that many 1/1000 em; otherwise it is a literal space character.
-#[inline]
-fn write_tag_word_space(s: &mut Vec<u8>, word: &[u8], space_units: Option<u32>) {
-    s.extend_from_slice(word);
-    match space_units {
-        Some(u) => {
-            s.extend_from_slice(b") -");
-            write_u64(s, u as u64);
-            s.extend_from_slice(b" (");
-        }
-        None => s.push(b' '),
+/// The `/Widths` the PDF font of an unshaped run carries, when it is one of the embedded
+/// Computer Modern programs (the standard 14 fonts' widths live in the viewer).
+fn pdf_simple_widths(face: Face, family: FontFamily, master: Option<OpticalMaster>) -> Option<&'static [u16; 128]> {
+    use crate::backend::backend_fonts as f;
+    if let Some(m) = master {
+        return Some(m.widths());
     }
-}
-
-/// Emits a body-text run with each word shaped by its font's ligature/kern program.
-///
-/// Ligatures become their glyph codes; implicit kerns become `TJ` displacements (in 1/1000
-/// text-space units, negated: a negative kern moves the next glyph left). Runs without kerns
-/// keep the plain `Tj` form. The resulting advance equals `TextFont::width_units` per word,
-/// which is what layout measured.
-fn emit_shaped_glyph_run(s: &mut Vec<u8>, parts: &[&str], font: &TextFont, face: Face) {
-    let open = s.len();
-    s.extend_from_slice(b"[(");
-    let mut kerned = false;
-    for &p in parts {
-        if p == " " {
-            s.push(b' ');
-            continue;
-        }
-        font.shape(p, |g, kern| {
-            match g {
-                Glyph::Code(code) => push_string_byte(s, code),
-                Glyph::Raw(c) => {
-                    let mut buf = [0u8; 4];
-                    pdf_escape(s, c.encode_utf8(&mut buf), face);
-                }
-            }
-            if kern != 0 {
-                s.push(b')');
-                write_tj_kern(s, kern);
-                s.push(b'(');
-                kerned = true;
-            }
-        });
+    if let Some((_, widths)) = crate::backend::cm_fonts::extra_cm_program(face, family) {
+        return Some(widths);
     }
-    if kerned {
-        s.extend_from_slice(b")] TJ\n");
-    } else {
-        // No kerns: drop the array bracket (one byte, so the stream needs no shifting).
-        s[open] = b' ';
-        s.extend_from_slice(b") Tj\n");
+    if family != FontFamily::ComputerModern {
+        return None;
     }
-}
-
-/// Writes a TJ displacement for a kern of `kern` 1/10000 em: `-kern / 10` thousandths of
-/// text space, with at most one decimal (integer formatting, no float round trip).
-#[inline]
-fn write_tj_kern(out: &mut Vec<u8>, kern: i32) {
-    let v = -kern;
-    if v < 0 {
-        out.push(b'-');
-    }
-    let a = v.unsigned_abs();
-    write_u64(out, (a / 10) as u64);
-    let frac = (a % 10) as u8;
-    if frac != 0 {
-        out.push(b'.');
-        out.push(b'0' + frac);
-    }
+    Some(match face {
+        Face::Roman => &f::CMR10_WIDTHS.0,
+        Face::Bold => &f::CMBX10_WIDTHS.0,
+        Face::Italic => &f::CMTI10_WIDTHS.0,
+        Face::MathItalic => &f::CMMI10_WIDTHS.0,
+        Face::Symbol => &f::CMSY10_WIDTHS.0,
+        Face::Extension => &f::CMEX10_WIDTHS.0,
+        Face::Roman7 => &f::CMR7_WIDTHS.0,
+        Face::Roman5 => &f::CMR5_WIDTHS.0,
+        Face::MathItalic7 => &f::CMMI7_WIDTHS.0,
+        Face::MathItalic5 => &f::CMMI5_WIDTHS.0,
+        Face::Symbol7 => &f::CMSY7_WIDTHS.0,
+        Face::Symbol5 => &f::CMSY5_WIDTHS.0,
+        Face::AmsA => &f::MSAM10_WIDTHS.0,
+        Face::AmsB => &f::MSBM10_WIDTHS.0,
+        _ => return None,
+    })
 }
 
 /// Writes one glyph code into a PDF literal string, escaping delimiters and non-printables.
@@ -1844,323 +2063,314 @@ fn emit_glyph_run_parts(s: &mut Vec<u8>, parts: &[&str], face: Face) {
     }
 }
 
-fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>, has_math_font: bool) {
-    // Layout coordinates are TeX points; one transform maps them to PDF big points.
-    s.extend_from_slice(b"0.996264 0 0 0.996264 0 0 cm\nBT\n");
-    let mut last_face: Option<Face> = None;
-    let mut last_master: Option<OpticalMaster> = None;
-    let mut last_size: Option<f32> = None;
-    let mut last_word_spacing: Option<f32> = None;
-    let mut last_x = 0.0f32;
-    let mut last_y = 0.0f32;
-    let mut pos_inited = false;
-
-    let mut in_text = true;
-    for op in &page.ops {
-        if let Paint::Color { color } = op {
-            // Colour operators are legal inside and outside text objects.
-            write_color(s, *color);
-            continue;
-        }
-        if let Paint::Rule { x, y, w, h, fill } = op {
-            if in_text {
-                if last_word_spacing.is_some_and(|w| w != 0.0) {
-                    s.extend_from_slice(b"0 Tw\n");
-                    last_word_spacing = Some(0.0);
-                }
-                s.extend_from_slice(b"ET\n");
-                in_text = false;
-            }
-            write_rule(s, *x, *y, *w, *h, *fill);
-            pos_inited = false;
-            continue;
-        }
-
-        if let Paint::VectorGlyph {
-            x,
-            y,
-            size,
-            glyph_id,
-        } = op
-        {
-            if in_text {
-                if last_word_spacing.is_some_and(|w| w != 0.0) {
-                    s.extend_from_slice(b"0 Tw\n");
-                    last_word_spacing = Some(0.0);
-                }
-                s.extend_from_slice(b"ET\n");
-                in_text = false;
-            }
-            if let Some(path) = crate::math::fonts::get_vector_glyph_path(*glyph_id) {
-                s.extend_from_slice(b"q\n");
-                write_f32_4dec(s, *size * 0.001);
-                s.extend_from_slice(b" 0 0 ");
-                write_f32_4dec(s, *size * 0.001);
-                s.push(b' ');
-                write_f32(s, *x);
-                s.push(b' ');
-                write_f32(s, *y);
-                s.extend_from_slice(b" cm\n");
-                s.extend_from_slice(path);
-                s.extend_from_slice(b"\nf\nQ\n");
-            }
-            if has_math_font {
-                s.extend_from_slice(b"BT\n/F_Math ");
-                write_f32(s, *size);
-                s.extend_from_slice(b" Tf\n3 Tr\n1 0 0 1 ");
-                write_f32(s, *x);
-                s.push(b' ');
-                write_f32(s, *y);
-                s.extend_from_slice(b" Tm\n");
-                emit_hex_gid(s, *glyph_id);
-                s.extend_from_slice(b" Tj\n0 Tr\nET\n");
-            }
-            pos_inited = false;
-            continue;
-        }
-
-        if let Paint::CidGlyphRun {
-            x,
-            y,
-            size,
-            glyph_id,
-        } = op
-        {
-            if in_text {
-                if last_word_spacing.is_some_and(|w| w != 0.0) {
-                    s.extend_from_slice(b"0 Tw\n");
-                    last_word_spacing = Some(0.0);
-                }
-                s.extend_from_slice(b"ET\n");
-                in_text = false;
-            }
-            s.extend_from_slice(b"BT\n/F_Math ");
-            write_f32(s, *size);
-            s.extend_from_slice(b" Tf\n1 0 0 1 ");
-            write_f32(s, *x);
-            s.push(b' ');
-            write_f32(s, *y);
-            s.extend_from_slice(b" Tm\n");
-            emit_hex_gid(s, *glyph_id);
-            s.extend_from_slice(b" Tj\nET\n");
-            pos_inited = false;
-            continue;
-        }
-
-        let (x, y, face, size, word_spacing) = match op {
-            Paint::GlyphRun {
-                x,
-                y,
-                face,
-                size,
-                word_spacing,
-                ..
-            } => (*x, *y, *face, *size, *word_spacing),
-            Paint::Marker {
-                x, y, face, size, ..
-            }
-            | Paint::PageNumber {
-                x, y, face, size, ..
-            }
-            | Paint::SectionNumber {
-                x, y, face, size, ..
-            }
-            | Paint::FigureTag {
-                x, y, face, size, ..
-            }
-            | Paint::TableTag {
-                x, y, face, size, ..
-            }
-            | Paint::EquationNumber {
-                x, y, face, size, ..
-            } => (*x, *y, *face, *size, 0.0),
-            Paint::CaptionTag { x, y, size, .. } | Paint::TableCaptionTag { x, y, size, .. } => {
-                (*x, *y, Face::Roman, *size, 0.0)
-            }
-            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } | Paint::Color { .. } => unreachable!(),
-        };
-
-        if !in_text {
-            s.extend_from_slice(b"BT\n");
-            in_text = true;
-            last_face = None;
-            last_size = None;
-            last_word_spacing = None;
-            pos_inited = false;
-        }
-
-        if last_word_spacing != Some(word_spacing) {
-            write_tw(s, word_spacing);
-            last_word_spacing = Some(word_spacing);
-        }
-
-        let master = text_op_master(op, page.font_family);
-        if last_face != Some(face) || last_size != Some(size) || last_master != master {
-            match master {
-                Some(m) => write_tf_resource(s, m.resource(), size),
-                None => write_tf(s, face, size),
-            }
-            last_face = Some(face);
-            last_size = Some(size);
-            last_master = master;
-        }
-
-        if !pos_inited {
-            write_tm(s, x, y);
-            pos_inited = true;
-        } else {
-            // Td is relative and written to 0.01pt, so the offset is taken between the
-            // rounded positions: rounding errors then cannot accumulate along a page.
-            let centi = |v: f32| (v as f64 * 100.0).round();
-            write_td(s, ((centi(x) - centi(last_x)) / 100.0) as f32, ((centi(y) - centi(last_y)) / 100.0) as f32);
-        }
-
-        if let Paint::GlyphRun {
-            part_start,
-            part_count,
-            face,
-            ..
-        } = op
-        {
-            let start = *part_start as usize;
-            let count = (*part_count & GLYPH_RUN_COUNT_MASK) as usize;
-            let parts = &page.text_pool[start..start + count];
-            let font = if *part_count & GLYPH_RUN_SHAPED != 0 {
-                shape::text_font_at(page.font_family, *face, size)
-            } else {
-                None
-            };
-            match font {
-                Some(font) => emit_shaped_glyph_run(s, parts, &font, *face),
-                None => {
-                    s.push(b'(');
-                    emit_glyph_run_parts(s, parts, *face);
-                    s.extend_from_slice(b") Tj\n");
-                }
-            }
-            last_x = x;
-            last_y = y;
-            continue;
-        }
-
-        // Label tags ("Figure 1:", "Table 1") contain an interword space. In the
-        // OT1-encoded Computer Modern fonts code 32 is the `/suppress` glyph, not a
-        // space, so the space is emitted as a TJ displacement of the font's
-        // interword width (fontdimen 2) instead of as a character.
-        let is_label_tag = matches!(
-            op,
-            Paint::CaptionTag { .. }
-                | Paint::TableCaptionTag { .. }
-                | Paint::FigureTag { .. }
-                | Paint::TableTag { .. }
-        );
-        let tag_space: Option<u32> = if is_label_tag && page.font_family == FontFamily::ComputerModern {
-            Some(crate::font_metrics::resolve_space_units(page.font_family, face))
-        } else {
-            None
-        };
-        if tag_space.is_some() {
-            s.extend_from_slice(b"[(");
-        } else {
-            s.push(b'(');
-        }
-        match op {
-            Paint::GlyphRun { .. } => {}
-            Paint::Marker { marker, face, .. } => write_marker(s, *marker, *face),
-            Paint::CaptionTag { n, .. } => {
-                write_tag_word_space(s, b"Figure", tag_space);
-                write_u64(s, *n as u64);
-                s.push(b':');
-                if tag_space.is_none() {
-                    s.push(b' ');
-                }
-            }
-            Paint::TableCaptionTag { n, .. } => {
-                write_tag_word_space(s, b"Table", tag_space);
-                write_u64(s, *n as u64);
-                s.push(b':');
-                if tag_space.is_none() {
-                    s.push(b' ');
-                }
-            }
-            Paint::PageNumber { page_number, .. } => {
-                write_u64(s, *page_number as u64);
-            }
-            Paint::SectionNumber { number, level, .. } => match level {
-                1 => write_u64(s, number[0] as u64),
-                2 => {
-                    write_u64(s, number[0] as u64);
-                    s.push(b'.');
-                    write_u64(s, number[1] as u64);
-                }
-                3 => {
-                    write_u64(s, number[0] as u64);
-                    s.push(b'.');
-                    write_u64(s, number[1] as u64);
-                    s.push(b'.');
-                    write_u64(s, number[2] as u64);
-                }
-                _ => {
-                    write_u64(s, number[0] as u64);
-                    s.push(b'.');
-                    write_u64(s, number[1] as u64);
-                    s.push(b'.');
-                    write_u64(s, number[2] as u64);
-                    s.push(b'.');
-                    write_u64(s, number[3] as u64);
-                }
-            },
-            Paint::FigureTag { n, .. } => {
-                write_tag_word_space(s, b"Figure", tag_space);
-                write_u64(s, *n as u64);
-            }
-            Paint::TableTag { n, .. } => {
-                write_tag_word_space(s, b"Table", tag_space);
-                write_u64(s, *n as u64);
-            }
-            Paint::EquationNumber { n, .. } => {
-                s.push(b'(');
-                write_u64(s, *n as u64);
-                s.push(b')');
-            }
-            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } | Paint::Color { .. } => {}
-        }
-        if tag_space.is_some() {
-            s.extend_from_slice(b")] TJ\n");
-        } else {
-            s.extend_from_slice(b") Tj\n");
-        }
-
-        last_x = x;
-        last_y = y;
-    }
-    if in_text {
-        if last_word_spacing.is_some_and(|w| w != 0.0) {
-            s.extend_from_slice(b"0 Tw\n");
-        }
-        s.extend_from_slice(b"ET\n");
+/// TeX width in scaled points of `code` in an unshaped run's font: the TFM fix_word behind
+/// its `/Widths` when there is one, else the `/Widths` entry itself.
+#[inline(always)]
+fn plain_glyph_sp(code: u8, widths: &[u16; 128], tfm: Option<crate::backend::scaled::ExactWidths>, scaler: &Scaler, size_sp: i64) -> i64 {
+    match tfm {
+        Some(m) => scaler.scale(m.width(code)) as i64,
+        None => (widths[code as usize & 127] as i64 * size_sp + 500) / 1000,
     }
 }
 
-fn write_marker(out: &mut Vec<u8>, marker: Marker, face: Face) {
+/// `pdfTeX`'s resource identity for the font of a text paint: the master, else the face.
+#[inline(always)]
+fn font_key(face: Face, master: Option<OpticalMaster>) -> u32 {
+    match master {
+        Some(m) => 0x100 | m as u32,
+        None => face as u32,
+    }
+}
+
+/// The page's content stream. Text goes through [`TextState`]: each glyph at its TeX
+/// position in scaled points, written on pdfTeX's raster (no global scale; coordinates in bp).
+/// `RUSHTEX_TRACE_H` set: every character of a shaped run is written to stderr as
+/// `H <code> <h> <v>`, its position in scaled points, for comparison with the `hlist_out`
+/// of pdfTeX's box log (`scripts/parity/hlist_cmp.py`).
+fn trace_h() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("RUSHTEX_TRACE_H").is_some())
+}
+
+fn build_stream_into(page: &Page<'_>, s: &mut Vec<u8>, has_math_font: bool) {
+    let trace = trace_h();
+    let mut st = TextState::default();
+    // Bytes of a label, marker or number, reused across paints.
+    let mut out: Vec<u8> = Vec::with_capacity(32);
+    for op in &page.ops {
+        match *op {
+            Paint::Color { color } => {
+                // pdftex.def's colour stack is `direct`: it ends the string, not the text.
+                st.end_string_nl(s);
+                write_color(s, color);
+                continue;
+            }
+            Paint::Rule { x, y, w, h, fill: true } => {
+                // `y` is already upward (the page height folded in): TeX's `v` is `-y` from a
+                // zero origin, which keeps this path's rounding as it was.
+                st.rule(s, x.raw(), -y.raw(), 0, w.raw(), h.raw());
+                continue;
+            }
+            Paint::Rule { x, y, w, h, fill: false } => {
+                st.end_text(s);
+                s.extend_from_slice(b"q\n0.996264 0 0 0.996264 0 0 cm\n");
+                write_rule(s, x.to_pt(), y.to_pt(), w.to_pt(), h.to_pt(), false);
+                s.extend_from_slice(b"Q\n");
+                continue;
+            }
+            Paint::VectorGlyph { x, y, size, glyph_id } => {
+                let (x, y) = (x.to_pt(), y.to_pt());
+                st.end_text(s);
+                s.extend_from_slice(b"q\n0.996264 0 0 0.996264 0 0 cm\n");
+                if let Some(path) = crate::math::fonts::get_vector_glyph_path(glyph_id) {
+                    s.extend_from_slice(b"q\n");
+                    write_f32_4dec(s, size * 0.001);
+                    s.extend_from_slice(b" 0 0 ");
+                    write_f32_4dec(s, size * 0.001);
+                    s.push(b' ');
+                    write_f32(s, x);
+                    s.push(b' ');
+                    write_f32(s, y);
+                    s.extend_from_slice(b" cm\n");
+                    s.extend_from_slice(path);
+                    s.extend_from_slice(b"\nf\nQ\n");
+                }
+                if has_math_font {
+                    s.extend_from_slice(b"BT\n/F_Math ");
+                    write_f32(s, size);
+                    s.extend_from_slice(b" Tf\n3 Tr\n1 0 0 1 ");
+                    write_f32(s, x);
+                    s.push(b' ');
+                    write_f32(s, y);
+                    s.extend_from_slice(b" Tm\n");
+                    emit_hex_gid(s, glyph_id);
+                    s.extend_from_slice(b" Tj\n0 Tr\nET\n");
+                }
+                s.extend_from_slice(b"Q\n");
+                continue;
+            }
+            Paint::CidGlyphRun { x, y, size, glyph_id } => {
+                let (x, y) = (x.to_pt(), y.to_pt());
+                st.end_text(s);
+                s.extend_from_slice(b"q\n0.996264 0 0 0.996264 0 0 cm\nBT\n/F_Math ");
+                write_f32(s, size);
+                s.extend_from_slice(b" Tf\n1 0 0 1 ");
+                write_f32(s, x);
+                s.push(b' ');
+                write_f32(s, y);
+                s.extend_from_slice(b" Tm\n");
+                emit_hex_gid(s, glyph_id);
+                s.extend_from_slice(b" Tj\nET\nQ\n");
+                continue;
+            }
+            _ => {}
+        }
+
+        let (x, y, face, size, word_spacing) = match *op {
+            Paint::GlyphRun { x, y, face, size, word_spacing, .. } => (x, y, face, size, word_spacing),
+            Paint::Marker { x, y, face, size, .. }
+            | Paint::PageNumber { x, y, face, size, .. }
+            | Paint::SectionNumber { x, y, face, size, .. }
+            | Paint::FigureTag { x, y, face, size, .. }
+            | Paint::TableTag { x, y, face, size, .. }
+            | Paint::EquationNumber { x, y, face, size, .. } => (x, y, face, size, 0.0),
+            Paint::CaptionTag { x, y, size, .. } | Paint::TableCaptionTag { x, y, size, .. } => (x, y, Face::Roman, size, 0.0),
+            Paint::Rule { .. } | Paint::VectorGlyph { .. } | Paint::CidGlyphRun { .. } | Paint::Color { .. } => unreachable!(),
+        };
+        let master = text_op_master(op, page.font_family);
+        let size_sp = crate::backend::scaled::to_sp(size) as i64;
+        let resource = master.map_or_else(|| face.resource(), |m| m.resource());
+        st.set_font(s, font_key(face, master), resource, size_sp);
+        let scaler = Scaler::new(size_sp as i32);
+        let mut h = x.raw();
+        let v = y.raw();
+
+        if let Paint::GlyphRun { part_start, part_count, face, .. } = *op {
+            let start = part_start as usize;
+            let parts = &page.text_pool[start..start + (part_count & GLYPH_RUN_COUNT_MASK) as usize];
+            let shaped = if part_count & GLYPH_RUN_SHAPED != 0 { shape::text_font_at(page.font_family, face, size) } else { None };
+            if let Some(font) = shaped {
+                // Interword glue as layout set it: the space glyph's advance plus `word_spacing`.
+                let space = ((font.glyph_tenths(b' ') as f64 * 1e-4 * size as f64 + word_spacing as f64) * 65536.0).round() as i64;
+                for &p in parts {
+                    if p == " " {
+                        h += space;
+                        continue;
+                    }
+                    font.shape(p, |g, kern| {
+                        match g {
+                            Glyph::Code(code) => {
+                                let w = font.glyph_sp(code, &scaler, size_sp);
+                                if trace {
+                                    eprintln!("H {code} {h} {v}");
+                                }
+                                st.char(s, code, w, h, v);
+                                h += w;
+                            }
+                            Glyph::Raw(c) => {
+                                st.begin_string(s, h, v);
+                                let mut buf = [0u8; 4];
+                                pdf_escape(s, c.encode_utf8(&mut buf), face);
+                                st.lose_position();
+                                h += (crate::font_metrics::char_units_family(c, face, page.font_family) as i64 * size_sp + 500) / 1000;
+                            }
+                            Glyph::Accent { base, accent } => {
+                                // \accent (§1125): a kern, the accent (raised), a kern back, the base.
+                                let (off, up) = font.accent_sp(base, accent, &scaler).unwrap_or_else(|| {
+                                    let (delta, rise) = font.accent_placement(base, accent);
+                                    ((delta as i64 * size_sp).div_euclid(10000), (rise as i64 * size_sp).div_euclid(10000))
+                                });
+                                let wb = font.glyph_sp(base, &scaler, size_sp);
+                                let wa = font.glyph_sp(accent, &scaler, size_sp);
+                                if trace {
+                                    eprintln!("H {accent} {} {}", h + off, v + up);
+                                    eprintln!("H {base} {h} {v}");
+                                }
+                                st.char(s, accent, wa, h + off, v + up);
+                                st.char(s, base, wb, h, v);
+                                h += wb;
+                            }
+                        }
+                        if kern != 0 {
+                            h += scaler.scale(kern) as i64;
+                        }
+                    });
+                }
+                continue;
+            }
+            match pdf_simple_widths(face, page.font_family, master) {
+                Some(widths) if parts.iter().all(|p| p.is_ascii()) => {
+                    let tfm = crate::backend::scaled::exact_widths(widths);
+                    let ws = (word_spacing as f64 * 65536.0).round() as i64;
+                    for b in parts.iter().flat_map(|p| p.bytes()) {
+                        let w = plain_glyph_sp(b, widths, tfm, &scaler, size_sp);
+                        if trace {
+                            eprintln!("H {b} {h} {v}");
+                        }
+                        st.char(s, b, w, h, v);
+                        h += w + if b == b' ' { ws } else { 0 };
+                    }
+                }
+                _ => {
+                    st.begin_string(s, h, v);
+                    emit_glyph_run_parts(s, parts, face);
+                    st.lose_position();
+                }
+            }
+            continue;
+        }
+
+        // Labels, markers and numbers: their bytes, then as an unshaped run.
+        out.clear();
+        match *op {
+            Paint::Marker { marker, face, .. } => write_marker(&mut out, marker, face),
+            Paint::CaptionTag { n, .. } | Paint::FigureTag { n, .. } => {
+                out.extend_from_slice(b"Figure ");
+                write_u64(&mut out, n as u64);
+                if matches!(op, Paint::CaptionTag { .. }) {
+                    out.push(b':');
+                }
+            }
+            Paint::TableCaptionTag { n, .. } | Paint::TableTag { n, .. } => {
+                out.extend_from_slice(b"Table ");
+                write_u64(&mut out, n as u64);
+                if matches!(op, Paint::TableCaptionTag { .. }) {
+                    out.push(b':');
+                }
+            }
+            Paint::PageNumber { page_number, .. } => write_u64(&mut out, page_number as u64),
+            Paint::SectionNumber { number, level, .. } => crate::layout::layout_engine::write_section_number(number, level, &mut out),
+            Paint::EquationNumber { n, .. } => {
+                out.push(b'(');
+                write_u64(&mut out, n as u64);
+                out.push(b')');
+            }
+            _ => {}
+        }
+        let bytes = &out[..];
+        // Label words are text (`\figurename`): shaped, with their implicit kerns (cmr10 `Ta`).
+        let shaped = matches!(op, Paint::CaptionTag { .. } | Paint::TableCaptionTag { .. } | Paint::FigureTag { .. } | Paint::TableTag { .. })
+            .then(|| shape::text_font_at(page.font_family, face, size))
+            .flatten();
+        if let (Some(font), Ok(text)) = (shaped, std::str::from_utf8(bytes)) {
+            let space = crate::backend::scaled::space_glue(page.font_family, face, size).space as i64;
+            for (k, word) in text.split(' ').enumerate() {
+                if k > 0 {
+                    h += space;
+                }
+                font.shape(word, |g, kern| {
+                    if let Glyph::Code(code) = g {
+                        let w = font.glyph_sp(code, &scaler, size_sp);
+                        st.char(s, code, w, h, v);
+                        h += w;
+                    }
+                    if kern != 0 {
+                        h += scaler.scale(kern) as i64;
+                    }
+                });
+            }
+            continue;
+        }
+        match pdf_simple_widths(face, page.font_family, master) {
+            Some(widths) => {
+                let tfm = crate::backend::scaled::exact_widths(widths);
+                // OT1 code 32 is `/suppress`: a label's space is the font's interword space.
+                let cm = page.font_family == FontFamily::ComputerModern;
+                let space = crate::backend::scaled::space_glue(page.font_family, face, size).space as i64;
+                for &b in bytes {
+                    if b == b' ' && cm {
+                        h += space;
+                        continue;
+                    }
+                    let w = plain_glyph_sp(b, widths, tfm, &scaler, size_sp);
+                    if trace {
+                        eprintln!("H {b} {h} {v}");
+                    }
+                    st.char(s, b, w, h, v);
+                    h += w;
+                }
+            }
+            None => {
+                st.begin_string(s, h, v);
+                for &b in bytes {
+                    push_string_byte(s, b);
+                }
+                st.lose_position();
+            }
+        }
+    }
+    st.end_text(s);
+}
+
+pub(crate) fn write_marker(out: &mut Vec<u8>, marker: Marker, face: Face) {
+    if face == Face::TextComp && matches!(marker, Marker::Bullet | Marker::Asterisk | Marker::MiddleDot) {
+        out.push(crate::backend::backend_ts1::TS1_SLOT_CODE[marker.ts1_slot() as usize]);
+        return;
+    }
     match marker {
         Marker::Bullet => {
-            if matches!(face, Face::Symbol | Face::Symbol7 | Face::Symbol5) {
+            if face.is_symbol() {
                 out.push(0x0F); // CMSY10 bullet
             } else {
                 out.push(0x95); // WinAnsi bullet
             }
         }
         Marker::Dash => {
-            if matches!(face, Face::Roman | Face::Roman7 | Face::Roman5) {
+            if matches!(face, Face::Roman | Face::Roman7 | Face::Roman5 | Face::Bold) {
                 out.push(0x7B); // OT1 en-dash
             } else {
                 out.push(0x96); // WinAnsi en-dash
             }
         }
-        Marker::Asterisk => out.push(b'*'),
+        Marker::Asterisk => {
+            if face.is_symbol() {
+                out.push(0x03); // CMSY10 asteriskmath
+            } else {
+                out.push(b'*');
+            }
+        }
         Marker::MiddleDot => {
-            if matches!(face, Face::Symbol | Face::Symbol7 | Face::Symbol5) {
+            if face.is_symbol() {
                 out.push(0x01); // CMSY10 periodcentered
             } else {
                 out.push(0xB7); // WinAnsi middle dot
@@ -2261,7 +2471,7 @@ fn pdf_escape(out: &mut Vec<u8>, text: &str, face: Face) {
             let rest = &text[i..];
             let c = rest.chars().next().unwrap();
             i += c.len_utf8();
-            let wb = if matches!(face, Face::Symbol | Face::Symbol7 | Face::Symbol5) {
+            let wb = if face.is_symbol() {
                 crate::font_metrics::unicode_to_symbol_byte(c).unwrap_or(b'?')
             } else {
                 to_winansi(c)
@@ -2389,56 +2599,6 @@ fn write_f32(out: &mut Vec<u8>, v: f32) {
 }
 
 #[inline(always)]
-fn write_td(out: &mut Vec<u8>, dx: f32, dy: f32) {
-    let mut buf = [0u8; 64];
-    let l1 = format_f32_buf(&mut buf, dx);
-    buf[l1] = b' ';
-    let l2 = format_f32_buf(&mut buf[l1 + 1..], dy);
-    let p = l1 + 1 + l2;
-    buf[p..p + 4].copy_from_slice(b" Td\n");
-    out.extend_from_slice(&buf[..p + 4]);
-}
-
-#[inline(always)]
-fn write_tm(out: &mut Vec<u8>, x: f32, y: f32) {
-    let mut buf = [0u8; 64];
-    buf[..8].copy_from_slice(b"1 0 0 1 ");
-    let l1 = format_f32_buf(&mut buf[8..], x);
-    let p1 = 8 + l1;
-    buf[p1] = b' ';
-    let l2 = format_f32_buf(&mut buf[p1 + 1..], y);
-    let p = p1 + 1 + l2;
-    buf[p..p + 4].copy_from_slice(b" Tm\n");
-    out.extend_from_slice(&buf[..p + 4]);
-}
-
-#[inline(always)]
-fn write_tf(out: &mut Vec<u8>, face: Face, size: f32) {
-    write_tf_resource(out, face.resource(), size);
-}
-
-#[inline(always)]
-fn write_tf_resource(out: &mut Vec<u8>, resource: &str, size: f32) {
-    let mut buf = [0u8; 32];
-    let res = resource.as_bytes();
-    let r_len = res.len();
-    buf[..r_len].copy_from_slice(res);
-    buf[r_len] = b' ';
-    let s_len = format_f32_buf(&mut buf[r_len + 1..], size);
-    let p = r_len + 1 + s_len;
-    buf[p..p + 4].copy_from_slice(b" Tf\n");
-    out.extend_from_slice(&buf[..p + 4]);
-}
-
-#[inline(always)]
-fn write_tw(out: &mut Vec<u8>, word_spacing: f32) {
-    let mut buf = [0u8; 32];
-    let s_len = format_f32_buf(&mut buf, word_spacing);
-    buf[s_len..s_len + 4].copy_from_slice(b" Tw\n");
-    out.extend_from_slice(&buf[..s_len + 4]);
-}
-
-#[inline(always)]
 /// `r g b rg r g b RG`, each channel with up to three decimals as xcolor writes them.
 fn write_color(out: &mut Vec<u8>, color: crate::frontend::ast::PackedColor) {
     let ch = color.channels();
@@ -2559,6 +2719,9 @@ fn write_f32_4dec(out: &mut Vec<u8>, v: f32) {
 struct Writer<'w> {
     buf: &'w mut Vec<u8>,
     offsets: Vec<usize>,
+    font_sizes: FontSizes,
+    /// The first-use size of the font being written (0: its design size).
+    widths_size: i32,
 }
 
 impl<'w> Writer<'w> {
@@ -2569,11 +2732,13 @@ impl<'w> Writer<'w> {
         Self {
             buf,
             offsets,
+            font_sizes: FontSizes::new(),
+            widths_size: 0,
         }
     }
 
     fn from_existing(buf: &'w mut Vec<u8>, offsets: Vec<usize>) -> Self {
-        Self { buf, offsets }
+        Self { buf, offsets, font_sizes: FontSizes::new(), widths_size: 0 }
     }
 
     #[inline]
@@ -2696,7 +2861,7 @@ fn write_i64(out: &mut Vec<u8>, n: i64) {
 }
 
 #[inline(always)]
-fn write_u64(out: &mut Vec<u8>, mut n: u64) {
+pub(crate) fn write_u64(out: &mut Vec<u8>, mut n: u64) {
     if n == 0 {
         out.push(b'0');
         return;

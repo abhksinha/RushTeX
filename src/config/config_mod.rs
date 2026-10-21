@@ -62,8 +62,17 @@ pub struct DocumentConfig {
     pub base_leading: f32,
     pub font_family: FontFamily,
     pub page_numbering: bool,
+    pub page_style: crate::frontend::ast::PageStyle,
+    /// LaTeX `\headsep`: running-head baseline to the top of the text block.
+    pub head_sep: f32,
     pub par_indent: f32,
     pub par_skip: f32,
+    /// `\c@secnumdepth` and `\c@tocdepth` (article: 3 and 3).
+    pub sec_num_depth: i8,
+    pub toc_depth: i8,
+    /// `\parskip`'s stretch and shrink in pt (article: `0pt plus 1pt`).
+    pub par_skip_stretch: f32,
+    pub par_skip_shrink: f32,
     pub hang_indent: f32,
     pub hang_after: i32,
     pub left_skip: f32,
@@ -100,19 +109,28 @@ impl Default for DocumentConfig {
             // LaTeX's standard classes default to 10pt.
             base_font_size: 10.0,
             base_leading: 12.0,
-            font_family: FontFamily::Times,
+            // LaTeX's default text font is Computer Modern (`\rmdefault` = cmr).
+            font_family: FontFamily::ComputerModern,
             page_numbering: true,
+            page_style: crate::frontend::ast::PageStyle::Plain,
+            head_sep: 25.0,
             par_indent: 15.0,
             // LaTeX kernel: \parskip = 0pt plus 1pt (natural width 0).
             par_skip: 0.0,
+            sec_num_depth: 3,
+            toc_depth: 3,
+            par_skip_stretch: 1.0,
+            par_skip_shrink: 0.0,
             hang_indent: 0.0,
             hang_after: 1,
             left_skip: 0.0,
             right_skip: 0.0,
-            list_left_margin: 24.0,
-            list_label_sep: 6.0,
+            // NaN: the class values (`\leftmargini` 2.5em, `\labelsep` .5em, `\itemsep` of
+            // the list level) until the document sets them.
+            list_left_margin: f32::NAN,
+            list_label_sep: f32::NAN,
             list_item_indent: 0.0,
-            list_item_sep: 4.0,
+            list_item_sep: f32::NAN,
             list_par_indent: 0.0,
             french_spacing: false,
             pre_tolerance: 100,
@@ -213,6 +231,8 @@ impl PackageHandler for ParskipPackage {
         // parskip.sty: \parskip = .5\baselineskip plus 2pt, \parindent = 0pt.
         config.par_indent = 0.0;
         config.par_skip = 0.5 * config.base_leading;
+        config.par_skip_stretch = 2.0;
+        config.par_skip_shrink = 0.0;
     }
 }
 
@@ -309,9 +329,20 @@ impl PackageRegistry {
 pub const TEX_INCH: f32 = 72.27;
 /// PDF big points per TeX point (72 / 72.27): the backend's page transform.
 pub const BP_PER_PT: f32 = 72.0 / 72.27;
-/// A4 and US letter paper in TeX points.
-pub const A4_PT: (f32, f32) = (597.508, 845.047);
-pub const LETTER_PT: (f32, f32) = (614.295, 794.97);
+/// A4 (`210mm`, `297mm`) and US letter (`8.5in`, `11in`) paper as `scan_dimen` (§458)
+/// converts them, in scaled points.
+pub const A4_SP: (i32, i32) = (39158276, 55380990);
+pub const LETTER_SP: (i32, i32) = (40258437, 52099153);
+/// The same in TeX points.
+pub const A4_PT: (f32, f32) = (A4_SP.0 as f32 / 65536.0, A4_SP.1 as f32 / 65536.0);
+pub const LETTER_PT: (f32, f32) = (LETTER_SP.0 as f32 / 65536.0, LETTER_SP.1 as f32 / 65536.0);
+
+/// A paper dimension in scaled points: the exact value of a standard paper size whose
+/// points `pt` holds (f32 cannot carry its last sp bits), else `pt` rounded.
+pub fn paper_sp(pt: f32) -> i32 {
+    let sp = crate::backend::scaled::to_sp(pt);
+    [A4_SP.0, A4_SP.1, LETTER_SP.0, LETTER_SP.1].into_iter().find(|&k| (k - sp).abs() <= 4).unwrap_or(sp)
+}
 
 /// `\paperwidth` × `\paperheight` in TeX points for the standard class paper options.
 fn class_paper_size(option: &str) -> Option<(f32, f32)> {
@@ -367,9 +398,14 @@ fn apply_standard_class_geometry(
     config.margin_left = TEX_INCH + odd_side_margin;
     config.margin_right = config.page_width - config.margin_left - text_width;
     config.margin_top = TEX_INCH + top_margin + head_height + head_sep;
-    config.margin_bottom = config.page_height - config.margin_top - text_height;
+    // In sp from the exact paper height: f32 cannot hold A4's last bits at 845pt.
+    {
+        use crate::backend::scaled::{sp_pt, to_sp};
+        config.margin_bottom = sp_pt(paper_sp(config.page_height) - to_sp(config.margin_top) - to_sp(text_height));
+    }
     config.top_skip = top_skip;
     config.foot_skip = foot_skip;
+    config.head_sep = head_sep;
 }
 
 /// Apply document class options (e.g. `12pt`, `letterpaper`, `landscape`, `sans`) to configuration.
@@ -380,7 +416,7 @@ pub fn apply_doc_class(doc_class: &DocClass<'_>, config: &mut DocumentConfig) {
     let mut paper = class_paper_size("letterpaper").unwrap_or((614.295, 794.97));
     let mut size_pt = 10u8;
     let mut landscape = false;
-    let mut twoside = doc_class.name == "book";
+    let mut twoside = crate::expand::classes::base_class(doc_class.name) == "book";
     let mut twocolumn = false;
     for &option_str in &doc_class.options {
         let option_str = option_str.trim();
@@ -405,7 +441,8 @@ pub fn apply_doc_class(doc_class: &DocClass<'_>, config: &mut DocumentConfig) {
                 size_pt = 12;
                 config.base_font_size = 12.0;
                 config.base_leading = 14.5;
-                config.par_indent = 18.0;
+                // size12.clo: 1.5em in cmr12, the font at class load (its quad is 11.75pt).
+                config.par_indent = 17.625;
             }
             "a4paper" => {
                 (config.page_width, config.page_height) = A4_PT;
@@ -441,60 +478,51 @@ pub fn apply_doc_class(doc_class: &DocClass<'_>, config: &mut DocumentConfig) {
     if landscape {
         paper = (paper.1, paper.0);
     }
-    if matches!(doc_class.name, "article" | "report" | "book") {
+    if matches!(crate::expand::classes::base_class(doc_class.name), "article" | "report" | "book") {
         apply_standard_class_geometry(config, paper, size_pt, twoside, twocolumn);
     }
 }
 
 /// Parse TeX dimension string into PDF points (e.g. `1in`, `2.54cm`, `20mm`, `72pt`).
 pub fn parse_dimension_pt(dimension_str: &str) -> Option<f32> {
-    let trimmed_str = dimension_str.trim();
-    if trimmed_str.is_empty() {
-        return None;
-    }
+    parse_dimension_pt_in(dimension_str, 11.0, 5.5)
+}
 
-    let (number_part, unit_suffix) = if let Some(stripped) = trimmed_str.strip_suffix("bp") {
-        (stripped, "bp")
-    } else if let Some(stripped) = trimmed_str.strip_suffix("pc") {
-        (stripped, "pc")
-    } else if let Some(stripped) = trimmed_str.strip_suffix("dd") {
-        (stripped, "dd")
-    } else if let Some(stripped) = trimmed_str.strip_suffix("cc") {
-        (stripped, "cc")
-    } else if let Some(stripped) = trimmed_str.strip_suffix("sp") {
-        (stripped, "sp")
-    } else if let Some(stripped) = trimmed_str.strip_suffix("in") {
-        (stripped, "in")
-    } else if let Some(stripped) = trimmed_str.strip_suffix("cm") {
-        (stripped, "cm")
-    } else if let Some(stripped) = trimmed_str.strip_suffix("mm") {
-        (stripped, "mm")
-    } else if let Some(stripped) = trimmed_str.strip_suffix("pt") {
-        (stripped, "pt")
-    } else if let Some(stripped) = trimmed_str.strip_suffix("em") {
-        (stripped, "em")
-    } else if let Some(stripped) = trimmed_str.strip_suffix("ex") {
-        (stripped, "ex")
-    } else {
-        (trimmed_str, "pt")
-    };
+/// [`parse_dimension_pt`] with the current font's `em` (quad) and `ex` (x-height) in pt.
+pub fn parse_dimension_pt_in(dimension_str: &str, em: f32, ex: f32) -> Option<f32> {
+    // TeX's own arithmetic (`scan_dimen`), so a length is the scaled points TeX has.
+    let sp = |v: f32| (v as f64 * 65536.0).round() as i64;
+    crate::backend::scaled::scan_dimen(dimension_str, sp(em), sp(ex)).map(|v| (v as f64 / 65536.0) as f32)
+}
 
-    let numeric_value = number_part.trim().parse::<f32>().ok()?;
-    match unit_suffix {
-        // TeX's units (The TeXbook ch. 10), all in TeX points.
-        "in" => Some(numeric_value * TEX_INCH),
-        "cm" => Some(numeric_value * (TEX_INCH / 2.54)),
-        "mm" => Some(numeric_value * (TEX_INCH / 25.4)),
-        "bp" => Some(numeric_value * (TEX_INCH / 72.0)),
-        "pc" => Some(numeric_value * 12.0),
-        "dd" => Some(numeric_value * (1238.0 / 1157.0)),
-        "cc" => Some(numeric_value * (12.0 * 1238.0 / 1157.0)),
-        "sp" => Some(numeric_value / 65536.0),
-        "pt" => Some(numeric_value),
-        "em" => Some(numeric_value * 11.0),
-        "ex" => Some(numeric_value * 5.5),
-        _ => None,
+/// [`parse_glue_pt`] with the shrink: (width, stretch, shrink) in pt.
+pub fn parse_glue3_pt(glue_str: &str) -> Option<(f32, f32, f32)> {
+    parse_glue3_pt_in(glue_str, 11.0, 5.5)
+}
+
+/// [`parse_glue3_pt`] with the current font's `em` and `ex` in pt.
+pub fn parse_glue3_pt_in(glue_str: &str, em: f32, ex: f32) -> Option<(f32, f32, f32)> {
+    if let Some(g) = named_skip(glue_str.trim()) {
+        return Some(g);
     }
+    let (w, stretch) = parse_glue_pt_in(glue_str, em, ex)?;
+    let shrink = glue_str
+        .find("minus")
+        .and_then(|p| parse_dimension_pt_in(glue_str[p + "minus".len()..].trim(), em, ex))
+        .unwrap_or(0.0);
+    Some((w, stretch, shrink))
+}
+
+/// The kernel's fixed skip registers (latex.ltx, `\smallskipamount` etc.): (width, stretch,
+/// shrink) in pt.
+pub fn named_skip(name: &str) -> Option<(f32, f32, f32)> {
+    Some(match name {
+        "\\smallskipamount" => (3.0, 1.0, 1.0),
+        "\\medskipamount" => (6.0, 2.0, 2.0),
+        "\\bigskipamount" => (12.0, 4.0, 4.0),
+        "\\z@skip" | "\\z@" => (0.0, 0.0, 0.0),
+        _ => return None,
+    })
 }
 
 /// Parse TeX glue string into (width_pt, stretch_pt).
@@ -504,6 +532,11 @@ pub fn parse_dimension_pt(dimension_str: &str) -> Option<f32> {
 /// - `1cm plus 1fil` -> `(28.346..., f32::INFINITY)`
 /// - `10pt plus 5pt` -> `(10.0, 5.0)`
 pub fn parse_glue_pt(glue_str: &str) -> Option<(f32, f32)> {
+    parse_glue_pt_in(glue_str, 11.0, 5.5)
+}
+
+/// [`parse_glue_pt`] with the current font's `em` and `ex` in pt.
+pub fn parse_glue_pt_in(glue_str: &str, em: f32, ex: f32) -> Option<(f32, f32)> {
     let s = glue_str.trim();
     if s.is_empty() {
         return None;
@@ -515,7 +548,7 @@ pub fn parse_glue_pt(glue_str: &str) -> Option<(f32, f32)> {
     } else {
         (s, "")
     };
-    let width = parse_dimension_pt(w_str.trim())?;
+    let width = parse_dimension_pt_in(w_str.trim(), em, ex)?;
     let stretch = if let Some(after_plus) = rest.strip_prefix("plus") {
         let after_plus = after_plus.trim();
         let stretch_str = if let Some(m_pos) = after_plus.find("minus") {
@@ -527,7 +560,7 @@ pub fn parse_glue_pt(glue_str: &str) -> Option<(f32, f32)> {
         if stretch_str.contains("fil") {
             f32::INFINITY
         } else {
-            parse_dimension_pt(stretch_str).unwrap_or(0.0)
+            parse_dimension_pt_in(stretch_str, em, ex).unwrap_or(0.0)
         }
     } else {
         0.0

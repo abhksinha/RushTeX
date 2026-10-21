@@ -5,7 +5,7 @@
 //! differential comparison against reference geometry tolerances.
 
 use crate::backend::fonts::{Face, FontFamily};
-use crate::layout::engine::Paint;
+use crate::layout::engine::{Paint, Sp};
 use crate::math::math_ast::{MathNode, MathStyle};
 use crate::math::math_box::MathBox;
 use crate::math::math_layout::render_math;
@@ -115,7 +115,7 @@ pub fn trace_math_geometry(
     let mut ops = Vec::with_capacity(32);
     let mut pool = Vec::with_capacity(32);
     let bounding_box = render_math(
-        node, font_size, family, style, 0.0, 0.0, &mut ops, &mut pool,
+        node, font_size, family, style, Sp(0), Sp(0), &mut ops, &mut pool,
     );
 
     let mut glyphs = Vec::with_capacity(ops.len());
@@ -140,15 +140,15 @@ pub fn trace_math_geometry(
                     String::new()
                 };
                 glyphs.push(GlyphPlacement {
-                    x,
-                    y,
+                    x: x.to_pt(),
+                    y: y.to_pt(),
                     face,
                     size,
                     text,
                 });
             }
             Paint::Rule { x, y, w, h, .. } => {
-                rules.push(RulePlacement { x, y, w, h });
+                rules.push(RulePlacement { x: x.to_pt(), y: y.to_pt(), w: w.to_pt(), h: h.to_pt() });
             }
             Paint::VectorGlyph {
                 x,
@@ -169,8 +169,8 @@ pub fn trace_math_geometry(
                     format!("vglyph_{glyph_id}")
                 };
                 glyphs.push(GlyphPlacement {
-                    x,
-                    y,
+                    x: x.to_pt(),
+                    y: y.to_pt(),
                     face: Face::Symbol,
                     size,
                     text,

@@ -8,12 +8,20 @@ pub mod backend_cm_fix;
 pub mod backend_cm_fonts;
 pub mod backend_cm_optical;
 pub mod backend_deflate;
+pub mod backend_inflate;
 pub mod backend_fonts;
+pub mod backend_hash;
 pub mod backend_ligkern;
 pub mod backend_optical;
 pub mod backend_pdf;
+pub mod backend_pdftex;
+pub mod backend_png;
 pub mod backend_scaled;
+pub mod backend_tfm;
+pub mod backend_tfm_data;
 pub mod backend_shape;
+pub mod backend_ship;
+pub mod backend_ts1;
 
 // Backward-compatible module aliases:
 pub use backend_cm_fonts as cm_fonts;

@@ -261,6 +261,31 @@ impl MathContextFlags {
     }
 }
 
+/// Script and scriptscript sizes for a text size: latex.ltx's `\DeclareMathSizes` for the
+/// standard sizes, otherwise `\defaultscriptratio` (.7) and `\defaultscriptscriptratio` (.5).
+pub fn latex_math_sizes(text: f32) -> (f32, f32) {
+    const SIZES: [(f32, f32, f32); 12] = [
+        (5.0, 5.0, 5.0),
+        (6.0, 5.0, 5.0),
+        (7.0, 5.0, 5.0),
+        (8.0, 6.0, 5.0),
+        (9.0, 6.0, 5.0),
+        (10.0, 7.0, 5.0),
+        (10.95, 8.0, 6.0),
+        (12.0, 8.0, 6.0),
+        (14.4, 10.0, 7.0),
+        (17.28, 12.0, 10.0),
+        (20.74, 14.4, 12.0),
+        (24.88, 20.74, 17.28),
+    ];
+    for &(t, s, ss) in &SIZES {
+        if (text - t).abs() < 0.01 {
+            return (s, ss);
+        }
+    }
+    (text * 0.7, text * 0.5)
+}
+
 /// Sizing tier cache resolving font size switches in a single memory read.
 ///
 /// Precomputes and caches the scaled font sizes for all 8 styles.
@@ -276,8 +301,7 @@ impl FontVariantTier {
     #[inline(always)]
     pub fn new(base_font_size: f32) -> Self {
         let text_sz = base_font_size;
-        let script_sz = base_font_size * 0.70;
-        let scriptscript_sz = base_font_size * 0.50;
+        let (script_sz, scriptscript_sz) = latex_math_sizes(base_font_size);
         Self {
             sizes: [
                 text_sz,         // Display = 0
@@ -449,6 +473,10 @@ pub const FRACTION_OPT_SKEWED: u8 = 1 << 3;
 /// The fraction carries its own delimiters (`\atopwithdelims`, `\binom`, `\genfrac`), which
 /// replace the `\nulldelimiterspace` TeX otherwise puts on both sides (§748).
 pub const FRACTION_OPT_DELIMITED: u8 = 1 << 4;
+/// A TeX generalized fraction (`\over`, `\atop`, `\above`, `\choose`, …) is an Inner atom
+/// (tex.web §761). amsmath's `\frac`, `\dfrac`, `\binom` and `\genfrac` wrap it in braces,
+/// so those are Ord.
+pub const FRACTION_OPT_INNER: u8 = 1 << 5;
 
 /// Data payload for dynamic delimiters (boxed to guarantee MathNode fits within 32 bytes).
 #[derive(Debug, Clone, PartialEq)]
@@ -461,10 +489,14 @@ pub struct DelimitedData<'a> {
     pub depth: f32,
     pub options: u8,
     pub class: u8,
+    /// `\delimiterfactor` in force at the `\left` (TeX §762).
+    pub factor: u16,
+    /// `\delimitershortfall` in pt at the `\left`; NaN for the font's default.
+    pub shortfall: f32,
     #[cfg(target_pointer_width = "64")]
-    pub _padding: [u8; 14],
+    pub _padding: [u8; 8],
     #[cfg(target_pointer_width = "32")]
-    pub _padding: [u8; 2],
+    pub _padding: [u8; 4],
 }
 
 impl<'a> DelimitedData<'a> {
@@ -479,10 +511,12 @@ impl<'a> DelimitedData<'a> {
             depth: 0.0,
             options: 0,
             class: 0,
+            factor: 901,
+            shortfall: f32::NAN,
             #[cfg(target_pointer_width = "64")]
-            _padding: [0; 14],
+            _padding: [0; 8],
             #[cfg(target_pointer_width = "32")]
-            _padding: [0; 2],
+            _padding: [0; 4],
         }
     }
 }
@@ -535,7 +569,55 @@ pub struct MatrixData<'a> {
     pub rows: Vec<Vec<MathNode<'a>>>,
     pub delim: MatrixDelim,
     pub env_kind: MatrixEnvKind,
-    pub col_alignments: Vec<ColAlign>,
+    pub col_alignments: Box<[ColAlign]>,
+    /// A numbered display alignment (`align`, `alignat`, `gather`): every row gets an
+    /// equation number except those marked in `notag_mask`.
+    pub numbered_env: bool,
+    /// A display alignment environment (`align`, `gather`, starred or not), whose rows
+    /// are lines of the page rather than one box.
+    pub display_env: bool,
+    /// Bit `r` set: row `r` has `\notag`/`\nonumber` (rows past 63 are always numbered).
+    pub notag_mask: u64,
+    /// amsmath `split`: as the whole of a display it makes the display an alignment
+    /// (regular skips, `\openup\jot`).
+    pub split: bool,
+    /// Settings most alignments leave at their defaults.
+    pub extras: Option<Box<MatrixExtras>>,
+}
+
+impl MatrixData<'_> {
+    /// `\\[dim]` skips: entry `r` is the `\noalign{\vskip dim}` after row `r` (pt).
+    pub fn row_skips(&self) -> &[f32] {
+        self.extras.as_deref().map_or(&[], |e| &e.row_skips)
+    }
+
+    /// amsmath `\multlinegap` in force at the environment (pt).
+    pub fn multline_gap(&self) -> f32 {
+        self.extras.as_deref().map_or(10.0, |e| e.multline_gap)
+    }
+}
+
+/// Math parameters a document assigns in its text (TeX groups scope them), which the
+/// parser records in the nodes they affect.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MathParams {
+    /// `\delimiterfactor` and `\delimitershortfall` (pt; NaN: the font's).
+    pub delim: (u16, f32),
+    /// amsmath `\multlinegap` (pt).
+    pub multline_gap: f32,
+}
+
+impl Default for MathParams {
+    fn default() -> Self {
+        Self { delim: (901, f32::NAN), multline_gap: 10.0 }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MatrixExtras {
+    /// `\\[dim]`: entry `r` is the skip after row `r` (pt); missing entries are 0.
+    pub row_skips: Vec<f32>,
+    pub multline_gap: f32,
 }
 
 /// Four canonical mathematical ellipsis kinds defined in Donald Knuth's The TeXbook.
@@ -569,10 +651,15 @@ pub struct ExtensibleArrowData<'a> {
 pub enum MathSkip {
     TextEm(f32),
     Mu(f32),
+    /// Math glue with finite stretch (`\mskip6mu plus1mu`): width and stretch in mu.
+    MuGlue(f32, f32),
     Pt(f32),
     /// The interword space (fontdimen 2) of the text font at the current style's size, as
     /// between the words of `\text{...}`.
     TextSpace,
+    /// The interword space at a space factor of 2000 or more (after a sentence-ending
+    /// period): fontdimen 2 plus the extra space, fontdimen 7 (tex.web §1044).
+    TextSpaceExtra,
 }
 
 /// Abstract Syntax Tree node for mathematical expressions.
@@ -583,6 +670,10 @@ pub enum MathSkip {
 pub enum MathNode<'a> {
     /// Mathematical ellipsis (\ldots, \cdots, \vdots, \ddots).
     Ellipsis(EllipsisKind),
+    /// amsmath `\hdotsfor[space]{cols}`: a matrix cell spanning `cols` columns filled
+    /// with `\xleaders` of `\hbox{$\mkern s\dotsspace@.\mkern s\dotsspace@$}`, where
+    /// `\dotsspace@` is 1.5mu and `s` is `space`.
+    HDotsFor { cols: u8, space: f32 },
     /// Mathematical symbol (Greek, operator, relation, differential).
     Symbol {
         kind: MathAtomKind,
@@ -617,6 +708,9 @@ pub enum MathNode<'a> {
     Radical {
         degree: Option<Box<MathNode<'a>>>,
         radicand: Box<MathNode<'a>>,
+        /// amsmath `\uproot` and `\leftroot` (mu) for the degree.
+        up: i8,
+        left: i8,
     },
     /// Big operator with optional limits ($\sum_{i=0}^n$, $\int_a^b$, $\lim_{x \to 0}$).
     BigOp(Box<BigOpData<'a>>),
@@ -703,7 +797,8 @@ pub enum MathNode<'a> {
         content: Box<MathNode<'a>>,
         zero_width: bool,
         shift_left: bool,
-        zero_height_depth: bool,
+        /// `\smash`: bit 0 zeroes the height, bit 1 the depth (amsmath `[t]` and `[b]`).
+        smash: u8,
     },
     /// An Op atom with an arbitrary nucleus (`\mathop{...}`), carrying its `\limits`
     /// setting (`OP_LIMITS_*`) for Rule 13.
@@ -713,9 +808,43 @@ pub enum MathNode<'a> {
     },
     /// `\boxed{...}`: the content in display style inside an `\fbox`.
     Boxed(Box<MathNode<'a>>),
+    /// `\raise`/`\lower` of an `\hbox`: the content shifted up by `shift` points
+    /// (negative: down). Builds the `\TeX` and `\LaTeX` logos.
+    Raise {
+        content: Box<MathNode<'a>>,
+        shift: f32,
+    },
+    /// amsbsy `\pmb` ("poor man's bold"): the formula set three times, at -.8mu, at -.4mu
+    /// raised by .5mu, and at 0, in the width of one copy.
+    Pmb(Box<MathNode<'a>>),
+    /// `$...$` inside `\text{...}`: a formula of its own in an hbox, in text style at the
+    /// `\text` size, with no font override, and its trailing italic correction inside.
+    Formula(Box<MathNode<'a>>),
+    /// Text in the font around the formula (amsmath `\text`).
+    TextFont(Box<MathNode<'a>>),
+    /// `\rule[raise]{w}{h}`: a filled box `w` wide and `h` high, raised by `raise` (pt).
+    Rule { w: f32, h: f32, raise: f32 },
+    /// amsthm `\openbox`, the default `\qedsymbol`:
+    /// `\hbox to.77778em{\hfil\vrule\vbox to.675em{\hrule width.6em\vfil\hrule}\vrule\hfil}`.
+    OpenBox,
     /// amsmath `\sideset{pre}{post}\op`: (the operator, the pre-scripts on an empty box as
-    /// tall as it, the operator with `\nolimits` post-scripts).
+    /// tall as it, the operator with `\nolimits` post-scripts). It is the `\mathop` nucleus
+    /// `\kern-\dimen@\box4\box6`, \dimen@ = wd4 + wd0 - wd6, all in display style.
     SideSet(Box<(MathNode<'a>, MathNode<'a>, MathNode<'a>)>),
+    /// The `\hbox to\dimen@{}` Ord that precedes a `\sideset` `\mathop`.
+    SideSetLead(Box<(MathNode<'a>, MathNode<'a>, MathNode<'a>)>),
+    /// A `split` alone in an `align` cell (amsmath `\rendsplit@`, `\ifinalign@`,
+    /// centertags) takes two columns: `\hbox to\wd3{}`, wd3 the width of its left column…
+    SplitLead(Box<MathNode<'a>>),
+    /// …then `\vcenter{\vbox{\moveleft\wd3\box\z@}}`, which lines its `&` up with the
+    /// alignment's.
+    SplitTail(Box<MathNode<'a>>),
+    /// An `align`-family environment inside another display alignment (`\ingather@`):
+    /// its `\halign` box starts with `\tabskip\eqnshift@`, (displaywidth − width)/2.
+    InnerAlign(Box<MathNode<'a>>),
+    /// amsopn `\varlimsup` (0), `\varliminf` (1), `\varinjlim` (2), `\varprojlim` (3):
+    /// the upright `lim` over- or underlined, or over an arrow fill.
+    VarLim { kind: u8, lim: Box<MathNode<'a>> },
 }
 
 /// Glyph strings of math-letter runs joined into a ligature word (`\mathrm{ff}`). They are
@@ -767,11 +896,18 @@ impl<'a> MathNode<'a> {
                 EllipsisKind::Low | EllipsisKind::Centered | EllipsisKind::Diagonal => MathAtomKind::Inner,
                 EllipsisKind::Vertical => MathAtomKind::Ord,
             },
+            MathNode::HDotsFor { .. } | MathNode::TextFont(_) => MathAtomKind::Ord,
             MathNode::Symbol { kind, .. } => *kind,
             MathNode::Number(_) => MathAtomKind::Ord,
             MathNode::Variable(_) => MathAtomKind::Ord,
             MathNode::SubSup { nucleus, .. } => nucleus.atom_kind(),
-            MathNode::Fraction { .. } => MathAtomKind::Inner,
+            MathNode::Fraction { options, .. } => {
+                if options & FRACTION_OPT_INNER != 0 {
+                    MathAtomKind::Inner
+                } else {
+                    MathAtomKind::Ord
+                }
+            }
             MathNode::Radical { .. } => MathAtomKind::Ord,
             MathNode::BigOp(_) => MathAtomKind::Op,
             MathNode::Delimited(_) => MathAtomKind::Inner,
@@ -806,8 +942,17 @@ impl<'a> MathNode<'a> {
             // `\phantom`, `\smash` and the laps build boxes, which are Ord atoms.
             MathNode::Phantom { .. } | MathNode::DimensionBox { .. } => MathAtomKind::Ord,
             MathNode::OpLimits { .. } => MathAtomKind::Op,
-            MathNode::Boxed(_) => MathAtomKind::Ord,
+            MathNode::Boxed(_) | MathNode::Raise { .. } | MathNode::Formula(_) | MathNode::Rule { .. } | MathNode::OpenBox => {
+                MathAtomKind::Ord
+            }
             MathNode::SideSet(_) => MathAtomKind::Op,
+            MathNode::SideSetLead(_) | MathNode::VarLim { .. } => MathAtomKind::Ord,
+            MathNode::SplitLead(_) | MathNode::SplitTail(_) | MathNode::InnerAlign(_) => MathAtomKind::Ord,
+            // `\binrel@`: a Bin or Rel stays one, anything else is Ord.
+            MathNode::Pmb(content) => match content.atom_kind() {
+                k @ (MathAtomKind::Bin | MathAtomKind::Rel) => k,
+                _ => MathAtomKind::Ord,
+            },
         }
     }
 

@@ -1,0 +1,18 @@
+\catcode`\{=1 \catcode`\}=2 \catcode`\#=6
+\font\tenrm=cmr10 \font\tenit=cmti10 \font\sevenrm=cmr7 \tenrm \hyphenchar\tenrm=`-
+\setbox0\hbox{\accent"7F a}
+\setbox1\hbox{\accent"5E A}
+\setbox2\hbox{\tenit\accent"7F e\accent19 A}
+\setbox3\hbox{\accent"7F\sevenrm o}
+\setbox4\hbox{\accent"18 \char"63}
+\setbox5\hbox{x\accent"7F}
+\setbox6\hbox{ab\discretionary{c-}{d}{ef}gh}
+\setbox7\hbox{ab\-cd}
+\count1=\lastpenalty
+\hsize=30pt \parindent=0pt \tolerance=10000 \pretolerance=-1 \parfillskip=0pt plus 1fil
+\baselineskip=12pt \lineskip=1pt \lineskiplimit=0pt
+\setbox8\vbox{aaaa\-bbbb\-cccc\-dddd\discretionary{X}{Y}{ZZ}eeee}
+\setbox9\vbox{\accent"7F a\accent"7F a\accent"7F a\accent"7F a\accent"7F a}
+\count2=\prevgraf
+\setbox10\hbox{\tenit\hskip1em\hskip.5ex}
+\font\big=cmbx12 at 14.4pt \setbox11\hbox{\big\hskip 1em}

@@ -201,6 +201,17 @@ impl Machine<'_, '_> {
                     self.show_node(p, depth + 1, out);
                 }
             }
+            // pdfTeX's `pdf_refximage_node`: `\pdfrefximage(h+d)xw`.
+            Kind::Whatsit if n.sub == super::engine_whatsit::XIMAGE => {
+                Self::line(depth, out);
+                let [w, h, d] = nodes.rules[n.a as usize];
+                out.push_str("\\pdfrefximage(");
+                print_scaled(h, out);
+                out.push('+');
+                print_scaled(d, out);
+                out.push_str(")x");
+                print_scaled(w, out);
+            }
             Kind::Whatsit => {
                 Self::line(depth, out);
                 out.push_str(&format!("\\whatsit{}", n.sub));

@@ -133,6 +133,20 @@ pub struct TextState {
     /// moved them: by the amounts written, so rounding carries on as in pdfTeX.
     org_h: i64,
     org_v: i64,
+    /// `pdf_cur_Tm_a`: the expansion (thousandths) of the text matrix in force.
+    tm_a: i64,
+}
+
+/// pdfTeX's `round_xn_over_d` on 64-bit values: `x·n/d`, the magnitude rounded half up.
+#[inline]
+fn rxd(x: i64, n: i64, d: i64) -> i64 {
+    let p = x.abs() * n;
+    let u = p / d + (2 * (p % d) >= d) as i64;
+    if x >= 0 {
+        u
+    } else {
+        -u
+    }
 }
 
 impl TextState {
@@ -175,6 +189,7 @@ impl TextState {
         self.doing_string = false;
         self.v = -self.org_v;
         self.tj_start_h = self.org_h;
+        self.tm_a = 0;
         // A new text object starts at the origin: the first string sets its position.
         self.lost = true;
     }
@@ -199,8 +214,23 @@ impl TextState {
         self.font_size = so;
     }
 
-    /// `pdf_set_text_pos` (unexpanded fonts): `Td` from the line start to (h, v).
-    fn set_text_pos(&mut self, out: &mut Vec<u8>, h: i64, v: i64, v_out: i64) {
+    /// `pdf_set_text_pos`: `Td` from the line start to (h, v), or, for an expanded font (or
+    /// back from one), a text matrix `Tm` scaled by `1000 + ea` thousandths at absolute
+    /// (`h`, `y`).
+    fn set_text_pos(&mut self, out: &mut Vec<u8>, h: i64, y: i64, v: i64, v_out: i64, ea: i64) {
+        if ea != 0 || self.tm_a != 0 {
+            out.push(b' ');
+            print_real(out, 1000 + ea, 3);
+            out.extend_from_slice(b" 0 0 1 ");
+            self.tj_start_h = self.org_h + print_bp(out, h - self.org_h);
+            out.push(b' ');
+            self.v = -self.org_v + print_bp(out, y + self.org_v);
+            out.extend_from_slice(b" Tm");
+            self.tm_a = ea;
+            self.delta_h = 0;
+            self.lost = false;
+            return;
+        }
         out.push(b' ');
         let so = print_bp(out, h - self.tj_start_h);
         out.push(b' ');
@@ -215,21 +245,35 @@ impl TextState {
     /// `pdf_begin_string` for a character at (h, v): moves there by a `TJ` displacement or
     /// a new text position, and leaves a string open. Call [`Self::set_font`] first.
     pub fn begin_string(&mut self, out: &mut Vec<u8>, h: i64, v: i64) {
+        self.begin_string_ex(out, h, v, 0);
+    }
+
+    /// [`Self::begin_string`] for a character of a font automatically expanded by `ea`
+    /// thousandths (pdfTeX's `get_font_auto_expand_ratio`).
+    pub fn begin_string_ex(&mut self, out: &mut Vec<u8>, h: i64, v: i64, ea: i64) {
         let mut must_set = false;
         if !self.doing_text {
             self.begin_text(out);
             must_set = true;
         }
-        let (mut s, s_out) = divide_scaled(h - (self.tj_start_h + self.delta_h), self.font_size, 3);
+        let dh = h - (self.tj_start_h + self.delta_h);
+        let (mut s, s_out) = if self.tm_a == 0 {
+            divide_scaled(dh, self.font_size, 3)
+        } else {
+            let a = 1000 + self.tm_a;
+            let s = divide_scaled(rxd(dh, 1000, a), self.font_size, 3).0;
+            let so = if s.abs() < 0o100000 { rxd(rxd(self.font_size, s.abs(), 1000), a, 1000) * s.signum() } else { 0 };
+            (s, so)
+        };
         let (dv, v_out) = if (v - self.v).abs() >= MIN_BP_VAL {
             divide_scaled(v - self.v, ONE_HUNDRED_BP, DECIMAL_DIGITS + 2)
         } else {
             (0, 0)
         };
-        must_set |= dv != 0 || s.abs() >= 0o100000 || self.lost;
+        must_set |= dv != 0 || s.abs() >= 0o100000 || self.lost || ea != self.tm_a;
         if must_set {
             self.end_string(out);
-            self.set_text_pos(out, h, dv, v_out);
+            self.set_text_pos(out, h, v, dv, v_out, ea);
             s = 0;
         }
         if !self.doing_string {
@@ -252,15 +296,28 @@ impl TextState {
     /// `output_one_char`: character `c` of TeX width `w` at (h, v).
     #[inline]
     pub fn char(&mut self, out: &mut Vec<u8>, c: u8, w: i64, h: i64, v: i64) {
-        self.begin_string(out, h, v);
+        self.char_ex(out, c, w, h, v, 0);
+    }
+
+    /// [`Self::char`] in a font automatically expanded by `ea` thousandths.
+    #[inline]
+    pub fn char_ex(&mut self, out: &mut Vec<u8>, c: u8, w: i64, h: i64, v: i64, ea: i64) {
+        self.begin_string_ex(out, h, v, ea);
         print_char(out, c);
         self.advance(w);
     }
 
-    /// `adv_char_width`: the viewer's advance over a character of TeX width `w`.
+    /// `adv_char_width`: the viewer's advance over a character of TeX width `w`, through
+    /// the text matrix's expansion.
     #[inline(always)]
     pub fn advance(&mut self, w: i64) {
-        self.delta_h += divide_scaled(w, self.font_size, 4).1;
+        if self.tm_a == 0 {
+            self.delta_h += divide_scaled(w, self.font_size, 4).1;
+        } else {
+            let a = 1000 + self.tm_a;
+            let s = divide_scaled(rxd(w, 1000, a), self.font_size, 4).0;
+            self.delta_h += rxd(rxd(self.font_size, s.abs(), 10000), a, 1000) * s.signum();
+        }
     }
 
     /// Text of unknown advance was written into the open string: the next character must

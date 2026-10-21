@@ -10,6 +10,8 @@
 //! follows tex.web exactly.
 
 use super::engine_eqtb::{Glue, Reg, Region};
+use super::engine_font::Fonts;
+use super::engine_microtype::{char_pw, protchar_left, protchar_right};
 use super::engine_node::{Kind, Node, Nodes};
 use super::engine_pack::badness;
 use super::engine_run::Machine;
@@ -36,6 +38,8 @@ const DOUBLE_HYPHEN_DEMERITS: u32 = 14;
 const FINAL_HYPHEN_DEMERITS: u32 = 15;
 const ADJ_DEMERITS: u32 = 16;
 const TRACING_PARAGRAPHS: u32 = 32;
+const PDF_PROTRUDE_CHARS: u32 = 76;
+const PDF_ADJUST_SPACING: u32 = 75;
 const LOOSENESS: u32 = 19;
 const HANG_AFTER: u32 = 41;
 const HSIZE: u32 = 3;
@@ -46,12 +50,16 @@ const RIGHT_SKIP: u32 = 8;
 const PAR_FILL_SKIP: u32 = 14;
 
 /// Widths in TeX's six components (§823): natural width, stretch of order normal, fil,
-/// fill, filll, and shrink.
-type Widths = [i32; 6];
+/// fill, filll, and shrink; then pdfTeX's font stretch and shrink (`\pdfadjustspacing > 1`).
+type Widths = [i32; 8];
 
 /// `a - b`, component by component.
 fn diff(a: Widths, b: Widths) -> Widths {
     std::array::from_fn(|k| a[k] - b[k])
+}
+
+fn sum(a: Widths, b: Widths) -> Widths {
+    std::array::from_fn(|k| a[k] + b[k])
 }
 
 fn add(a: &mut Widths, g: Glue) {
@@ -110,8 +118,14 @@ impl Shape {
 struct Breaker<'p> {
     par: &'p [Node],
     nodes: &'p Nodes,
+    fonts: &'p Fonts,
+    /// `\pdfprotrudechars > 1`: protrusion counts in the line widths (pdfTeX).
+    protrude: bool,
+    /// pdfTeX's paragraph-wide expansion limits (`check_expand_pars`): `cur_font_step`,
+    /// `max_stretch_ratio`, `max_shrink_ratio`; `None` without `\pdfadjustspacing > 1`.
+    expand: Option<[i32; 3]>,
     /// §839 `disc_width`: the pre-break text of the discretionary being tried.
-    disc_width: i32,
+    disc_width: Widths,
     actives: Vec<Active>,
     passives: Vec<Passive>,
     /// §823 `background` and the running total of widths before the current node.
@@ -135,7 +149,7 @@ struct Breaker<'p> {
 
 impl Breaker<'_> {
     /// §829 `try_break` at node `at` (`None` for the paragraph's end).
-    fn try_break(&mut self, widths: &impl Fn(&Node) -> Widths, mut pi: i32, hyphenated: bool, at: Option<usize>) {
+    fn try_break(&mut self, widths: &impl Fn(&[Node], usize) -> Widths, mut pi: i32, hyphenated: bool, at: Option<usize>) {
         if pi.abs() >= INF_PENALTY {
             if pi > 0 {
                 return;
@@ -191,7 +205,20 @@ impl Breaker<'_> {
             // §851: the badness and fitness class of a line from node `i` to here.
             let r = self.actives[i];
             let w = diff(self.total, r.origin);
-            let shortfall = line_width - w[0];
+            let mut shortfall = line_width - w[0];
+            if self.protrude {
+                shortfall += self.total_pw(r.passive, at);
+            }
+            // pdfTeX: the fonts' stretch or shrink absorbs the shortfall, to half a step
+            // when it can absorb all of it. (A margin kern's character in an automatically
+            // expanded font keeps its base's quad, so margin kerns add no variation.)
+            if let Some([step, max_stretch, max_shrink]) = self.expand.filter(|_| shortfall != 0) {
+                if shortfall > 0 && w[6] > 0 {
+                    shortfall = if w[6] > shortfall { (w[6] / (max_stretch / step)) / 2 } else { shortfall - w[6] };
+                } else if shortfall < 0 && w[7] > 0 {
+                    shortfall = if w[7] > -shortfall { -((w[7] / (max_shrink / step)) / 2) } else { shortfall + w[7] };
+                }
+            }
             let (b, fit) = if shortfall > 0 {
                 if w[2] != 0 || w[3] != 0 || w[4] != 0 {
                     (0, 2)
@@ -274,8 +301,35 @@ impl Breaker<'_> {
         }
     }
 
+    /// pdftex.web `total_pw`: the protrusion at both ends of the line from active node
+    /// `passive`'s break to a break at `at`.
+    fn total_pw(&self, passive: Option<u32>, at: Option<usize>) -> i32 {
+        let (par, nodes) = (self.par, self.nodes);
+        let l = passive.map_or(0, |p| self.passives[p as usize].at.map_or(par.len(), |a| a as usize));
+        let end = at.unwrap_or(par.len());
+        // The right margin: a discretionary's pre-break text ends in its last character.
+        let right = match at.map(|a| par[a]) {
+            Some(n) if n.kind == Kind::Disc && !nodes.get(disc_lists(nodes, &n)[0]).is_empty() => nodes.get(disc_lists(nodes, &n)[0]).last().copied(),
+            _ => protchar_right(nodes, &par[l.min(end)..end]),
+        };
+        // The left margin: after a discretionary, its post-break text, else what follows
+        // the text it replaced.
+        let left = match par.get(l) {
+            Some(n) if passive.is_some() && n.kind == Kind::Disc => {
+                let post = nodes.get(disc_lists(nodes, n)[1]);
+                match post.first() {
+                    Some(&first) => Some(first),
+                    None => protchar_left(nodes, &par[(l + 1 + n.sub as usize).min(par.len() - 1)..], true),
+                }
+            }
+            Some(_) => protchar_left(nodes, &par[l..], true),
+            None => None,
+        };
+        char_pw(self.fonts, left, false) + char_pw(self.fonts, right, true)
+    }
+
     /// §837–§840 `break_width`: the background less what disappears after a break at `at`.
-    fn break_width(&self, widths: &impl Fn(&Node) -> Widths, hyphenated: bool, at: Option<usize>) -> Widths {
+    fn break_width(&self, widths: &impl Fn(&[Node], usize) -> Widths, hyphenated: bool, at: Option<usize>) -> Widths {
         let mut bw = self.background;
         let Some(mut s) = at else { return bw };
         // §840: at a discretionary, the replaced text goes and the post-break text comes;
@@ -283,14 +337,15 @@ impl Breaker<'_> {
         if hyphenated && self.par[s].kind == Kind::Disc {
             let d = self.par[s];
             let t = d.sub as usize;
-            for v in &self.par[s + 1..s + 1 + t] {
-                bw[0] -= widths(v)[0];
+            for i in s + 1..s + 1 + t {
+                bw = diff(bw, widths(self.par, i));
             }
             let [_, post] = disc_lists(self.nodes, &d);
-            for v in self.nodes.get(post) {
-                bw[0] += widths(v)[0];
+            let post_list = self.nodes.get(post);
+            for i in 0..post_list.len() {
+                bw = sum(bw, widths(post_list, i));
             }
-            bw[0] += self.disc_width;
+            bw = sum(bw, self.disc_width);
             if post.0 != post.1 {
                 return bw;
             }
@@ -298,7 +353,7 @@ impl Breaker<'_> {
         }
         while let Some(n) = self.par.get(s) {
             match n.kind {
-                Kind::Glue => bw = diff(bw, widths(n)),
+                Kind::Glue => bw = diff(bw, widths(self.par, s)),
                 Kind::Penalty => {}
                 Kind::Kern if n.sub == 1 => bw[0] -= n.a,
                 Kind::Math => bw[0] -= n.a,
@@ -362,7 +417,7 @@ impl Machine<'_, '_> {
         };
         let (left, right) = (self.gp(LEFT_SKIP), self.gp(RIGHT_SKIP));
         let (left, right) = (check(self, left), check(self, right));
-        let mut background = [0; 6];
+        let mut background = [0; 8];
         add(&mut background, left);
         add(&mut background, right);
         let hsize = self.dp(HSIZE);
@@ -418,12 +473,28 @@ impl Machine<'_, '_> {
         // shrinkage), boxes, rules, kerns.
         let nodes = &self.e.nodes;
         let fonts = &self.e.fonts;
-        let widths = |n: &Node| -> Widths {
-            let mut w = [0; 6];
+        let expand = (self.ip(PDF_ADJUST_SPACING) > 1).then(|| self.expand_pars(par)).flatten();
+        // Node `i` of `list` (the paragraph or a discretionary's text): its widths, with
+        // pdfTeX's font stretch and shrink of a character or of a font kern between two.
+        let widths = |list: &[Node], i: usize| -> Widths {
+            let n = &list[i];
+            let mut w = [0; 8];
             match n.kind {
                 Kind::Char | Kind::Lig => {
                     let f = &fonts.list[n.font as usize];
-                    w[0] = u8::try_from(n.a).ok().and_then(|c| f.metrics.dims(c, f.size)).map_or(0, |d| d[0]);
+                    let c = n.a as u8;
+                    w[0] = u8::try_from(n.a).ok().and_then(|c| f.dims(c)).map_or(0, |d| d[0]);
+                    if expand.is_some() && fonts.micro.expand(n.font).step != 0 {
+                        w[6] = self.char_flex(n.font, c, false);
+                        w[7] = self.char_flex(n.font, c, true);
+                    }
+                }
+                Kind::Kern if n.sub == 0 && expand.is_some() => {
+                    w[0] = n.a;
+                    if let (Some(l), Some(&r)) = (i.checked_sub(1).map(|j| list[j]), list.get(i + 1)) {
+                        w[6] = self.kern_flex(l, n.a, r, false);
+                        w[7] = self.kern_flex(l, n.a, r, true);
+                    }
                 }
                 Kind::Glue => {
                     let mut g = nodes.glue(n);
@@ -444,11 +515,14 @@ impl Machine<'_, '_> {
         let mut br = Breaker {
             par,
             nodes,
-            disc_width: 0,
+            fonts,
+            protrude: self.ip(PDF_PROTRUDE_CHARS) > 1,
+            expand,
+            disc_width: [0; 8],
             actives: Vec::new(),
             passives: Vec::new(),
             background,
-            total: [0; 6],
+            total: [0; 8],
             threshold: 0,
             final_pass: false,
             minimal: [AWFUL_BAD; 4],
@@ -483,7 +557,7 @@ impl Machine<'_, '_> {
             br.passives.clear();
             br.actives.clear();
             br.actives.push(Active { passive: None, line: prev_graf + 1, fitness: 2, hyphenated: false, total: 0, origin: br.background.map(|v| -v) });
-            br.total = [0; 6];
+            br.total = [0; 8];
             br.minimal = [AWFUL_BAD; 4];
             br.minimum = AWFUL_BAD;
             // §866: false inside math, which the engine's lists do not hold yet.
@@ -498,28 +572,30 @@ impl Machine<'_, '_> {
                     Kind::Char => {
                         // §867: a run of characters.
                         while k < par.len() && par[k].kind == Kind::Char {
-                            br.total[0] += widths(&par[k])[0];
+                            br.total = sum(br.total, widths(par, k));
                             k += 1;
                         }
                         prev = Some(Kind::Char);
                         prev_explicit_kern = false;
                         continue;
                     }
-                    Kind::Box | Kind::Rule | Kind::Lig => br.total[0] += widths(&n)[0],
+                    Kind::Box | Kind::Rule | Kind::Lig => br.total = sum(br.total, widths(par, k)),
                     // §869: a break after the pre-break text, then past the replaced text.
                     Kind::Disc => {
                         let [pre, _] = disc_lists(nodes, &n);
-                        br.disc_width = nodes.get(pre).iter().map(|s| widths(s)[0]).sum();
+                        let pre_list = nodes.get(pre);
+                        br.disc_width = (0..pre_list.len()).fold([0; 8], |a, i| sum(a, widths(pre_list, i)));
                         if pre.0 == pre.1 {
                             br.try_break(&widths, ex_hyphen_penalty, true, Some(k));
                         } else {
-                            br.total[0] += br.disc_width;
+                            let before = br.total;
+                            br.total = sum(br.total, br.disc_width);
                             br.try_break(&widths, hyphen_penalty, true, Some(k));
-                            br.total[0] -= br.disc_width;
+                            br.total = before;
                         }
                         let r = n.sub as usize;
-                        for s in &par[k + 1..(k + 1 + r).min(par.len())] {
-                            br.total[0] += widths(s)[0];
+                        for s in k + 1..(k + 1 + r).min(par.len()) {
+                            br.total = sum(br.total, widths(par, s));
                         }
                         prev = Some(Kind::Disc);
                         prev_explicit_kern = false;
@@ -540,15 +616,14 @@ impl Machine<'_, '_> {
                                 br.try_break(&widths, 0, false, Some(k));
                             }
                         }
-                        let g = widths(&n);
-                        br.total = std::array::from_fn(|j| br.total[j] + g[j]);
+                        br.total = sum(br.total, widths(par, k));
                     }
                     Kind::Kern => {
                         // `kern_break`: an explicit kern before glue is a legal break.
                         if n.sub == 1 && auto_breaking && par.get(k + 1).is_some_and(|m| m.kind == Kind::Glue) {
                             br.try_break(&widths, 0, false, Some(k));
                         }
-                        br.total[0] += n.a;
+                        br.total = sum(br.total, widths(par, k));
                     }
                     // §866: a math node switches automatic breaking off (before) or on
                     // (after), and is a legal break before glue (`kern_break`).
@@ -627,6 +702,7 @@ impl Machine<'_, '_> {
     /// `\rightskip`, and the interline penalties.
     fn post_line_break(&mut self, par: &[Node], breaks: &[Option<u32>], shape: &Shape, left: Glue, prev_graf: i32, display: bool) {
         let right = self.gp(RIGHT_SKIP);
+        let protrude = self.ip(PDF_PROTRUDE_CHARS) > 0;
         let best_line = prev_graf + 1 + breaks.len() as i32;
         let mut pos = 0usize;
         // §882: a discretionary's post-break text, which begins the next line.
@@ -639,8 +715,13 @@ impl Machine<'_, '_> {
                 let g = self.e.nodes.glue_node(left, LEFT_SKIP as u8 + 1);
                 self.cur.push(g);
             }
+            let content_start = self.cur.len();
             self.cur.append(&mut carry);
             let mut disc_break = false;
+            // pdfTeX: where the right margin's search ends (the node before the break),
+            // or the last node of a discretionary's pre-break text, taken as it is.
+            let mut right_end: usize;
+            let mut pre_last = false;
             // §881: the break node: glue becomes `\rightskip`; a kern loses its width; a
             // discretionary becomes compulsory (§882): the text it replaces goes, its
             // pre-break text ends this line and its post-break text starts the next.
@@ -650,21 +731,32 @@ impl Machine<'_, '_> {
                     let n = par[q];
                     self.cur.extend_from_slice(&par[pos..q]);
                     match n.kind {
-                        Kind::Glue => q + 1,
+                        Kind::Glue => {
+                            right_end = self.cur.len();
+                            q + 1
+                        }
                         Kind::Kern | Kind::Math => {
+                            right_end = self.cur.len();
                             self.cur.push(Node { a: 0, ..n });
                             q + 1
                         }
                         Kind::Disc => {
                             let [pre, post] = disc_lists(&self.e.nodes, &n);
+                            right_end = self.cur.len();
                             self.cur.push(Node { sub: 0, a: -1, ..n });
                             let nodes = &self.e.nodes;
-                            self.cur.extend_from_slice(nodes.get(pre));
+                            let pre = nodes.get(pre);
+                            if !pre.is_empty() {
+                                pre_last = true;
+                                self.cur.extend_from_slice(pre);
+                                right_end = self.cur.len();
+                            }
                             carry.extend_from_slice(nodes.get(post));
                             disc_break = true;
                             q + 1 + n.sub as usize
                         }
                         _ => {
+                            right_end = self.cur.len();
                             self.cur.push(n);
                             q + 1
                         }
@@ -672,13 +764,33 @@ impl Machine<'_, '_> {
                 }
                 None => {
                     self.cur.extend_from_slice(&par[pos..]);
+                    right_end = self.cur.len().saturating_sub(1).max(content_start);
                     par.len()
                 }
             };
+            // pdfTeX's character protrusion (post_line_break): a margin kern after the
+            // rightmost and before the leftmost protruding character.
+            if protrude {
+                let end = right_end;
+                let ch = if pre_last { self.cur.get(end - 1).copied() } else { protchar_right(&self.e.nodes, &self.cur[content_start..end]) };
+                let w = char_pw(&self.e.fonts, ch, true);
+                if let (true, Some(ch)) = (w != 0, ch) {
+                    self.cur.insert(end, Self::margin_kern(w, ch, true));
+                }
+                let ch = protchar_left(&self.e.nodes, &self.cur[content_start..], false);
+                let w = char_pw(&self.e.fonts, ch, false);
+                if let (true, Some(ch)) = (w != 0, ch) {
+                    self.cur.insert(content_start, Self::margin_kern(w, ch, false));
+                }
+            }
             let g = self.e.nodes.glue_node(right, RIGHT_SKIP as u8 + 1);
             self.cur.push(g);
             // §889: packaged to the line's width, shifted by its indent.
             let (indent, width) = shape.line(cur_line);
+            // pdfTeX's font expansion of the line (`hpack` with `cal_expand_ratio`).
+            if self.ip(PDF_ADJUST_SPACING) > 0 {
+                self.expand_line(line_start, width);
+            }
             self.adjust = Some(Vec::new());
             let mut b = self.hpack(line_start, width, true);
             b.shift = indent;

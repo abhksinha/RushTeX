@@ -27,6 +27,9 @@ impl Machine<'_, '_> {
     /// The value of `last_item` primitive `i`, or `None` when it is not one.
     pub(super) fn native_value(&mut self, i: u16) -> Option<Value> {
         let (name, cmd) = PRIMITIVES[i as usize];
+        if cmd == Cmd::AssignFontInt {
+            return self.micro_value(name);
+        }
         if cmd != Cmd::LastItem {
             return None;
         }
@@ -88,7 +91,7 @@ impl Machine<'_, '_> {
         let f = self.scan_font_ident() as usize;
         let c = self.scan_int();
         let font = &self.e.fonts.list[f];
-        let Some([wd, ht, dp, ic]) = u8::try_from(c).ok().and_then(|c| font.metrics.dims(c, font.size)) else { return 0 };
+        let Some([wd, ht, dp, ic]) = u8::try_from(c).ok().and_then(|c| font.dims(c)) else { return 0 };
         match name {
             "fontcharwd" => wd,
             "fontcharht" => ht,
@@ -126,6 +129,21 @@ impl Machine<'_, '_> {
                 }
             }
             "pdfcolorstackinit" => self.color_stack_init(out),
+            // pdfTeX: the margin kern at either end of an `\hbox` register.
+            "leftmarginkern" | "rightmarginkern" => {
+                let n = self.scan_box_num();
+                let list = self.e.eqtb.box_reg(n).map(|b| self.e.nodes.boxes[b as usize]).filter(|b| !b.vertical);
+                let Some(b) = list else { return self.error("pdfTeX error (marginkern): a non-empty hbox expected") };
+                let w = self.margin_kern_of(self.e.nodes.get(b.list), name == "rightmarginkern");
+                // No margin kern prints as `0pt`, not `print_scaled`'s `0.0pt`.
+                let mut s = String::new();
+                match w {
+                    Some(w) => super::engine_value::print_scaled(w, &mut s),
+                    None => s.push('0'),
+                }
+                s.push_str("pt");
+                str_toks(&s, out);
+            }
             // utils.c `matchstrings`: `1` matched, `0` not, `-1` a bad pattern; at most
             // `subcount` (default 10) subexpressions are kept for `\pdflastmatch`.
             "pdfmatch" => {

@@ -23,7 +23,9 @@ pub enum Kind {
     /// §149: glue `a` (an index into [`Nodes::glues`]); subtype §149's (0 normal, 1–18 the
     /// parameter it came from plus one, 100–102 leaders, with the leader box in `b`).
     Glue,
-    /// §155: a kern of width `a`; subtype 0 normal, 1 explicit, 2 accent.
+    /// §155: a kern of width `a`; subtype 0 normal, 1 explicit, 2 accent. pdfTeX's margin
+    /// kerns are kerns of subtype [`MARGIN_LEFT`] or [`MARGIN_RIGHT`], with the protruding
+    /// character `b` of font `font`.
     Kern,
     /// §157: penalty `a`.
     Penalty,
@@ -47,6 +49,18 @@ pub enum Kind {
     /// §681–§688: a noad of a math list being built, `a` indexing the machine's noad
     /// table (see `engine_mlist`). Noads never reach a box.
     Noad,
+}
+
+/// pdfTeX's `margin_kern_node` (`left_side`, `right_side`), as kern subtypes.
+pub const MARGIN_LEFT: u8 = 4;
+pub const MARGIN_RIGHT: u8 = 5;
+
+impl Node {
+    /// A pdfTeX margin kern (which `\unkern` and `\lastkern` do not see).
+    #[inline]
+    pub fn is_margin_kern(&self) -> bool {
+        self.kind == Kind::Kern && self.sub >= MARGIN_LEFT
+    }
 }
 
 /// §140: an insertion for box `n`: its material's height plus depth, `\splitmaxdepth`,

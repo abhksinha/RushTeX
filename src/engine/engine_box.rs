@@ -163,7 +163,7 @@ impl Machine<'_, '_> {
             Prim::ItalCorr => {
                 if let Some(t) = self.tail().filter(|t| matches!(t.kind, Kind::Char | Kind::Lig)) {
                     let f = &self.e.fonts.list[t.font as usize];
-                    let ic = u8::try_from(t.a).ok().and_then(|c| f.metrics.dims(c, f.size)).map_or(0, |d| d[3]);
+                    let ic = u8::try_from(t.a).ok().and_then(|c| f.dims(c)).map_or(0, |d| d[3]);
                     self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, ic) });
                 }
             }
@@ -187,8 +187,9 @@ impl Machine<'_, '_> {
                 self.maybe_build_page();
             }
             Prim::Hskip | Prim::Vskip => {
-                let g = self.scan_glue(false);
-                let n = self.e.nodes.glue_node(g, 0);
+                let (g, fresh) = self.scan_glue_spec(false);
+                let mut n = self.e.nodes.glue_node(g, 0);
+                n.font = (fresh && g == Glue::default()) as u16;
                 self.cur.push(n);
             }
             Prim::Hfil | Prim::Hfill | Prim::Hss | Prim::HfilNeg | Prim::Vfil | Prim::Vfill | Prim::Vss | Prim::VfilNeg => {
@@ -224,7 +225,7 @@ impl Machine<'_, '_> {
                     Prim::Unkern => Kind::Kern,
                     _ => Kind::Penalty,
                 };
-                if self.tail().is_some_and(|t| t.kind == kind) {
+                if self.tail().is_some_and(|t| t.kind == kind && !t.is_margin_kern()) {
                     self.cur.pop();
                 }
             }
@@ -238,7 +239,7 @@ impl Machine<'_, '_> {
     }
 
     /// §436 `scan_register_num` for a box register.
-    fn scan_box_num(&mut self) -> u32 {
+    pub(super) fn scan_box_num(&mut self) -> u32 {
         let n = self.scan_int();
         if (0..=32767).contains(&n) {
             n as u32
@@ -699,7 +700,7 @@ impl Machine<'_, '_> {
     /// `\lastskip`, `\lastkern`, `\lastpenalty` (§424): the last node of the list being built,
     /// if it is of that kind.
     pub(super) fn last_item(&self, kind: Kind) -> Option<Node> {
-        self.tail().filter(|t| t.kind == kind && !self.mode_zero)
+        self.tail().filter(|t| t.kind == kind && !t.is_margin_kern() && !self.mode_zero)
     }
 }
 

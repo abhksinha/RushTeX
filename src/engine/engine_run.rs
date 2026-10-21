@@ -528,6 +528,8 @@ impl<'e, 'a> Machine<'e, 'a> {
                 }
                 return self.insert_dollar_sign(x.t);
             }
+            // pdfTeX's protrusion and expansion codes and `\pdffontexpand`.
+            Meaning::Native(i) if self.micro_command(super::engine_tables::PRIMITIVES[i as usize].0) => return,
             Meaning::CharDef(n) => {
                 let c = char::from_u32(n).unwrap_or('\0');
                 let cat = if c.is_ascii_alphabetic() { Cat::Letter } else { Cat::Other };

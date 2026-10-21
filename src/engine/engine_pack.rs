@@ -83,7 +83,7 @@ impl Machine<'_, '_> {
                 // §654: a ligature measures as its character.
                 Kind::Char | Kind::Lig => {
                     let f = &self.e.fonts.list[n.font as usize];
-                    if let Some([wd, ht, dp, _]) = u8::try_from(n.a).ok().and_then(|c| f.metrics.dims(c, f.size)) {
+                    if let Some([wd, ht, dp, _]) = u8::try_from(n.a).ok().and_then(|c| f.dims(c)) {
                         x += wd;
                         h = h.max(ht);
                         d = d.max(dp);

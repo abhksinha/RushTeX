@@ -1,8 +1,10 @@
 //! pdfTeX's colour stacks (pdftex.web `pdf_out_colorstack`, utils.c `newcolorstack`,
-//! `colorstackpush` and kin), in our own form: page stacks only (forms come with `\pdfxform`).
+//! `colorstackpush` and kin), in our own form.
 //!
 //! A stack's current literal survives from page to page; a stack made with `page` repeats
-//! its current literal at the top of every page unless it is the default `0 g 0 G`.
+//! its current literal at the top of every page unless it is the default `0 g 0 G`. A form
+//! (`\pdfxform`) is shipped with each stack's form side (utils.c `form_current`, begun at
+//! the stack's initial literal and never reset), swapped in by [`ColorStacks::swap_form`].
 
 use super::engine_run::Machine;
 use super::engine_value::str_toks;
@@ -21,6 +23,14 @@ pub struct ColorStack {
     page_start: bool,
     current: Option<String>,
     saved: Vec<Option<String>>,
+    form_current: Option<String>,
+    form_saved: Vec<Option<String>>,
+}
+
+impl ColorStack {
+    fn new(mode: u8, page_start: bool, init: Option<String>) -> Self {
+        ColorStack { mode, page_start, current: init.clone(), saved: Vec::new(), form_current: init, form_saved: Vec::new() }
+    }
 }
 
 pub struct ColorStacks(pub Vec<ColorStack>);
@@ -28,7 +38,7 @@ pub struct ColorStacks(pub Vec<ColorStack>);
 impl Default for ColorStacks {
     /// `colstacks_first_init`: stack 0 is the default colour, direct, repeated per page.
     fn default() -> Self {
-        ColorStacks(vec![ColorStack { mode: DIRECT_ALWAYS, page_start: true, current: Some(DEFAULT.into()), saved: Vec::new() }])
+        ColorStacks(vec![ColorStack::new(DIRECT_ALWAYS, true, Some(DEFAULT.into()))])
     }
 }
 
@@ -64,6 +74,15 @@ impl ColorStacks {
         Some((st.mode, st.current.clone().unwrap_or_default()))
     }
 
+    /// utils.c `page_mode`: the form side of every stack becomes current (and back again),
+    /// as a form begins (and ends) shipping.
+    pub fn swap_form(&mut self) {
+        for st in &mut self.0 {
+            std::mem::swap(&mut st.current, &mut st.form_current);
+            std::mem::swap(&mut st.saved, &mut st.form_saved);
+        }
+    }
+
     /// `pdf_out_colorstack_startpage`: the literals that begin a page.
     pub fn page_start(&self) -> Vec<(u8, String)> {
         self.0
@@ -86,7 +105,7 @@ impl Machine<'_, '_> {
             SET_ORIGIN
         };
         let s = self.general_text_string();
-        self.colors.0.push(ColorStack { mode, page_start, current: some(s), saved: Vec::new() });
+        self.colors.0.push(ColorStack::new(mode, page_start, some(s)));
         str_toks(&(self.colors.0.len() - 1).to_string(), out);
     }
 }

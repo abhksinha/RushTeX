@@ -12,7 +12,7 @@ use super::engine_node::{BoxRec, InsRec, Kind, Node, IGNORE_DEPTH};
 use super::engine_pack::badness;
 use super::engine_prim::{Meaning, Prim};
 use super::engine_run::{Machine, Mode};
-use super::engine_whatsit::XIMAGE;
+use super::engine_whatsit::sized;
 
 /// pdfTeX's `\ignoreprimitiveerror` (§236 slot).
 const IGNORE_PRIMITIVE_ERROR: u32 = 102;
@@ -202,7 +202,7 @@ impl Machine<'_, '_> {
                         prev_dp = dp;
                         None
                     }
-                    Kind::Whatsit if n.sub == XIMAGE => {
+                    Kind::Whatsit if sized(n.sub) => {
                         let [_, ht, dp] = self.e.nodes.rules[n.a as usize];
                         act[1] += prev_dp + ht;
                         prev_dp = dp;
@@ -433,7 +433,7 @@ impl Machine<'_, '_> {
                     Next::Contribute
                 }
                 // pdfTeX: an image whatsit adds to `page_total` like a box, without `\topskip`.
-                Kind::Whatsit if p.sub == XIMAGE => {
+                Kind::Whatsit if sized(p.sub) => {
                     let [_, h, d] = self.e.nodes.rules[p.a as usize];
                     self.page.so_far[1] += self.page.so_far[7] + h;
                     self.page.so_far[7] = d;

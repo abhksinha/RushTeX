@@ -15,7 +15,7 @@ use super::engine_microtype::{char_pw, protchar_left, protchar_right};
 use super::engine_node::{Kind, Node, Nodes};
 use super::engine_pack::badness;
 use super::engine_run::Machine;
-use super::engine_whatsit::XIMAGE;
+use super::engine_whatsit::sized;
 
 const INF_BAD: i32 = 10_000;
 const INF_PENALTY: i32 = 10_000;
@@ -506,7 +506,7 @@ impl Machine<'_, '_> {
                 Kind::Box => w[0] = nodes.boxes[n.a as usize].width,
                 Kind::Rule => w[0] = nodes.rules[n.a as usize][0],
                 Kind::Kern | Kind::Math => w[0] = n.a,
-                Kind::Whatsit if n.sub == XIMAGE => w[0] = nodes.rules[n.a as usize][0],
+                Kind::Whatsit if sized(n.sub) => w[0] = nodes.rules[n.a as usize][0],
                 Kind::Penalty | Kind::Disc | Kind::Ins | Kind::Mark | Kind::Adjust | Kind::Whatsit | Kind::Noad => {}
             }
             w
@@ -636,7 +636,7 @@ impl Machine<'_, '_> {
                     }
                     Kind::Penalty => br.try_break(&widths, n.a, false, Some(k)),
                     // pdfTeX: an image whatsit adds its width (`act_width`).
-                    Kind::Whatsit if n.sub == XIMAGE => br.total[0] += nodes.rules[n.a as usize][0],
+                    Kind::Whatsit if sized(n.sub) => br.total[0] += nodes.rules[n.a as usize][0],
                     // §866: `mark_node, ins_node, adjust_node: do_nothing`.
                     Kind::Ins | Kind::Mark | Kind::Adjust | Kind::Whatsit | Kind::Noad => {}
                 }

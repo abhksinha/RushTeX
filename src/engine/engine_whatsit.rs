@@ -33,6 +33,15 @@ pub(super) const SAVE: u8 = 12;
 pub(super) const RESTORE: u8 = 13;
 /// `\pdfrefximage` (14–17 are `engine_pdfdoc`'s): see `engine_image`.
 pub(super) const XIMAGE: u8 = 18;
+/// `\pdfrefxform`: see `engine_xform`.
+pub(super) const XFORM: u8 = 19;
+
+/// A whatsit with a size, kept like a rule's (`a` indexes `nodes.rules`): pdfTeX's
+/// `pdf_refximage_node` and `pdf_refxform_node`.
+#[inline]
+pub(super) fn sized(sub: u8) -> bool {
+    sub == XIMAGE || sub == XFORM
+}
 
 // §236 parameter slots.
 const LANGUAGE_CODE: u32 = 50;

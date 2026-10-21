@@ -21,6 +21,38 @@ pub struct ShippedPage {
     /// (`/Im<n>`, object).
     pub group: i32,
     pub images: Vec<(u32, i32)>,
+    /// The forms it shows as (`/Fm<n>`, object).
+    pub forms: Vec<(u32, i32)>,
+}
+
+/// A shipped `\pdfxform` (pdftex.web `pdf_ship_out` of a form): its object, its box's width
+/// and height plus depth, content, the images and forms it shows, and its `attr` and
+/// `resources` text.
+#[derive(Debug, Clone, Default)]
+pub struct ShippedForm {
+    pub id: i32,
+    pub width: i32,
+    pub height: i32,
+    pub content: Vec<u8>,
+    pub images: Vec<(u32, i32)>,
+    pub forms: Vec<(u32, i32)>,
+    pub attr: Vec<u8>,
+    pub resources: Vec<u8>,
+}
+
+/// pdfTeX's `/XObject` resources: forms, then images.
+fn xobjects(buf: &mut Vec<u8>, forms: &[(u32, i32)], images: &[(u32, i32)]) {
+    buf.extend_from_slice(b" /XObject <<");
+    for (prefix, list) in [(&b" /Fm"[..], forms), (b" /Im", images)] {
+        for &(n, obj) in list {
+            buf.extend_from_slice(prefix);
+            print_int(buf, n as i64);
+            buf.push(b' ');
+            print_int(buf, obj as i64);
+            buf.extend_from_slice(b" 0 R");
+        }
+    }
+    buf.extend_from_slice(b" >>");
 }
 
 /// A font the pages use: its file name, size and the TeX widths of its 256 characters.
@@ -346,6 +378,8 @@ pub struct DocMeta<'m> {
     pub catalog: &'m [u8],
     pub objects: &'m [(i32, Vec<u8>)],
     pub base: usize,
+    /// The shipped forms.
+    pub forms: &'m [ShippedForm],
 }
 
 /// The PDF of `pages`; `fonts[i]` is engine font `i` when a page uses it. `files` reads
@@ -406,7 +440,7 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
         d.buf.extend_from_slice(b"<< /Type /Page /Contents ");
         d.reference(content);
         d.buf.extend_from_slice(b" /Resources ");
-        let own = if p.images.is_empty() {
+        let own = if p.images.is_empty() && p.forms.is_empty() {
             resources
         } else {
             next += 1;
@@ -436,19 +470,41 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
         if own != resources {
             d.begin(own);
             d.buf.extend_from_slice(&font_dict);
-            d.buf.extend_from_slice(b" /XObject <<");
-            for &(n, obj) in &p.images {
-                d.buf.extend_from_slice(b" /Im");
-                print_int(&mut d.buf, n as i64);
-                d.buf.push(b' ');
-                d.reference(obj as usize);
-            }
-            d.buf.extend_from_slice(b" >> >>\n");
+            xobjects(&mut d.buf, &p.forms, &p.images);
+            d.buf.extend_from_slice(b" >>\n");
             d.end();
         }
         packed.clear();
         deflate.compress_zlib(&p.content, &mut packed);
         d.stream(content, b"", &packed, true);
+    }
+    // pdfTeX's `Write out Form stream header`, the resources given inline.
+    let mut dict = Vec::new();
+    for f in meta.forms {
+        dict.clear();
+        dict.extend_from_slice(b"\n/Type /XObject\n/Subtype /Form\n");
+        if !f.attr.is_empty() {
+            dict.extend_from_slice(&f.attr);
+            dict.push(b'\n');
+        }
+        dict.extend_from_slice(b"/BBox [0 0 ");
+        print_bp(&mut dict, f.width as i64);
+        dict.push(b' ');
+        print_bp(&mut dict, f.height as i64);
+        dict.extend_from_slice(b"]\n/FormType 1\n/Matrix [1 0 0 1 0 0]\n/Resources ");
+        dict.extend_from_slice(&font_dict);
+        if !f.resources.is_empty() {
+            dict.push(b'\n');
+            dict.extend_from_slice(&f.resources);
+            dict.push(b'\n');
+        }
+        if !f.images.is_empty() || !f.forms.is_empty() {
+            xobjects(&mut dict, &f.forms, &f.images);
+        }
+        dict.extend_from_slice(b" >>\n");
+        packed.clear();
+        deflate.compress_zlib(&f.content, &mut packed);
+        d.stream(f.id as usize, &dict, &packed, true);
     }
     d.begin(tree);
     d.buf.extend_from_slice(b"<< /Type /Pages /Count ");

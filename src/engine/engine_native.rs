@@ -54,6 +54,7 @@ impl Machine<'_, '_> {
             "pdflastlink" => Value::Int(self.pdf_doc.last_link),
             "pdflastximage" => Value::Int(self.pdf_doc.last_ximage),
             "pdflastximagepages" => Value::Int(self.pdf_doc.last_ximage_pages),
+            "pdflastxform" => Value::Int(self.pdf_doc.last_xform),
             "fontcharwd" | "fontcharht" | "fontchardp" | "fontcharic" => Value::Dimen(self.font_char_dimen(name)),
             "gluestretch" | "glueshrink" => {
                 let g = self.scan_glue(false);

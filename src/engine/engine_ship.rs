@@ -18,7 +18,7 @@ use super::engine_pdfdoc::{self as doc, PdfDoc};
 use super::engine_vf::{PacketOut, VfTable};
 use super::engine_whatsit as what;
 use crate::backend::backend_pdftex::TextState;
-pub use crate::backend::backend_ship::ShippedPage;
+pub use crate::backend::backend_ship::{ShippedForm, ShippedPage};
 
 const H_OFFSET: u32 = 18;
 const V_OFFSET: u32 = 19;
@@ -108,6 +108,18 @@ struct Walk<'a> {
     /// shows (`pdf_ximage_list`), by resource number and object.
     group: i32,
     images: Vec<(u32, i32)>,
+    /// The forms it shows (`pdf_xform_list`), by resource number and object.
+    forms: Vec<(u32, i32)>,
+}
+
+/// What a walk of a page or form box leaves: its content, link annotations, transparency
+/// group, images and forms.
+struct Walked {
+    content: Vec<u8>,
+    annots: Vec<(i32, usize, [i32; 4])>,
+    group: i32,
+    images: Vec<(u32, i32)>,
+    forms: Vec<(u32, i32)>,
 }
 
 /// `set_rect_dimens`: the rectangle of an annotation or destination with dimensions `dims`
@@ -217,6 +229,15 @@ impl Walk<'_> {
         }
     }
 
+    /// `out_form` with the form's lower left corner at TeX's (h, v).
+    fn form(&mut self, n: &Node, h: i32, v: i32) {
+        let entry = (n.b as u32 + 1, self.doc.forms[n.b as usize].obj);
+        if !self.forms.contains(&entry) {
+            self.forms.push(entry);
+        }
+        self.text.form_ref(&mut self.out, n.b as usize + 1, h as i64, v as i64, self.page_height);
+    }
+
     /// §621 `hlist_out` of box `b` with its reference point at (`cur_h`, `cur_v`).
     fn hlist(&mut self, b: &BoxRec, mut cur_h: i32, cur_v: i32) {
         let (g_order, g_sign) = (b.glue_order, b.glue_sign);
@@ -270,9 +291,13 @@ impl Walk<'_> {
                 }
                 Kind::Kern | Kind::Math => cur_h += n.a,
                 Kind::Whatsit => match n.sub {
-                    // pdfTeX's `Output a Image node in a hlist`.
+                    // pdfTeX's `Output a Image node in a hlist`, and a Form node.
                     what::XIMAGE => {
                         self.image(n, cur_h, base_line + self.nodes.rules[n.a as usize][2]);
+                        cur_h += self.nodes.rules[n.a as usize][0];
+                    }
+                    what::XFORM => {
+                        self.form(n, cur_h, base_line + self.nodes.rules[n.a as usize][2]);
                         cur_h += self.nodes.rules[n.a as usize][0];
                     }
                     doc::START_LINK => self.do_link(n.a as usize, b, left_edge, base_line, cur_h),
@@ -417,6 +442,11 @@ impl Walk<'_> {
                         cur_v += ht + dp;
                         self.image(n, left_edge, cur_v);
                     }
+                    what::XFORM => {
+                        let [_, ht, dp] = self.nodes.rules[n.a as usize];
+                        cur_v += ht + dp;
+                        self.form(n, left_edge, cur_v);
+                    }
                     doc::DEST => self.do_dest(n.a as usize, b, left_edge, top_edge + b.height, left_edge, cur_v),
                     doc::START_LINK | doc::END_LINK => {}
                     doc::REF_OBJ => self.doc.want_obj(n.a),
@@ -526,11 +556,53 @@ impl Machine<'_, '_> {
             h => h,
         };
         self.check_virtual_fonts(b);
+        // `pdf_last_page`: the page's object, made now unless a `goto page` asked for it.
+        let page_obj = self.pdf_doc.page_obj(self.page.pdf.len() as i32 + 1);
+        let w = self.walk_box(bx, Some(page_obj), height, h_offset, bx.height + v_offset);
+        for &(obj, link, rect) in &w.annots {
+            self.pdf_doc.write_link(link, obj, rect, height);
+        }
+        self.ship_forms(&w.forms);
+        let annots = w.annots.iter().map(|a| a.0).collect();
+        self.page.pdf.push(ShippedPage { id: page_obj, width, height, content: w.content, annots, group: w.group, images: w.images, forms: w.forms });
+    }
+
+    /// The forms a page or form showed that are not shipped yet (pdfTeX's `Write out
+    /// pending forms`).
+    fn ship_forms(&mut self, forms: &[(u32, i32)]) {
+        for &(n, _) in forms {
+            if !self.pdf_doc.forms[n as usize - 1].shipped {
+                self.ship_form(n as usize - 1);
+            }
+        }
+    }
+
+    /// `pdf_ship_out` of form `k`: its box walked from (0, height), the page height its
+    /// height plus depth; then the forms it shows.
+    pub(super) fn ship_form(&mut self, k: usize) {
+        let f = &mut self.pdf_doc.forms[k];
+        f.shipped = true;
+        let (b, [width, height, depth]) = (f.box_rec, f.dims);
+        self.check_virtual_fonts(b);
+        let bx = self.e.nodes.boxes[b as usize];
+        self.colors.swap_form();
+        let w = self.walk_box(bx, None, height + depth, 0, height);
+        self.colors.swap_form();
+        let f = &self.pdf_doc.forms[k];
+        let latin1 = |s: &str| s.chars().map(|c| c as u32 as u8).collect::<Vec<u8>>();
+        let shipped = ShippedForm { id: f.obj, width, height: height + depth, content: w.content, images: w.images, forms: w.forms, attr: latin1(&f.attr), resources: latin1(&f.resources) };
+        self.ship_forms(&shipped.forms);
+        self.pdf_doc.shipped_forms.push(shipped);
+    }
+
+    /// pdfTeX's `pdf_hlist_out`/`pdf_vlist_out` of box `bx` with its reference point at
+    /// (h, v), on a page (whose object is given; its colour stacks start it) or a form
+    /// `height` tall.
+    fn walk_box(&mut self, bx: BoxRec, page: Option<i32>, height: i32, h: i32, v: i32) -> Walked {
+        let dimen = |m: &Self, slot| m.dimen_param(slot);
         let mut base = std::mem::take(&mut self.page.font_base);
         let mut colors = std::mem::take(&mut self.colors);
         let mut pdf_doc = std::mem::take(&mut self.pdf_doc);
-        // `pdf_last_page`: the page's object, made now unless a `goto page` asked for it.
-        let page_obj = pdf_doc.page_obj(self.page.pdf.len() as i32 + 1);
         let (link_margin, dest_margin) = (dimen(self, PDF_LINK_MARGIN), dimen(self, PDF_DEST_MARGIN));
         let me = &*self;
         let text_of = move |a: i32, b: i32| {
@@ -538,24 +610,20 @@ impl Machine<'_, '_> {
             me.show(me.e.toks.get(super::engine_token::Span { start: a as u32, end: b as u32 }), &mut s);
             s
         };
-        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj, cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new() };
+        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new() };
         // `pdf_out_colorstack_startpage`, at the page's origin.
-        for (mode, s) in walk.colors.page_start() {
-            walk.literal(mode, &s, 0, height);
+        if page.is_some() {
+            for (mode, s) in walk.colors.page_start() {
+                walk.literal(mode, &s, 0, height);
+            }
         }
-        walk.box_out(&bx, h_offset, bx.height + v_offset);
+        walk.box_out(&bx, h, v);
         walk.text.end_text(&mut walk.out);
-        let content = walk.out;
-        let annots = std::mem::take(&mut walk.annots);
-        let group = walk.group;
-        let images = std::mem::take(&mut walk.images);
-        for &(obj, link, rect) in &annots {
-            pdf_doc.write_link(link, obj, rect, height);
-        }
+        let walked = Walked { content: walk.out, annots: walk.annots, group: walk.group, images: walk.images, forms: walk.forms };
         self.page.font_base = base;
         self.colors = colors;
         self.pdf_doc = pdf_doc;
-        self.page.pdf.push(ShippedPage { id: page_obj, width, height, content, annots: annots.iter().map(|a| a.0).collect(), group, images });
+        walked
     }
 
     /// The document so far as a PDF: the shipped pages and the fonts they use.
@@ -588,7 +656,7 @@ impl Machine<'_, '_> {
         let minor = self.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot: PDF_MINOR_VERSION });
         let first_page = self.page.pdf.first().map_or(0, |p| p.id);
         let (objects, catalog, base) = self.pdf_doc.finish(first_page, files, self.image_hicolor());
-        let meta = crate::backend::backend_ship::DocMeta { minor, info: &self.pdf_doc.info, catalog: &catalog, objects: &objects, base: base as usize };
+        let meta = crate::backend::backend_ship::DocMeta { minor, info: &self.pdf_doc.info, catalog: &catalog, objects: &objects, base: base as usize, forms: &self.pdf_doc.shipped_forms };
         crate::backend::backend_ship::write(&self.page.pdf, &fonts, files, to_unicode, &meta)
     }
 }

@@ -8,7 +8,7 @@
 use super::engine_eqtb::{Glue, Reg, Region};
 use super::engine_node::{BoxRec, Kind, Node, Sign, IGNORE_DEPTH, RUNNING};
 use super::engine_run::Machine;
-use super::engine_whatsit::XIMAGE;
+use super::engine_whatsit::sized;
 
 // Parameter slots (tex.web §236, §247, §224 numbering; checked against the table in tests).
 pub(super) const LOOSENESS: u32 = 19;
@@ -119,7 +119,7 @@ impl Machine<'_, '_> {
                 }
                 Kind::Kern | Kind::Math => x += n.a,
                 // pdfTeX: an image whatsit counts like a rule.
-                Kind::Whatsit if n.sub == XIMAGE => {
+                Kind::Whatsit if sized(n.sub) => {
                     let [w, ih, id] = nodes.rules[n.a as usize];
                     x += w;
                     h = h.max(ih);
@@ -207,7 +207,7 @@ impl Machine<'_, '_> {
                     x += d + n.a;
                     d = 0;
                 }
-                Kind::Whatsit if n.sub == XIMAGE => {
+                Kind::Whatsit if sized(n.sub) => {
                     let [iw, ih, id] = nodes.rules[n.a as usize];
                     x += d + ih;
                     d = id;

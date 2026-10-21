@@ -372,6 +372,18 @@ impl TextState {
         out.extend_from_slice(b" Do\nQ\n");
     }
 
+    /// pdfTeX's `out_form`: form `/Fm<n>` with its lower left corner at TeX's (x, v).
+    pub fn form_ref(&mut self, out: &mut Vec<u8>, n: usize, x: i64, v: i64, origin_v: i64) {
+        self.end_text(out);
+        out.extend_from_slice(b"q\n1 0 0 1 ");
+        print_bp(out, x - self.org_h);
+        out.push(b' ');
+        print_bp(out, origin_v + self.org_v - v);
+        out.extend_from_slice(b" cm\n/Fm");
+        print_int(out, n as i64);
+        out.extend_from_slice(b" Do\nQ\n");
+    }
+
     /// pdfTeX's `out_image` for an included PDF page `/Im<n>`: its form, `img` sp at natural
     /// size with its box's corner at `orig`, scaled to `w`×`hd` with that corner at TeX's
     /// (x, v).

@@ -37,7 +37,7 @@ enum Step {
 /// A `lig_stack` entry: the character read ahead (`real`), or a pseudo-ligature item whose
 /// `lig_ptr` is the character it stands for, if any.
 #[derive(Clone, Copy)]
-struct Item {
+pub(super) struct Item {
     c: u8,
     real: bool,
     orig: Option<u8>,
@@ -77,7 +77,8 @@ impl Machine<'_, '_> {
         // §576 `font_false_bchar`: a boundary character the font also has as a real one.
         let false_bchar = if font_bchar < NON_CHAR && self.e.fonts.list[f as usize].metrics.exists(font_bchar as u8) { NON_CHAR } else { font_bchar };
         let paragraph = self.mode == Mode::Horizontal && !self.inner;
-        let mut lig_stack = vec![Item { c: first, real: true, orig: None }];
+        let mut lig_stack = std::mem::take(&mut self.lig_buf);
+        cur_l_next(&mut lig_stack, first);
         let mut cur_l = first as u16;
         let mut cur_r = NON_CHAR;
         let mut cur_q = self.cur.len();
@@ -103,7 +104,10 @@ impl Machine<'_, '_> {
                     let ins_disc = self.cur.len() > cur_q && self.cur.last().is_some_and(|n| n.a == hyphen);
                     if lig_present {
                         // §1035 `pack_lig`.
-                        let from: Vec<u8> = self.cur.drain(cur_q..).map(|n| n.a as u8).collect();
+                        let nodes = &mut self.e.nodes;
+                        let at = nodes.lig_chars.len();
+                        nodes.lig_chars.extend(self.cur[cur_q..].iter().map(|n| n.a as u8));
+                        self.cur.truncate(cur_q);
                         let mut hits = 0;
                         if lft_hit {
                             hits = 2;
@@ -113,7 +117,7 @@ impl Machine<'_, '_> {
                             hits += 1;
                             rt_hit = false;
                         }
-                        let n = self.e.nodes.lig_node(f, cur_l as u8, &from, hits);
+                        let n = self.e.nodes.lig_node_at(f, cur_l as u8, at, hits);
                         self.cur.push(n);
                         lig_present = false;
                     }
@@ -295,6 +299,7 @@ impl Machine<'_, '_> {
                 }
             };
         }
+        self.lig_buf = lig_stack;
         // `reswitch`: the token that ended the word.
         if let Some(x) = pending {
             self.command(x, 0);

@@ -134,6 +134,8 @@ pub struct PdfDoc {
     /// image with alpha needs one).
     pub images: Vec<super::engine_image::XImage>,
     pub last_ximage: i32,
+    /// `\pdflastximagepages`.
+    pub last_ximage_pages: i32,
     pub group_obj: i32,
 }
 
@@ -159,6 +161,7 @@ impl Default for PdfDoc {
             done: Vec::new(),
             images: Vec::new(),
             last_ximage: 0,
+            last_ximage_pages: 0,
             group_obj: 0,
         }
     }

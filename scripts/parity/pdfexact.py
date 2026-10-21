@@ -164,7 +164,12 @@ def resources(doc, xref):
 
 class FontInfo:
     def __init__(self, doc, xref):
-        self.base = doc.xref_get_key(xref, "BaseFont")[1].lstrip("/")
+        t, v = doc.xref_get_key(xref, "BaseFont")
+        # An indirect name (pdfTeX writes one for a font it replaced in an included PDF) is
+        # the same name.
+        if t == "xref":
+            v = doc.xref_object(ref_xref(v)).strip()
+        self.base = v.lstrip("/")
         # A subset tag (`ABCDEF+`) is not part of the font's identity.
         self.base = re.sub(r"^[A-Z]{6}\+", "", self.base)
         first = doc.xref_get_key(xref, "FirstChar")[1]

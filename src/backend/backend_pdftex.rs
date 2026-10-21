@@ -372,6 +372,25 @@ impl TextState {
         out.extend_from_slice(b" Do\nQ\n");
     }
 
+    /// pdfTeX's `out_image` for an included PDF page `/Im<n>`: its form, `img` sp at natural
+    /// size with its box's corner at `orig`, scaled to `w`×`hd` with that corner at TeX's
+    /// (x, v).
+    #[allow(clippy::too_many_arguments)]
+    pub fn form(&mut self, out: &mut Vec<u8>, n: usize, x: i64, v: i64, origin_v: i64, [w, hd]: [i64; 2], img: [i64; 2], orig: [i64; 2]) {
+        self.end_text(out);
+        out.extend_from_slice(b"q\n");
+        print_real(out, ext_xn_over_d(w, TEN_POW[6], img[0]), 6);
+        out.extend_from_slice(b" 0 0 ");
+        print_real(out, ext_xn_over_d(hd, TEN_POW[6], img[1]), 6);
+        out.push(b' ');
+        print_bp(out, x - self.org_h - ext_xn_over_d(w, orig[0], img[0]));
+        out.push(b' ');
+        print_bp(out, origin_v + self.org_v - v - ext_xn_over_d(hd, orig[1], img[1]));
+        out.extend_from_slice(b" cm\n/Im");
+        print_int(out, n as i64);
+        out.extend_from_slice(b" Do\nQ\n");
+    }
+
     /// `pdf_set_rule(x, y, w, h)` with (x, y) the rule's lower left corner.
     /// `pdf_set_rule(x, v, w, h)`: `v` is TeX's (downward) position of the rule's bottom and
     /// `origin_v` the page height (`pdf_origin_v`).

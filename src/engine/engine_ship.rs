@@ -205,7 +205,16 @@ impl Walk<'_> {
         if self.group == 0 {
             self.group = im.group;
         }
-        self.text.image(&mut self.out, n.b as usize + 1, h as i64, v as i64, self.page_height, [w as i64, ht as i64 + dp as i64]);
+        match &im.pdf {
+            // `out_image` of a PDF page: its form scaled from the box's size, placed by the
+            // box's corner.
+            Some(p) => {
+                let [iw, ih] = if p.rotate == 90 || p.rotate == 270 { [p.size[1], p.size[0]] } else { p.size };
+                let (orig, k) = (p.orig, n.b as usize + 1);
+                self.text.form(&mut self.out, k, h as i64, v as i64, self.page_height, [w as i64, ht as i64 + dp as i64], [iw as i64, ih as i64], [orig[0] as i64, orig[1] as i64]);
+            }
+            None => self.text.image(&mut self.out, n.b as usize + 1, h as i64, v as i64, self.page_height, [w as i64, ht as i64 + dp as i64]),
+        }
     }
 
     /// §621 `hlist_out` of box `b` with its reference point at (`cur_h`, `cur_v`).

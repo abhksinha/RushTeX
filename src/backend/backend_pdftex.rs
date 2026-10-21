@@ -127,6 +127,9 @@ pub struct TextState {
     font: Option<(u32, i64)>,
     /// `pdf_font_size[f]` of the current font.
     font_size: i64,
+    /// writet3.c `get_pk_font_scale` of the current font when it is a bitmap (PK) font,
+    /// whose advance is `getpkcharwidth`; 0 for a scalable font.
+    pub pk_scale: i64,
     /// False after text of unknown advance: the viewer's position is then not `delta_h`.
     lost: bool,
     /// `pdf_origin_h`, and `pdf_origin_v` less the page height (down), as `pdf_set_origin`
@@ -311,7 +314,9 @@ impl TextState {
     /// the text matrix's expansion.
     #[inline(always)]
     pub fn advance(&mut self, w: i64) {
-        if self.tm_a == 0 {
+        if self.pk_scale != 0 {
+            self.delta_h += super::backend_pk::pk_advance(w, self.font_size, self.pk_scale);
+        } else if self.tm_a == 0 {
             self.delta_h += divide_scaled(w, self.font_size, 4).1;
         } else {
             let a = 1000 + self.tm_a;

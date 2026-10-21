@@ -1,6 +1,6 @@
 # paracol at zero shift: `head_for_vmode` and display alignments in lists
 Author: abhi+claude | Date: 2026-10-22
-Files: `src/engine/engine_box.rs`, `src/engine/engine_align.rs`, `src/engine/engine_noad.rs`, `scripts/parity/corpus/paracol.tex`
+Files: `src/engine/engine_box.rs`, `src/engine/engine_align.rs`, `src/engine/engine_noad.rs`, `scripts/parity/corpus/paracol.tex`, `scripts/parity/corpus/man.dtx`, `scripts/parity/corpus/impl.dtx`, `scripts/parity/corpus/bgpaint.dtx`
 
 ## Context
 paracol.dtx (CTAN bundle, 270 pages: parallel columns, column footnotes, parallel pages)

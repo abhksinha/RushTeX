@@ -94,6 +94,12 @@ pub(super) struct Page {
     /// shares (pdfTeX's `pdf_font_num`, `NOT_USED` until the font is first shipped).
     pub pdf: Vec<super::engine_ship::ShippedPage>,
     pub font_base: Vec<u16>,
+    /// Per font: the characters shipped (pdfTeX's `pdf_char_marked`), and its PK scale
+    /// (writet3.c `get_pk_font_scale`) when it is a bitmap font, 0 when scalable; with the
+    /// map's TFM names (`backend_ship::map_names`), read at the first shipout.
+    pub font_used: Vec<[u64; 4]>,
+    pub font_pk: Vec<i64>,
+    pub map_names: Option<Vec<u64>>,
 }
 
 impl Page {

@@ -45,9 +45,13 @@ pub fn run(fmt: &[u8], src: &str, o: &Opts, read: &dyn Fn(&str) -> Option<Vec<u8
         setup(&mut m);
         m.start_job();
         m.run();
-        let wrote = m.closed.split_off(n);
+        // What the next run reads back is each file's final content, as on disk: a file
+        // written several times in one run (listings' `.tmp`, doc's `.glo`) is compared by
+        // its last version only, and only that version is kept.
+        let mut wrote = m.closed.split_off(n);
+        last_versions(&mut wrote);
         prior = std::mem::take(&mut m.closed);
-        let same = wrote.iter().all(|w| prior.iter().rev().find(|p| p.name == w.name).is_some_and(|p| p.text == w.text));
+        let same = wrote.iter().all(|w| prior.iter().find(|p| p.name == w.name).is_some_and(|p| p.text == w.text));
         if same || runs >= o.max_runs {
             inspect(&m);
             return Some(Job { pdf: m.pdf(), pages: m.page.shipped.len(), runs, errors: std::mem::take(&mut m.errors) });
@@ -55,6 +59,17 @@ pub fn run(fmt: &[u8], src: &str, o: &Opts, read: &dyn Fn(&str) -> Option<Vec<u8
         prior = wrote;
     }
     None
+}
+
+/// Keeps the last version of each file name, in the order of those last versions.
+fn last_versions(files: &mut Vec<WriteStream>) {
+    let mut i = files.len();
+    while i > 0 {
+        i -= 1;
+        if files[i + 1..].iter().any(|w| w.name == files[i].name) {
+            files.remove(i);
+        }
+    }
 }
 
 /// IniTeX on `ini` (`pdflatex.ini`), then `\dump`: the format `run` starts from. `None` when

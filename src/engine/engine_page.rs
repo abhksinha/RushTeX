@@ -103,6 +103,18 @@ pub(super) struct Page {
 }
 
 impl Page {
+    /// The marks and the current page's nodes' token spans, for `engine_gc`.
+    pub(super) fn for_each_span(&mut self, f: &mut dyn FnMut(&mut Span)) {
+        for (_, marks) in &mut self.marks {
+            for m in marks.iter_mut().flatten() {
+                f(m);
+            }
+        }
+        for n in &mut self.list {
+            super::engine_gc::node_span(n, f);
+        }
+    }
+
     pub(super) fn marks_mut(&mut self, class: u32) -> &mut Marks {
         let i = match self.marks.iter().position(|m| m.0 == class) {
             Some(i) => i,

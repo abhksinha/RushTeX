@@ -64,8 +64,7 @@ impl Machine<'_, '_> {
             return;
         };
         if self.building() {
-            self.e.nodes.rules.push(self.pdf_doc.forms[k].dims);
-            let a = self.e.nodes.rules.len() as i32 - 1;
+            let a = self.e.nodes.add_rule(self.pdf_doc.forms[k].dims) as i32;
             self.cur.push(Node { kind: Kind::Whatsit, sub: XFORM, font: 0, a, b: k as i32 });
         }
     }

@@ -720,8 +720,7 @@ impl Machine<'_, '_> {
                                         let b = self.vpack_list(&remainder, 0, false, MAX_DIMEN);
                                         let stored = self.e.nodes.store(&remainder);
                                         let rec2 = InsRec { height: b.height + b.depth, list: stored, ..ins };
-                                        self.e.nodes.inserts.push(rec2);
-                                        node.a = self.e.nodes.inserts.len() as i32 - 1;
+                                        node.a = self.e.nodes.add_insert(rec2) as i32;
                                         wait = true;
                                     }
                                 }
@@ -870,8 +869,7 @@ impl Machine<'_, '_> {
         let b = self.vpack(start, 0, false, MAX_DIMEN);
         self.pop_nest();
         let node = if n < 255 {
-            self.e.nodes.inserts.push(InsRec { n, height: b.height + b.depth, depth, split_top, float_cost, list: b.list });
-            Node::new(Kind::Ins, self.e.nodes.inserts.len() as i32 - 1)
+            Node::new(Kind::Ins, self.e.nodes.add_insert(InsRec { n, height: b.height + b.depth, depth, split_top, float_cost, list: b.list }) as i32)
         } else {
             Node { kind: Kind::Adjust, sub: 0, font: 0, a: b.list.0 as i32, b: b.list.1 as i32 }
         };

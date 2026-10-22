@@ -511,8 +511,7 @@ impl Machine<'_, '_> {
             }
             out[i] = self.e.nodes.store(&list);
         }
-        self.e.nodes.discs.push(out);
-        n.a = self.e.nodes.discs.len() as i32 - 1;
+        n.a = self.e.nodes.add_disc(out) as i32;
     }
 
     /// pdfTeX's font expansion of a finished line (`hpack` with `cal_expand_ratio`, then

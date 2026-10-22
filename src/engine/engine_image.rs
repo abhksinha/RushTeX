@@ -173,8 +173,7 @@ impl Machine<'_, '_> {
             return;
         };
         if self.building() {
-            self.e.nodes.rules.push(self.pdf_doc.images[k].dims);
-            let a = self.e.nodes.rules.len() as i32 - 1;
+            let a = self.e.nodes.add_rule(self.pdf_doc.images[k].dims) as i32;
             self.cur.push(Node { kind: Kind::Whatsit, sub: XIMAGE, font: 0, a, b: k as i32 });
         }
     }

@@ -636,8 +636,8 @@ impl Machine<'_, '_> {
                     if r_count <= 127 {
                         let pre = self.e.nodes.store(&pre);
                         let post = self.e.nodes.store(&post);
-                        self.e.nodes.discs.push([pre, post]);
-                        out.push(Node { kind: Kind::Disc, sub: r_count as u8, font: 0, a: self.e.nodes.discs.len() as i32 - 1, b: 0 });
+                        let d = self.e.nodes.add_disc([pre, post]);
+                        out.push(Node { kind: Kind::Disc, sub: r_count as u8, font: 0, a: d as i32, b: 0 });
                     }
                     out.append(&mut major);
                     w.hyphen_passed = j - 1;

@@ -22,3 +22,11 @@ Model M: every node list and record has one owner, and is freed at the point TeX
 
 ## Open
 Z3 (document macros in size-class token blocks, §275 `eq_destroy`, §390 reference held while reading a body) follows Z1 under the same rules.
+
+## Measured
+Z1a, allocator half (2026-10-22):
+- `Nodes::store` allocates by `size_class`, and `Free` keeps per-class block starts plus one slot list per side table (`add_box`, `add_disc`, `add_insert`, `add_rule`, `glue_node`).
+- `lig_node_at` moves the characters into a freed block of their class.
+- Every direct `push` onto a side table now goes through these (`engine_chars`, `engine_hyph`, `engine_microtype`, `engine_page`, `engine_image`, `engine_xform`).
+- Until Z1d deletes it, the oracle's `collect_nodes` keeps whole blocks live (`Nodes::block`) and clears `Free`.
+- Nothing is freed yet. Gate: 85/85 zero shift, tests and suites pass. The ownership-check build is still to come.

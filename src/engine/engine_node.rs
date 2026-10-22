@@ -126,6 +126,73 @@ pub struct Nodes {
     pub lig_chars: Vec<u8>,
     pub discs: Vec<[(u32, u32); 2]>,
     pub inserts: Vec<InsRec>,
+    /// The free blocks and slots of each table (model M: one owner per list or record,
+    /// freed where TeX frees it; nothing is traced or moved).
+    pub free: Free,
+}
+
+/// Size classes of list and ligature blocks: exact lengths 1–16, then powers of two up to
+/// 2³¹, so a freed block of a class fits any list of that class.
+const CLASSES: usize = 16 + 27;
+
+/// The class of a block holding `len` entries, and the class's block length.
+#[inline]
+pub fn size_class(len: usize) -> (usize, usize) {
+    if len <= 16 {
+        (len - 1, len)
+    } else {
+        let p = len.next_power_of_two();
+        (16 + p.trailing_zeros() as usize - 5, p)
+    }
+}
+
+/// What fills a block past its list: never read, since every span ends at its list.
+const PAD: Node = Node { kind: Kind::Kern, sub: 0, font: 0, a: 0, b: 0 };
+
+/// Free blocks by size class (their starts) and free fixed-size slots, per table.
+#[derive(Debug)]
+pub struct Free {
+    pub spans: [Vec<u32>; CLASSES],
+    pub ligs: [Vec<u32>; CLASSES],
+    pub boxes: Vec<u32>,
+    pub glues: Vec<u32>,
+    pub rules: Vec<u32>,
+    pub discs: Vec<u32>,
+    pub inserts: Vec<u32>,
+}
+
+impl Default for Free {
+    fn default() -> Free {
+        Free { spans: std::array::from_fn(|_| Vec::new()), ligs: std::array::from_fn(|_| Vec::new()), boxes: Vec::new(), glues: Vec::new(), rules: Vec::new(), discs: Vec::new(), inserts: Vec::new() }
+    }
+}
+
+impl Free {
+    /// Forgets every free block and slot (the oracle's collector, `engine_gc`, compacts the
+    /// tables and so drops them).
+    pub fn clear(&mut self) {
+        for v in self.spans.iter_mut().chain(self.ligs.iter_mut()) {
+            v.clear();
+        }
+        for v in [&mut self.boxes, &mut self.glues, &mut self.rules, &mut self.discs, &mut self.inserts] {
+            v.clear();
+        }
+    }
+}
+
+/// A slot of `table` for `x`: a freed one when there is one, else a new one at the end.
+#[inline]
+fn slot<T>(table: &mut Vec<T>, free: &mut Vec<u32>, x: T) -> u32 {
+    match free.pop() {
+        Some(i) => {
+            table[i as usize] = x;
+            i
+        }
+        None => {
+            table.push(x);
+            table.len() as u32 - 1
+        }
+    }
 }
 
 /// §138: a rule dimension that is "running" (`null_flag`): it takes the size of the box.
@@ -138,40 +205,84 @@ impl Nodes {
         &self.list[list.0 as usize..list.1 as usize]
     }
 
-    /// Stores a finished list.
+    /// Stores a finished list in a block of its size class (a freed one when there is
+    /// one). An empty list takes no block.
     pub fn store(&mut self, nodes: &[Node]) -> (u32, u32) {
-        let start = self.list.len() as u32;
-        self.list.extend_from_slice(nodes);
-        (start, self.list.len() as u32)
+        if nodes.is_empty() {
+            return (0, 0);
+        }
+        let (c, cap) = size_class(nodes.len());
+        let start = match self.free.spans[c].pop() {
+            Some(s) => s as usize,
+            None => {
+                let s = self.list.len();
+                self.list.resize(s + cap, PAD);
+                s
+            }
+        };
+        self.list[start..start + nodes.len()].copy_from_slice(nodes);
+        (start as u32, (start + nodes.len()) as u32)
+    }
+
+    /// The block range holding list `l` (the list plus its class's padding).
+    #[inline]
+    pub fn block(l: (u32, u32)) -> (u32, u32) {
+        if l.0 >= l.1 {
+            return l;
+        }
+        (l.0, l.0 + size_class((l.1 - l.0) as usize).1 as u32)
     }
 
     pub fn add_box(&mut self, b: BoxRec) -> u32 {
-        self.boxes.push(b);
-        self.boxes.len() as u32 - 1
+        slot(&mut self.boxes, &mut self.free.boxes, b)
+    }
+
+    pub fn add_disc(&mut self, d: [(u32, u32); 2]) -> u32 {
+        slot(&mut self.discs, &mut self.free.discs, d)
+    }
+
+    pub fn add_insert(&mut self, r: InsRec) -> u32 {
+        slot(&mut self.inserts, &mut self.free.inserts, r)
+    }
+
+    pub fn add_rule(&mut self, dims: [i32; 3]) -> u32 {
+        slot(&mut self.rules, &mut self.free.rules, dims)
     }
 
     pub fn glue_node(&mut self, g: Glue, sub: u8) -> Node {
-        self.glues.push(g);
-        Node { kind: Kind::Glue, sub, font: 0, a: self.glues.len() as i32 - 1, b: 0 }
+        let i = slot(&mut self.glues, &mut self.free.glues, g);
+        Node { kind: Kind::Glue, sub, font: 0, a: i as i32, b: 0 }
     }
 
     pub fn rule_node(&mut self, dims: [i32; 3]) -> Node {
-        self.rules.push(dims);
-        Node::new(Kind::Rule, self.rules.len() as i32 - 1)
+        Node::new(Kind::Rule, self.add_rule(dims) as i32)
     }
 
     /// A ligature of `c` in font `f` made from the characters `from`.
     pub fn lig_node(&mut self, f: u16, c: u8, from: &[u8], hits: u8) -> Node {
-        let at = self.lig_chars.len() as i32;
+        let at = self.lig_chars.len();
         self.lig_chars.extend_from_slice(from);
-        Node { kind: Kind::Lig, sub: (from.len().min(63) as u8) << 2 | hits, font: f, a: c as i32, b: at }
+        self.lig_node_at(f, c, at, hits)
     }
 
-    /// A ligature of `c` in font `f` made from the characters stored from `at` to the end
-    /// of `lig_chars`.
+    /// A ligature of `c` in font `f` made from the characters appended to `lig_chars` from
+    /// `at`: they move into a freed block of their class when there is one, else stay as a
+    /// new block at the end.
     pub fn lig_node_at(&mut self, f: u16, c: u8, at: usize, hits: u8) -> Node {
         let len = self.lig_chars.len() - at;
-        Node { kind: Kind::Lig, sub: (len.min(63) as u8) << 2 | hits, font: f, a: c as i32, b: at as i32 }
+        let mut start = at;
+        if len > 0 {
+            let (k, cap) = size_class(len);
+            match self.free.ligs[k].pop() {
+                Some(s) => {
+                    start = s as usize;
+                    self.lig_chars.copy_within(at..at + len, start);
+                    self.lig_chars.truncate(at);
+                }
+                None => self.lig_chars.resize(at + cap, 0),
+            }
+        }
+        Node { kind: Kind::Lig, sub: (len.min(63) as u8) << 2 | hits, font: f, a: c as i32, b: start as i32 }
     }
 
     /// The characters a ligature was made from.

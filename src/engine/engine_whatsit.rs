@@ -39,6 +39,12 @@ pub(super) const XFORM: u8 = 19;
 /// `\write`s after it read the position with `\pdflastxpos` and `\pdflastypos`.
 pub(super) const SAVE_POS: u8 = 20;
 
+/// Whether a whatsit keeps a token list as its span `a..b` (for `engine_gc`).
+#[inline]
+pub(super) fn holds_tokens(sub: u8) -> bool {
+    matches!(sub, OPEN | WRITE | SPECIAL | LITERAL | LATE_LITERAL | COLOR_SET | COLOR_PUSH | SET_MATRIX)
+}
+
 /// A whatsit with a size, kept like a rule's (`a` indexes `nodes.rules`): pdfTeX's
 /// `pdf_refximage_node` and `pdf_refxform_node`.
 #[inline]

@@ -189,6 +189,11 @@ impl<'a> Input<'a> {
         self.frames.push(Frame { arena: Arena::Scratch, pos: start, end, params: NONE, scratch_mark: start, u_template: false });
     }
 
+    /// The scratch array's and the parameter stack's capacities, for `RT_MEM`.
+    pub fn capacities(&self) -> (usize, usize, usize) {
+        (self.scratch.capacity(), self.params.capacity(), self.frames.capacity())
+    }
+
     /// The scratch array, for collecting arguments and backed-up lists.
     pub fn scratch(&mut self) -> &mut Vec<Token> {
         &mut self.scratch
@@ -209,6 +214,16 @@ impl<'a> Input<'a> {
             return;
         }
         self.frames.push(Frame { arena: Arena::Defs, pos: span.start, end: span.end, params: NONE, scratch_mark: NONE, u_template: u });
+    }
+
+    /// Each token-arena list being read, from its current position (for `engine_gc`,
+    /// which moves it).
+    pub(super) fn for_each_list(&mut self, mut f: impl FnMut(&mut Span)) {
+        for fr in self.frames.iter_mut().filter(|fr| fr.arena == Arena::Defs) {
+            let mut s = Span { start: fr.pos, end: fr.end };
+            f(&mut s);
+            (fr.pos, fr.end) = (s.start, s.end);
+        }
     }
 
     pub fn push_param(&mut self, span: Span) {

@@ -14,6 +14,7 @@ pub mod engine_cond;
 pub mod engine_eqtb;
 pub mod engine_expr;
 pub mod engine_font;
+pub mod engine_gc;
 pub mod engine_input;
 pub mod engine_io;
 pub mod engine_job;

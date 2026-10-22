@@ -263,6 +263,19 @@ impl Tokens {
     pub fn is_empty(&self) -> bool {
         self.toks.is_empty()
     }
+
+    /// Slides the disjoint, ascending ranges `keep` (old start, old end, new start) down to
+    /// their new starts and drops everything else, in place: no allocation, and the
+    /// capacity stays for the lists stored next.
+    pub(super) fn slide(&mut self, keep: &[(u32, u32, u32)]) {
+        for &(s, e, to) in keep {
+            if to != s {
+                self.toks.copy_within(s as usize..e as usize, to as usize);
+            }
+        }
+        let len = keep.last().map_or(0, |&(s, e, to)| to + (e - s));
+        self.toks.truncate(len as usize);
+    }
 }
 
 /// How names print (§262 `print_cs`): the escape character (`\escapechar`; none outside

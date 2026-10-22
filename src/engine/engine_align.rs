@@ -83,6 +83,19 @@ pub(super) struct Align {
     adjusts: Vec<Node>,
 }
 
+impl Align {
+    /// The templates and the pending adjustment nodes' token spans, for `engine_gc`.
+    pub(super) fn for_each_span(&mut self, f: &mut dyn FnMut(&mut Span)) {
+        for c in &mut self.cols {
+            f(&mut c.u);
+            f(&mut c.v);
+        }
+        for n in &mut self.adjusts {
+            super::engine_gc::node_span(n, f);
+        }
+    }
+}
+
 impl Machine<'_, '_> {
     /// §780: the code of `t` when it ends an entry (`tab_mark` or `car_ret`).
     pub(super) fn align_code(&self, t: Token) -> Option<u32> {

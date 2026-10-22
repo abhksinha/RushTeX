@@ -151,6 +151,10 @@ pub struct Machine<'e, 'a> {
     pub(super) dont_expand: bool,
     /// The main loop's `lig_stack`, kept between words so no word allocates one.
     pub(super) lig_buf: Vec<super::engine_chars::Item>,
+    /// The token-arena length at which `engine_gc` next collects, and its reused buffer of
+    /// live ranges.
+    pub(super) collect_at: u32,
+    pub(super) collect_buf: Vec<(u32, u32, u32)>,
 }
 
 /// §211: vertical, horizontal or math mode.
@@ -171,7 +175,7 @@ pub(super) struct X {
 
 impl<'e, 'a> Machine<'e, 'a> {
     pub fn new(e: &'e mut Engine, src: &'a str) -> Self {
-        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new() }
+        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new() }
     }
 
     /// Records an error with TeX's `l.<line>` context of the innermost file.
@@ -485,6 +489,8 @@ impl<'e, 'a> Machine<'e, 'a> {
     pub fn run(&mut self) {
         while let Some(x) = self.get_x_token(false) {
             self.command(x, 0);
+            // Between commands no Rust frame holds a token span: the arena can be collected.
+            self.maybe_collect();
         }
         // §1378: the job ends with every `\openout` file closed.
         for k in 0..16 {
@@ -1035,6 +1041,13 @@ mod tests {
             if let Some(n) = std::env::var("RT_MAXEXP").ok().and_then(|v| v.parse().ok()) {
                 m.max_expansions = n;
             }
+            // `RT_PAGES=1`: the files each run reads back (what the run before it wrote), so
+            // the file that keeps a document rerunning shows as the one whose length changes.
+            if std::env::var("RT_PAGES").is_ok() {
+                for w in &m.closed {
+                    eprintln!("READS {} ({} bytes)", w.name, w.text.len());
+                }
+            }
         };
         let t = std::time::Instant::now();
         if let Some(f) = &fmt_in {
@@ -1095,6 +1108,35 @@ mod tests {
     /// `format_smoke`'s report on the last run: timing, errors, and the `RT_BOXES`,
     /// `RT_PAGES`, `RT_OUT` and `RT_PRIMS` dumps.
     fn report(m: &Machine, path: &str, dt: std::time::Duration, (n_files, file_t): (u32, std::time::Duration)) {
+        // `RT_MEM=1`: the bytes each arena holds at the end of the run, to find what grows.
+        if std::env::var("RT_MEM").is_ok() {
+            let n = &m.e.nodes;
+            let mb = |b: usize| b as f64 / 1048576.0;
+            eprintln!(
+                "MEM toks {:.1} MB, nodes {:.1} MB ({} nodes), boxes {:.1} MB, glues {:.1} MB, rules {:.1} MB, discs {:.1} MB, page pdf {:.1} MB, cur {} nodes, closed {:.1} MB",
+                mb(m.e.toks.len() * 4),
+                mb(n.list.capacity() * std::mem::size_of::<super::super::engine_node::Node>()),
+                n.list.len(),
+                mb(n.boxes.capacity() * std::mem::size_of::<super::super::engine_node::BoxRec>()),
+                mb(n.glues.capacity() * std::mem::size_of::<super::super::Glue>()),
+                mb(n.rules.capacity() * 12),
+                mb(n.discs.capacity() * 16),
+                mb(m.page.pdf.iter().map(|p| p.content.len()).sum::<usize>()),
+                m.cur.len(),
+                mb(m.closed.iter().map(|w| w.text.len()).sum::<usize>()),
+            );
+            let (sc, pa, fr) = m.input.capacities();
+            eprintln!(
+                "MEM scratch {:.1} MB, params {pa}, frames {fr}, out {:.1} MB, collect {:.1} MB, pattern {:.1} MB, def {:.1} MB, cur cap {:.1} MB, log {:.1} MB",
+                mb(sc * 4),
+                mb(m.out.capacity() * 4),
+                mb(m.collect.capacity() * 4),
+                mb(m.pattern.capacity() * 4),
+                mb(m.def.capacity() * 4),
+                mb(m.cur.capacity() * 12),
+                mb(m.log.capacity())
+            );
+        }
         let prims: Vec<String> = std::env::var("RT_PRIMS").ok().and_then(|p| std::fs::read_to_string(p).ok()).map(|s| s.lines().filter_map(|l| l.split(' ').next().map(String::from)).collect()).unwrap_or_default();
         let mut missing: HashMap<String, u32> = HashMap::new();
         for &t in &m.out {

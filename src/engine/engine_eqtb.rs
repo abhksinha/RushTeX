@@ -449,6 +449,13 @@ impl Eqtb {
 
     /// Every token list the equivalents hold: macro texts, token registers and parameters,
     /// and the values saved for restoring.
+    /// Each control sequence's macro text length (0 when it is not a macro), by id: the
+    /// `RT_PROFILE` audit's view of what a format holds.
+    #[cfg(test)]
+    pub(super) fn macro_lengths(&self) -> Vec<u32> {
+        self.meanings.vals.iter().map(|m| if let Meaning::Macro(mac) = m { mac.text.end - mac.text.start } else { 0 }).collect()
+    }
+
     pub fn for_each_span(&mut self, mut f: impl FnMut(&mut Span)) {
         for m in &mut self.meanings.vals {
             if let Meaning::Macro(mac) = m {

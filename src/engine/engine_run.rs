@@ -157,6 +157,9 @@ pub struct Machine<'e, 'a> {
     pub(super) collect_buf: Vec<(u32, u32, u32)>,
     /// The node-arena length at which `engine_gc` next collects nodes, and its tables.
     pub(super) dead_buf: Vec<u32>,
+    /// `RT_PROFILE`: one bit per control sequence whose macro was expanded.
+    #[cfg(test)]
+    pub(super) used_cs: Vec<u64>,
 }
 
 /// §211: vertical, horizontal or math mode.
@@ -177,7 +180,7 @@ pub(super) struct X {
 
 impl<'e, 'a> Machine<'e, 'a> {
     pub fn new(e: &'e mut Engine, src: &'a str) -> Self {
-        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), dead_buf: Vec::new() }
+        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), dead_buf: Vec::new(), #[cfg(test)] used_cs: Vec::new() }
     }
 
     /// Records an error with TeX's `l.<line>` context of the innermost file.
@@ -1053,6 +1056,32 @@ mod tests {
                 }
             }
         };
+        // `RT_PROFILE=1`: how much of the format a document uses (the document-needs gate's
+        // measure): format macros expanded, and their share of the format's macro tokens.
+        let fmt_macros = std::cell::RefCell::new(Vec::new());
+        let setup = |m: &mut Machine| {
+            if fmt_macros.borrow().is_empty() {
+                *fmt_macros.borrow_mut() = m.e.eqtb.macro_lengths();
+            }
+            setup(m)
+        };
+        let profile = |m: &Machine| {
+            let fm = fmt_macros.borrow();
+            let (mut n, mut t, mut un, mut ut) = (0u64, 0u64, 0u64, 0u64);
+            for (id, &len) in fm.iter().enumerate() {
+                if len == 0 {
+                    continue;
+                }
+                n += 1;
+                t += len as u64;
+                if m.used_cs.get(id / 64).is_some_and(|w| w >> (id % 64) & 1 == 1) {
+                    un += 1;
+                    ut += len as u64;
+                }
+            }
+            let all: u64 = m.used_cs.iter().map(|w| w.count_ones() as u64).sum();
+            eprintln!("PROFILE format macros used {un} of {n} ({:.1}%), their tokens {ut} of {t} ({:.1}%); macros expanded in all {all}", 100.0 * un as f64 / n.max(1) as f64, 100.0 * ut as f64 / t.max(1) as f64);
+        };
         let t = std::time::Instant::now();
         if let Some(f) = &fmt_in {
             let fmt = || std::fs::read(f).ok();
@@ -1061,6 +1090,9 @@ mod tests {
                 // `RT_LEAKS=1`: model M's leak audit of the last run.
                 if std::env::var("RT_LEAKS").is_ok() {
                     eprintln!("{}", m.node_leaks());
+                }
+                if std::env::var("RT_PROFILE").is_ok() {
+                    profile(m);
                 }
                 report(m, &path, t.elapsed(), lookups.get())
             }).expect("a format of this build");

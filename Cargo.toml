@@ -21,6 +21,9 @@ crate-type = ["rlib", "cdylib"]
 # becomes the default and releases build without it.
 default = ["oracle"]
 oracle = []
+# The table builders (`src/data/`): `rushtex-gen` and tests construct tables; the product
+# only reads them.
+gen = []
 # Model M's checker: freed node blocks are poisoned, and reading or freeing one twice panics.
 ownership-check = []
 

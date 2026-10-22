@@ -41,6 +41,8 @@
 pub mod backend;
 #[path = "config/config_mod.rs"]
 pub mod config;
+#[path = "data/data_mod.rs"]
+pub mod data;
 #[path = "diagnostic/diagnostic_mod.rs"]
 pub mod diagnostic;
 #[path = "engine/engine_mod.rs"]

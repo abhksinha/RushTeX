@@ -33,6 +33,7 @@ scripts/parity/parity.py gaps [DOC..]       # unsupported commands/envs/errors, 
 scripts/parity/parity.py boxes DOC PAGE     # pdfTeX's exact glue/kern/box recipe above each drifting line
 scripts/parity/parity.py rank|lines|miss|repro ...
 ./target/release/rushtex --gaps input.tex   # gap inventory of one file (parse only, never stops at errors)
+scripts/parity/engine_boxdiff.py pdftex.log engine.boxes PAGE   # first node where the engine's page box differs from pdfTeX's \tracingoutput (RT_BOXES=file format_smoke)
 
 # Where TeX/LaTeX define something, and where rushtex cites it
 scripts/refindex.py NAME [-s] [-a]          # \selectfont, hskip, line_break, §1057, \textwidth ...

@@ -6,6 +6,8 @@
 //! file lookup. A virtual font keeps its packets as ranges of one byte buffer; its local fonts
 //! are ordinary engine fonts (found or loaded as `tfm_lookup` and `read_font_info` would).
 
+use std::rc::Rc;
+
 use super::engine_node::Kind;
 use super::engine_run::Machine;
 use crate::backend::scaled::Scaler;
@@ -40,8 +42,9 @@ const MAX_RECURSION: u8 = 10;
 /// default) and each character's packet, a range of `code`.
 pub struct Vf {
     locals: Vec<(u32, u16)>,
-    packets: Vec<(u32, u32)>,
-    code: Vec<u8>,
+    /// Shared with the font's expanded copies (pdftex.web `auto_expand_vf`).
+    packets: Rc<[(u32, u32)]>,
+    code: Rc<[u8]>,
 }
 
 /// Which fonts are virtual: per font, 0 not yet checked, 1 real, `n + 2` virtual font `n`.
@@ -227,6 +230,9 @@ impl Machine<'_, '_> {
     /// Reads `<name>.vf` for font `f`: real when there is none. Local fonts go on `todo`.
     fn load_vf(&mut self, f: u16, todo: &mut Vec<u16>) {
         self.vf.set(f, 1);
+        if self.auto_expand_vf(f, todo) {
+            return;
+        }
         let name = self.e.fonts.list[f as usize].name.clone();
         let Some(bytes) = self.read_file.as_ref().and_then(|read| read(&format!("{name}.vf"))) else { return };
         if bytes.len() < 3 || bytes[0] != PRE || bytes[1] != VF_ID {
@@ -250,6 +256,13 @@ impl Machine<'_, '_> {
             let local: String = bytes.get(at..at + l).unwrap_or_default().iter().map(|&c| char::from(c)).collect();
             at += l;
             let id = self.find_font(&local, fs, None);
+            // `vf_def_font`: the local fonts of an expandable virtual font expand with it.
+            let x = self.e.fonts.micro.expand(f);
+            if id != 0 && x.step != 0 {
+                let ratio = |k: u16| if k == 0 { 0 } else { self.e.fonts.list[k as usize].expand as i32 };
+                let (stretch, shrink) = (ratio(x.stretch), -ratio(x.shrink));
+                self.set_expand_params(id, x.auto, stretch, shrink, x.step as i32);
+            }
             if id != 0 && !self.vf.checked(id) {
                 todo.push(id);
             }
@@ -284,8 +297,32 @@ impl Machine<'_, '_> {
             }
             at += len;
         }
+        self.vf.vfs.push(Vf { locals, packets: packets.into(), code: code.into() });
+        let n = self.vf.vfs.len() as u32 + 1;
+        self.vf.set(f, n);
+    }
+    /// pdftex.web `auto_expand_vf`: an expanded copy of a virtual font is virtual too, with
+    /// the base's packets and each local font replaced by its copy expanded as much.
+    fn auto_expand_vf(&mut self, f: u16, todo: &mut Vec<u16>) -> bool {
+        let (e, bf) = (self.e.fonts.list[f as usize].expand as i32, self.e.fonts.micro.expand(f).blink);
+        if e == 0 || bf == 0 {
+            return false;
+        }
+        if !self.vf.checked(bf) {
+            self.load_vf(bf, todo);
+        }
+        let Some(base) = self.vf.get(bf) else { return false };
+        let (packets, code) = (base.packets.clone(), base.code.clone());
+        let mut locals = base.locals.clone();
+        for l in &mut locals {
+            l.1 = self.get_expand_font(l.1, e);
+            if !self.vf.checked(l.1) {
+                todo.push(l.1);
+            }
+        }
         self.vf.vfs.push(Vf { locals, packets, code });
         let n = self.vf.vfs.len() as u32 + 1;
         self.vf.set(f, n);
+        true
     }
 }

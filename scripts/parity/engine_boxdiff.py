@@ -16,13 +16,21 @@ import sys
 
 
 def unwrap(text):
+    """The page's lines, up to the blank line that ends the box. A line of exactly 79
+    characters was wrapped: the next line continues it, and when it ended there anyway
+    TeX printed an empty line, which is not the end."""
     out = []
     for line in text.splitlines():
-        if out and len(out[-1]) == 79:
-            out[-1] += line
-        else:
-            out.append(line)
-    return out
+        if out and len(out[-1]) == 79 and not out[-1].endswith("\0"):
+            if line == "":
+                out[-1] += "\0"
+            else:
+                out[-1] += line
+            continue
+        if line == "":
+            break
+        out.append(line)
+    return [l.removesuffix("\0") for l in out]
 
 
 def skip(line):
@@ -32,11 +40,13 @@ def skip(line):
 def main(log_path, boxes_path, page):
     log = open(log_path, encoding="latin-1").read()
     parts = re.split(r"Completed box being shipped out \[([^\]]*)\]\n", log)
-    ref = {parts[i]: unwrap(parts[i + 1].split("\n\n")[0]) for i in range(1, len(parts), 2)}
+    ref = {parts[i]: unwrap(parts[i + 1]) for i in range(1, len(parts), 2)}
     ours = {}
+    # pdfTeX's log (TeX Live's cp227 translation) prints codes 128-255 as they are.
+    high = re.compile(r"\^\^([89a-f][0-9a-f])")
     for chunk in open(boxes_path).read().split("PAGE ")[1:]:
         n, rest = chunk.split("\n", 1)
-        ours[n] = rest.splitlines()
+        ours[n] = [high.sub(lambda m: chr(int(m.group(1), 16)), l) for l in rest.splitlines()]
     r = [l for l in ref[page] if l.strip() and not skip(l)]
     o = [l for l in ours[page] if l.strip() and not skip(l)]
     for k, (a, b) in enumerate(zip(r, o)):

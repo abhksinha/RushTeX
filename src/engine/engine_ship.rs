@@ -666,7 +666,14 @@ impl Machine<'_, '_> {
         } as i64;
         let dd = int(self, PDF_DECIMAL_DIGITS).clamp(0, 4) as u32;
         let names = self.page.map_names.as_deref().unwrap_or(&[]);
-        for f in &self.e.fonts.list[self.page.font_pk.len()..] {
+        for (i, f) in self.e.fonts.list.iter().enumerate().skip(self.page.font_pk.len()) {
+            // An expanded copy (`name+e`) is drawn from its base font's program or bitmaps.
+            let blink = self.e.fonts.micro.expand(i as u16).blink;
+            if f.expand != 0 && blink != 0 {
+                let base = self.page.font_pk[blink as usize];
+                self.page.font_pk.push(base);
+                continue;
+            }
             let mapped = names.binary_search(&crate::backend::backend_ship::fnv(f.name.as_bytes())).is_ok() || crate::backend::backend_optical::program_by_name(&f.name).is_some();
             let size = crate::backend::backend_pdftex::pdf_font_size(f.size as i64);
             self.page.font_pk.push(if mapped || f.name.is_empty() { 0 } else { crate::backend::backend_pk::pk_font_scale(size, res, dd) });

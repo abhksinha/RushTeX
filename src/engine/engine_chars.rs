@@ -388,9 +388,9 @@ impl Machine<'_, '_> {
             if let Ok(c) = u8::try_from(c) {
                 if font.metrics.exists(c) {
                     let pre = self.e.nodes.store(&[Node { kind: Kind::Char, sub: 0, font: f, a: c as i32, b: 0 }]);
-                    self.e.nodes.discs.push([pre, (0, 0)]);
+                    let d = self.e.nodes.add_disc([pre, (0, 0)]);
                     let last = self.cur.len() - 1;
-                    self.cur[last].a = self.e.nodes.discs.len() as i32 - 1;
+                    self.cur[last].a = d as i32;
                 }
             }
             return;
@@ -439,8 +439,7 @@ impl Machine<'_, '_> {
                 let a = if pre.0 == pre.1 && post.0 == post.1 {
                     -1
                 } else {
-                    self.e.nodes.discs.push([pre, post]);
-                    self.e.nodes.discs.len() as i32 - 1
+                    self.e.nodes.add_disc([pre, post]) as i32
                 };
                 self.cur[d] = Node { sub: n.min(255) as u8, ..Node::new(Kind::Disc, a) };
             }

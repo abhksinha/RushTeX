@@ -123,6 +123,7 @@ impl Machine<'_, '_> {
         for i in &mut nodes.inserts {
             i.list = gc.list.span(i.list);
         }
+        nodes.free.clear();
         self.for_each_node_root(&mut |r| gc.remap(r));
         self.node_collect_at = (nodes.list.len() as u32).saturating_mul(2).max(MIN_NODE_COLLECT);
         self.e.nodes = nodes;
@@ -315,7 +316,8 @@ impl NodeGc {
                 }
             }
             Kind::Lig => {
-                for i in x.b as u32..x.b as u32 + (x.sub >> 2) as u32 {
+                let (s, e) = Nodes::block((x.b as u32, x.b as u32 + (x.sub >> 2) as u32));
+                for i in s..e {
                     self.ligs.set(i);
                 }
             }
@@ -340,8 +342,10 @@ impl NodeGc {
             Root::Box(b) => self.mark_box(n, *b),
             Root::Node(x) => self.mark_node(n, *x),
         }
-        while let Some((s, e)) = self.work.pop() {
-            for k in s..e {
+        // A list keeps its whole block (model M's size classes) live.
+        while let Some(l) = self.work.pop() {
+            let (s, e) = Nodes::block(l);
+            for k in s..e.min(n.list.len() as u32) {
                 if self.list.set(k) {
                     self.mark_node(n, n.list[k as usize]);
                 }

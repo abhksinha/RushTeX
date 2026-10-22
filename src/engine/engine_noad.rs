@@ -256,7 +256,7 @@ impl Machine<'_, '_> {
                 let (g, sub) = if space != Glue::default() {
                     (space, SPACE_SKIP as u8 + 1)
                 } else {
-                    let p = &self.e.fonts.list[self.cur_font() as usize].params;
+                    let p = self.e.fonts.params(self.cur_font());
                     (Glue { width: p[1], stretch: p[2], shrink: p[3], stretch_order: 0, shrink_order: 0 }, 0)
                 };
                 let n = self.e.nodes.glue_node(g, sub);
@@ -647,14 +647,14 @@ impl Machine<'_, '_> {
     /// maximum when glue there stretches or shrinks.
     fn pre_display_width(&self) -> i32 {
         let jb = self.e.nodes.boxes[self.just_box as usize];
-        let quad = self.e.fonts.list[self.cur_font() as usize].params.get(5).copied().unwrap_or(0);
+        let quad = self.e.fonts.params(self.cur_font()).get(5).copied().unwrap_or(0);
         let mut v = jb.shift + 2 * quad;
         let mut w = -MAX_DIMEN;
         for n in self.e.nodes.get(jb.list) {
             let (d, visible) = match n.kind {
                 Kind::Char | Kind::Lig => {
                     let f = &self.e.fonts.list[n.font as usize];
-                    (u8::try_from(n.a).ok().and_then(|c| f.dims(c)).map_or(0, |d| d[0]), true)
+                    (u8::try_from(n.a).ok().and_then(|c| f.dims(c, &self.e.fonts.info)).map_or(0, |d| d[0]), true)
                 }
                 Kind::Box => (self.e.nodes.boxes[n.a as usize].width, true),
                 Kind::Rule => (self.e.nodes.rules[n.a as usize][0], true),
@@ -689,7 +689,7 @@ impl Machine<'_, '_> {
 
     /// §1195: whether the math fonts lack parameters; the formula is then deleted.
     fn math_fonts_missing(&mut self) -> bool {
-        let short = |m: &Self, fam: u8, need: usize| [0, 16, 32].iter().any(|&s| m.e.fonts.list[m.fam_fnt(fam, s) as usize].params.len() < need);
+        let short = |m: &Self, fam: u8, need: usize| [0, 16, 32].iter().any(|&s| m.e.fonts.params(m.fam_fnt(fam, s)).len() < need);
         let what = if short(self, 2, 22) {
             "symbol"
         } else if short(self, 3, 13) {

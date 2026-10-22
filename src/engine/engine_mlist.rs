@@ -12,7 +12,6 @@ use super::engine_font::{restart, STOP_FLAG};
 use super::engine_node::{BoxRec, Kind, Node, RUNNING};
 use super::engine_prim::Meaning;
 use super::engine_run::Machine;
-use crate::backend::scaled::Scaler;
 
 /// §682–§688 noad kinds, in TeX's order (`ord_noad` .. `right_noad`), then §688's style
 /// and choice nodes.
@@ -207,7 +206,7 @@ impl Machine<'_, '_> {
     }
 
     fn param_of(&self, f: u16, k: usize) -> i32 {
-        self.e.fonts.list[f as usize].params.get(k - 1).copied().unwrap_or(0)
+        self.e.fonts.params(f).get(k - 1).copied().unwrap_or(0)
     }
 
     /// §700 `mathsy`: parameter `k` of family 2 in `size`.
@@ -231,7 +230,7 @@ impl Machine<'_, '_> {
     /// Width, height, depth and italic correction of `c` in `f`; zero when it is absent.
     fn char_dims(&self, f: u16, c: u8) -> [i32; 4] {
         let font = &self.e.fonts.list[f as usize];
-        font.dims(c).unwrap_or([0; 4])
+        font.dims(c, &self.e.fonts.info).unwrap_or([0; 4])
     }
 
     fn char_exists(&self, f: u16, c: u8) -> bool {
@@ -776,14 +775,13 @@ impl Machine<'_, '_> {
     fn lig_kern_step(&self, f: u16, c: u8, next: u8) -> Result<Option<i32>, (u8, u8)> {
         let font = &self.e.fonts.list[f as usize];
         let Some(mut a) = font.metrics.lig_kern_start(c) else { return Ok(None) };
-        let (prog, kerns) = font.metrics.lig_kern();
+        let (prog, _) = font.metrics.lig_kern();
         loop {
             let Some(j) = prog.try_get(a) else { return Ok(None) };
             let (skip, nc, op, rem) = ((j >> 24) as u8, (j >> 16 & 0xFF) as u8, (j >> 8 & 0xFF) as u8, j as u8);
             if nc == next && skip <= STOP_FLAG {
                 if op >= STOP_FLAG {
-                    let k = kerns.try_get(restart(j) - 256 * STOP_FLAG as usize).map_or(0, |k| k as i32);
-                    return Ok(Some(Scaler::new(font.size).scale(k)));
+                    return Ok(Some(font.kern(restart(j) - 256 * STOP_FLAG as usize, &self.e.fonts.info)));
                 }
                 return Err((op, rem));
             }

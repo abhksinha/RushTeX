@@ -54,7 +54,9 @@ jobs:
         run: cargo test --release
 
       - name: Clippy
-        run: cargo clippy --release -- -D warnings
+        run: |
+          cargo clippy --release --all-targets -- -D warnings
+          cargo clippy --release --features gen -- -D warnings
 
       # The product/oracle boundary (native-architecture.md §2, progress.md A0): the product
       # must build, lint and pass its tests without the TeX engine's format, kpathsea and job.

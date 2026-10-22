@@ -94,7 +94,7 @@ impl Machine<'_, '_> {
         let f = self.scan_font_ident() as usize;
         let c = self.scan_int();
         let font = &self.e.fonts.list[f];
-        let Some([wd, ht, dp, ic]) = u8::try_from(c).ok().and_then(|c| font.dims(c)) else { return 0 };
+        let Some([wd, ht, dp, ic]) = u8::try_from(c).ok().and_then(|c| font.dims(c, &self.e.fonts.info)) else { return 0 };
         match name {
             "fontcharwd" => wd,
             "fontcharht" => ht,

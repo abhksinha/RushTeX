@@ -444,20 +444,25 @@ impl Machine<'_, '_> {
     pub(super) fn flush_mlist(&mut self, l: (u32, u32)) {
         for i in l.0..l.1 {
             let n = self.e.nodes.list[i as usize];
-            if n.kind == Kind::Noad {
-                let q = self.noads[n.a as usize];
-                for f in [q.nucleus, q.supscr, q.subscr, q.extra] {
-                    match f {
-                        Field::Box(b) => self.e.nodes.flush_box(b),
-                        Field::Mlist(a, b) => self.flush_mlist((a, b)),
-                        _ => {}
-                    }
-                }
-            } else {
-                self.e.nodes.flush_node(n);
-            }
+            self.flush_math_node(n);
         }
         self.e.nodes.free_block(l);
+    }
+
+    /// §698 for one node of a math list.
+    pub(super) fn flush_math_node(&mut self, n: Node) {
+        if n.kind == Kind::Noad {
+            let q = self.noads[n.a as usize];
+            for f in [q.nucleus, q.supscr, q.subscr, q.extra] {
+                match f {
+                    Field::Box(b) => self.e.nodes.flush_box(b),
+                    Field::Mlist(a, b) => self.flush_mlist((a, b)),
+                    _ => {}
+                }
+            }
+        } else {
+            self.e.nodes.flush_node(n);
+        }
     }
 
     /// §720 `clean_box`: field `p` as a box in style `s`.

@@ -26,6 +26,7 @@ cargo run --release -- docs/manual.tex -o docs/manual.pdf       # regenerate the
 # Visual parity vs pdfLaTeX (needs TeX Live + poppler pdftoppm + numpy/PIL/scipy)
 python3 scripts/differential_parity_harness.py --suite {math,table,page,all} --dpi 300 [--ci] [--save-all] [--diff-dir comparison/diff]
 
+scripts/leak_audit.py [DOC..]               # model M gate: every corpus document under the ownership-check build, RT_LEAKS must be zero
 ./benchmark.sh [file.tex]                   # rushtex vs pdfLaTeX latency/RSS benchmark
 
 # Strict glyph parity (0.1pt) vs pdfLaTeX over scripts/parity/corpus/ (run with uv; see its --help)

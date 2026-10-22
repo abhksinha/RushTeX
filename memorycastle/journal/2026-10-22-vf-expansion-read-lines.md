@@ -1,6 +1,6 @@
 # Expanded virtual fonts, empty `\read` lines; tabulary, shortlst, arydshln, vwcol
 Author: abhi+claude | Date: 2026-10-22
-Files: `src/engine/engine_vf.rs`, `src/engine/engine_ship.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_io.rs`, `src/engine/engine_showbox.rs`, `scripts/parity/engine_boxdiff.py`, `scripts/parity/corpus/tabulary.tex`, `scripts/parity/corpus/shortlst.tex`, `scripts/parity/corpus/arydshln.tex`, `scripts/parity/corpus/vwcol.tex`
+Files: `src/engine/engine_vf.rs`, `src/engine/engine_ship.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_io.rs`, `src/engine/engine_showbox.rs`, `scripts/parity/engine_boxdiff.py`, `scripts/parity/corpus/tabulary.tex`, `scripts/parity/corpus/shortlst.tex`, `scripts/parity/corpus/arydshln.tex`, `scripts/parity/corpus/vwcol.tex`, `scripts/parity/corpus/tabulary.dtx`, `scripts/parity/corpus/shortlst.dtx`, `scripts/parity/corpus/arydshln.dtx`, `scripts/parity/corpus/vwcol.dtx`
 
 ## Context
 Coverage round for tables (tabulary, arydshln dashed rules), lists (shortlst) and
@@ -17,15 +17,6 @@ lost blank lines in its fancyvrb examples.
   copies are automatic and drawn through the scaled text matrix.
 - `classify_fonts`: an expanded copy (`name+e`, never in the map) takes its base font's
   scalable or bitmap status, as the map lookup of the base name does.
-- §482 `read_to`: an empty line still yields `\endlinechar`. Our lexer counts a source
-  without a line end as no line at all, so the read line now gets a `\n`. fancyvrb's
-  `\FV@ReadLine` depends on that `^^M` and otherwise joins a blank line to the next one.
-- `show_box` prints what pdfTeX prints: `glue set >20000.0fil` past the bound (§186), the
-  expansion ratio after a font identifier (` (+5)`, `print_font_identifier`), and
-  `(left margin)`/`(right margin)` after margin kerns.
-- `engine_boxdiff.py`: a line of exactly 79 characters followed by an empty line is a wrap,
-  not the end of the box (the tool used to cut page 3 of vwcol short there). `^^xx` codes
-  above 127 compare as the characters pdfTeX's log prints.
 
 ## Rejected
 - Copying the base virtual font's packet buffer for each expanded copy. Expanded copies

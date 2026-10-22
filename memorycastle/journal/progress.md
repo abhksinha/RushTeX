@@ -26,13 +26,13 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - [x] Profiler that tells the truth (`scripts/profile_doc.py`): `get_token` 3.3 ns/token, token volume is the cost
 - [x] Zero-GC memory rules written into the spec (§6a)
 
-### Z. Zero-GC exact core (prerequisite of every native phase: native code builds into this core)
-- [ ] Z1. Node ownership as TeX's (§202 `flush_node_list`, §204 `copy_node_list`):
-  - each list has one owner, and `\copy` copies;
-  - a list is freed at `\shipout`, when `\setbox` overwrites a register, when `\box` voids one, and when a group restores a register;
-  - fixed-size node slots and side-table entries return to free lists. `collect_nodes` is deleted.
-- [ ] Z2. Paragraph and page regions: the build buffer and line-break scratch are reset per paragraph, and a shipped page's records per page, each with capacity reserved once.
-- [ ] Z3. Document macros in size-class blocks: redefinition frees the old block (§275 `eq_destroy`); a macro body being read holds a count (§390), so `collect_tokens` is deleted.
+### Z. Zero-GC exact core, before P1 (model M: `2026-10-22-zero-gc-core-model.md`)
+- [ ] Z1a. Pools: size-class span blocks and free lists for each side table in `Nodes`, plus the ownership-check build (poisoned slots).
+- [ ] Z1b. `flush_list` (§202) and `copy_list` (§204); `\copy`/`\unhcopy`/`\unvcopy` deep-copy.
+- [ ] Z1c. Free points: `\shipout`, `\setbox` overwrite, group restore, `\box` and `\unvbox` moves, discards (§1105, line break, page builder).
+- [ ] Z1d. `collect_nodes` deleted; 85/85 under the checker; RSS per page flat on listings.
+- [ ] Z2. Build buffers (`cur`, line-break scratch) with capacity reserved once and reset per list.
+- [ ] Z3. Document macros in size-class token blocks: redefinition frees the old block (§275 `eq_destroy`); a body being read holds a count (§390). `collect_tokens` deleted.
 - [ ] Z4. Capacity reserved from the source size; RSS growth per page measured flat on listings (236 pages).
 
 ### B. Borrowing and layout audit (the oracle's hot paths; also the core's)
@@ -42,7 +42,7 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - [ ] B4. Profile the 85 documents with `profile_doc.py`; list every function above 2% self time with its cost per call.
 
 ### P. Native port (per `native-port-plan.md`)
-- [ ] P0 rest: `RT_STATE`, `RT_NATIVE=cmd,…`, engine-against-engine `engine_boxdiff.py`, `rushtex-gen` skeleton, arXiv package sample, pinned LaTeX version
+- [ ] P0 rest: `RT_PROFILE` (expansions and time per format macro, which picks the next command to port), `RT_STATE`, `RT_NATIVE=cmd,…`, engine-against-engine `engine_boxdiff.py`, `rushtex-gen` skeleton, arXiv package sample, pinned LaTeX version
 - [ ] P1. Fonts and NFSS as generated tables
 - [ ] P2. Kernel core (small2e, sample2e, lppl at zero format expansions)
 - [ ] P3. Output routine and floats

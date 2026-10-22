@@ -16,3 +16,5 @@ Runs now equal pdflatex's (array 2, vwcol 2, listings 3, multicolrule 3, fancyhd
 
 ## Open
 What remains is the node arena: `Nodes::list` is append-only too (listings ends with 1.09M nodes, 24 MB, plus boxes and glues 9 MB), so shipped pages' nodes are never freed. Next: reclaim at `\shipout`. The 23 MB floor is the undumped format plus the binary; reaching 30–35 MB typical needs both.
+
+Functions changed: `for_each_span` (`Eqtb`, `Align`, `Page`), `for_each_list` (`Input`), `holds_tokens`, `slide`, `maybe_collect`, `for_each_root`; diagnostics `report` (`RT_MEM`) and `capacities` in `format_smoke`.

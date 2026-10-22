@@ -111,12 +111,8 @@ The full specification follows. Every change to rushtex is checked against it.
 ### 6a. Memory: zero garbage collection, predictable growth
 The native path never traces, never compacts and never moves live data. Every byte has an owner whose lifetime is known when it is allocated:
 - **Typed pools at fixed addresses.** Each kind of record (node, box, glue, rule, ligature, discretionary, insertion, mark) lives in its own pool, SoA where a phase reads one field across many records (widths in packing, penalties in line breaking) and AoS where a record is read whole. An index into a pool never changes while the record lives.
-- **Lifetimes by region, freed wholesale.** Four regions, reset in one step and reused without reallocation:
-  1. the paragraph region: its horizontal list, break candidates and active nodes, reset after line breaking;
-  2. the page region: lines, glue and inserts of the current page, reset at shipout once the page is written;
-  3. the float and insertion queue: records released one by one through a per-size free list when placed;
-  4. the document region: definitions, labels, fonts. It grows only with what the document defines and is never collected.
-- **Sharing is explicit.** A box that is copied (`\copy`, `\usebox`) is copied into the region of its use, or held in the document region, so no reference counts or tracing are needed.
+- **One owner per list or record, freed where TeX frees it** (model M, `2026-10-22-zero-gc-core-model.md`). Moves transfer ownership; `\copy` deep-copies (§204); a list is freed at `\shipout`, a `\setbox` overwrite, a group restore and when discarded (§202). Freed span blocks return to size-class free lists (exact 1–16, then powers of two), fixed-size records to one free list per table.
+- **Build buffers are the regions.** The list being built (`cur`) and the line-break scratch are reused buffers reset per paragraph or box; they own no arena memory.
 - **Replaced definitions return to a free list by size class.** The document's own macros, the only interpreted text, are stored in size-class blocks. Redefinition frees the old block at once (TeX §275 `eq_destroy`), so a loop that redefines a macro reuses one block.
 - **Capacity is reserved up front.** Each region starts from a capacity estimated from the source size (pages, paragraphs, definitions) and grows by doubling only past it. Peak RAM is about the format tables plus the document region plus one page region; it does not grow with the number of pages.
 - **The oracle is the exception.** The TeX engine stays exact to tex.web and keeps a tracing collector (`engine_gc`) as a dev tool. Its numbers are not the product's.

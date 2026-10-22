@@ -63,6 +63,14 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - [ ] B1–B2. Copies and clones removed from the expander and the core (`toks.get(..).to_vec()`, `nodes.get(..).to_vec()`, the math `Vec<Node>` returns).
 - [ ] B3. Layout table beside every core record (size, fields, SoA or AoS and why).
 - [ ] B4. Hot-loop census of the core and the expander over 85 documents (`profile_doc.py` plus H1): every function above 2% with its cost per call and its working set against the §7a floor, each one removed or justified. Known: mid-vector inserts (protrusion, math lists), per-call math vectors, name hashing per lexed name.
+- [ ] H2. Single-core throughput (`native-architecture.md` §7b), after B4 and only for loops B4 keeps:
+  - SWAR in the lexer and the pre-scan;
+  - prefix-sum widths in line breaking;
+  - multi-accumulator packing;
+  - SWAR match finding and checksums in DEFLATE;
+  - a PGO release build;
+  - an optional x86-64-v3 build.
+  Each measured with H1 counters and per-kernel benchmarks.
 
 ### Phase 2. Tables and demand loading (shared by the oracle now and native later)
 - [ ] D1. Table library, std only, with tests and size reports: a static perfect hash with an 8-bit fingerprint per slot (name to ID and membership in one probe), SoA tables by ID, CSR lists (offsets plus IDs), bitsets, Roaring-style compressed bitmaps.

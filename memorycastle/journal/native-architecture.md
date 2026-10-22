@@ -183,6 +183,49 @@ Design budgets come from the weakest common machine, not from the Apple M5 the w
 
 **Measured, not guessed:** hardware counters per document (instructions, cycles, IPC, L1 and last-level misses, branch mispredicts): `perf stat` on x86 Linux (CI's runners and a floor-class machine), `xctrace` CPU Counters on macOS. Budgets per document are instructions per output glyph and cache misses per page, next to the speed ratio. Every surviving hot loop states its per-item work, its working set against the floor budgets, and its measured cost in its module comment.
 
+### 7b. Single-core throughput: SIMD and vectorisation (user, 2026-10-22)
+Constraints: safe Rust only (`#![forbid(unsafe_code)]`), std only, stable compiler, one binary for every machine of its architecture. SIMD speeds up kernels by roughly 1.3–2× overall; removing interpretation stays the main lever (§6c).
+
+**Tools, in order of preference:**
+1. **Better algorithm first.** Example: line breaking keeps prefix sums of the paragraph's widths, so the width between two breakpoints is one subtraction, not a re-accumulation per candidate.
+2. **Compiler auto-vectorisation** (SSE2 on x86, NEON on ARM). Loops are written so LLVM can vectorise them:
+   - one field per array (SoA) for a field scanned across many records;
+   - no branches in the body (`min`/`max`/select instead of `if`) and no early exit;
+   - `chunks_exact(N)` plus a remainder, so bounds checks are hoisted and the loop unrolls;
+   - struct fields copied into locals before the loop, so aliasing does not force a reload each iteration;
+   - integer arithmetic where TeX's is integer, so reordering is exact.
+3. **SWAR** (SIMD within a register, `u64` for 8 bytes and `u128` for 16, plain bit tricks):
+   - the lexer and the pre-scan skip runs of ordinary bytes, stopping only at `\`, `{`, `}`, `%`, `$`, `&`, `#`, `^`, `_`, `~` or a newline;
+   - DEFLATE match length by XOR plus `trailing_zeros`;
+   - name hashing 8 bytes per multiply;
+   - PDF string escaping checks.
+4. **Instruction-level parallelism:** several independent accumulators, combined at the end, instead of one dependency chain. This covers box packing (widths, heights, stretch and shrink per order), Adler-32 and CRC, and bitset and Roaring unions, which compile to 128- or 256-bit operations.
+5. **Build level:**
+   - LTO and one codegen unit (already on);
+   - a PGO release build trained on the corpus (`-Cprofile-generate`/`-Cprofile-use`, typically 10–20% on branchy code);
+   - an optional x86-64-v3 (AVX2) build beside the baseline one, chosen at install, because run-time dispatch to `target_feature` code needs `unsafe`. ARM always has NEON.
+
+**Not used:**
+- `std::arch` intrinsics (`unsafe`), nightly `std::simd`, and `-C target-cpu=native` in releases.
+- Vectorising TeX's order-sensitive arithmetic (badness, glue setting, division): exactness wins.
+
+**Expected gains per kernel:**
+
+| Kernel | Share of native-path time (estimate) | Gain |
+|---|---|---|
+| Lexing and pre-scan | 5–10% | 3–6× |
+| DEFLATE compression | 10–25% | 2–4× |
+| Image decoding (PNG unfiltering, colour conversion) | depends on the document | 3–8× |
+| Packing and bitsets | small | 2–4× |
+| Line-break widths (prefix sums) | 5–15% | 2–5×, algorithmic |
+| Whole program, PGO | | 1.1–1.2× |
+
+**Verified, not assumed:**
+- instructions per glyph and IPC from H1's counters;
+- the emitted vector instructions checked with a dev-only assembly viewer (`cargo-show-asm`);
+- per-kernel micro-benchmarks with `std::hint::black_box`.
+- A kernel is vectorised only after B4 shows it survives and matters.
+
 ### 8. Exactness method (the oracle)
 - Every native routine is developed against the oracle's box output:
   - `RT_BOXES` against the native node lists, diffed node by node by `scripts/parity/engine_boxdiff.py`;

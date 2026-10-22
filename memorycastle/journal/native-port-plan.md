@@ -77,7 +77,7 @@ Each phase is closed by the gates: `cargo test`, clippy, `zero --pixels` on all 
   - `RT_NATIVE=cmd,…`: a per-command switch.
   - `engine_boxdiff.py` for engine-against-engine box diffs.
   - `rushtex-gen` skeleton.
-  - An arXiv package-frequency sample, and the pinned LaTeX version recorded (TeX Live 2026 basic locally, while CI pins 2023; `lthooks`, `ltcmd` and `lttagging` differ between them).
+  - An arXiv package-frequency sample. The pinned LaTeX version is a dated TeX Live 2026 snapshot (`progress.md` A1).
 - **P1. Fonts and NFSS as generated tables.**
   - `ltfssbas`, `ltfssini`, `ltfssdcl`, `ltfsstrc`, `ltfntcmd`, `ltfssaxes`, `ltoutenc`, `lttextcomp`.
   - `.fd` files, TFM metrics, encodings and size functions become static tables.
@@ -149,6 +149,6 @@ Inventory, 2026-10-22:
 - The baseline oracle benchmark is in `2026-10-22-corpus-benchmark.md`.
 
 ## Open
-- **Unported packages in a document:** a clear error naming the package (the spec's rule), or an opt-in oracle fallback for non-release builds. Decide before P7.
-- **The pinned LaTeX version:** TeX Live 2026 locally against CI's 2023; the references must come from the pinned one.
+- **Unported packages in a document: decided 2026-10-22.** A release gives a clear error naming the package; the oracle fallback exists only in dev builds (`native-architecture.md`).
+- **The pinned LaTeX version: decided 2026-10-22.** A dated TeX Live 2026 snapshot with a checksummed manifest is pinned for references, generated tables and CI. The user chose 2026 over 2023: the zero-shift proof is against pdfTeX 1.40.29 of TeX Live 2026, and an old kernel would be ported only to be rewritten. It is upgraded yearly as one deliberate step (`progress.md` A1).
 - **expl3:** which l3 functions documents call directly (via `\ExplSyntaxOn` in preambles) and must therefore be primitives.

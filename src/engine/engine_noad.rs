@@ -699,7 +699,11 @@ impl Machine<'_, '_> {
         };
         self.error(format!("Math formula deleted: Insufficient {what} fonts"));
         // §719 `flush_math`
-        self.cur.truncate(self.start as usize);
+        while self.cur.len() > self.start as usize {
+            if let Some(n) = self.cur.pop() {
+                self.flush_math_node(n);
+            }
+        }
         self.aux = -1;
         true
     }

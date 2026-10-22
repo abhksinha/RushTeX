@@ -1,6 +1,6 @@
 # Zero-GC core: TeX ownership on size-class pools (model M)
 Author: abhi+claude | Date: 2026-10-22
-Files: `src/engine/engine_node.rs`, `src/engine/engine_chars.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_image.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_xform.rs`, `src/engine/engine_box.rs`, `src/engine/engine_page.rs`, `src/engine/engine_eqtb.rs`, `src/engine/engine_gc.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_run.rs`, `src/engine/engine_job.rs`, `src/engine/engine_align.rs`, `src/engine/engine_mlist.rs`, `src/engine/engine_noad.rs`, `src/engine/engine_pack.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_microtype.rs`, `Cargo.toml`, `memorycastle/journal/native-architecture.md`, `memorycastle/journal/progress.md`
+Files: `src/engine/engine_node.rs`, `src/engine/engine_chars.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_image.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_xform.rs`, `src/engine/engine_box.rs`, `src/engine/engine_page.rs`, `src/engine/engine_eqtb.rs`, `src/engine/engine_gc.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_run.rs`, `src/engine/engine_job.rs`, `src/engine/engine_align.rs`, `src/engine/engine_mlist.rs`, `src/engine/engine_noad.rs`, `src/engine/engine_pack.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_microtype.rs`, `scripts/leak_audit.py`, `CLAUDE.md`, `Cargo.toml`, `memorycastle/journal/native-architecture.md`, `memorycastle/journal/progress.md`
 Supersedes: 2026-10-21-engine-boxes-b1.md
 
 ## Context
@@ -86,3 +86,8 @@ Z1c done, Z1d (2026-10-22):
   - peak RSS, pre-Z1 binary against now, same machine and interleaved: listings 55 → 45 MB, fancyhdr 60 → 54 MB, multicolrule 56 → 54 MB, array 45 → 37 MB, testmath 26 MB, small2e 22 MB;
   - time is unchanged (listings 2.96 s against 2.97 s, fancyhdr 7.54 s against 7.40 s).
 - The rest of RSS is the token arena (`collect_tokens`, Z3) and the format's state.
+
+Z1 follow-ups (2026-10-22):
+- `flush_math` (§719) flushes the formula's nodes through `flush_math_node` instead of truncating.
+- `noads` is a per-formula region, cleared after each outermost formula (`after_math`).
+- `scripts/leak_audit.py` makes the ownership gate one command: the checker build over the corpus, with `RT_LEAKS` zero in every table. It is now part of the gate in `progress.md`. 85/85 clean.

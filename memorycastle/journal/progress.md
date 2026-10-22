@@ -3,7 +3,7 @@ Author: abhi+claude | Date: 2026-10-22
 Files: `memorycastle/journal/native-architecture.md`, `memorycastle/journal/native-port-plan.md`, `src/engine/engine_gc.rs`, `src/engine/engine_node.rs`, `src/engine/engine_token.rs`
 
 ## Context
-The one place to see what is done and what is next. Tick an item when its gate passes (tests, clippy, `parity.py zero --engine --pixels --all` at 85/85, `bench_corpus.py`) and its dated note is saved; the next unticked item is the work. Detail lives elsewhere:
+The one place to see what is done and what is next. Tick an item when its gate passes (tests, clippy, `parity.py zero --engine --pixels --all` at 85/85, `scripts/leak_audit.py` at 85/85 clean, `bench_corpus.py`) and its dated note is saved; the next unticked item is the work. Detail lives elsewhere:
 - `native-architecture.md` holds the rules;
 - `native-port-plan.md` holds the method and the kernel and package tables;
 - the dated notes hold decisions and measurements.

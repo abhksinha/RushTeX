@@ -12,6 +12,13 @@ The port is a strangler migration inside the engine:
 - When every command a document reaches is native, `latex.ltx` is no longer loaded. Its data comes from tables generated at build time.
 - TeX's expansion machinery remains for the document's own macros. The old native pipeline (`src/layout`, `src/math`) is frozen and retired.
 
+### 0a. Scope and design rule (user, 2026-10-22)
+- **All of P1–P8 is in scope**, with a speed gate of at least 30–40× pdflatex on every native document.
+- **Port designs, not transliterations.** A ported cluster is redesigned by `native-architecture.md` §5a: least computation, simplest algorithm, least data moved, cache lines counted per operation. Only LaTeX's observable results are kept (boxes, glyph positions, the state other code reads, written files).
+  - Example: font selection becomes one cached (shape, size) → font ID lookup over the generated tables, not `\csname` building and `.fd` reading.
+  - Example: counters, lengths and flags live in typed `eqtb` slots read by index, not in macro texts.
+- **The per-command strangler** (`RT_NATIVE`, `kernel_diff.py`) proves each step against the macros. Once a whole cluster is native and nothing outside it reads its internals, the cluster's internal macros and their side effects are dropped. That is where the speed comes from.
+
 ### 1. The boundary: what stays and what goes
 - **Leaves the product:** interpretation of `latex.ltx`, expl3 and the `.sty`/`.cls` files (their macro implementations); the TeX Live files; the first-run format build; `kpsewhich`; `.aux` files.
 - **Stays in the product:** the typesetting core, and TeX's macro language for the document's own code. Documents use `\def` with delimited parameters, `\expandafter`, `\csname`, `\makeatletter`, catcode changes and `\newcommand`, so backward compatibility requires TeX's full expansion semantics (tex.web §366–§401, conditionals §487–§510). `engine_macro` and `engine_cond` already implement them. This is not "the engine" in the slow sense: it expands only the document's own macros, which are few and short. Every LaTeX command it reaches is a native call.

@@ -1,6 +1,6 @@
 # Zero-GC core: TeX ownership on size-class pools (model M)
 Author: abhi+claude | Date: 2026-10-22
-Files: `src/engine/engine_node.rs`, `src/engine/engine_box.rs`, `src/engine/engine_page.rs`, `src/engine/engine_eqtb.rs`, `src/engine/engine_gc.rs`, `memorycastle/journal/native-architecture.md`, `memorycastle/journal/progress.md`
+Files: `src/engine/engine_node.rs`, `src/engine/engine_chars.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_image.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_xform.rs`, `src/engine/engine_box.rs`, `src/engine/engine_page.rs`, `src/engine/engine_eqtb.rs`, `src/engine/engine_gc.rs`, `memorycastle/journal/native-architecture.md`, `memorycastle/journal/progress.md`
 Supersedes: 2026-10-21-engine-boxes-b1.md
 
 ## Context

@@ -201,7 +201,12 @@ impl Machine<'_, '_> {
             }
             return;
         }
-        // `set_expand_params`.
+        self.set_expand_params(f, auto, stretch, shrink, step);
+    }
+
+    /// pdftex.web `set_expand_params`: font `f` expands by up to `stretch` and `shrink`
+    /// thousandths in steps of `step`, through copies made now.
+    pub(super) fn set_expand_params(&mut self, f: u16, auto: bool, stretch: i32, shrink: i32, step: i32) {
         let m = self.e.fonts.micro.expand_mut(f);
         m.step = step as u16;
         m.auto = auto;

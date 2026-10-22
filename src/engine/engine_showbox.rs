@@ -2,7 +2,7 @@
 //! for `\showbox` and `\tracingoutput`. The engine's boxes then diff line by line against
 //! pdfTeX's log, which locates any difference to the node.
 
-use super::engine_node::{BoxRec, Kind, Node, Sign, RUNNING};
+use super::engine_node::{BoxRec, Kind, Node, Sign, MARGIN_LEFT, MARGIN_RIGHT, RUNNING};
 use super::engine_run::Machine;
 use super::engine_value::{print_scaled, print_spec};
 
@@ -41,8 +41,14 @@ impl Machine<'_, '_> {
             if b.glue_sign == Sign::Shrinking {
                 out.push_str("- ");
             }
-            let g = (65536.0 * b.glue_set).round() as i32;
-            print_glue(g, b.glue_order, "", out);
+            // Beyond 20000 only the bound is printed (`print_glue(20000*unity, ...)`).
+            if b.glue_set > 20000.0 {
+                out.push('>');
+                print_glue(20000 * 65536, b.glue_order, "", out);
+            } else {
+                let g = (65536.0 * b.glue_set).round() as i32;
+                print_glue(g, b.glue_order, "", out);
+            }
         }
         if b.shift != 0 {
             out.push_str(", shifted ");
@@ -130,6 +136,11 @@ impl Machine<'_, '_> {
                         out.push_str("\\kern ");
                         print_scaled(n.a, out);
                         out.push_str(" (for accent)");
+                    }
+                    MARGIN_LEFT | MARGIN_RIGHT => {
+                        out.push_str("\\kern");
+                        print_scaled(n.a, out);
+                        out.push_str(if n.sub == MARGIN_LEFT { " (left margin)" } else { " (right margin)" });
                     }
                     99 => {
                         out.push_str("\\mkern");
@@ -228,6 +239,12 @@ impl Machine<'_, '_> {
             out.push_str("FONT");
         } else {
             out.push_str(self.e.cs.name(font.ident));
+        }
+        // pdftex.web `print_font_identifier`: an expanded copy shows its ratio.
+        if font.expand != 0 {
+            out.push_str(if font.expand > 0 { " (+" } else { " (" });
+            out.push_str(&font.expand.to_string());
+            out.push(')');
         }
     }
 }

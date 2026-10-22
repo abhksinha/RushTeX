@@ -169,6 +169,11 @@ impl Machine<'_, '_> {
                 super::engine_value::str_toks(&text, &mut list);
                 break;
             }
+            // One line, even an empty one, ends with `\endlinechar` (§483 `begin_file_reading`
+            // of the line); the lexer counts a source without a line end as one only when
+            // it has text.
+            let mut line = line;
+            line.push('\n');
             let mut lexer = Lexer::new(line);
             while let Some(tok) = lexer.next(self.e.eqtb.cats(), &mut self.e.cs, elc) {
                 match (tok.cs_id(), tok.cat()) {

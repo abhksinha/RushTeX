@@ -59,7 +59,7 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - [ ] Z2. Build buffers reserved once: the per-line adjustment list, per-word hyphenation scratch, per-paragraph `par`/`breaks`/`carry`/active lists. Allocator share measured before and after.
 - [ ] Z3. Token model M: macro texts and token lists in size-class blocks with one owner, or a count where TeX shares (§200 `token_ref_count`: `\let`, `\toks` copies, a body being read §390). Redefinition frees (§275 `eq_destroy`); `collect_tokens` deleted. This is the product's expander for user macros, so it stays.
 - [ ] Z4. Capacity reserved from the source size; RSS flat per page on listings.
-- [ ] H1. Hardware-counter tool `scripts/hw_profile.py`: `perf stat` on x86 Linux (CI and a floor-class machine), `xctrace` on macOS. Baseline for all 85 documents: instructions per glyph, IPC, L1 and last-level misses per page, branch mispredicts. Budgets and floor in `native-architecture.md` §7a.
+- [ ] H1. Hardware-counter tool `scripts/hw_profile.py`: `perf stat` on x86 Linux (CI and a floor-class machine), `xctrace` on macOS. Baseline for all 85 documents: instructions per glyph, IPC, L1 and last-level misses per page, branch mispredicts, plus bytes allocated and bytes copied per page (the §6d budgets). Budgets and floor in `native-architecture.md` §7a.
 - [ ] B1–B2. Copies and clones removed from the expander and the core (`toks.get(..).to_vec()`, `nodes.get(..).to_vec()`, the math `Vec<Node>` returns).
 - [ ] B3. Layout table beside every core record (size, fields, SoA or AoS and why).
 - [ ] B4. Hot-loop census of the core and the expander over 85 documents (`profile_doc.py` plus H1): every function above 2% with its cost per call and its working set against the §7a floor, each one removed or justified. Known: mid-vector inserts (protrusion, math lists), per-call math vectors, name hashing per lexed name.
@@ -69,25 +69,28 @@ The one place to see what is done and what is next. Tick an item when its gate p
   - multi-accumulator packing;
   - SWAR match finding and checksums in DEFLATE;
   - a PGO release build;
-  - an optional x86-64-v3 build.
+  - an optional x86-64-v3 build;
+  - a custom integer and fixed-point formatter in the PDF writer, not generic formatting (§6d).
   Each measured with H1 counters and per-kernel benchmarks.
 
 ### Phase 2. Tables and demand loading (shared by the oracle now and native later)
 - [ ] D1. Table library, std only, with tests and size reports: a static perfect hash with an 8-bit fingerprint per slot (name to ID and membership in one probe), SoA tables by ID, CSR lists (offsets plus IDs), bitsets, Roaring-style compressed bitmaps.
 - [ ] D2. `rushtex-gen` skeleton plus the package registry. For each `.sty`/`.cls`/`.clo`/`.fd`, recorded from an oracle run: its class (a–e of the port plan), options, `\RequirePackage` edges (CSR), the control sequences it defines, and its parameters. Generated, checksummed.
-- [ ] D3. Document pre-scan: one pass over the source gives its command names, through the D1 hash, to a module `needs` bitset with its closure. Per-block ID arrays of what each block needs and reads (P8's dependency index from day one).
+- [ ] D3. Document pre-scan, fused into the lexer's single pass (§6d: the source is lexed once, never twice): one pass over the source gives its command names, through the D1 hash, to a module `needs` bitset with its closure. Per-block ID arrays of what each block needs and reads (P8's dependency index from day one).
 - [ ] D4. Demand loading in the core: hyphenation patterns only for the languages used, font metrics on first use, embedded font programs decompressed per used font.
+- [ ] D4b. Hyphenation cache keyed by (language, `\lefthyphenmin`, `\righthyphenmin`, word), cleared when `\hyphenation` or patterns change; exact because §923 depends only on these. Hit rate measured on the corpus.
 - [ ] D5. Measure: startup time and RSS per document against everything loaded.
 
 ### Phase 3. Native translation (per `native-port-plan.md`, each command oracle-proven)
 - [ ] P0 rest: `RT_PROFILE` time per macro, `RT_STATE`, `RT_NATIVE=cmd,…`, engine-against-engine `engine_boxdiff.py`, arXiv package-frequency sample.
-- [ ] P1. Fonts and NFSS as generated tables (`.fd`, TFM, encodings, size functions); `\selectfont` and the size commands native.
+- [ ] P1. Fonts and NFSS as generated tables (`.fd`, TFM, encodings, size functions); `\selectfont` and the size commands native. Metrics scaled once per used (font, size) and cached by ID (§568); embedded fonts subset once, at the end of the document.
 - [ ] P2. Kernel core (counters, lengths, spacing, boxes, paragraphs, lists, sectioning, references, `\newcommand`, `\NewDocumentCommand`, keys, hooks, files): small2e, sample2e and lppl at zero format expansions.
+- [ ] P2b. Single-run references (§6d): `\label`, `\ref`, `\pageref`, `\cite` and the contents lists resolved in memory, with no `.aux` reruns. Only pages whose resolved values changed are laid out again, until they stop changing. Output identical to pdflatex's final run.
 - [ ] P3. Output routine and floats as an explicit state machine.
 - [ ] P4. Tables, math, pictures.
 - [ ] P5. Classes (article, report, book, their `.clo`; ltxdoc/doc; amsart, scrartcl, IEEEtran, exam): parameters as generated `const` tables, behaviour native.
 - [ ] P6. Packages by real usage. Each `.sty` becomes data (tables generated by D2) plus behaviour (one Rust module with option bitflags and fixed hook slots). Class (a) libraries are not ported; native code subsumes them.
 
 ### Phase 4. Product
-- [ ] P7. Zero dependency: no `latex.ltx`, tables and fonts in the binary, native is the default. Speed gate at least 20× pdflatex on every corpus document, zero shift 85/85.
+- [ ] P7. Zero dependency: no `latex.ltx`, tables and fonts in the binary, native is the default. Speed gate at least 20× pdflatex on every corpus document, zero shift 85/85, one typesetting run per document (P2b), and the §6d per-page budgets met.
 - [ ] P8. Real-time incremental: block checkpoints, (content, state) cache, early cutoff, repagination until the breaks match, only changed pages shipped. Under 16 ms per typical edit.

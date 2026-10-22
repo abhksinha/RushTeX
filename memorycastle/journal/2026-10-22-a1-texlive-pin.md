@@ -26,6 +26,8 @@ Zero shift is proven against one pdfTeX and one LaTeX kernel. Before this, CI in
 - CI rehearsal on macOS: TeX Live off `PATH`, everything from the unpacked tarball, `RUSHTEX_PINNED_REFS=1`. Result: `parity.py zero --engine --pixels --all` 85/85.
 - The snapshot-built format differs from the host's only in the build date. `\time` and `\day` are stored at format build, as in TeX: 0 and 20 under the fixed `SOURCE_DATE_EPOCH`, against 1208 and 21.
 
+- First CI run (ubuntu-latest, no TeX Live, from release `texlive-2026-pin-1`): zero shift 85/85 and the leak audit passed. The other job's 29 unit-test failures predate A1: 28 were `pdftotext` missing and 1 was STIX2, Fira and Asana missing. CI now installs poppler and fetches all four TeX Live 2023 math fonts by checksum.
+
 ## Open
 - `scripts/engine_suites.py` runs `pdftex -ini` live, so it stays a local gate.
 - Yearly upgrade: install the new TeX Live, `parity.py score --build`, then `pin.py files`, `record` and `pack`. Then a new release tag, plus `PIN_TAG`/`PIN_SHA256` and `PINNED_LATEX`.

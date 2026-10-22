@@ -56,7 +56,7 @@ The one place to see what is done and what is next. Tick an item when its gate p
   - The references, the generated tables and the oracle all come from it.
   - A yearly upgrade is one deliberate step: bump the pin, regenerate, and let the node-level diffs name every change.
   - The 2023 NewCMMath pin stays only for the frozen old pipeline's tests and leaves with it at P7.
-- [ ] A1+. CI gates what is local today: zero shift on the corpus, `scripts/leak_audit.py`, the ownership-check build and the engine probe suites, all against the pinned snapshot.
+- [x] A1+. CI gates what is local today: zero shift on the corpus, `scripts/leak_audit.py`, the ownership-check build and the engine probe suites, all against the pinned snapshot.
 - [ ] A1b. Pinned-file suite, narrowed (user, 2026-10-22). Data files (`.tfm`, `.pfb`, `.vf`, `.fd`, `.def`, `.cfg`) are not probed against pdfLaTeX. They become build-time tables (`native-architecture.md`), and each generator checks every emitted entry against its source file deterministically: no trial and error. Code files only (`.sty`, `.cls`): one generated load probe each against pdfLaTeX (zero shift, or identical errors). Deferred to the port phase (P1 onward), where it proves each native package against its macro version.
 - [ ] A2. Security for untrusted documents:
   - a file-read policy (the document's folder and the bundled tables; full kpathsea reach only in dev builds);
@@ -87,7 +87,7 @@ The one place to see what is done and what is next. Tick an item when its gate p
   Each measured with H1 counters and per-kernel benchmarks.
 
 ### Phase 2. Tables and demand loading (shared by the oracle now and native later)
-- [ ] D1. Table library, std only, with tests and size reports: a static perfect hash with an 8-bit fingerprint per slot (name to ID and membership in one probe), SoA tables by ID, CSR lists (offsets plus IDs), bitsets, Roaring-style compressed bitmaps.
+- [x] D1. Table library, std only, with tests and size reports: a static perfect hash with an 8-bit fingerprint per slot (name to ID and membership in one probe), SoA tables by ID, CSR lists (offsets plus IDs), bitsets, Roaring-style compressed bitmaps.
 - [ ] D2. `rushtex-gen` skeleton plus the package registry. Every generator self-checks: it re-reads each emitted table and compares every entry with its source file (pillar 2). For each `.sty`/`.cls`/`.clo`/`.fd`, recorded from an oracle run: its class (a–e of the port plan), options, `\RequirePackage` edges (CSR), the control sequences it defines, and its parameters. Generated, checksummed.
 - [ ] D3. Document pre-scan, fused into the lexer's single pass (§6d: the source is lexed once, never twice): one pass over the source gives its command names, through the D1 hash, to a module `needs` bitset with its closure. Per-block ID arrays of what each block needs and reads (P8's dependency index from day one).
 - [ ] D4. Demand loading in the core: hyphenation patterns only for the languages used, font metrics on first use, embedded font programs decompressed per used font.

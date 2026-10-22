@@ -17,8 +17,10 @@ pub mod engine_font;
 pub mod engine_gc;
 pub mod engine_input;
 pub mod engine_io;
+#[cfg(feature = "oracle")]
 pub mod engine_job;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "oracle")]
 pub mod engine_host;
 pub mod engine_lex;
 pub mod engine_macro;
@@ -47,6 +49,7 @@ pub mod engine_showbox;
 pub mod engine_vf;
 pub mod engine_color;
 pub mod engine_tounicode;
+#[cfg(feature = "oracle")]
 pub mod engine_snapshot;
 pub mod engine_tables;
 pub mod engine_token;

@@ -44,6 +44,14 @@ jobs:
       - name: Clippy
         run: cargo clippy --release -- -D warnings
 
+      # The product/oracle boundary (native-architecture.md §2, progress.md A0): the product
+      # must build, lint and pass its tests without the TeX engine's format, kpathsea and job.
+      - name: Product without the oracle
+        run: |
+          cargo build --release --no-default-features
+          cargo clippy --release --no-default-features -- -D warnings
+          cargo test --release --no-default-features --lib
+
   # Zero-shift parity compares against pdfLaTeX, so it needs the TeX Live the references were
   # made with. Until CI pins one, it reports without gating.
   parity:

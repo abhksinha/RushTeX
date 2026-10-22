@@ -5,6 +5,7 @@
 //! sorted vector of (name, hex) pairs, searched by bisection.
 
 use super::engine_run::Machine;
+#[cfg(feature = "oracle")]
 use super::engine_snapshot::{Reader, Writer};
 
 #[derive(Debug, Default)]
@@ -51,6 +52,7 @@ impl GlyphUnicode {
         None
     }
 
+    #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut Writer) {
         w.u32(self.pairs.len() as u32);
         for (n, h) in &self.pairs {
@@ -59,6 +61,7 @@ impl GlyphUnicode {
         }
     }
 
+    #[cfg(feature = "oracle")]
     pub(super) fn undump(r: &mut Reader) -> Option<GlyphUnicode> {
         let n = r.u32()? as usize;
         let mut pairs = Vec::with_capacity(n.min(1 << 16));

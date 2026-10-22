@@ -111,6 +111,7 @@ fn hash(name: &str) -> u64 {
 
 impl CsTable {
     /// The names and their spans; the hash table is rebuilt on load.
+    #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut super::engine_snapshot::Writer) {
         w.str(&self.text);
         w.count(self.spans.len());
@@ -120,6 +121,7 @@ impl CsTable {
         }
     }
 
+    #[cfg(feature = "oracle")]
     pub(super) fn undump(r: &mut super::engine_snapshot::Reader) -> Option<CsTable> {
         let text = r.str()?;
         let n = r.count()?;
@@ -230,10 +232,12 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut super::engine_snapshot::Writer) {
         w.all(&self.toks);
     }
 
+    #[cfg(feature = "oracle")]
     pub(super) fn undump(r: &mut super::engine_snapshot::Reader) -> Option<Tokens> {
         Some(Tokens { toks: r.all()? })
     }

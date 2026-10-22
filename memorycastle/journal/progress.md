@@ -42,7 +42,7 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - **Budgets per commit:** time ratio, peak RSS, binary size, leak audit, zero shift.
 
 ### Phase 1. Foundations (the core and the boundary; everything later stands on them)
-- [ ] A0. `oracle` cargo feature: the product builds and passes its unit tests without `latex.ltx` interpretation, `engine_job`, `engine_host` or the format build.
+- [x] A0. `oracle` cargo feature: the product builds and passes its unit tests without `latex.ltx` interpretation, `engine_job`, `engine_host` or the format build.
 - [ ] A1. Pin a dated TeX Live 2026 snapshot (user, 2026-10-22: not 2023; our zero shift is already against pdfTeX 1.40.29 of TeX Live 2026, and users run the current kernel).
   - A manifest with package names, revisions and checksums, plus the LaTeX kernel date, committed and recorded in the binary.
   - CI installs that snapshot from the TeX Live archive, cached; Ubuntu's apt TeX Live is dropped.

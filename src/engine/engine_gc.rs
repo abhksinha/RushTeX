@@ -15,7 +15,7 @@
 //! live range and keep their offsets in it, so sharing survives without bookkeeping.
 
 use super::engine_node::{Kind, Node};
-#[cfg(test)]
+#[cfg(all(test, feature = "oracle"))]
 use super::engine_node::{leader, Nodes};
 use super::engine_run::Machine;
 use super::engine_token::Span;
@@ -57,7 +57,7 @@ impl Machine<'_, '_> {
     /// save stack, the lists being built, the current page, the shipped pages a harness
     /// keeps, alignments' adjustments, open discretionaries and `\pdfxform`s. §814 `just_box` is not one: it is read only right after the line
     /// break that sets it, within one command.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "oracle"))]
     fn for_each_node_root(&mut self, f: &mut dyn FnMut(Root)) {
         self.e.eqtb.for_each_box(|b| f(Root::Box(b)));
         for x in self.cur.iter_mut().chain(self.adjust.iter_mut().flatten()).chain(self.adjust_out.iter_mut().flatten()) {
@@ -94,7 +94,7 @@ impl Machine<'_, '_> {
 
     /// Model M's leak audit (`RT_LEAKS`): per node table, the entries neither free nor
     /// reachable from a root. Zero everywhere means every free point is in place.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "oracle"))]
     pub(super) fn node_leaks(&mut self) -> String {
         self.flush_dead_boxes();
         let nodes = std::mem::take(&mut self.e.nodes);
@@ -193,13 +193,13 @@ impl Machine<'_, '_> {
 }
 
 /// One reachable bit per entry of a node table (the leak audit's).
-#[cfg(test)]
+#[cfg(all(test, feature = "oracle"))]
 #[derive(Debug, Default)]
 struct Live {
     bits: Vec<u64>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "oracle"))]
 impl Live {
     fn reset(&mut self, len: usize) {
         self.bits.clear();
@@ -221,7 +221,7 @@ impl Live {
 }
 
 /// A holder of node-arena references outside the arena.
-#[cfg(test)]
+#[cfg(all(test, feature = "oracle"))]
 pub(super) enum Root<'a> {
     /// A list, `start..end` of [`Nodes::list`].
     List(&'a mut (u32, u32)),
@@ -235,7 +235,7 @@ pub(super) enum Root<'a> {
 
 /// The leak audit's tables: what is reachable in each node table, and the lists still to
 /// scan.
-#[cfg(test)]
+#[cfg(all(test, feature = "oracle"))]
 #[derive(Debug, Default)]
 pub(super) struct NodeGc {
     list: Live,
@@ -248,7 +248,7 @@ pub(super) struct NodeGc {
     work: Vec<(u32, u32)>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "oracle"))]
 impl NodeGc {
     fn mark_box(&mut self, n: &Nodes, b: u32) {
         if (b as usize) < n.boxes.len() && self.boxes.set(b) {
@@ -327,7 +327,7 @@ impl NodeGc {
 }
 
 /// The ownership-check build's leaks by the source line that made them, most first.
-#[cfg(all(test, feature = "ownership-check"))]
+#[cfg(all(test, feature = "oracle", feature = "ownership-check"))]
 fn leak_sites(nodes: &Nodes, gc: &NodeGc) -> String {
     use std::collections::HashMap;
     let is = |l: &Live, i: usize| l.bits.get(i / 64).is_some_and(|w| w >> (i % 64) & 1 == 1);

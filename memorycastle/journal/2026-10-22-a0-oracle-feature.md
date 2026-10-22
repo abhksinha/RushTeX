@@ -21,3 +21,13 @@ First item of Phase 1 (`progress.md`, `native-architecture.md` §2 layer 7). The
 - **Off by default now:** it would drop exact output from releases before native code replaces it.
 - **A separate crate for the oracle now:** it moves 20k lines and every private field access across a crate boundary, a large churn that the feature gate gets for a fraction of the cost. It can follow if the gate proves leaky.
 - **Gating only `engine_job`/`engine_host`:** the format dump and load is oracle work too (the native product has no format), and leaving it compiled would keep the snapshot codec alive as accidental product code.
+
+## Measured
+- Without the feature, the library and binary build, clippy is clean, and 335 unit tests pass. The 3 left out are the harness and format round trips.
+- With it (the default), 338 tests pass and clippy is clean; the ownership-check build is unaffected.
+- Gated:
+  - the modules `engine_job`, `engine_host`, `engine_snapshot`;
+  - 21 per-module `dump`/`undump` items;
+  - `compile_engine` and `cache_dir` in `main.rs`;
+  - the `format_smoke` harness and the test-only audit code it drives (`node_leaks`, `NodeGc`, `for_each_node_root`, `macro_lengths`, `used_cs`), now `cfg(all(test, feature = "oracle"))`.
+- CI gained a "Product without the oracle" step.

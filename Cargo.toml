@@ -16,6 +16,11 @@ path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
 [features]
+# The TeX engine as exactness oracle (native-architecture.md §2 layer 7): the LaTeX format's
+# build and load, kpathsea lookup and the multi-run job. Default until P7, when native output
+# becomes the default and releases build without it.
+default = ["oracle"]
+oracle = []
 # Model M's checker: freed node blocks are poisoned, and reading or freeing one twice panics.
 ownership-check = []
 

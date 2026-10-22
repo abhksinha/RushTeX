@@ -19,6 +19,7 @@ use super::engine_font::{restart, NON_CHAR, STOP_FLAG};
 use super::engine_node::{Kind, Node};
 use super::engine_prim::{Meaning, Prim};
 use super::engine_run::Machine;
+#[cfg(feature = "oracle")]
 use super::engine_snapshot::{Reader, Writer};
 use super::engine_whatsit::LANGUAGE;
 
@@ -162,6 +163,7 @@ impl Hyph {
         self.tries[lang].as_ref()
     }
 
+    #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut Writer) {
         w.count(self.patterns.len());
         for p in &self.patterns {
@@ -176,6 +178,7 @@ impl Hyph {
         }
     }
 
+    #[cfg(feature = "oracle")]
     pub(super) fn undump(r: &mut Reader) -> Option<Hyph> {
         let n = r.count()?;
         let mut patterns = Vec::with_capacity(n);

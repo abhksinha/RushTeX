@@ -286,6 +286,18 @@ impl Kpse {
     }
 
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
+        // The files carried in the binary (`data_embed`): where the disk has none, and first
+        // under `RT_EMBED_FIRST` (the gate that proves them equal to the disk's).
+        let embedded = || crate::data::data_embed::embedded().and_then(|t| t.read(name));
+        if std::env::var_os("RT_EMBED_FIRST").is_some() {
+            if let Some(b) = embedded() {
+                return Some(b);
+            }
+        }
+        self.read_disk(name).or_else(embedded)
+    }
+
+    fn read_disk(&self, name: &str) -> Option<Vec<u8>> {
         if let Some(p) = self.found.borrow().get(name) {
             return p.as_ref().and_then(|p| std::fs::read(p).ok());
         }

@@ -4,6 +4,7 @@
 //!     rushtex-gen fonts --list FILE --use USE --check                           # self-check only
 //!     rushtex-gen nfss --list FILE [--format FMT] [--out assets/tables/nfss.rtdb] [--dump]
 //!     rushtex-gen pkgs --list FILE [--format FMT] [--out assets/tables/pkgs.rtdb]
+//!     rushtex-gen embed --list FILE [--set assets/tables/embed.set] [--out assets/tables/embed.rtdb]
 //!
 //! `FILE` lists TFM paths, one per line, or `scripts/texlive/files.tsv` rows (path first).
 //! `USE` (`scripts/texlive/font-use.tsv`) gives each font's popularity: `name<TAB>documents`.
@@ -259,15 +260,52 @@ fn pkgs(args: &[String]) -> Result<String, String> {
     Ok(format!("{out}: {} packages and classes, {n_files} files, {n_cmds} commands, {} bytes; {} bookkeeping names left out; {} loaded with errors", pkgs.len(), bytes.len(), noise.len(), failed.len()))
 }
 
+/// Whether basename `name` matches `pattern`, which holds at most one `*`.
+fn glob(pattern: &str, name: &str) -> bool {
+    match pattern.split_once('*') {
+        Some((a, b)) => name.len() >= a.len() + b.len() && name.starts_with(a) && name.ends_with(b),
+        None => pattern == name,
+    }
+}
+
+/// `rushtex-gen embed`: the pinned files whose names match the set's patterns, carried in
+/// the binary (`data_embed`), each read back and compared before the table is accepted.
+fn embed(args: &[String]) -> Result<String, String> {
+    use rushtex::data::data_embed;
+    let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
+    let list = arg("--list").ok_or("--list FILE is required")?;
+    let set_path = arg("--set").unwrap_or_else(|| "assets/tables/embed.set".into());
+    let set = std::fs::read_to_string(&set_path).map_err(|e| format!("{set_path}: {e}"))?;
+    let patterns: Vec<&str> = set.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
+    let text = std::fs::read_to_string(&list).map_err(|e| format!("{list}: {e}"))?;
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for path in text.lines().filter_map(|l| l.split('\t').next()) {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        if patterns.iter().any(|p| glob(p, name)) && !files.iter().any(|f| f.0 == name) {
+            files.push((name.to_string(), read_listed(path)?));
+        }
+    }
+    let raw: usize = files.iter().map(|f| f.1.len()).sum();
+    let out = arg("--out").unwrap_or_else(|| "assets/tables/embed.rtdb".into());
+    let mut w = BlobWriter::default();
+    let packed = data_embed::write(&mut w, &files)?;
+    std::fs::write(&out, w.finish()).map_err(|e| format!("{out}: {e}"))?;
+    let bytes = std::fs::read(&out).map_err(|e| format!("{out}: {e}"))?;
+    let table = Blob::new(&bytes).and_then(|b| data_embed::EmbedTable::from_blob(&b)).ok_or("not an embed table")?;
+    data_embed::check(&table, &files)?;
+    Ok(format!("{out}: {} files, {raw} bytes as {packed} compressed ({} in all), every file read back exactly", files.len(), bytes.len()))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("fonts") => fonts(&args[1..]),
         #[cfg(feature = "oracle")]
         Some("nfss") => nfss(&args[1..]),
+        Some("embed") => embed(&args[1..]),
         #[cfg(feature = "oracle")]
         Some("pkgs") => pkgs(&args[1..]),
-        _ => Err("usage: rushtex-gen fonts --list FILE --use USE [--out PATH] [--check] | nfss --list FILE [--format FMT] [--out PATH] [--dump] | pkgs --list FILE [--format FMT] [--out PATH]".into()),
+        _ => Err("usage: rushtex-gen fonts --list FILE --use USE [--out PATH] [--check] | nfss --list FILE [--format FMT] [--out PATH] [--dump] | pkgs --list FILE [--format FMT] [--out PATH] | embed --list FILE [--set PATH] [--out PATH]".into()),
     };
     match result {
         Ok(msg) => {

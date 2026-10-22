@@ -1,0 +1,18 @@
+# D2b tier 1: the font files carried in the binary, as basename patterns (one `*` each)
+# matched against the pinned file list (scripts/texlive/files.tsv). The set is what most
+# documents use: Computer Modern and the AMS fonts (text, math, symbols, Fraktur), Latin
+# Modern (T1 text with lmodern), and the URW clones of the PostScript base fonts (Times,
+# Helvetica, Courier, Palatino, Symbol), with the encodings their map lines name.
+cm*.pfb
+msam*.pfb
+msbm*.pfb
+eu*.pfb
+lm*.pfb
+utm*.pfb
+uhv*.pfb
+ucr*.pfb
+upl*.pfb
+usy*.pfb
+uzd*.pfb
+lm-*.enc
+8r.enc

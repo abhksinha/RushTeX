@@ -204,7 +204,8 @@ impl Machine<'_, '_> {
                     out.extend_from_slice(&list[i..]);
                     return out;
                 }
-                Kind::Glue | Kind::Kern | Kind::Penalty => {}
+                // §968: the discarded nodes are flushed.
+                Kind::Glue | Kind::Kern | Kind::Penalty => self.e.nodes.flush_node(*n),
                 _ => out.push(*n),
             }
         }
@@ -348,6 +349,9 @@ impl Machine<'_, '_> {
             Some(self.e.nodes.add_box(r))
         };
         self.e.eqtb.replace_box(n, left);
+        // The old box's nodes moved to the two new ones (or were pruned).
+        self.e.nodes.free_block(b.list);
+        self.e.nodes.free_box(v);
         let top = self.vpack_list(&list[..cut], h, true, self.dimen_p(SPLIT_MAX_DEPTH));
         Some(self.e.nodes.add_box(top))
     }
@@ -474,6 +478,8 @@ impl Machine<'_, '_> {
             };
             let heights = match next {
                 Next::Discard => {
+                    // §1000 `done1`: the node is flushed.
+                    self.e.nodes.flush_node(p);
                     i += 1;
                     continue;
                 }
@@ -647,7 +653,9 @@ impl Machine<'_, '_> {
         if let Some(b) = self.e.eqtb.box_reg(n) {
             if !self.e.nodes.boxes[b as usize].vertical {
                 self.error("Insertions can only be added to a vbox");
+                // §993 `box_error`: the box is flushed.
                 self.e.eqtb.replace_box(n, None);
+                self.e.nodes.flush_box(b);
             }
         }
     }
@@ -677,9 +685,10 @@ impl Machine<'_, '_> {
         }
         // §1014: the page ends before `best` (the whole page when it was the new node).
         let cut = best.min(self.page.list.len());
-        if self.e.eqtb.box_reg(255).is_some() {
+        if let Some(b) = self.e.eqtb.box_reg(255) {
             self.error("\\box255 is not void");
             self.e.eqtb.replace_box(255, None);
+            self.e.nodes.flush_box(b);
         }
         self.page.insert_penalties = 0;
         let holding = self.int_p(HOLDING_INSERTS) > 0;
@@ -708,6 +717,9 @@ impl Machine<'_, '_> {
                     if self.page.ins[r].best_ins.is_some() {
                         wait = false;
                         let list = self.e.nodes.get(ins.list).to_vec();
+                        // The insertion's nodes move into the queue (or the remainder).
+                        self.e.nodes.free_block(ins.list);
+                        self.e.nodes.free_insert(p.a as u32);
                         let rec = self.page.ins[r];
                         if rec.best_ins == Some(idx) {
                             // §1021: the last insertion of the class on this page, perhaps split.
@@ -718,6 +730,9 @@ impl Machine<'_, '_> {
                                     let remainder = self.prune_page_top(&list[bp..], ins.split_top);
                                     if !remainder.is_empty() {
                                         let b = self.vpack_list(&remainder, 0, false, MAX_DIMEN);
+                                        // Only the height is needed; the remainder's nodes
+                                        // are owned by the new insertion's list.
+                                        self.e.nodes.free_block(b.list);
                                         let stored = self.e.nodes.store(&remainder);
                                         let rec2 = InsRec { height: b.height + b.depth, list: stored, ..ins };
                                         node.a = self.e.nodes.add_insert(rec2) as i32;
@@ -731,6 +746,11 @@ impl Machine<'_, '_> {
                             let q = queues[r].take().unwrap_or_default();
                             let b = self.vpack_list(&q, 0, false, MAX_DIMEN);
                             let b = self.e.nodes.add_box(b);
+                            // §1021: the class's box, whose list began the queue, is replaced.
+                            if let Some(old) = self.e.eqtb.box_reg(ins.n as u32) {
+                                self.e.nodes.free_block(self.e.nodes.boxes[old as usize].list);
+                                self.e.nodes.free_box(old);
+                            }
                             self.e.eqtb.replace_box(ins.n as u32, Some(b));
                         } else if let Some(q) = queues[r].as_mut() {
                             q.extend_from_slice(&list);
@@ -829,6 +849,9 @@ impl Machine<'_, '_> {
         self.page.pages += 1;
         if self.page.keep_shipped {
             self.page.shipped.push(b);
+        } else {
+            // §640: the shipped box is flushed.
+            self.e.nodes.flush_box(b);
         }
     }
 

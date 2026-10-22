@@ -396,7 +396,9 @@ impl Machine<'_, '_> {
         // §816: the paragraph ends with an infinite penalty and `\parfillskip` (a final
         // glue becomes the penalty).
         if self.cur.last().is_some_and(|n| n.kind == Kind::Glue) && self.cur.len() > start {
-            self.cur.pop();
+            if let Some(n) = self.cur.pop() {
+                self.e.nodes.flush_node(n);
+            }
         }
         self.cur.push(Node::new(Kind::Penalty, INF_PENALTY));
         let fill = self.e.nodes.glue_node(self.gp(PAR_FILL_SKIP), PAR_FILL_SKIP as u8 + 1);
@@ -733,6 +735,7 @@ impl Machine<'_, '_> {
                     match n.kind {
                         Kind::Glue => {
                             right_end = self.cur.len();
+                            self.e.nodes.flush_node(n);
                             q + 1
                         }
                         Kind::Kern | Kind::Math => {
@@ -753,6 +756,16 @@ impl Machine<'_, '_> {
                             }
                             carry.extend_from_slice(nodes.get(post));
                             disc_break = true;
+                            // Both texts moved into the lines; the replaced nodes go.
+                            let [pre, post] = disc_lists(&self.e.nodes, &n);
+                            self.e.nodes.free_block(pre);
+                            self.e.nodes.free_block(post);
+                            if n.a >= 0 {
+                                self.e.nodes.free_disc(n.a as u32);
+                            }
+                            for &r in &par[q + 1..(q + 1 + n.sub as usize).min(par.len())] {
+                                self.e.nodes.flush_node(r);
+                            }
                             q + 1 + n.sub as usize
                         }
                         _ => {
@@ -829,6 +842,7 @@ impl Machine<'_, '_> {
                 if !discardable {
                     break;
                 }
+                self.e.nodes.flush_node(n);
                 pos += 1;
             }
         }

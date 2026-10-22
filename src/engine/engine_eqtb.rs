@@ -187,6 +187,8 @@ pub struct Eqtb {
     cat_levels: [u16; 256],
     /// §230 `box_base`: box register `n` holds box index + 1, or 0 when void.
     boxes: Table<u32>,
+    /// Boxes released by assignments and group ends, not yet flushed.
+    dead_boxes: Vec<u32>,
     /// §230 `par_shape_loc`: `\parshape` as an index + 1 into `shapes` (0 for none), and its
     /// level; every shape ever set is kept, so restoring one is an index.
     par_shape: u32,
@@ -201,7 +203,7 @@ pub struct Eqtb {
 impl Default for Eqtb {
     fn default() -> Self {
         use super::engine_names as n;
-        let mut e = Eqtb { ints: Table::default(), dimens: Table::default(), glues: Table::default(), mus: Table::default(), toks: Table::default(), codes: Default::default(), cats: CatTable::latex(), cat_levels: [0; 256], boxes: Table::default(), par_shape: 0, par_shape_level: LEVEL_ONE, shapes: Vec::new(), meanings: Table::default(), save: Vec::new(), level: LEVEL_ONE };
+        let mut e = Eqtb { ints: Table::default(), dimens: Table::default(), glues: Table::default(), mus: Table::default(), toks: Table::default(), codes: Default::default(), cats: CatTable::latex(), cat_levels: [0; 256], boxes: Table::default(), dead_boxes: Vec::new(), par_shape: 0, par_shape_level: LEVEL_ONE, shapes: Vec::new(), meanings: Table::default(), save: Vec::new(), level: LEVEL_ONE };
         // §240: the integer parameters IniTeX does not start at zero.
         for (slot, v) in [(n::MAG, 1000), (n::TOLERANCE, 10000), (n::MAX_DEAD_CYCLES, 25), (n::HANG_AFTER, 1), (n::ESCAPE_CHAR, b'\\' as i32), (n::END_LINE_CHAR, 13)] {
             e.ints.put(slot, v, LEVEL_ONE);
@@ -389,17 +391,35 @@ impl Eqtb {
         self.boxes.get(n).checked_sub(1)
     }
 
-    /// §1077 `\setbox`: grouped like any equivalent.
+    /// §1077 `\setbox`: grouped like any equivalent. The box it replaces at the same level,
+    /// or any level when global, dies (§277 `eq_define`, §279 `geq_define`: `eq_destroy`).
     pub fn set_box(&mut self, n: u32, b: Option<u32>, global: bool) {
         let v = b.map_or(0, |b| b + 1);
-        if global {
-            return self.boxes.put(n, v, LEVEL_ONE);
+        let (old_v, old) = (self.boxes.get(n), self.boxes.level(n));
+        if global || old == self.level {
+            self.kill_box(old_v);
+        } else {
+            self.save.push(Saved::Box { level: old, n, b: old_v });
         }
-        let old = self.boxes.level(n);
-        if old != self.level {
-            self.save.push(Saved::Box { level: old, n, b: self.boxes.get(n) });
+        self.boxes.put(n, v, if global { LEVEL_ONE } else { self.level });
+    }
+
+    /// A box register value (index plus one, 0 void) that no longer has an owner: its box is
+    /// flushed by the machine (`take_dead_boxes`).
+    fn kill_box(&mut self, v: u32) {
+        if v > 0 {
+            self.dead_boxes.push(v - 1);
         }
-        self.boxes.put(n, v, self.level);
+    }
+
+    #[inline]
+    pub fn has_dead_boxes(&self) -> bool {
+        !self.dead_boxes.is_empty()
+    }
+
+    /// The boxes assignments and group ends have released since the last call.
+    pub fn take_dead_boxes(&mut self, into: &mut Vec<u32>) {
+        into.append(&mut self.dead_boxes);
     }
 
     /// The register's box replaced at its own level, unsaved: `\box n` voiding it (§1079)
@@ -483,7 +503,7 @@ impl Eqtb {
         let meanings = Table::<Meaning>::undump(r)?;
         let inside = |s: &Span| s.end <= toks;
         let spans_ok = toks_t.vals.iter().all(inside) && meanings.vals.iter().all(|m| !matches!(m, Meaning::Macro(mac) if !inside(&mac.text)));
-        spans_ok.then_some(Eqtb { ints, dimens, glues, mus, toks: toks_t, codes, cats, cat_levels, boxes, par_shape, par_shape_level: LEVEL_ONE, shapes, meanings, save: Vec::new(), level: LEVEL_ONE })
+        spans_ok.then_some(Eqtb { ints, dimens, glues, mus, toks: toks_t, codes, cats, cat_levels, boxes, dead_boxes: Vec::new(), par_shape, par_shape_level: LEVEL_ONE, shapes, meanings, save: Vec::new(), level: LEVEL_ONE })
     }
 
     /// What control sequence `id` means; `Unset` when never assigned.
@@ -548,9 +568,15 @@ impl Eqtb {
                         self.par_shape_level = level;
                     }
                 }
+                // §283: the value that loses dies, the saved one when the register was
+                // assigned globally inside the group, else the current one.
                 Saved::Box { level, n, b } => {
                     if self.boxes.level(n) != LEVEL_ONE {
+                        let cur = self.boxes.get(n);
+                        self.kill_box(cur);
                         self.boxes.put(n, b, level);
+                    } else {
+                        self.kill_box(b);
                     }
                 }
                 Saved::Code { kind, level, ch, val } => {

@@ -45,6 +45,9 @@ impl Machine<'_, '_> {
         if self.e.toks.len() as u32 >= self.collect_at {
             self.collect_tokens();
         }
+        if self.e.eqtb.has_dead_boxes() {
+            self.flush_dead_boxes();
+        }
         if self.e.nodes.list.len() as u32 >= self.node_collect_at {
             self.collect_nodes();
         }
@@ -53,7 +56,8 @@ impl Machine<'_, '_> {
     /// Every holder of node-arena references outside the arena: the box registers and the
     /// save stack, the lists being built, the current page, the shipped pages a harness
     /// keeps, alignments' adjustments, open discretionaries, the noads of an open formula,
-    /// `\pdfxform`s, and §814 `just_box`.
+    /// and `\pdfxform`s. §814 `just_box` is not one: it is read only right after the line
+    /// break that sets it, within one command.
     fn for_each_node_root(&mut self, f: &mut dyn FnMut(Root)) {
         self.e.eqtb.for_each_box(|b| f(Root::Box(b)));
         for x in self.cur.iter_mut().chain(self.adjust.iter_mut().flatten()).chain(self.adjust_out.iter_mut().flatten()) {
@@ -83,7 +87,54 @@ impl Machine<'_, '_> {
         for x in &mut self.pdf_doc.forms {
             f(Root::Box(&mut x.box_rec));
         }
-        f(Root::Box(&mut self.just_box));
+    }
+
+    /// Flushes the boxes assignments and group ends released (§275 `eq_destroy`).
+    fn flush_dead_boxes(&mut self) {
+        let mut dead = std::mem::take(&mut self.dead_buf);
+        self.e.eqtb.take_dead_boxes(&mut dead);
+        for b in dead.drain(..) {
+            self.e.nodes.flush_box(b);
+        }
+        self.dead_buf = dead;
+    }
+
+    /// Model M's leak audit (`RT_LEAKS`): per node table, the entries neither free nor
+    /// reachable from a root. Zero everywhere means every free point is in place.
+    #[cfg(test)]
+    pub(super) fn node_leaks(&mut self) -> String {
+        self.flush_dead_boxes();
+        let nodes = std::mem::take(&mut self.e.nodes);
+        let mut gc = std::mem::take(&mut self.node_gc);
+        gc.list.reset(nodes.list.len());
+        gc.boxes.reset(nodes.boxes.len());
+        gc.glues.reset(nodes.glues.len());
+        gc.rules.reset(nodes.rules.len());
+        gc.ligs.reset(nodes.lig_chars.len());
+        gc.discs.reset(nodes.discs.len());
+        gc.inserts.reset(nodes.inserts.len());
+        self.for_each_node_root(&mut |r| gc.mark(&nodes, r));
+        let f = &nodes.free;
+        let blocks = |v: &[Vec<u32>]| -> usize { v.iter().enumerate().map(|(c, s)| s.len() * super::engine_node::class_len(c)).sum() };
+        let row = |name: &str, len: usize, free: usize, live: &Live| {
+            let live: usize = live.bits.iter().map(|w| w.count_ones() as usize).sum();
+            format!("{name} {} of {len} ", len as i64 - free as i64 - live as i64)
+        };
+        let s = [
+            row("nodes", nodes.list.len(), blocks(&f.spans), &gc.list),
+            row("boxes", nodes.boxes.len(), f.boxes.len(), &gc.boxes),
+            row("glues", nodes.glues.len(), f.glues.len(), &gc.glues),
+            row("rules", nodes.rules.len(), f.rules.len(), &gc.rules),
+            row("ligs", nodes.lig_chars.len(), blocks(&f.ligs), &gc.ligs),
+            row("discs", nodes.discs.len(), f.discs.len(), &gc.discs),
+            row("inserts", nodes.inserts.len(), f.inserts.len(), &gc.inserts),
+        ]
+        .concat();
+        #[cfg(feature = "ownership-check")]
+        let s = s + &leak_sites(&nodes, &gc);
+        self.e.nodes = nodes;
+        self.node_gc = gc;
+        format!("LEAKS {s}")
     }
 
     /// Mark and compact the node arena and its side tables, in place: one live bit per
@@ -374,4 +425,37 @@ impl NodeGc {
             Root::Node(x) => self.remap_node(x),
         }
     }
+}
+
+/// The ownership-check build's leaks by the source line that made them, most first.
+#[cfg(all(test, feature = "ownership-check"))]
+fn leak_sites(nodes: &Nodes, gc: &NodeGc) -> String {
+    use std::collections::HashMap;
+    let is = |l: &Live, i: usize| l.bits.get(i / 64).is_some_and(|w| w >> (i % 64) & 1 == 1);
+    let mut sites: HashMap<String, usize> = HashMap::new();
+    let free_boxes: std::collections::HashSet<u32> = nodes.free.boxes.iter().copied().collect();
+    for (i, o) in nodes.origin.boxes.iter().enumerate() {
+        if let Some(o) = o {
+            if !is(&gc.boxes, i) && !free_boxes.contains(&(i as u32)) {
+                *sites.entry(format!("box {o}")).or_default() += 1;
+            }
+        }
+    }
+    let free_glues: std::collections::HashSet<u32> = nodes.free.glues.iter().copied().collect();
+    for (i, o) in nodes.origin.glues.iter().enumerate() {
+        if let Some(o) = o {
+            if !is(&gc.glues, i) && !free_glues.contains(&(i as u32)) {
+                *sites.entry(format!("glue {o}")).or_default() += 1;
+            }
+        }
+    }
+    let free_lists: std::collections::HashSet<u32> = nodes.free.spans.iter().flatten().copied().collect();
+    for (&s, o) in &nodes.origin.lists {
+        if !is(&gc.list, s as usize) && !free_lists.contains(&s) {
+            *sites.entry(format!("list {o}")).or_default() += 1;
+        }
+    }
+    let mut v: Vec<_> = sites.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    v.iter().take(40).map(|(k, n)| format!("\n  {n:6} {k}")).collect()
 }

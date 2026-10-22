@@ -133,6 +133,39 @@ pub struct Nodes {
     /// built, one segment per nesting level).
     pub(super) work: Vec<(u32, u32)>,
     pub(super) copy_buf: Vec<Node>,
+    /// The ownership-check build's record of where each list block, box and glue was made,
+    /// so the leak audit names the line that leaks.
+    #[cfg(feature = "ownership-check")]
+    pub origin: Origins,
+}
+
+#[cfg(feature = "ownership-check")]
+pub enum Table {
+    Box,
+    Glue,
+}
+
+#[cfg(feature = "ownership-check")]
+#[derive(Debug, Default)]
+pub struct Origins {
+    pub lists: std::collections::HashMap<u32, &'static std::panic::Location<'static>>,
+    pub boxes: Vec<Option<&'static std::panic::Location<'static>>>,
+    pub glues: Vec<Option<&'static std::panic::Location<'static>>>,
+}
+
+#[cfg(feature = "ownership-check")]
+impl Origins {
+    #[track_caller]
+    fn note(&mut self, t: Table, i: u32) {
+        let v = match t {
+            Table::Box => &mut self.boxes,
+            Table::Glue => &mut self.glues,
+        };
+        if v.len() <= i as usize {
+            v.resize(i as usize + 1, None);
+        }
+        v[i as usize] = Some(std::panic::Location::caller());
+    }
 }
 
 /// Leaders glue (§149 subtypes 100–102) has its box in `b`; rule leaders (110–112) its rule.
@@ -161,6 +194,15 @@ pub fn size_class(len: usize) -> (usize, usize) {
     } else {
         let p = len.next_power_of_two();
         (16 + p.trailing_zeros() as usize - 5, p)
+    }
+}
+
+/// The block length of size class `c`.
+pub fn class_len(c: usize) -> usize {
+    if c < 16 {
+        c + 1
+    } else {
+        1 << (c - 16 + 5)
     }
 }
 
@@ -228,6 +270,7 @@ impl Nodes {
 
     /// Stores a finished list in a block of its size class (a freed one when there is
     /// one). An empty list takes no block.
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub fn store(&mut self, nodes: &[Node]) -> (u32, u32) {
         if nodes.is_empty() {
             return (0, 0);
@@ -242,6 +285,8 @@ impl Nodes {
             }
         };
         self.list[start..start + nodes.len()].copy_from_slice(nodes);
+        #[cfg(feature = "ownership-check")]
+        self.origin.lists.insert(start as u32, std::panic::Location::caller());
         (start as u32, (start + nodes.len()) as u32)
     }
 
@@ -254,32 +299,44 @@ impl Nodes {
         (l.0, l.0 + size_class((l.1 - l.0) as usize).1 as u32)
     }
 
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub fn add_box(&mut self, b: BoxRec) -> u32 {
-        slot(&mut self.boxes, &mut self.free.boxes, b)
+        let i = slot(&mut self.boxes, &mut self.free.boxes, b);
+        #[cfg(feature = "ownership-check")]
+        self.origin.note(Table::Box, i);
+        i
     }
 
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub fn add_disc(&mut self, d: [(u32, u32); 2]) -> u32 {
         slot(&mut self.discs, &mut self.free.discs, d)
     }
 
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub fn add_insert(&mut self, r: InsRec) -> u32 {
         slot(&mut self.inserts, &mut self.free.inserts, r)
     }
 
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub fn add_rule(&mut self, dims: [i32; 3]) -> u32 {
         slot(&mut self.rules, &mut self.free.rules, dims)
     }
 
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub fn glue_node(&mut self, g: Glue, sub: u8) -> Node {
         let i = slot(&mut self.glues, &mut self.free.glues, g);
+        #[cfg(feature = "ownership-check")]
+        self.origin.note(Table::Glue, i);
         Node { kind: Kind::Glue, sub, font: 0, a: i as i32, b: 0 }
     }
 
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub fn rule_node(&mut self, dims: [i32; 3]) -> Node {
         Node::new(Kind::Rule, self.add_rule(dims) as i32)
     }
 
     /// A ligature of `c` in font `f` made from the characters `from`.
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub fn lig_node(&mut self, f: u16, c: u8, from: &[u8], hits: u8) -> Node {
         let at = self.lig_chars.len();
         self.lig_chars.extend_from_slice(from);
@@ -289,6 +346,7 @@ impl Nodes {
     /// A ligature of `c` in font `f` made from the characters appended to `lig_chars` from
     /// `at`: they move into a freed block of their class when there is one, else stay as a
     /// new block at the end.
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub fn lig_node_at(&mut self, f: u16, c: u8, at: usize, hits: u8) -> Node {
         let len = self.lig_chars.len() - at;
         let mut start = at;
@@ -319,6 +377,16 @@ impl Nodes {
         }
         let _ = cap;
         self.free.spans[c].push(l.0);
+    }
+
+    /// Frees insertion record `i` alone: its list has moved to a new owner.
+    pub fn free_insert(&mut self, i: u32) {
+        self.free.inserts.push(i);
+    }
+
+    /// Frees discretionary record `d` alone: its texts have moved to a new owner.
+    pub fn free_disc(&mut self, d: u32) {
+        self.free.discs.push(d);
     }
 
     /// Frees box record `b` alone: its list has moved to a new owner.

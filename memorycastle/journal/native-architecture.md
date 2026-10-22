@@ -38,7 +38,9 @@ The full specification follows. Every change to rushtex is checked against it.
 4. **Native packages.** One Rust module each, with option bitflags and hooks at fixed kernel hook points.
 5. **Exact typesetting core**, today's `engine_box`, `engine_pack`, `engine_chars`, `engine_linebreak`, `engine_hyph`, `engine_align`, `engine_page`, `engine_noad`/`engine_mlist`, `engine_font`/`engine_vf`, `engine_microtype`, `engine_ship`, `engine_pdfdoc`, `engine_image`: about 11k lines, already exact.
 6. **Output:** PDF pages, or a direct preview for real-time mode.
-7. **Oracle (dev only, cargo feature `oracle`):** the macro interpreter (`engine_run`, `engine_macro`, `engine_cond`, `engine_value`, `engine_scan`, `engine_snapshot`) plus `engine_job`/`engine_host`.
+7. **Oracle (dev only, cargo feature `oracle`):** interpretation of `latex.ltx`, expl3 and the `.sty`/`.cls` files, plus `engine_job`/`engine_host` and the format build.
+   - **Boundary (corrected 2026-10-22, `native-port-plan.md` §1):** TeX's expansion semantics (`engine_macro`, `engine_cond`, `engine_value`, `engine_scan`; tex.web §366–§401, §487–§510) stay in the product, because documents' own macros (`\def`, `\expandafter`, `\csname`, catcodes) need them for backward compatibility.
+   - Every LaTeX command they reach is a native primitive. What leaves the product is LaTeX's macro implementation and TeX Live, not the expansion machinery.
 
 ### 3. Build time, not run time
 - A generator (`rushtex-gen`, dev only) reads the pinned TeX Live files once and emits `src/generated/*.rs` and compressed blobs. Everything lands in the binary's read-only data:
@@ -155,7 +157,8 @@ The full specification follows. Every change to rushtex is checked against it.
 - **N3:** native kernel: small2e, sample2e, lppl exact natively, then the kernel-only corpus documents.
 - **N4:** packages by usage frequency, each oracle-diffed.
 - **N5:** in-memory references with one layout pass where possible, then the block-level incremental pipeline.
-- **N6:** the oracle out of the release (cargo feature). One native binary.
+- **N6:** the oracle (`latex.ltx` interpretation, format build, `engine_host`) out of the release. One native binary that keeps TeX's expansion for the document's own macros.
+- **Detailed phases P0–P8, inventory and trackers:** `native-port-plan.md`. The port grows inside the engine as native primitives, verified per command against the macro version. The old native pipeline is frozen and retired at P7, replacing N1's migration of it.
 
 ### 12. Review checklist (every change)
 1. Does any work run at run time that could run at build time?

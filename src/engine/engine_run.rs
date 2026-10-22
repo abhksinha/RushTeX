@@ -1043,11 +1043,12 @@ mod tests {
             }
         };
         // LaTeX reads back the `.aux` and `.toc` its previous run wrote, so a document is run
-        // again while those change, as `pdflatex` is until it stops asking (at most 3 runs).
+        // again while those change, as latexmk runs `pdflatex` (at most 5 runs: varioref's
+        // "on the following page" texts can move a float and need more than 3).
         let kpse = std::rc::Rc::new(kpse);
         let mut prior: Vec<super::super::engine_io::WriteStream> = Vec::new();
         if let Some(f) = fmt_in.as_ref().filter(|_| std::env::var("RT_ONCE").is_err()) {
-            for _ in 0..2 {
+            for _ in 0..4 {
                 let mut e = Engine::undump(&std::fs::read(f).expect("format file")).expect("a format of this build");
                 let mut m = Machine::new(&mut e, &src);
                 let k = kpse.clone();

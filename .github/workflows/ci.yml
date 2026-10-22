@@ -98,6 +98,16 @@ jobs:
       - name: Engine format
         run: RT_FMT=target/parity/pdflatex.rfmt RT_FORMAT=pdflatex.ini cargo test --release --lib format_smoke -- --ignored --nocapture
 
+      # Generated tables (native-architecture.md 3a): regenerated from the pin, byte for byte
+      # the committed ones, each through its generator's self-check.
+      - name: Generated tables match the pin
+        run: |
+          cargo build --release --features gen --bin rushtex-gen
+          ./target/release/rushtex-gen fonts --list scripts/texlive/files.tsv --use scripts/texlive/font-use.tsv --out "$RUNNER_TEMP/fonts.rtdb"
+          ./target/release/rushtex-gen nfss --list scripts/texlive/files.tsv --format target/parity/pdflatex.rfmt --out "$RUNNER_TEMP/nfss.rtdb"
+          cmp assets/tables/fonts.rtdb "$RUNNER_TEMP/fonts.rtdb"
+          cmp assets/tables/nfss.rtdb "$RUNNER_TEMP/nfss.rtdb"
+
       - name: Zero check, all documents
         run: uv run scripts/parity/parity.py zero --engine --pixels --all
 

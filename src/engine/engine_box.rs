@@ -288,10 +288,14 @@ impl Machine<'_, '_> {
             Prim::BoxReg | Prim::Copy => {
                 let n = self.scan_box_num();
                 let b = self.e.eqtb.box_reg(n);
-                if p == Prim::BoxReg {
-                    // §1079: the register becomes void at its own level.
+                let b = if p == Prim::BoxReg {
+                    // §1079: the register becomes void at its own level; its box moves.
                     self.e.eqtb.replace_box(n, None);
-                }
+                    b
+                } else {
+                    // §1079 `copy_node_list`.
+                    b.map(|b| self.e.nodes.copy_box(b))
+                };
                 self.box_end(ctx, b);
             }
             // §1080: the last node of the current list, if it is a box.
@@ -550,10 +554,15 @@ impl Machine<'_, '_> {
             self.error("Incompatible list can't be unboxed");
             return;
         }
-        let (a, e) = r.list;
-        self.cur.extend_from_slice(&self.e.nodes.list[a as usize..e as usize]);
         if matches!(p, Prim::Unhbox | Prim::Unvbox) {
+            // §1110: the list moves into the current one.
+            self.cur.extend_from_slice(self.e.nodes.get(r.list));
             self.e.eqtb.replace_box(n, None);
+        } else {
+            // §1110 `copy_node_list`.
+            let mut cur = std::mem::take(&mut self.cur);
+            self.e.nodes.copy_into(r.list, &mut cur);
+            self.cur = cur;
         }
     }
 

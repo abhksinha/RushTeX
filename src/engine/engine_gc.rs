@@ -14,7 +14,7 @@
 //! (a macro body inside its text, a list being read from its middle) fall in one merged
 //! live range and keep their offsets in it, so sharing survives without bookkeeping.
 
-use super::engine_node::{Kind, Node, Nodes};
+use super::engine_node::{leader, Kind, Node, Nodes};
 use super::engine_run::Machine;
 use super::engine_token::Span;
 
@@ -280,16 +280,6 @@ pub(super) struct NodeGc {
     discs: Live,
     inserts: Live,
     work: Vec<(u32, u32)>,
-}
-
-/// Leaders glue (§149 subtypes 100–102) has its box in `b`; rule leaders (110–112) its rule.
-#[inline]
-fn leader(sub: u8) -> Option<bool> {
-    match sub {
-        100..=102 => Some(true),
-        110..=112 => Some(false),
-        _ => None,
-    }
 }
 
 impl NodeGc {

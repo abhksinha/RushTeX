@@ -35,6 +35,9 @@ pub(super) const RESTORE: u8 = 13;
 pub(super) const XIMAGE: u8 = 18;
 /// `\pdfrefxform`: see `engine_xform`.
 pub(super) const XFORM: u8 = 19;
+/// pdfTeX's `pdf_save_pos_node`: the walk that ships the page records where it is, and the
+/// `\write`s after it read the position with `\pdflastxpos` and `\pdflastypos`.
+pub(super) const SAVE_POS: u8 = 20;
 
 /// A whatsit with a size, kept like a rule's (`a` indexes `nodes.rules`): pdfTeX's
 /// `pdf_refximage_node` and `pdf_refxform_node`.
@@ -53,6 +56,11 @@ const DIRECT_PAGE: u16 = 1;
 const DIRECT_ALWAYS: u16 = 2;
 
 impl Machine<'_, '_> {
+    /// `Implement \pdfsavepos`.
+    pub(super) fn save_pos(&mut self) {
+        self.whatsit(SAVE_POS, 0, Span { start: 0, end: 0 });
+    }
+
     fn whatsit(&mut self, sub: u8, font: u16, span: Span) {
         self.cur.push(Node { kind: Kind::Whatsit, sub, font, a: span.start as i32, b: span.end as i32 });
     }
@@ -212,12 +220,23 @@ impl Machine<'_, '_> {
 
     /// §1373 `out_what` for the box being shipped out, depth first (§1366, §1367); leader
     /// boxes are not visited, as `doing_leaders` suppresses them in TeX.
-    pub(super) fn out_whats(&mut self, b: u32) {
+    ///
+    /// `late` does the `\pdfliteral shipout`s, before the page is walked; otherwise the
+    /// files are written, after it, each `\pdfsavepos` taking the next of `positions` (in
+    /// the walk's order, which is this one's) for `\pdflastxpos` and `\pdflastypos`.
+    pub(super) fn out_whats(&mut self, b: u32, late: bool, positions: &mut std::slice::Iter<(i32, i32)>) {
         let (start, end) = self.e.nodes.boxes[b as usize].list;
         for i in start..end {
             let n = self.e.nodes.list[i as usize];
             match (n.kind, n.sub) {
-                (Kind::Box, _) => self.out_whats(n.a as u32),
+                (Kind::Box, _) => self.out_whats(n.a as u32, late, positions),
+                (Kind::Whatsit, SAVE_POS) if !late => {
+                    if let Some(&p) = positions.next() {
+                        self.pdf_doc.last_pos = p;
+                    }
+                }
+                (Kind::Whatsit, OPEN | CLOSE | WRITE) if late => {}
+                (Kind::Whatsit, LATE_LITERAL) if !late => {}
                 (Kind::Whatsit, OPEN | CLOSE) => {
                     let k = n.font as usize;
                     if let Some(w) = self.writes[k].take() {

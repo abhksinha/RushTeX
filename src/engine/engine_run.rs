@@ -534,6 +534,15 @@ impl<'e, 'a> Machine<'e, 'a> {
             Meaning::Native(i) if self.micro_command(super::engine_tables::PRIMITIVES[i as usize].0) => return,
             // pdfTeX's `\pdfxform` and `\pdfrefxform`.
             Meaning::Native(i) if self.xform_command(super::engine_tables::PRIMITIVES[i as usize].0, false) => return,
+            // pdfTeX's `\quitvmode` (`start_par`, 2): `\indent` in vertical mode, nothing in
+            // horizontal and math modes (no `indent_in_hmode`).
+            Meaning::Native(i) if self.building() && super::engine_tables::PRIMITIVES[i as usize].0 == "quitvmode" => {
+                if self.mode == Mode::Vertical {
+                    self.new_graf(true);
+                }
+                return;
+            }
+            Meaning::Native(i) if self.building() && super::engine_tables::PRIMITIVES[i as usize].0 == "pdfsavepos" => return self.save_pos(),
             Meaning::CharDef(n) => {
                 let c = char::from_u32(n).unwrap_or('\0');
                 let cat = if c.is_ascii_alphabetic() { Cat::Letter } else { Cat::Other };
@@ -1006,9 +1015,16 @@ mod tests {
             if let Some(b) = doc_dir.and_then(|d| std::fs::read(d.join(name)).ok()) {
                 return Some(b);
             }
-            let out = std::process::Command::new("kpsewhich").arg(name).output().ok()?;
-            let p = String::from_utf8(out.stdout).ok()?;
-            std::fs::read(p.trim()).ok()
+            // kpsewhich picks the search path by suffix; `\input` and `\openin` search the
+            // TeX inputs whatever the suffix (`kpse_tex_format`), so `.pgf` and other
+            // unregistered suffixes are looked up there too.
+            let find = |args: &[&str]| -> Option<String> {
+                let out = std::process::Command::new("kpsewhich").args(args).output().ok()?;
+                String::from_utf8(out.stdout).ok().map(|p| p.trim().to_string()).filter(|p| !p.is_empty())
+            };
+            let font_file = name.rsplit_once('.').is_some_and(|(_, ext)| matches!(ext, "tfm" | "vf" | "map" | "enc" | "pfb" | "pfa" | "otf" | "ttf") || ext.ends_with("pk"));
+            let p = find(&[name]).or_else(|| if font_file { None } else { find(&["-format=tex", name]) })?;
+            std::fs::read(p).ok()
         };
         // Time spent finding files (a `kpsewhich` process each), which a real run reads from
         // memory instead: reported apart from the engine's own time.

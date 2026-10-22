@@ -798,8 +798,9 @@ impl Machine<'_, '_> {
     /// §638 `ship_out`: the page is done; its `\write`s, `\openout`s and `\closeout`s
     /// act now.
     pub(super) fn ship_out(&mut self, b: u32) {
-        self.out_whats(b);
-        self.ship_page(b);
+        self.out_whats(b, true, &mut [].iter());
+        let positions = self.ship_page(b);
+        self.out_whats(b, false, &mut positions.iter());
         self.page.dead_cycles = 0;
         self.page.shipped.push(b);
     }

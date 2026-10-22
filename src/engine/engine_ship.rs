@@ -120,6 +120,14 @@ struct Walk<'a> {
     images: Vec<(u32, i32)>,
     /// The forms it shows (`pdf_xform_list`), by resource number and object.
     forms: Vec<(u32, i32)>,
+    /// Where each `\pdfsavepos` of a page is, from its lower left corner (none in forms).
+    positions: Vec<(i32, i32)>,
+    /// utils.c `matrix_stack` (each `\pdfsetmatrix` composed with those before it, as
+    /// a b c d e f), the matrix depth at each open `\pdfsave` (`pos_stack`), and the last
+    /// rectangle transformed (`last_llx` ...), all for pages only.
+    matrices: Vec<[f64; 6]>,
+    saves: Vec<usize>,
+    last_rect: [i32; 4],
 }
 
 /// What a walk of a page or form box leaves: its content, link annotations, transparency
@@ -130,18 +138,56 @@ struct Walked {
     group: i32,
     images: Vec<(u32, i32)>,
     forms: Vec<(u32, i32)>,
+    positions: Vec<(i32, i32)>,
 }
 
 /// `set_rect_dimens`: the rectangle of an annotation or destination with dimensions `dims`
 /// (running ones from the parent box at (x, y)) begun at (`cur_h`, `cur_v`).
-fn rect_dimens(dims: [Option<i32>; 3], parent: &BoxRec, x: i32, y: i32, cur_h: i32, cur_v: i32, margin: i32) -> [i32; 4] {
+fn rect_dimens(dims: [Option<i32>; 3], parent: &BoxRec, x: i32, y: i32, cur_h: i32, cur_v: i32) -> [i32; 4] {
     let right = dims[0].map_or(x + parent.width, |w| cur_h + w);
     let top = dims[1].map_or(y - parent.height, |h| cur_v - h);
     let bottom = dims[2].map_or(y + parent.depth, |d| cur_v + d);
-    [cur_h - margin, top - margin, right + margin, bottom + margin]
+    [cur_h, top, right, bottom]
+}
+
+/// utils.c `do_matrixtransform`: point (x, y) through matrix `m`, rounded half away from 0.
+fn transform(m: &[f64; 6], x: i32, y: i32) -> (i32, i32) {
+    let round = |v: f64| if v > 0.0 { (v + 0.5) as i32 } else { (v - 0.5) as i32 };
+    let (x, y) = (x as f64, y as f64);
+    (round(x * m[0] + y * m[2] + m[4]), round(x * m[1] + y * m[3] + m[5]))
 }
 
 impl Walk<'_> {
+    /// `set_rect_dimens`' end: `raw` (left, top, right, bottom) through the current
+    /// `\pdfsetmatrix` on a page, then widened by `margin`.
+    fn rect(&mut self, raw: [i32; 4], margin: i32) -> [i32; 4] {
+        let [l, t, r, b] = if self.matrices.is_empty() { raw } else { self.transform_rect(raw) };
+        [l - margin, t - margin, r + margin, b + margin]
+    }
+
+    /// utils.c `matrixtransformrect` in TeX's page coordinates (down from the top): the
+    /// box around the four corners, the PDF corners kept for `matrixrecalculate`.
+    fn transform_rect(&mut self, [l, t, r, b]: [i32; 4]) -> [i32; 4] {
+        let ph = self.page_height as i32;
+        let (llx, lly, urx, ury) = (l, ph - b, r, ph - t);
+        self.last_rect = [llx, lly, urx, ury];
+        let m = self.matrices[self.matrices.len() - 1];
+        let p = [transform(&m, llx, lly), transform(&m, llx, ury), transform(&m, urx, lly), transform(&m, urx, ury)];
+        let min_x = p.iter().map(|q| q.0).min().unwrap_or(0);
+        let min_y = p.iter().map(|q| q.1).min().unwrap_or(0);
+        let max_x = p.iter().map(|q| q.0).max().unwrap_or(0);
+        let max_y = p.iter().map(|q| q.1).max().unwrap_or(0);
+        [min_x, ph - max_y, max_x, ph - min_y]
+    }
+
+    /// `Save current position to pdf_last_x_pos, pdf_last_y_pos`, on a page and outside
+    /// leaders (whose `\write`s TeX skips, so the positions stay in step with them).
+    fn save_pos(&mut self, h: i32, v: i32) {
+        if self.page_obj != 0 && !self.leaders {
+            self.positions.push((h, (self.page_height - v as i64) as i32));
+        }
+    }
+
     fn char(&mut self, f: u16, c: u8, h: i32, v: i32) -> i32 {
         self.packet_char(f, c, h, v, 0)
     }
@@ -177,11 +223,35 @@ impl Walk<'_> {
             // `pdf_out_setmatrix`: four numbers, written with ` 0 0 cm` at the origin.
             what::SET_MATRIX => {
                 let s = text(self);
-                let ok = s.split_whitespace().count() == 4 && s.split_whitespace().all(|t| t.parse::<f64>().is_ok());
+                let mut k = [0f64; 4];
+                let mut words = s.split_whitespace();
+                let ok = k.iter_mut().all(|x| words.next().and_then(|w| w.parse().ok()).map(|v| *x = v).is_some()) && words.next().is_none();
+                if ok && self.page_obj != 0 {
+                    // utils.c `pdfsetmatrix`: about the current point, after the matrix in force.
+                    let (x, y) = (h as f64, (self.page_height - v as i64) as f64);
+                    let [a, b, c, d] = k;
+                    let (e, f) = (x * (1.0 - a) - y * c, y * (1.0 - d) - x * b);
+                    let m = match self.matrices.last() {
+                        Some(t) => [a * t[0] + b * t[2], a * t[1] + b * t[3], c * t[0] + d * t[2], c * t[1] + d * t[3], e * t[0] + f * t[2] + t[4], e * t[1] + f * t[3] + t[5]],
+                        None => [a, b, c, d, e, f],
+                    };
+                    self.matrices.push(m);
+                }
                 ok.then(|| (SET_ORIGIN, format!("{s} 0 0 cm")))
             }
-            what::SAVE => Some((SET_ORIGIN, "q".to_string())),
-            what::RESTORE => Some((SET_ORIGIN, "Q".to_string())),
+            // `checkpdfsave`, `checkpdfrestore`: a restore drops the matrices set since.
+            what::SAVE => {
+                if self.page_obj != 0 {
+                    self.saves.push(self.matrices.len());
+                }
+                Some((SET_ORIGIN, "q".to_string()))
+            }
+            what::RESTORE => {
+                if let Some(k) = self.saves.pop().filter(|_| self.page_obj != 0) {
+                    self.matrices.truncate(k);
+                }
+                Some((SET_ORIGIN, "Q".to_string()))
+            }
             _ => None,
         };
         if let Some((mode, s)) = lit {
@@ -266,7 +336,7 @@ impl Walk<'_> {
             let (level, link, _) = self.link_stack[i];
             if level == self.cur_s {
                 let obj = self.doc.new_link_piece();
-                let rect = rect_dimens(self.doc.link_dims(link), b, left_edge, base_line, left_edge, base_line, self.link_margin);
+                let rect = self.rect(rect_dimens(self.doc.link_dims(link), b, left_edge, base_line, left_edge, base_line), self.link_margin);
                 self.link_stack[i].2 = self.annots.len();
                 self.annots.push((obj, link, rect));
             }
@@ -320,6 +390,7 @@ impl Walk<'_> {
                     doc::END_LINK => self.end_link(cur_h),
                     doc::DEST => self.do_dest(n.a as usize, b, left_edge, base_line, cur_h, base_line),
                     doc::REF_OBJ => self.doc.want_obj(n.a),
+                    what::SAVE_POS => self.save_pos(cur_h, base_line),
                     _ => self.whatsit(n, cur_h, base_line),
                 },
                 _ => {}
@@ -332,7 +403,7 @@ impl Walk<'_> {
     /// `end_link` when its width is running.
     fn do_link(&mut self, link: usize, b: &BoxRec, x: i32, y: i32, cur_h: i32) {
         let obj = self.doc.link_obj(link);
-        let rect = rect_dimens(self.doc.link_dims(link), b, x, y, cur_h, y, self.link_margin);
+        let rect = self.rect(rect_dimens(self.doc.link_dims(link), b, x, y, cur_h, y), self.link_margin);
         self.link_stack.push((self.cur_s, link, self.annots.len()));
         self.annots.push((obj, link, rect));
     }
@@ -340,7 +411,16 @@ impl Walk<'_> {
     fn end_link(&mut self, cur_h: i32) {
         let Some((_, link, annot)) = self.link_stack.pop() else { return };
         if self.doc.link_dims(link)[0].is_none() {
-            self.annots[annot].2[2] = cur_h + self.link_margin;
+            if self.matrices.is_empty() {
+                self.annots[annot].2[2] = cur_h + self.link_margin;
+            } else {
+                // `matrixrecalculate`: the last rectangle transformed, with this right edge.
+                let ph = self.page_height as i32;
+                let [l, b, _, t] = self.last_rect;
+                let [l, t, r, b] = self.transform_rect([l, ph - t, cur_h + self.link_margin, ph - b]);
+                let m = self.link_margin;
+                self.annots[annot].2 = [l - m, t - m, r + m, b + m];
+            }
         }
     }
 
@@ -349,7 +429,13 @@ impl Walk<'_> {
         if self.leaders {
             return;
         }
-        let rect = if self.doc.dest_is_fitr(dest) { rect_dimens(self.doc.dest_dims(dest), b, x, y, cur_h, cur_v, self.dest_margin) } else { [0; 4] };
+        // Under `\pdfsetmatrix` every view takes its place from the transformed rectangle
+        // (`pdf_left`, `pdf_top`); otherwise only `/FitR` has one.
+        if !self.matrices.is_empty() {
+            let rect = self.rect(rect_dimens(self.doc.dest_dims(dest), b, x, y, cur_h, cur_v), self.dest_margin);
+            return self.doc.place_dest(dest, self.page_obj, rect[0], rect[1], rect, self.page_height as i32);
+        }
+        let rect = if self.doc.dest_is_fitr(dest) { self.rect(rect_dimens(self.doc.dest_dims(dest), b, x, y, cur_h, cur_v), self.dest_margin) } else { [0; 4] };
         self.doc.place_dest(dest, self.page_obj, cur_h, cur_v, rect, self.page_height as i32);
     }
 
@@ -466,6 +552,7 @@ impl Walk<'_> {
                     doc::DEST => self.do_dest(n.a as usize, b, left_edge, top_edge + b.height, left_edge, cur_v),
                     doc::START_LINK | doc::END_LINK => {}
                     doc::REF_OBJ => self.doc.want_obj(n.a),
+                    what::SAVE_POS => self.save_pos(left_edge, cur_v),
                     _ => self.whatsit(n, left_edge, cur_v),
                 },
                 _ => {}
@@ -558,7 +645,8 @@ fn stretched(g: &Glue, sign: Sign, order: u8, set: f64, cur_g: &mut i32, cur_glu
 
 impl Machine<'_, '_> {
     /// pdfTeX's `pdf_ship_out` of box `b` as a page: its size, origin and content stream.
-    pub(super) fn ship_page(&mut self, b: u32) {
+    /// Returns where its `\pdfsavepos`s are.
+    pub(super) fn ship_page(&mut self, b: u32) -> Vec<(i32, i32)> {
         let dimen = |m: &Self, slot| m.dimen_param(slot);
         let h_offset = dimen(self, PDF_H_ORIGIN) + dimen(self, H_OFFSET);
         let v_offset = dimen(self, PDF_V_ORIGIN) + dimen(self, V_OFFSET);
@@ -581,6 +669,7 @@ impl Machine<'_, '_> {
         self.ship_forms(&w.forms);
         let annots = w.annots.iter().map(|a| a.0).collect();
         self.page.pdf.push(ShippedPage { id: page_obj, width, height, content: w.content, annots, group: w.group, images: w.images, forms: w.forms });
+        w.positions
     }
 
     /// The forms a page or form showed that are not shipped yet (pdfTeX's `Write out
@@ -629,7 +718,7 @@ impl Machine<'_, '_> {
             me.show(me.e.toks.get(super::engine_token::Span { start: a as u32, end: b as u32 }), &mut s);
             s
         };
-        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new() };
+        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new(), positions: Vec::new(), matrices: Vec::new(), saves: Vec::new(), last_rect: [0; 4] };
         // `pdf_out_colorstack_startpage`, at the page's origin.
         if page.is_some() {
             for (mode, s) in walk.colors.page_start() {
@@ -638,7 +727,7 @@ impl Machine<'_, '_> {
         }
         walk.box_out(&bx, h, v);
         walk.text.end_text(&mut walk.out);
-        let walked = Walked { content: walk.out, annots: walk.annots, group: walk.group, images: walk.images, forms: walk.forms };
+        let walked = Walked { content: walk.out, annots: walk.annots, group: walk.group, images: walk.images, forms: walk.forms, positions: walk.positions };
         self.page.font_base = base;
         self.page.font_used = used;
         self.page.font_pk = pk;

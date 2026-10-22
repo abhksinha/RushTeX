@@ -54,7 +54,8 @@ The one place to see what is done and what is next. Tick an item when its gate p
   - a file-read policy (the document's folder and the bundled tables; full kpathsea reach only in dev builds);
   - resource caps on nodes, tokens, file size, pages and expansions, each with a clear error;
   - fuzzing of the PNG, inflate and PDF-reading parsers (a dev-only tool, no runtime crates);
-  - one CI corpus run with overflow checks on, to find silent wraparound where tex.web specifies a check.
+  - one CI corpus run with overflow checks on, to find silent wraparound where tex.web specifies a check;
+  - `\pdfmatch` (`engine_regex`) moved from backtracking, which is exponential in the worst case, to a linear-time matcher that reproduces pdfTeX's match and submatch rules.
 - [ ] A3. Balanced corpus: 15–20 real-world documents (articles, theses, papers with floats and bibliographies) picked from the arXiv package sample, added to the zero-shift gate.
 - [ ] Z2. Build buffers reserved once: the per-line adjustment list, per-word hyphenation scratch, per-paragraph `par`/`breaks`/`carry`/active lists. Allocator share measured before and after.
 - [ ] Z3. Token model M: macro texts and token lists in size-class blocks with one owner, or a count where TeX shares (§200 `token_ref_count`: `\let`, `\toks` copies, a body being read §390). Redefinition frees (§275 `eq_destroy`); `collect_tokens` deleted. This is the product's expander for user macros, so it stays.
@@ -63,9 +64,13 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - [ ] B1–B2. Copies and clones removed from the expander and the core (`toks.get(..).to_vec()`, `nodes.get(..).to_vec()`, the math `Vec<Node>` returns).
 - [ ] B3. Layout table beside every core record (size, fields, SoA or AoS and why).
 - [ ] B4. Hot-loop census of the core and the expander over 85 documents (`profile_doc.py` plus H1): every function above 2% with its cost per call and its working set against the §7a floor, each one removed or justified. Known: mid-vector inserts (protrusion, math lists), per-call math vectors, name hashing per lexed name.
+- [ ] B5. Algorithmic waste in the expander and core:
+  - `macro_call` stores the parameter pattern's length in `Macro` at definition time, instead of scanning for `END_MATCH` on every call;
+  - mid-vector `insert`/`remove`/`splice` removed (`cur.insert` in protrusion; `ml.remove` and `splice` in math), so they no longer shift everything after them;
+  - measure whether ligature and kern program walks are hot; if so, a per-font 256-bit start gate and direct pair arrays.
 - [ ] H2. Single-core throughput (`native-architecture.md` §7b), after B4 and only for loops B4 keeps:
   - SWAR in the lexer and the pre-scan;
-  - prefix-sum widths in line breaking;
+  - line breaking: each node's widths computed once per paragraph into SoA arrays with prefix sums (`passes` recomputes them through a font lookup at every use, in every pass);
   - multi-accumulator packing;
   - SWAR match finding and checksums in DEFLATE;
   - a PGO release build;
@@ -79,7 +84,7 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - [ ] D3. Document pre-scan, fused into the lexer's single pass (§6d: the source is lexed once, never twice): one pass over the source gives its command names, through the D1 hash, to a module `needs` bitset with its closure. Per-block ID arrays of what each block needs and reads (P8's dependency index from day one).
 - [ ] D4. Demand loading in the core: hyphenation patterns only for the languages used, font metrics on first use, embedded font programs decompressed per used font.
 - [ ] D4b. Hyphenation cache keyed by (language, `\lefthyphenmin`, `\righthyphenmin`, word), cleared when `\hyphenation` or patterns change; exact because §923 depends only on these. Hit rate measured on the corpus.
-- [ ] D5. Measure: startup time and RSS per document against everything loaded.
+- [ ] D5. Measure: startup time and RSS per document against everything loaded; PDF size against pdflatex's, adding a deeper DEFLATE match search for release builds if ours is noticeably larger (the single-probe 32 KB table is fast but has no chains).
 
 ### Phase 3. Native translation (per `native-port-plan.md`, each command oracle-proven)
 - [ ] P0 rest: `RT_PROFILE` time per macro, `RT_STATE`, `RT_NATIVE=cmd,…`, engine-against-engine `engine_boxdiff.py`, arXiv package-frequency sample.

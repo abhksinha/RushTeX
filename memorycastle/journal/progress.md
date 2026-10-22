@@ -48,6 +48,7 @@ The one place to see what is done and what is next. Tick an item when its gate p
   - At compile time, one pass over the source's control-sequence names and `\usepackage` lines gives a needs bitset of `u64` words over module IDs. Only modules whose bit is set are loaded or initialised.
   - Incremental: each block keeps its own needs bitset. An edit diffs the old and new bitset, so a newly used command loads one module and nothing else is reread.
   - Measured by tokens expanded and RSS per corpus document, against everything loaded.
+  - First measure (`2026-10-22-document-needs-measure.md`): documents expand 7–17% of the format's 20,445 macros. Engine step after Z3: lazy format undump (a meaning is faulted in on first lookup), with the source pre-scan as a prefetch hint.
 - [ ] P1. Fonts and NFSS as generated tables
 - [ ] P2. Kernel core (small2e, sample2e, lppl at zero format expansions)
 - [ ] P3. Output routine and floats

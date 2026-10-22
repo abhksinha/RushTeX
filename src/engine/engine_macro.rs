@@ -222,6 +222,14 @@ impl Machine<'_, '_> {
         if !self.count_expansion() {
             return;
         }
+        #[cfg(test)]
+        if let Some(id) = name.cs_id() {
+            let w = (id / 64) as usize;
+            if self.used_cs.len() <= w {
+                self.used_cs.resize(w + 1, 0);
+            }
+            self.used_cs[w] |= 1 << (id % 64);
+        }
         let mut pattern = std::mem::take(&mut self.pattern);
         pattern.clear();
         let text = self.e.toks.get(mac.text);

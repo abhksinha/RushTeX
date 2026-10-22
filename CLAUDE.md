@@ -66,6 +66,7 @@ Pipeline (all in-memory, single pass, no `.aux`/DVI): **frontend → config → 
 
 ## Project guidance documents
 
+- `memorycastle/journal/progress.md` — **the central progress checklist.** Tick an item when its gate passes and its note is saved; the next unticked item is the work.
 - **`memorycastle/journal/native-architecture.md` — SUPER IMPORTANT, the binding long-term architecture.** LaTeX's kernel and packages are written natively in Rust over the exact typesetting core; static data (fonts, metrics, NFSS, class parameters, hyphenation) is generated at build time into tables; the TeX engine is a dev-only exactness oracle; incremental compile is designed in. Its data-structure, data-movement and hot-loop rules and its review checklist apply to every change.
 
 - `god_instruction.md` — mandatory performance rules: borrow over copy, allocate once/reuse on hot paths, choose SoA vs AoS by access pattern, bit-pack for cache density, keep pipelines bounded, measure.

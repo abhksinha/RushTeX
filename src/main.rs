@@ -300,10 +300,13 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
     };
     let job_name = input.file_stem().and_then(|s| s.to_str()).unwrap_or("texput");
     let now = engine_host::run_date();
-    let mut format = std::fs::read(&fmt_path).ok();
+    // The format is read again for each run (from the OS cache) and dropped once undumped;
+    // only a format that could not be written to the cache is kept in memory.
+    let mut unsaved: Option<Vec<u8>> = None;
     // A missing format, or one an older build dumped, is made again (once).
     for attempt in 0..2 {
-        if let Some(job) = format.as_deref().and_then(|f| engine_job::run(f, &source, &engine_job::Opts { job_name, now, max_runs: engine_job::MAX_RUNS }, &read, &mut |_| {}, &mut |_| {})) {
+        let load = || unsaved.clone().or_else(|| std::fs::read(&fmt_path).ok());
+        if let Some(job) = engine_job::run(&load, &source, &engine_job::Opts { job_name, now, max_runs: engine_job::MAX_RUNS }, &read, &mut |_| {}, &mut |_| {}) {
             if let Err(err) = std::fs::write(output, &job.pdf) {
                 eprintln!("{}", rushtex::Error::Io(err));
                 return Some(ExitCode::from(1));
@@ -331,8 +334,9 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
         if let Some(dir) = fmt_path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(&fmt_path, &built);
-        format = Some(built);
+        if std::fs::write(&fmt_path, &built).is_err() {
+            unsaved = Some(built);
+        }
     }
     eprintln!("[ERROR] the format {} could not be made", fmt_path.display());
     Some(ExitCode::from(1))

@@ -27,14 +27,15 @@ pub struct Opts<'a> {
     pub max_runs: u32,
 }
 
-/// Runs `src` from format `fmt` up to `o.max_runs` times. Each run reads back the files the
+/// Runs `src` from the format `fmt` loads up to `o.max_runs` times; the format's bytes are
+/// loaded for each run and dropped once undumped, so a job holds only the engine. Each run reads back the files the
 /// one before it wrote; the run whose files repeat what it read is the last, since running
 /// it again gives the same pages. `setup` sees each machine before it runs and `inspect` the
-/// last one after. `None` when `fmt` is not a format of this build.
-pub fn run(fmt: &[u8], src: &str, o: &Opts, read: &dyn Fn(&str) -> Option<Vec<u8>>, setup: &mut dyn FnMut(&mut Machine), inspect: &mut dyn FnMut(&Machine)) -> Option<Job> {
+/// last one after. `None` when there is no format or it is not a format of this build.
+pub fn run(fmt: &dyn Fn() -> Option<Vec<u8>>, src: &str, o: &Opts, read: &dyn Fn(&str) -> Option<Vec<u8>>, setup: &mut dyn FnMut(&mut Machine), inspect: &mut dyn FnMut(&Machine)) -> Option<Job> {
     let mut prior: Vec<WriteStream> = Vec::new();
     for runs in 1..=o.max_runs.max(1) {
-        let mut e = Engine::undump(fmt)?;
+        let mut e = Engine::undump(&fmt()?)?;
         let mut m = Machine::new(&mut e, src);
         m.read_file = Some(Box::new(read));
         m.job_name = o.job_name.to_string();
@@ -54,7 +55,7 @@ pub fn run(fmt: &[u8], src: &str, o: &Opts, read: &dyn Fn(&str) -> Option<Vec<u8
         let same = wrote.iter().all(|w| prior.iter().find(|p| p.name == w.name).is_some_and(|p| p.text == w.text));
         if same || runs >= o.max_runs {
             inspect(&m);
-            return Some(Job { pdf: m.pdf(), pages: m.page.shipped.len(), runs, errors: std::mem::take(&mut m.errors) });
+            return Some(Job { pdf: m.pdf(), pages: m.page.pages, runs, errors: std::mem::take(&mut m.errors) });
         }
         prior = wrote;
     }

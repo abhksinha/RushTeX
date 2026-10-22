@@ -409,6 +409,18 @@ impl Eqtb {
         self.boxes.put(n, b.map_or(0, |b| b + 1), level);
     }
 
+    /// Every box the registers and the save stack hold, as an index (for `engine_gc`).
+    pub fn for_each_box(&mut self, mut f: impl FnMut(&mut u32)) {
+        let saved = self.save.iter_mut().filter_map(|s| if let Saved::Box { b, .. } = s { Some(b) } else { None });
+        for v in self.boxes.vals.iter_mut().chain(saved) {
+            if *v > 0 {
+                let mut b = *v - 1;
+                f(&mut b);
+                *v = b + 1;
+            }
+        }
+    }
+
     /// Whether no group is open (§1304: a format is dumped only outside every group).
     pub fn at_top(&self) -> bool {
         self.level == LEVEL_ONE && self.save.is_empty()

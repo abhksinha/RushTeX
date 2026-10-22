@@ -203,7 +203,14 @@ pub struct Kpse {
     disk: RefCell<HashMap<Vec<u8>, Index>>,
     /// The document's own directory, searched first: pdfLaTeX runs in it.
     doc_dir: Option<PathBuf>,
-    found: RefCell<HashMap<String, Option<Vec<u8>>>>,
+    /// Where each name was found, so a name is searched once; the file itself is read
+    /// again when asked for (from the OS cache), never kept here.
+    found: RefCell<HashMap<String, Option<PathBuf>>>,
+}
+
+/// The file at `p` and its path, when it can be read.
+fn read_at(p: &Path) -> Option<(PathBuf, Vec<u8>)> {
+    std::fs::read(p).ok().map(|b| (p.to_path_buf(), b))
 }
 
 impl Kpse {
@@ -249,16 +256,16 @@ impl Kpse {
     /// The file `name`, as the engine names it (`\input`, `\font`, the font map), read
     /// whole; `None` when kpathsea would not find it. Each name is looked up once.
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
-        if let Some(v) = self.found.borrow().get(name) {
-            return v.clone();
+        if let Some(p) = self.found.borrow().get(name) {
+            return p.as_ref().and_then(|p| std::fs::read(p).ok());
         }
         let v = self.find(name);
-        self.found.borrow_mut().insert(name.to_string(), v.clone());
-        v
+        self.found.borrow_mut().insert(name.to_string(), v.as_ref().map(|v| v.0.clone()));
+        v.map(|v| v.1)
     }
 
-    fn find(&self, name: &str) -> Option<Vec<u8>> {
-        if let Some(b) = self.doc_dir.as_ref().and_then(|d| std::fs::read(d.join(name)).ok()) {
+    fn find(&self, name: &str) -> Option<(PathBuf, Vec<u8>)> {
+        if let Some(b) = self.doc_dir.as_ref().and_then(|d| read_at(&d.join(name))) {
             return Some(b);
         }
         let format = format_of(name);
@@ -268,7 +275,7 @@ impl Kpse {
         // An absolute or explicitly relative name is read as written (kpathsea
         // `kpathsea_absolute_p`).
         if name.starts_with('/') || name.starts_with("./") || name.starts_with("../") {
-            return targets.iter().find_map(|t| std::fs::read(t).ok());
+            return targets.iter().find_map(|t| read_at(Path::new(t)));
         }
         // pathsearch.c `search_list`: each element in turn, every target name in it.
         for elt in &self.paths[format] {
@@ -283,7 +290,7 @@ impl Kpse {
 
     /// pathsearch.c `path_search` of one element: the database when one covers the
     /// element, else the disk when the element allows it.
-    fn search(&self, elt: &Elt, name: &str) -> Option<Vec<u8>> {
+    fn search(&self, elt: &Elt, name: &str) -> Option<(PathBuf, Vec<u8>)> {
         // db.c: a name with directories (`sub/file.tex`) is its last part, looked up in
         // the element extended by the directories.
         let (dirs, base) = name.rsplit_once('/').map_or(("", name), |(d, b)| (d, b));
@@ -294,7 +301,7 @@ impl Kpse {
         }
         let mut got = None;
         let mut read = |f: &[u8]| -> bool {
-            got = std::str::from_utf8(f).ok().and_then(|f| std::fs::read(f).ok());
+            got = std::str::from_utf8(f).ok().and_then(|f| read_at(Path::new(f)));
             got.is_some()
         };
         if self.db_roots.iter().any(|r| path.starts_with(r) && path.get(r.len()).is_none_or(|&c| c == b'/')) {
@@ -312,7 +319,7 @@ impl Kpse {
                 f.push(b'/');
             }
             f.extend_from_slice(name.as_bytes());
-            return std::str::from_utf8(&f).ok().and_then(|f| std::fs::read(f).ok());
+            return std::str::from_utf8(&f).ok().and_then(|f| read_at(Path::new(f)));
         };
         let root = elt.path[..cut].to_vec();
         let mut disk = self.disk.borrow_mut();

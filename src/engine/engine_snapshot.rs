@@ -303,6 +303,10 @@ impl Codec for Meaning {
                 w.u8(10);
                 w.u16(i);
             }
+            Meaning::Kernel(i) => {
+                w.u8(11);
+                w.u16(i);
+            }
         }
     }
     fn take(r: &mut Reader) -> Option<Self> {
@@ -318,6 +322,7 @@ impl Codec for Meaning {
             8 => Meaning::DontExpand,
             9 => Meaning::Font(r.u16()?),
             10 => Meaning::Native(r.u16()?),
+            11 => Meaning::Kernel(r.u16()?),
             _ => return None,
         })
     }

@@ -105,7 +105,7 @@ Status values: `macro` (interpreted), `native` (written), `verified` (node-diff 
 
 | Kernel file | Lines | Phase | Status | Proving documents |
 |---|---|---|---|---|
-| ltfssbas, ltfssini, ltfssdcl, ltfsstrc, ltfssaxes, ltfsscmp | 2550+2459+2236+2054+4544+378 | P1 | macro | all |
+| ltfssbas, ltfssini, ltfssdcl, ltfsstrc, ltfssaxes, ltfsscmp | 2550+2459+2236+2054+4544+378 | P1 | macro; `\get@external@font` verified (`2026-10-22-p0-kernel-native.md`) | all |
 | ltfntcmd, ltoutenc, lttextcomp | 806+3861+2778 | P1 | macro | all |
 | ltcounts, ltlength, ltspace, ltboxes, ltpara, ltpar | 1028+184+1543+1728+1354+189 | P2 | macro | small2e |
 | ltdefns, ltcmd, ltkeys, lthooks, ltcmdhooks | 2837+6817+740+8140+1858 | P2 | macro | all |

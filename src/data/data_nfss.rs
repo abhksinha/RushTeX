@@ -9,6 +9,10 @@
 //! - **Entries** (`nf.e`): one 16-byte record per size of the spec, in declaration order,
 //!   four to a cache line: `lo`, `hi` (or a single size's text), the scale, the argument, the
 //!   size function and the kind. A shape's entries are contiguous.
+//! - **Spec hashes** (`nf.h`, two words a shape): the hash of each shape's spec text, the
+//!   name of the control sequence `\DeclareFontShape` stores. The native selection checks a
+//!   document's shape against it once per spec, so a shape redeclared by a document or a
+//!   package is never read from the table.
 //! - **Families** by name (`T1+cmr`) through `nffa`; `nf.fr` holds three words each: the
 //!   `\hyphenchar` and `\skewchar` their loading code sets (`NONE` when it sets none) and any
 //!   other loading code, which a native package or the engine fallback must run.
@@ -179,6 +183,7 @@ const RANGE: u8 = 1;
 pub struct NfssTable<'a> {
     shapes: Phf<'a>,
     rows: U32s<'a>,
+    spec_hashes: U32s<'a>,
     code: U32s<'a>,
     entries: &'a [[u8; ENTRY]],
     families: Phf<'a>,
@@ -199,13 +204,14 @@ impl<'a> NfssTable<'a> {
         let shapes = Phf::from_blob(b, "nfsh")?;
         let families = Phf::from_blob(b, "nffa")?;
         let (entries, rest) = b.section("nf.e")?.as_chunks::<ENTRY>();
-        let (rows, code, family_recs) = (b.u32s("nf.r")?, b.u32s("nf.c")?, b.u32s("nf.fr")?);
+        let (rows, code, family_recs, spec_hashes) = (b.u32s("nf.r")?, b.u32s("nf.c")?, b.u32s("nf.fr")?, b.u32s("nf.h")?);
         let (strings, offsets, id) = (b.section("nf.str")?, b.u32s("nf.so")?, b.u32s("nf.id")?);
         let n_str = offsets.len().checked_sub(1)?;
         let str_ok = |s: u32| (s as usize) < n_str;
         let sound = rest.is_empty()
             && rows.len() == shapes.len() + 1
             && code.len() == shapes.len()
+            && spec_hashes.len() == 2 * shapes.len()
             && family_recs.len() == 3 * families.len()
             && id.len() == 2
             && rows.iter().zip(rows.iter().skip(1)).all(|(a, b)| a <= b)
@@ -221,7 +227,7 @@ impl<'a> NfssTable<'a> {
                 let scale_ok = !matches!(SizeFn::from_u8(e[14]), Some(SizeFn::Fixed | SizeFn::SFixed)) || str_ok(le_i32(e, 8) as u32);
                 SizeFn::from_u8(e[14]).is_some() && str_ok(arg) && kind_ok && scale_ok
             });
-        sound.then(|| NfssTable { shapes, rows, code, entries, families, family_recs, strings, offsets, id: (id.get(1) as u64) << 32 | id.get(0) as u64 })
+        sound.then(|| NfssTable { shapes, rows, spec_hashes, code, entries, families, family_recs, strings, offsets, id: (id.get(1) as u64) << 32 | id.get(0) as u64 })
     }
 
     /// The table's content fingerprint.
@@ -241,6 +247,12 @@ impl<'a> NfssTable<'a> {
 
     pub fn shape_name(&self, id: u32) -> &'a str {
         std::str::from_utf8(self.shapes.name(id)).unwrap_or("")
+    }
+
+    /// The hash of shape `id`'s spec text ([`spec_hash`]).
+    #[inline]
+    pub fn spec_hash(&self, id: u32) -> u64 {
+        (self.spec_hashes.get(2 * id as usize + 1) as u64) << 32 | self.spec_hashes.get(2 * id as usize) as u64
     }
 
     /// Shape `id`'s loading code (empty for none).
@@ -277,6 +289,24 @@ impl<'a> NfssTable<'a> {
     /// (`sub`, `ssub`, `alias`) are followed, at most `DEPTH` deep.
     pub fn external(&self, shape: u32, size: &'a str) -> Option<External<'a>> {
         self.external_at(shape, size, 0)
+    }
+
+    /// The cases `\get@external@font` settles without a message or a further file: the
+    /// first entry holding the size (`\try@size@range`) has a size function that only builds
+    /// a name (`""`, `s`, `gen`, `sgen`, `genb`, `sgenb`) and no scale. `None` for every
+    /// other case (substitution, `sub` chains, scales, `fixed`, no font): those warn, write
+    /// to the log or load an `.fd` file, so LaTeX's own macro runs them.
+    pub fn direct(&self, shape: u32, size: &'a str) -> Option<External<'a>> {
+        let sp = decimal_sp(size)?;
+        let e = self.entries(shape).iter().find(|e| match e[15] {
+            SINGLE => le_i32(e, 0) == sp,
+            _ => {
+                let hi = le_i32(e, 4);
+                sp < if hi == 0 { MAX_DIMEN } else { hi } && sp >= le_i32(e, 0)
+            }
+        })?;
+        let plain = matches!(SizeFn::from_u8(e[14])?, SizeFn::Plain | SizeFn::S | SizeFn::Gen | SizeFn::SGen | SizeFn::GenB | SizeFn::SGenB);
+        (plain && le_i32(e, 8) == 0).then(|| self.run(shape, e, size, 0)).flatten()
     }
 
     fn external_at(&self, shape: u32, size: &'a str, depth: u32) -> Option<External<'a>> {
@@ -345,6 +375,12 @@ impl<'a> NfssTable<'a> {
 
 static NFSS_BLOB: &[u8] = include_bytes!("../../assets/tables/nfss.rtdb");
 
+/// The hash of a spec's text, as `nf.h` stores it.
+#[inline]
+pub fn spec_hash(spec: &[u8]) -> u64 {
+    crate::backend::backend_hash::hash64(0x6e66_7373, spec)
+}
+
 /// The embedded NFSS table, checked on first use; `None` if it is not a table of this build.
 pub fn nfss() -> Option<&'static NfssTable<'static>> {
     static TABLE: std::sync::OnceLock<Option<NfssTable<'static>>> = std::sync::OnceLock::new();
@@ -370,6 +406,8 @@ pub struct GenEntry {
 #[derive(Clone, Debug, Default)]
 pub struct GenShape {
     pub name: String,
+    /// The spec's text (the name of the control sequence LaTeX stores it as).
+    pub spec: String,
     pub entries: Vec<GenEntry>,
     pub code: String,
 }
@@ -479,7 +517,7 @@ pub fn parse_declarations(text: &str) -> Result<(Vec<GenFamily>, Vec<GenShape>),
             let (spec, code) = r.split_once(' ').unwrap_or((r, ""));
             let spec = spec.strip_prefix('\\').ok_or_else(|| format!("{name}: spec `{spec}`"))?;
             let entries = parse_spec(spec).map_err(|e| format!("{name}: {e}"))?;
-            shapes.insert(name.to_string(), GenShape { name: name.to_string(), entries, code: code.trim().to_string() });
+            shapes.insert(name.to_string(), GenShape { name: name.to_string(), spec: spec.to_string(), entries, code: code.trim().to_string() });
         }
     }
     Ok((fams.into_values().collect(), shapes.into_values().collect()))
@@ -507,9 +545,12 @@ pub fn write(w: &mut super::data_blob::BlobWriter, fams: &[GenFamily], shapes: &
     super::data_phf::write(w, "nfsh", &names).map_err(|e| format!("{e:?}"))?;
     let fnames: Vec<&[u8]> = fams.iter().map(|f| f.name.as_bytes()).collect();
     super::data_phf::write(w, "nffa", &fnames).map_err(|e| format!("{e:?}"))?;
-    let (mut rows, mut code, mut entries) = (vec![0u32], Vec::new(), Vec::new());
+    let (mut rows, mut code, mut entries, mut hashes) = (vec![0u32], Vec::new(), Vec::new(), Vec::new());
     for s in shapes {
         id.bytes(s.name.as_bytes());
+        let h = spec_hash(s.spec.as_bytes());
+        hashes.extend_from_slice(&[h as u32, (h >> 32) as u32]);
+        id.u32(h as u32);
         for e in &s.entries {
             let mut rec = [0u8; ENTRY];
             let sp = |t: &str| if t.is_empty() { 0 } else { decimal_sp(t).unwrap_or(0) };
@@ -554,6 +595,7 @@ pub fn write(w: &mut super::data_blob::BlobWriter, fams: &[GenFamily], shapes: &
     let strings = pool.len();
     w.u32s("nf.r", &rows);
     w.u32s("nf.c", &code);
+    w.u32s("nf.h", &hashes);
     w.bytes("nf.e", entries);
     w.u32s("nf.fr", &frecs);
     w.bytes("nf.str", pool);
@@ -697,5 +739,11 @@ mod tests {
         assert_eq!(t.external(sc, "7").unwrap().text(), "cmcsc8 at3.5pt");
         assert_eq!(t.external(sc, "10").unwrap().text(), "cmcsc10 at9pt");
         assert_eq!(t.family("OT1+cmr"), Some((NONE, NONE, "")));
+        assert_eq!(t.spec_hash(n), spec_hash(b"<5><6>gen*cmr<10.95>cmr10<12>cmr12"));
+        // Only what LaTeX settles without a message or another file.
+        assert_eq!(t.direct(n, "10.95").unwrap().text(), "cmr10 at10.95pt");
+        assert_eq!(t.direct(n, "11"), None);
+        assert_eq!(t.direct(it, "5"), None);
+        assert_eq!(t.direct(sc, "7"), None);
     }
 }

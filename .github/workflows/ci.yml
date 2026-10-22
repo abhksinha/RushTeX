@@ -73,8 +73,8 @@ jobs:
     name: Zero shift and ownership vs pinned pdfLaTeX
     runs-on: ubuntu-latest
     env:
-      PIN_TAG: texlive-2026-pin-1
-      PIN_SHA256: dcbdc7c9827a7e8c76495248a3addc0a3e0cf96ee98d4e9d124683788ad20c50
+      PIN_TAG: texlive-2026-pin-2
+      PIN_SHA256: 37d3a5b5797c832b0e6bfde0b5deebb6dee32c4bffc6e79ef8182ea8b088ac91
       RUSHTEX_PINNED_REFS: "1"
       SOURCE_DATE_EPOCH: "1792454400"
       FORCE_SOURCE_DATE: "1"

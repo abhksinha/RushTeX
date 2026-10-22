@@ -118,8 +118,8 @@ Alongside, where profiles point:
 - Z2–Z4, B1–B5, H1 and H2 run on native code once P1 profiles exist. Z3 runs only if RSS needs it, since native code replaces the interpreter's token use.
 
 ### Phase 3. Native translation (per `native-port-plan.md`, each command oracle-proven)
-- [ ] P0 rest: `RT_PROFILE` time per macro, `RT_STATE`, `RT_NATIVE=cmd,…`, engine-against-engine `engine_boxdiff.py`, arXiv package-frequency sample.
-- [ ] P1. Fonts and NFSS as generated tables (`.fd`, TFM, encodings, size functions); `\selectfont` and the size commands native. Metrics scaled once per used (font, size) and cached by ID (§568); embedded fonts subset once, at the end of the document.
+- [ ] P0 rest: `RT_PROFILE` time per macro, `RT_STATE`, `RT_NATIVE=cmd,…`, engine-against-engine `engine_boxdiff.py`, arXiv package-frequency sample. Done (`2026-10-22-p0-kernel-native.md`): `Meaning::Kernel` and its dispatch, `RT_NATIVE`, `RT_STATE`, and `scripts/parity/kernel_diff.py` (PDF bytes and full state, macro against native, which replaces the box-diff mode). Still owed: time per macro, the arXiv sample.
+- [ ] P1. Fonts and NFSS as generated tables (`.fd`, TFM, encodings, size functions); `\selectfont` and the size commands native. Started: `\get@external@font` native from the NFSS table, identical on 85/85, 84% of calls native. Metrics scaled once per used (font, size) and cached by ID (§568); embedded fonts subset once, at the end of the document.
 - [ ] P2. Kernel core (counters, lengths, spacing, boxes, paragraphs, lists, sectioning, references, `\newcommand`, `\NewDocumentCommand`, keys, hooks, files): small2e, sample2e and lppl at zero format expansions.
 - [ ] P2b. Single-run references (§6d): `\label`, `\ref`, `\pageref`, `\cite` and the contents lists resolved in memory, with no `.aux` reruns. Only pages whose resolved values changed are laid out again, until they stop changing. Output identical to pdflatex's final run.
 - [ ] P3. Output routine and floats as an explicit state machine.

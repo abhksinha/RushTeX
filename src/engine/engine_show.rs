@@ -16,6 +16,7 @@ impl Machine<'_, '_> {
             Meaning::Unset | Meaning::Undefined => out.push_str("undefined"),
             Meaning::DontExpand => ctx.esc("relax", out),
             Meaning::Prim(p) => ctx.esc(p.name(), out),
+            Meaning::Kernel(i) => ctx.esc(super::engine_kernel::kernel_name(i), out),
             Meaning::Native(i) => {
                 let (name, cmd) = PRIMITIVES[i as usize];
                 ctx.esc(name, out);

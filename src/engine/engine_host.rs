@@ -208,6 +208,23 @@ pub struct Kpse {
     found: RefCell<HashMap<String, Option<PathBuf>>>,
 }
 
+/// The TeX Live the zero-shift references, the generated tables and CI are pinned to
+/// (`scripts/texlive/manifest.tsv`, `progress.md` A1): exactness is proven against it only.
+pub const PINNED_TEXLIVE: &str = "2026";
+/// The pinned LaTeX kernel: `\fmtversion` and `\patch@level` of its `latex.ltx`.
+pub const PINNED_LATEX: (&str, u32) = ("2025-11-01", 0);
+
+/// `\fmtversion` and `\patch@level` as `latex.ltx` (`ltvers.dtx`) defines them.
+pub fn latex_version(latex_ltx: &[u8]) -> Option<(String, u32)> {
+    // Once per format build: the file is not necessarily UTF-8, and this path is cold.
+    let text = String::from_utf8_lossy(latex_ltx);
+    let rest = &text[text.find("\\edef\\fmtversion")?..];
+    let date = rest[rest.find('{')? + 1..].split('}').next()?.trim().to_string();
+    const PL: &str = "\\def\\patch@level{";
+    let pl = rest.find(PL).map(|i| &rest[i + PL.len()..]).and_then(|r| r.split('}').next()).and_then(|n| n.trim().parse().ok())?;
+    Some((date, pl))
+}
+
 /// The file at `p` and its path, when it can be read.
 fn read_at(p: &Path) -> Option<(PathBuf, Vec<u8>)> {
     std::fs::read(p).ok().map(|b| (p.to_path_buf(), b))
@@ -219,7 +236,12 @@ impl Kpse {
     /// a TeX installation.
     pub fn new(progname: &str, cache: Option<&Path>, doc_dir: Option<PathBuf>) -> Option<Kpse> {
         let key = env_key(progname);
-        let lines = cache.and_then(|c| std::fs::read_to_string(c).ok()).filter(|s| s.lines().next() == Some(key.as_str())).map(|s| s.lines().skip(1).map(String::from).collect::<Vec<_>>());
+        // `RUSHTEX_KPSE_PATHS`: a search-path file used whatever the environment, so a pinned
+        // snapshot of the TeX tree runs where no `kpsewhich` is installed (CI).
+        let forced = std::env::var_os("RUSHTEX_KPSE_PATHS").and_then(|f| std::fs::read_to_string(f).ok());
+        let lines = forced
+            .map(|s| s.lines().skip(1).map(String::from).collect::<Vec<_>>())
+            .or_else(|| cache.and_then(|c| std::fs::read_to_string(c).ok()).filter(|s| s.lines().next() == Some(key.as_str())).map(|s| s.lines().skip(1).map(String::from).collect::<Vec<_>>()));
         let lines = match lines {
             Some(l) if l.len() == FORMATS.len() + 1 => l,
             _ => {
@@ -255,6 +277,14 @@ impl Kpse {
 
     /// The file `name`, as the engine names it (`\input`, `\font`, the font map), read
     /// whole; `None` when kpathsea would not find it. Each name is looked up once.
+    /// Every file found so far, by path, sorted (`RT_FILES`, the pin's file list).
+    pub fn found_paths(&self) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = self.found.borrow().values().flatten().cloned().collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
         if let Some(p) = self.found.borrow().get(name) {
             return p.as_ref().and_then(|p| std::fs::read(p).ok());
@@ -371,6 +401,12 @@ pub fn run_date() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn latex_version_of_ltvers() {
+        let src = b"\\def\\fmtname{LaTeX2e}\n\\edef\\fmtversion\n   {2025-11-01}\n\\def\\patch@level{0}\n";
+        assert_eq!(super::latex_version(src), Some(("2025-11-01".to_string(), 0)));
+    }
+
     use super::*;
 
     #[test]

@@ -52,12 +52,18 @@ jobs:
           cargo clippy --release --no-default-features -- -D warnings
           cargo test --release --no-default-features --lib
 
-  # Zero-shift parity compares against pdfLaTeX, so it needs the TeX Live the references were
-  # made with. Until CI pins one, it reports without gating.
+  # Zero shift against pdfLaTeX of the pinned TeX Live 2026 (progress.md A1, A1+): the snapshot
+  # holds the TeX files the corpus reads, their search paths and the references, made by
+  # `scripts/texlive/pin.py pack` and checked by checksum, so no TeX Live is installed here.
   parity:
-    name: Zero-shift parity vs pdfLaTeX (report only)
+    name: Zero shift and ownership vs pinned pdfLaTeX
     runs-on: ubuntu-latest
-    continue-on-error: true
+    env:
+      PIN_TAG: texlive-2026-pin-1
+      PIN_SHA256: dcbdc7c9827a7e8c76495248a3addc0a3e0cf96ee98d4e9d124683788ad20c50
+      RUSHTEX_PINNED_REFS: "1"
+      SOURCE_DATE_EPOCH: "1792454400"
+      FORCE_SOURCE_DATE: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -67,15 +73,19 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
-      - name: TeX Live
+      - name: Pinned TeX Live snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            texlive-latex-base texlive-latex-recommended texlive-latex-extra \
-            texlive-fonts-recommended texlive-science lmodern
+          gh release download "$PIN_TAG" -p texlive-2026-pin.tar.xz -D "$RUNNER_TEMP"
+          echo "$PIN_SHA256  $RUNNER_TEMP/texlive-2026-pin.tar.xz" | sha256sum -c -
+          python3 -I scripts/texlive/pin.py unpack "$RUNNER_TEMP/texlive-2026-pin.tar.xz" "$RUNNER_TEMP/tl" | sed 's/^export //' >> "$GITHUB_ENV"
 
       - name: Engine format
         run: RT_FMT=target/parity/pdflatex.rfmt RT_FORMAT=pdflatex.ini cargo test --release --lib format_smoke -- --ignored --nocapture
 
       - name: Zero check, all documents
         run: uv run scripts/parity/parity.py zero --engine --pixels --all
+
+      - name: Leak audit (ownership-check build)
+        run: python3 scripts/leak_audit.py

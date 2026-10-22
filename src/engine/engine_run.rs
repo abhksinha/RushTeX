@@ -1018,6 +1018,19 @@ mod tests {
         // document's own directory and kpathsea's search (`engine_host`).
         let doc_dir = std::path::Path::new(&path).parent().filter(|d| !d.as_os_str().is_empty()).map(std::path::Path::to_path_buf);
         let host = crate::engine::engine_host::Kpse::new("pdflatex", Some(std::path::Path::new("target/parity/kpse-paths")), doc_dir).expect("a TeX installation");
+        // `RT_FILES=1`: every TeX file the run found, as `FILE <path>` lines when the harness
+        // ends (`scripts/texlive/pin.py` builds the pinned snapshot's file list from them).
+        struct Files<'h>(&'h crate::engine::engine_host::Kpse);
+        impl Drop for Files<'_> {
+            fn drop(&mut self) {
+                if std::env::var("RT_FILES").is_ok() {
+                    for p in self.0.found_paths() {
+                        eprintln!("FILE {}", p.display());
+                    }
+                }
+            }
+        }
+        let _files = Files(&host);
         let kpse_raw = |name: &str| -> Option<Vec<u8>> {
             if let Some(b) = std::env::var("RT_DIR").ok().and_then(|d| std::fs::read(format!("{d}/{name}")).ok()) {
                 return Some(b);

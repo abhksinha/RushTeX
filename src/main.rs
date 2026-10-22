@@ -332,6 +332,13 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
             break;
         }
         let ini: String = kpse.read("pdflatex.ini")?.iter().map(|&b| char::from(b)).collect();
+        // Exactness is proven against one pinned kernel; another one is used, but said so.
+        let (pin_date, pin_pl) = engine_host::PINNED_LATEX;
+        if let Some((date, pl)) = kpse.read("latex.ltx").as_deref().and_then(engine_host::latex_version) {
+            if (date.as_str(), pl) != (pin_date, pin_pl) {
+                eprintln!("[WARN] LaTeX {date} patch level {pl} is installed; RushTeX's output is proven identical to pdfLaTeX for LaTeX {pin_date} patch level {pin_pl} (TeX Live {})", engine_host::PINNED_TEXLIVE);
+            }
+        }
         eprintln!("[INFO] Making the LaTeX format {} (once)", fmt_path.display());
         let built = engine_job::build_format(&ini, "pdflatex", now, &read)?;
         if let Some(dir) = fmt_path.parent() {

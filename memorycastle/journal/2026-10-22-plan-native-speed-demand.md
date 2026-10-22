@@ -14,7 +14,10 @@ After Z1, the user set the direction:
 
 **1. Foundations.**
 - A0: an `oracle` cargo feature boundary that CI enforces.
-- A1: one pinned TeX Live, 2023 as in CI.
+- A1: one pinned TeX Live: a dated 2026 snapshot with a checksummed manifest. The user overruled 2023: the proof already exists for 2026, and an old kernel would be ported only to be rewritten.
+- A1+: CI gates zero shift, leaks and the checker.
+- A2: security (read policy, resource caps, parser fuzzing, an overflow-check run).
+- A3: a balanced real-world corpus.
 - Z2–Z4: buffers reserved once; token model M; capacity reserved from the source size.
 - B1–B4: copies removed and a hot-loop census, scoped to the core and the expander, the two parts that stay in the product.
 

@@ -34,7 +34,7 @@ The one place to see what is done and what is next. Tick an item when its gate p
 ### Debt guards (each is a gate or a rule, not a hope)
 - **One implementation per job.** The old approximate pipeline (`src/layout`, `src/math`, `src/tables`, `--native`) is frozen: no new work, retired at P7. Typesetting is the engine core only.
 - **One product/oracle boundary,** enforced by the compiler: the `oracle` cargo feature holds `latex.ltx` interpretation, the format build and `engine_host`. CI builds without it.
-- **One pinned TeX Live** for the references, the generated tables and CI. Generated files carry a checksum, and CI regenerates and compares.
+- **One pinned TeX Live (a dated 2026 snapshot)** for the references, the generated tables and CI. Generated files carry a checksum, and CI regenerates and compares.
 - **One table format library** (D1) for every generated table, versioned. No ad-hoc formats per module.
 - **Every native command is proven twice** against its macro version (`RT_NATIVE` with identical boxes, state and written files), then corpus zero shift.
 - **Kernel internals stay overridable** (port plan §5): a native routine checks one meaning word and yields to a redefinition.
@@ -43,7 +43,19 @@ The one place to see what is done and what is next. Tick an item when its gate p
 
 ### Phase 1. Foundations (the core and the boundary; everything later stands on them)
 - [ ] A0. `oracle` cargo feature: the product builds and passes its unit tests without `latex.ltx` interpretation, `engine_job`, `engine_host` or the format build.
-- [ ] A1. Pin one TeX Live (2023, as in CI): references, local runs and generation from it; record the version in the binary.
+- [ ] A1. Pin a dated TeX Live 2026 snapshot (user, 2026-10-22: not 2023; our zero shift is already against pdfTeX 1.40.29 of TeX Live 2026, and users run the current kernel).
+  - A manifest with package names, revisions and checksums, plus the LaTeX kernel date, committed and recorded in the binary.
+  - CI installs that snapshot from the TeX Live archive, cached; Ubuntu's apt TeX Live is dropped.
+  - The references, the generated tables and the oracle all come from it.
+  - A yearly upgrade is one deliberate step: bump the pin, regenerate, and let the node-level diffs name every change.
+  - The 2023 NewCMMath pin stays only for the frozen old pipeline's tests and leaves with it at P7.
+- [ ] A1+. CI gates what is local today: zero shift on the corpus, `scripts/leak_audit.py`, the ownership-check build and the engine probe suites, all against the pinned snapshot.
+- [ ] A2. Security for untrusted documents:
+  - a file-read policy (the document's folder and the bundled tables; full kpathsea reach only in dev builds);
+  - resource caps on nodes, tokens, file size, pages and expansions, each with a clear error;
+  - fuzzing of the PNG, inflate and PDF-reading parsers (a dev-only tool, no runtime crates);
+  - one CI corpus run with overflow checks on, to find silent wraparound where tex.web specifies a check.
+- [ ] A3. Balanced corpus: 15–20 real-world documents (articles, theses, papers with floats and bibliographies) picked from the arXiv package sample, added to the zero-shift gate.
 - [ ] Z2. Build buffers reserved once: the per-line adjustment list, per-word hyphenation scratch, per-paragraph `par`/`breaks`/`carry`/active lists. Allocator share measured before and after.
 - [ ] Z3. Token model M: macro texts and token lists in size-class blocks with one owner, or a count where TeX shares (§200 `token_ref_count`: `\let`, `\toks` copies, a body being read §390). Redefinition frees (§275 `eq_destroy`); `collect_tokens` deleted. This is the product's expander for user macros, so it stays.
 - [ ] Z4. Capacity reserved from the source size; RSS flat per page on listings.

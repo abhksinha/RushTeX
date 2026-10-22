@@ -141,6 +141,8 @@ pub struct PdfDoc {
     pub shipped_forms: Vec<crate::backend::backend_ship::ShippedForm>,
     pub last_xform: i32,
     pub group_obj: i32,
+    /// `pdf_last_x_pos` and `pdf_last_y_pos`, from the last `\pdfsavepos` shipped.
+    pub last_pos: (i32, i32),
 }
 
 impl Default for PdfDoc {
@@ -169,6 +171,7 @@ impl Default for PdfDoc {
             forms: Vec::new(),
             shipped_forms: Vec::new(),
             last_xform: 0,
+            last_pos: (0, 0),
             group_obj: 0,
         }
     }

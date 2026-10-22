@@ -1,0 +1,47 @@
+% Purpose : Provide some extensible arrows in math mode.
+%           (Sample source file)
+% Author  : Ky-Anh Huynh
+% License : LGPL
+
+\documentclass[10pt, a4paper, oneside]{article}
+
+\usepackage{extarrows}
+
+% Define a simple macro for testing
+\def\test#1/{%
+	\texttt{\textbackslash #1:}\qquad& A\csname #1\endcsname[\text{sub-script}]{\text{super-script}}Z}
+
+% Test command without sub/super-scripts
+\def\tfst #1/{%
+	\texttt{\textbackslash #1:}\qquad& A\csname #1\endcsname[]{}Z}
+
+\begin{document}
+\section{Syntax}
+
+\begin{verbatim}
+\arrowname{super-script}
+\arrowname[sub-script]{super-script}
+\end{verbatim}
+
+\noindent
+\texttt{arrowname} is one of known arrow command, for example, \texttt{xlongequal}, \texttt{xLongleftarrow},\ldots
+
+\section{Examples}
+\begin{align}
+\test xlongequal/\\[5mm]
+\test xLongleftarrow/\\
+\test xLongrightarrow/\\
+\test xLongleftrightarrow/\\
+\test xLeftrightarrow/\\[3mm]
+\test xlongleftrightarrow/\\
+\test xlongrightarrow/\\[5mm]
+\test xleftrightarrow/\\
+\test xlongleftarrow/\\%[2mm]
+(amsmath)\; \test xleftarrow/\\
+(amsmath)\; \test xrightarrow/\\[3mm]
+\tfst xlongleftarrow/\\
+\tfst xlongrightarrow/\\
+(amsmath)\; \tfst xleftarrow/\\
+(amsmath)\; \tfst xrightarrow/
+\end{align}
+\end{document}

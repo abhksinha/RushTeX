@@ -155,6 +155,9 @@ pub struct Machine<'e, 'a> {
     /// live ranges.
     pub(super) collect_at: u32,
     pub(super) collect_buf: Vec<(u32, u32, u32)>,
+    /// The node-arena length at which `engine_gc` next collects nodes, and its tables.
+    pub(super) node_collect_at: u32,
+    pub(super) node_gc: super::engine_gc::NodeGc,
 }
 
 /// §211: vertical, horizontal or math mode.
@@ -175,7 +178,7 @@ pub(super) struct X {
 
 impl<'e, 'a> Machine<'e, 'a> {
     pub fn new(e: &'e mut Engine, src: &'a str) -> Self {
-        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new() }
+        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), node_collect_at: super::engine_gc::MIN_NODE_COLLECT, node_gc: Default::default() }
     }
 
     /// Records an error with TeX's `l.<line>` context of the innermost file.
@@ -1038,6 +1041,8 @@ mod tests {
         let job_name = std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("texput").to_string();
         let setup = |m: &mut Machine| {
             m.trace = std::env::var("RT_TRACE").is_ok();
+            // The page dumps below read the shipped boxes after the run.
+            m.page.keep_shipped = std::env::var("RT_BOXES").is_ok() || std::env::var("RT_PAGES").is_ok();
             if let Some(n) = std::env::var("RT_MAXEXP").ok().and_then(|v| v.parse().ok()) {
                 m.max_expansions = n;
             }
@@ -1051,7 +1056,7 @@ mod tests {
         };
         let t = std::time::Instant::now();
         if let Some(f) = &fmt_in {
-            let fmt = std::fs::read(f).expect("format file");
+            let fmt = || std::fs::read(f).ok();
             let max = if std::env::var("RT_ONCE").is_ok() { 1 } else { crate::engine::engine_job::MAX_RUNS };
             let job = crate::engine::engine_job::run(&fmt, &src, &crate::engine::engine_job::Opts { job_name: &job_name, now, max_runs: max }, &kpse, &mut |m| setup(m), &mut |m| report(m, &path, t.elapsed(), lookups.get())).expect("a format of this build");
             eprintln!("{path}: {} runs", job.runs);
@@ -1152,7 +1157,7 @@ mod tests {
         let mut missing: Vec<_> = missing.into_iter().collect();
         missing.sort_by_key(|m| std::cmp::Reverse(m.1));
         eprintln!("{path}: engine {:?} ({n_files} file lookups took {file_t:?} more)", dt.saturating_sub(file_t));
-        eprintln!("{path}: {} expansions, {} out tokens, {dt:?}, {} errors, {} names, {} stored tokens, {} pages, halted at line {}", m.expansions, m.out.len(), m.errors.len(), m.e.cs.len(), m.e.toks.len(), m.page.shipped.len(), m.input.line());
+        eprintln!("{path}: {} expansions, {} out tokens, {dt:?}, {} errors, {} names, {} stored tokens, {} pages, halted at line {}", m.expansions, m.out.len(), m.errors.len(), m.e.cs.len(), m.e.toks.len(), m.page.pages, m.input.line());
         for err in m.errors.iter().take(std::env::var("RT_ERRS").ok().and_then(|v| v.parse().ok()).unwrap_or(40)) {
             eprintln!("  {err}");
         }

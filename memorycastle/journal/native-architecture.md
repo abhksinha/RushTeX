@@ -108,6 +108,19 @@ The full specification follows. Every change to rushtex is checked against it.
 - **Free what dies.** A replaced definition, a finished paragraph's scratch data or a shipped page's nodes are released at once. Memory is bounded by the working set, never by document history (the token store's append-only growth is the counter-example to remove).
 - **Measure it.** Each change reports bytes moved per useful result where relevant: peak RSS, allocations, and bytes copied in the hot path.
 
+### 6a. Memory: zero garbage collection, predictable growth
+The native path never traces, never compacts and never moves live data. Every byte has an owner whose lifetime is known when it is allocated:
+- **Typed pools at fixed addresses.** Each kind of record (node, box, glue, rule, ligature, discretionary, insertion, mark) lives in its own pool, SoA where a phase reads one field across many records (widths in packing, penalties in line breaking) and AoS where a record is read whole. An index into a pool never changes while the record lives.
+- **Lifetimes by region, freed wholesale.** Four regions, reset in one step and reused without reallocation:
+  1. the paragraph region: its horizontal list, break candidates and active nodes, reset after line breaking;
+  2. the page region: lines, glue and inserts of the current page, reset at shipout once the page is written;
+  3. the float and insertion queue: records released one by one through a per-size free list when placed;
+  4. the document region: definitions, labels, fonts. It grows only with what the document defines and is never collected.
+- **Sharing is explicit.** A box that is copied (`\copy`, `\usebox`) is copied into the region of its use, or held in the document region, so no reference counts or tracing are needed.
+- **Replaced definitions return to a free list by size class.** The document's own macros, the only interpreted text, are stored in size-class blocks. Redefinition frees the old block at once (TeX §275 `eq_destroy`), so a loop that redefines a macro reuses one block.
+- **Capacity is reserved up front.** Each region starts from a capacity estimated from the source size (pages, paragraphs, definitions) and grows by doubling only past it. Peak RAM is about the format tables plus the document region plus one page region; it does not grow with the number of pages.
+- **The oracle is the exception.** The TeX engine stays exact to tex.web and keeps a tracing collector (`engine_gc`) as a dev tool. Its numbers are not the product's.
+
 ### 7. Hot loops: minimal or none
 - **Eliminate before optimising** (§1). Every per-character, per-node or per-line loop must justify existing.
 - Prefer:
@@ -165,7 +178,7 @@ The full specification follows. Every change to rushtex is checked against it.
 2. Does any string, `Vec` or node list get copied where an ID or a range would do?
 3. Is there a loop that searches, rescans or allocates in a hot path?
 4. Is each structure chosen by §5, and each SoA/AoS choice justified by the access pattern?
-5. Does memory stay bounded by the working set?
+5. Does memory stay bounded by the working set? Is every allocation owned by a region or pool with a known lifetime, with no tracing, compaction or moving of live data?
 6. Is the output still zero shift, and are the benchmark and RSS numbers equal or better?
 7. Is the § or macro of the source cited in a code comment (`// §1057`, `` `\@startsection` ``)?
 

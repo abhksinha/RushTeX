@@ -88,7 +88,10 @@ pub(super) struct Page {
     ins: Vec<PageIns>,
     /// The marks of each class that has had one, class 0 first.
     pub marks: Vec<(u32, Marks)>,
-    /// Boxes shipped out, in order (§638).
+    /// Pages shipped out (§638), and their boxes, in order, when `keep_shipped` is set (a
+    /// harness reading them after the run; otherwise they are freed).
+    pub pages: usize,
+    pub keep_shipped: bool,
     pub shipped: Vec<u32>,
     /// The shipped pages as PDF content, and for each font the font whose PDF object it
     /// shares (pdfTeX's `pdf_font_num`, `NOT_USED` until the font is first shipped).
@@ -103,6 +106,16 @@ pub(super) struct Page {
 }
 
 impl Page {
+    /// The current page's nodes and the shipped boxes kept, for `engine_gc`.
+    pub(super) fn for_each_node_root(&mut self, f: &mut dyn FnMut(super::engine_gc::Root)) {
+        for n in &mut self.list {
+            f(super::engine_gc::Root::Node(n));
+        }
+        for b in &mut self.shipped {
+            f(super::engine_gc::Root::Box(b));
+        }
+    }
+
     /// The marks and the current page's nodes' token spans, for `engine_gc`.
     pub(super) fn for_each_span(&mut self, f: &mut dyn FnMut(&mut Span)) {
         for (_, marks) in &mut self.marks {
@@ -814,7 +827,10 @@ impl Machine<'_, '_> {
         let positions = self.ship_page(b);
         self.out_whats(b, false, &mut positions.iter());
         self.page.dead_cycles = 0;
-        self.page.shipped.push(b);
+        self.page.pages += 1;
+        if self.page.keep_shipped {
+            self.page.shipped.push(b);
+        }
     }
 
     /// §1097 `begin_insert_or_adjust`.

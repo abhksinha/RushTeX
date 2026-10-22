@@ -643,6 +643,10 @@ pub enum Meaning {
     /// A primitive the engine leaves to the native pipeline: its index in the generated
     /// `PRIMITIVES` table, whose command code says what operands it takes.
     Native(u16),
+    /// A LaTeX command written natively (`crate::kernel`, the port's strangler step): its
+    /// index in `kernel::KERNEL`. Bound per run by `RT_NATIVE` in place of the macro, which
+    /// it calls for any case it does not take itself; unexpandable, like a primitive.
+    Kernel(u16),
 }
 
 #[cfg(test)]

@@ -844,6 +844,9 @@ impl Machine<'_, '_> {
     /// §638 `ship_out`: the page is done; its `\write`s, `\openout`s and `\closeout`s
     /// act now.
     pub(super) fn ship_out(&mut self, b: u32) {
+        if self.kernel.is_some() {
+            self.kernel_state(&format!("shipout {}", self.page.pages + 1));
+        }
         self.out_whats(b, true, &mut [].iter());
         let positions = self.ship_page(b);
         self.out_whats(b, false, &mut positions.iter());

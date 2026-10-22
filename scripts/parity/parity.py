@@ -35,7 +35,7 @@ A glyph matches when one of ours with the same origin lies within 0.1pt in x and
 Reference PDFs are cached in target/parity/ref and rebuilt when the source is newer.
 Every run deletes stale outputs first, so a failed compile is reported, never scored.
 """
-import argparse, itertools, json, os, re, shutil, subprocess, sys
+import argparse, hashlib, itertools, json, os, re, shutil, subprocess, sys
 from collections import Counter
 from pathlib import Path
 
@@ -135,8 +135,29 @@ def INSTALL_MTIME():
     return _install[0]
 
 
+# `RUSHTEX_PINNED_REFS=1` (CI): no pdfLaTeX is installed; the references come with the pinned
+# TeX Live snapshot (`scripts/texlive/pin.py unpack`), which records the corpus source each was
+# made from (`ref/sources.tsv`). A reference whose source changed since is an error, not a rerun.
+PINNED = os.environ.get("RUSHTEX_PINNED_REFS") == "1"
+_sources = {}
+
+
+def pinned_ref(tex, pdf):
+    if not _sources:
+        f = OUT / "ref" / "sources.tsv"
+        if not f.exists():
+            die(f"{f} missing: unpack the pinned snapshot")
+        _sources.update(l.split("\t") for l in f.read_text().split("\n") if l)
+    digest = hashlib.sha256(tex.read_bytes()).hexdigest()
+    if not pdf.exists() or _sources.get(tex.name) != digest:
+        die(f"{tex.name}: no pinned reference for this source; remake the snapshot (scripts/texlive/pin.py pack)")
+    return pdf
+
+
 def ref_pdf(tex):
     pdf = OUT / "ref" / (tex.stem + ".pdf")
+    if PINNED:
+        return pinned_ref(tex, pdf)
     if pdf.exists() and pdf.stat().st_mtime >= max(tex.stat().st_mtime, INSTALL_MTIME()):
         return pdf
     return run_pdflatex(tex, OUT / "ref")
@@ -988,8 +1009,8 @@ def main():
     s.add_argument("--build", action="store_true")
     s.set_defaults(f=cmd_repro)
     a = ap.parse_args()
-    if shutil.which("pdflatex") is None:
-        die("pdflatex not on PATH")
+    if shutil.which("pdflatex") is None and not PINNED:
+        die("pdflatex not on PATH (or set RUSHTEX_PINNED_REFS=1 with the pinned snapshot unpacked)")
     a.f(a)
 
 

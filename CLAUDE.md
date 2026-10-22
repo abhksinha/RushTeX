@@ -35,6 +35,7 @@ scripts/parity/parity.py gaps [DOC..]       # unsupported commands/envs/errors, 
 scripts/parity/parity.py boxes DOC PAGE     # pdfTeX's exact glue/kern/box recipe above each drifting line
 scripts/parity/parity.py rank|lines|miss|repro ...
 ./target/release/rushtex --gaps input.tex   # gap inventory of one file (parse only, never stops at errors)
+scripts/texlive/pin.py check|files|record|pack OUT|unpack TAR DIR   # the pinned TeX Live 2026 snapshot (CI's TeX tree and references)
 scripts/parity/engine_boxdiff.py pdftex.log engine.boxes PAGE   # first node where the engine's page box differs from pdfTeX's \tracingoutput (RT_BOXES=file format_smoke)
 
 # Where TeX/LaTeX define something, and where rushtex cites it
@@ -43,7 +44,7 @@ scripts/refindex.py -g REGEX                # search names
 scripts/fetch_latex_source.sh               # (re)download latex-source/ (.dtx of base, tools, amsmath, amscls, graphics, hyperref)
 ```
 
-CI (`.github/workflows/ci.yml`): one gating job (release build → `cargo test` → clippy, with the pinned TeX Live 2023 NewCMMath fetched and checksummed) and one report-only job (engine format, then `parity.py zero --engine --pixels --all`; it gates once CI pins the TeX Live the references come from). Locally the gate is `zero --all` 15/15 plus `scripts/engine_suites.py`.
+CI (`.github/workflows/ci.yml`): one gating job (release build → `cargo test` → clippy, with the pinned TeX Live 2023 NewCMMath fetched and checksummed) and one gating parity job on the pinned TeX Live 2026 snapshot (release `texlive-2026-pin-N`, no TeX installed: engine format, `parity.py zero --engine --pixels --all` with `RUSHTEX_PINNED_REFS=1`, the leak audit). Locally the gate is `zero --engine --pixels --all` 85/85, `scripts/engine_suites.py` and `scripts/leak_audit.py`; `pin.py check` reports when the local TeX Live drifts from the pin.
 
 ## Architecture
 

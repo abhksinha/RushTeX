@@ -26,6 +26,8 @@ The full specification follows. Every change to rushtex is checked against it.
 - **Least work, least movement, least memory**, measured on every change.
 - **Values from TeX, methods ours.** tex.web, pdftex.web, `latex.ltx` and the `.sty` sources define what the numbers are. Our representation and algorithms decide how they are computed.
 
+- **All five pillars together** (user, 2026-10-22): a native kernel on the exact core; data as build-time tables, self-checked against their sources; demand loading from a fused pre-scan; per-block incremental compile designed in; zero-shift proof for every ported feature. The progress checklist maps each pillar to its items.
+
 ### 2. Layers
 1. **Front ends.** Both produce the same command stream of IDs, never strings:
    - the LaTeX parser, zero-copy over the source bytes;
@@ -302,6 +304,7 @@ Constraints: safe Rust only (`#![forbid(unsafe_code)]`), std only, stable compil
 5. Does memory stay bounded by the working set? Is every allocation owned by a region or pool with a known lifetime, with no tracing, compaction or moving of live data?
 6. Is the output still zero shift, and are the benchmark and RSS numbers equal or better?
 7. Is the § or macro of the source cited in a code comment (`// §1057`, `` `\@startsection` ``)?
+8. Can the state this change adds be checkpointed at a block boundary, diffed and replayed per block (§9, pillar 4)? Is it reached through IDs and arrays, with no hidden global mutation?
 
 ## Rejected
 - **Approach B (engine plus native fast paths for hot macros) as the product.** It keeps every package working, but it pays for token interpretation on every non-shortcut macro. Its checkpoints are megabytes (the whole equivalents table and token store), and any macro can change any state, so dependencies cannot be tracked exactly. Real-time incremental compile would degrade with document size. The engine is kept only as the oracle.

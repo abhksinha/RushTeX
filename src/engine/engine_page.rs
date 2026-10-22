@@ -185,6 +185,7 @@ impl Machine<'_, '_> {
     }
 
     /// `vpack` of an arbitrary list, natural or to height `h` (`exact`), depth at most `d`.
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub(super) fn vpack_list(&mut self, list: &[Node], h: i32, exact: bool, d: i32) -> BoxRec {
         let start = self.cur.len();
         self.cur.extend_from_slice(list);

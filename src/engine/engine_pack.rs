@@ -133,6 +133,7 @@ impl Machine<'_, '_> {
 
     /// §649 `hpack` of the list from `start` in the build buffer: to width `w` when `exact`,
     /// else its natural width plus `w`. The list moves to the arena.
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub(super) fn hpack(&mut self, start: usize, w: i32, exact: bool) -> BoxRec {
         let (x, h, d, stretch, shrink) = self.measure_h(&self.cur[start..]);
         let width = if exact { w } else { x + w };
@@ -173,6 +174,7 @@ impl Machine<'_, '_> {
 
     /// §668 `vpackage` of the list from `start`: to height `h` when `exact`, else natural
     /// plus `h`, with depth at most `max_depth`.
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub(super) fn vpack(&mut self, start: usize, h: i32, exact: bool, max_depth: i32) -> BoxRec {
         let (mut w, mut d, mut x) = (0i32, 0i32, 0i32);
         let (mut stretch, mut shrink) = ([0i32; 4], [0i32; 4]);

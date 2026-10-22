@@ -149,6 +149,8 @@ pub enum Table {
 #[derive(Debug, Default)]
 pub struct Origins {
     pub lists: std::collections::HashMap<u32, &'static std::panic::Location<'static>>,
+    /// The size class each live block was stored with, by its start.
+    pub classes: std::collections::HashMap<u32, usize>,
     pub boxes: Vec<Option<&'static std::panic::Location<'static>>>,
     pub glues: Vec<Option<&'static std::panic::Location<'static>>>,
 }
@@ -177,6 +179,10 @@ pub fn leader(sub: u8) -> Option<bool> {
         _ => None,
     }
 }
+
+/// A freed box's list in the ownership-check build: outside every arena.
+#[cfg(feature = "ownership-check")]
+const DEAD_LIST: (u32, u32) = (u32::MAX - 1, u32::MAX);
 
 /// What a freed block holds in the ownership-check build, so a read of it is caught.
 #[cfg(feature = "ownership-check")]
@@ -286,7 +292,10 @@ impl Nodes {
         };
         self.list[start..start + nodes.len()].copy_from_slice(nodes);
         #[cfg(feature = "ownership-check")]
-        self.origin.lists.insert(start as u32, std::panic::Location::caller());
+        {
+            self.origin.lists.insert(start as u32, std::panic::Location::caller());
+            self.origin.classes.insert(start as u32, c);
+        }
         (start as u32, (start + nodes.len()) as u32)
     }
 
@@ -373,6 +382,9 @@ impl Nodes {
         #[cfg(feature = "ownership-check")]
         {
             assert!(self.list[l.0 as usize] != POISON, "node list {l:?} freed twice");
+            // A span changed after it was stored (a sub-span, a shortened tail) would
+            // free the wrong block.
+            assert_eq!(self.origin.classes.remove(&l.0), Some(c), "node list {l:?} is not the span that was stored");
             self.list[l.0 as usize..l.0 as usize + cap].fill(POISON);
         }
         let _ = cap;
@@ -391,6 +403,12 @@ impl Nodes {
 
     /// Frees box record `b` alone: its list has moved to a new owner.
     pub fn free_box(&mut self, b: u32) {
+        #[cfg(feature = "ownership-check")]
+        {
+            assert!(self.boxes[b as usize].list != DEAD_LIST, "box {b} freed twice");
+            // A read of the freed box's list now panics (out of the arena).
+            self.boxes[b as usize].list = DEAD_LIST;
+        }
         self.free.boxes.push(b);
     }
 
@@ -421,6 +439,8 @@ impl Nodes {
     /// §202 for one box: its list and its record.
     pub fn flush_box(&mut self, b: u32) {
         let l = self.boxes[b as usize].list;
+        #[cfg(feature = "ownership-check")]
+        assert!(l != DEAD_LIST, "box {b} flushed after it was freed");
         self.free_box(b);
         self.flush_list(l);
     }
@@ -429,7 +449,7 @@ impl Nodes {
         match x.kind {
             Kind::Box => {
                 work.push(self.boxes[x.a as usize].list);
-                self.free.boxes.push(x.a as u32);
+                self.free_box(x.a as u32);
             }
             Kind::Rule => self.free.rules.push(x.a as u32),
             Kind::Glue => {
@@ -437,7 +457,7 @@ impl Nodes {
                 match leader(x.sub) {
                     Some(true) => {
                         work.push(self.boxes[x.b as usize].list);
-                        self.free.boxes.push(x.b as u32);
+                        self.free_box(x.b as u32);
                     }
                     Some(false) => self.free.rules.push(x.b as u32),
                     None => {}

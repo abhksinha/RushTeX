@@ -501,6 +501,7 @@ impl Machine<'_, '_> {
                     let row = self.e.nodes.boxes[n.a as usize];
                     let list = self.set_row(&a, &p, &row);
                     let b = BoxRec { width: p.width, list, glue_set: p.glue_set, glue_sign: p.glue_sign, glue_order: p.glue_order, shift: o, ..row };
+                    self.e.nodes.free_box(n.a as u32);
                     self.cur[i] = Node::new(Kind::Box, self.e.nodes.add_box(b) as i32);
                 }
                 Kind::Rule => {
@@ -508,7 +509,7 @@ impl Machine<'_, '_> {
                     let [w, h, d] = self.e.nodes.rules[n.a as usize];
                     if w == RUNNING || h == RUNNING || d == RUNNING {
                         let dims = [if w == RUNNING { p.width } else { w }, if h == RUNNING { p.height } else { h }, if d == RUNNING { p.depth } else { d }];
-                        self.cur[i] = self.e.nodes.rule_node(dims);
+                        self.e.nodes.rules[n.a as usize] = dims;
                     }
                     // A shifted rule goes in a box of its natural size.
                     if o != 0 {
@@ -521,6 +522,8 @@ impl Machine<'_, '_> {
                 _ => {}
             }
         }
+        // §804: the prototype row has served.
+        self.e.nodes.flush_list(p.list);
         self.input.align_state = a.saved_state;
         // §812: the list joins the enclosing one, keeping the alignment's `\prevdepth`.
         let aux = self.aux;
@@ -579,6 +582,8 @@ impl Machine<'_, '_> {
                 (Sign::Shrinking, un.shrink_order, r)
             };
             b.width = w;
+            // The unset entry's record gives way to the set one; its list moves.
+            self.e.nodes.free_box(n.a as u32);
             let idx = self.e.nodes.add_box(b);
             self.cur.push(Node::new(Kind::Box, idx as i32));
             self.cur.extend_from_slice(&extra);
@@ -586,6 +591,8 @@ impl Machine<'_, '_> {
         }
         let list = self.e.nodes.store(&self.cur[start..]);
         self.cur.truncate(start);
+        // The unset row's nodes moved into the set one.
+        self.e.nodes.free_block(row.list);
         list
     }
 

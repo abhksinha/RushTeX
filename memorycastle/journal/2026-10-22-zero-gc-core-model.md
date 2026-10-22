@@ -1,6 +1,6 @@
 # Zero-GC core: TeX ownership on size-class pools (model M)
 Author: abhi+claude | Date: 2026-10-22
-Files: `src/engine/engine_node.rs`, `src/engine/engine_chars.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_image.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_xform.rs`, `src/engine/engine_box.rs`, `src/engine/engine_page.rs`, `src/engine/engine_eqtb.rs`, `src/engine/engine_gc.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_run.rs`, `src/engine/engine_job.rs`, `Cargo.toml`, `memorycastle/journal/native-architecture.md`, `memorycastle/journal/progress.md`
+Files: `src/engine/engine_node.rs`, `src/engine/engine_chars.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_image.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_xform.rs`, `src/engine/engine_box.rs`, `src/engine/engine_page.rs`, `src/engine/engine_eqtb.rs`, `src/engine/engine_gc.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_run.rs`, `src/engine/engine_job.rs`, `src/engine/engine_align.rs`, `src/engine/engine_mlist.rs`, `src/engine/engine_noad.rs`, `src/engine/engine_pack.rs`, `Cargo.toml`, `memorycastle/journal/native-architecture.md`, `memorycastle/journal/progress.md`
 Supersedes: 2026-10-21-engine-boxes-b1.md
 
 ## Context
@@ -49,3 +49,25 @@ Z1c, first free points (2026-10-22):
 - Leak audit (`RT_LEAKS`, `node_leaks`, and in the checker build `leak_sites` grouping by the `#[track_caller]` origin of each block, box and glue). On listings, before → after: boxes 6,581 → 201, glues 6,206 → 30, discretionaries 133 → 0, insertions 6 → 0.
 - Checker build: all 85 documents run with no double free and no use-after-free. Gate 85/85.
 - Still leaking (listings): math lists (`engine_noad.rs:532`), alignment unset rows and entries, `box_end`, ligature characters.
+
+Z1c, second half (2026-10-22):
+- Alignment (`fin_align`, `set_row`):
+  - unset row and entry records are freed as their set boxes replace them, and their lists' blocks too;
+  - running rules are set in place;
+  - the prototype row is flushed (§804).
+- Math (`engine_mlist`, `engine_noad`):
+  - `clean_box` and `convert_nucleus` take a converted list's nodes and free its block;
+  - a lone unshifted box is returned as is (§720), not copied;
+  - `rebox` frees the box it rewraps;
+  - `\mathchoice` flushes the three lists not chosen (`flush_mlist`, a noad-aware §698 flush);
+  - empty limits boxes, replaced mu glue and conditional math glue are flushed;
+  - math accents free the first box (§742) and the repacked list;
+  - `finish_display`'s repack frees the old box (§1201);
+  - the cut numerator of `\over` before `\right` gets a block of its own.
+- Collector correction: noads are not roots. They live through the `Noad` nodes of their lists (`mark_node`), plus an incompleat fraction in a math level's `aux` (`Root::Noad`). Marking every noad had kept freed lists "reachable", which made dangling references invisible.
+- Rule found: a span changed after `store` frees the wrong block. `clean_box`'s §721 tail cut now stores the character alone. The checker asserts that every freed span is a stored one (`Origins::classes`).
+- Measured, leaks after → before:
+  - testmath: boxes 2,404 → 0, glues 774 → 0, nodes 6,893 → 763;
+  - amsldoc: boxes 88 → 0, glues 59 → 0;
+  - listings: boxes 16, glues 7.
+- Gate: 85/85 and checker-clean on all documents.

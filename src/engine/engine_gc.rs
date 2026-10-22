@@ -55,8 +55,7 @@ impl Machine<'_, '_> {
 
     /// Every holder of node-arena references outside the arena: the box registers and the
     /// save stack, the lists being built, the current page, the shipped pages a harness
-    /// keeps, alignments' adjustments, open discretionaries, the noads of an open formula,
-    /// and `\pdfxform`s. §814 `just_box` is not one: it is read only right after the line
+    /// keeps, alignments' adjustments, open discretionaries and `\pdfxform`s. §814 `just_box` is not one: it is read only right after the line
     /// break that sets it, within one command.
     fn for_each_node_root(&mut self, f: &mut dyn FnMut(Root)) {
         self.e.eqtb.for_each_box(|b| f(Root::Box(b)));
@@ -71,21 +70,14 @@ impl Machine<'_, '_> {
             f(Root::List(pre));
             f(Root::List(post));
         }
-        for q in &mut self.noads {
-            for field in [&mut q.nucleus, &mut q.supscr, &mut q.subscr, &mut q.extra] {
-                match field {
-                    super::engine_mlist::Field::Box(b) => f(Root::Box(b)),
-                    super::engine_mlist::Field::Mlist(a, b) => {
-                        let mut l = (*a, *b);
-                        f(Root::List(&mut l));
-                        (*a, *b) = l;
-                    }
-                    _ => {}
-                }
-            }
-        }
         for x in &mut self.pdf_doc.forms {
             f(Root::Box(&mut x.box_rec));
+        }
+        let levels = self.nest.iter().map(|l| (l.mode, l.aux)).chain([(self.mode, self.aux)]);
+        for (mode, aux) in levels {
+            if mode == super::engine_run::Mode::Math && aux >= 0 {
+                f(Root::Noad(aux as u32));
+            }
         }
     }
 
@@ -113,7 +105,9 @@ impl Machine<'_, '_> {
         gc.ligs.reset(nodes.lig_chars.len());
         gc.discs.reset(nodes.discs.len());
         gc.inserts.reset(nodes.inserts.len());
-        self.for_each_node_root(&mut |r| gc.mark(&nodes, r));
+        let noads = std::mem::take(&mut self.noads);
+        self.for_each_node_root(&mut |r| gc.mark(&nodes, &noads, r));
+        self.noads = noads;
         let f = &nodes.free;
         let blocks = |v: &[Vec<u32>]| -> usize { v.iter().enumerate().map(|(c, s)| s.len() * super::engine_node::class_len(c)).sum() };
         let row = |name: &str, len: usize, free: usize, live: &Live| {
@@ -137,6 +131,24 @@ impl Machine<'_, '_> {
         format!("LEAKS {s}")
     }
 
+    /// The noads' boxes and lists, remapped after a collection. Noads are not roots: they
+    /// live through the `Noad` nodes of the lists that hold them (§698).
+    fn remap_noads(&mut self, gc: &NodeGc) {
+        for q in &mut self.noads {
+            for field in [&mut q.nucleus, &mut q.supscr, &mut q.subscr, &mut q.extra] {
+                match field {
+                    super::engine_mlist::Field::Box(b) => gc.remap(Root::Box(b)),
+                    super::engine_mlist::Field::Mlist(a, b) => {
+                        let mut l = (*a, *b);
+                        gc.remap(Root::List(&mut l));
+                        (*a, *b) = l;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Mark and compact the node arena and its side tables, in place: one live bit per
     /// entry, marked from the roots; then each table keeps its live entries in order and
     /// every index becomes its rank among them. Shared lists and boxes stay shared.
@@ -150,7 +162,9 @@ impl Machine<'_, '_> {
         gc.ligs.reset(nodes.lig_chars.len());
         gc.discs.reset(nodes.discs.len());
         gc.inserts.reset(nodes.inserts.len());
-        self.for_each_node_root(&mut |r| gc.mark(&nodes, r));
+        let noads = std::mem::take(&mut self.noads);
+        self.for_each_node_root(&mut |r| gc.mark(&nodes, &noads, r));
+        self.noads = noads;
         for l in [&mut gc.list, &mut gc.boxes, &mut gc.glues, &mut gc.rules, &mut gc.ligs, &mut gc.discs, &mut gc.inserts] {
             l.seal();
         }
@@ -176,6 +190,7 @@ impl Machine<'_, '_> {
         }
         nodes.free.clear();
         self.for_each_node_root(&mut |r| gc.remap(r));
+        self.remap_noads(&gc);
         self.node_collect_at = (nodes.list.len() as u32).saturating_mul(2).max(MIN_NODE_COLLECT);
         self.e.nodes = nodes;
         self.node_gc = gc;
@@ -317,6 +332,8 @@ pub(super) enum Root<'a> {
     Box(&'a mut u32),
     /// A node of a list being built (its side-table indices).
     Node(&'a mut Node),
+    /// An incompleat fraction noad (§1181: a math level's `aux`); noad indices never move.
+    Noad(u32),
 }
 
 /// The node collector's reused tables: what is live in each node table, and the lists
@@ -340,7 +357,7 @@ impl NodeGc {
         }
     }
 
-    fn mark_node(&mut self, n: &Nodes, x: Node) {
+    fn mark_node(&mut self, n: &Nodes, noads: &[super::engine_mlist::Noad], x: Node) {
         match x.kind {
             Kind::Box => self.mark_box(n, x.a as u32),
             Kind::Rule => {
@@ -372,23 +389,36 @@ impl NodeGc {
             Kind::Whatsit if super::engine_whatsit::sized(x.sub) => {
                 self.rules.set(x.a as u32);
             }
+            // §698: a noad's fields.
+            Kind::Noad => {
+                if let Some(q) = noads.get(x.a as usize) {
+                    for f in [q.nucleus, q.supscr, q.subscr, q.extra] {
+                        match f {
+                            super::engine_mlist::Field::Box(b) => self.mark_box(n, b),
+                            super::engine_mlist::Field::Mlist(a, b) => self.work.push((a, b)),
+                            _ => {}
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
 
     /// Marks a root and everything it reaches; each arena node is scanned once.
-    fn mark(&mut self, n: &Nodes, r: Root) {
+    fn mark(&mut self, n: &Nodes, noads: &[super::engine_mlist::Noad], r: Root) {
         match r {
             Root::List(l) => self.work.push(*l),
             Root::Box(b) => self.mark_box(n, *b),
-            Root::Node(x) => self.mark_node(n, *x),
+            Root::Node(x) => self.mark_node(n, noads, *x),
+            Root::Noad(q) => self.mark_node(n, noads, super::engine_mlist::noad_node(q)),
         }
         // A list keeps its whole block (model M's size classes) live.
         while let Some(l) = self.work.pop() {
             let (s, e) = Nodes::block(l);
             for k in s..e.min(n.list.len() as u32) {
                 if self.list.set(k) {
-                    self.mark_node(n, n.list[k as usize]);
+                    self.mark_node(n, noads, n.list[k as usize]);
                 }
             }
         }
@@ -423,6 +453,7 @@ impl NodeGc {
             Root::List(l) => *l = self.list.span(*l),
             Root::Box(b) => *b = self.boxes.rank(*b),
             Root::Node(x) => self.remap_node(x),
+            Root::Noad(_) => {}
         }
     }
 }
@@ -453,6 +484,19 @@ fn leak_sites(nodes: &Nodes, gc: &NodeGc) -> String {
     for (&s, o) in &nodes.origin.lists {
         if !is(&gc.list, s as usize) && !free_lists.contains(&s) {
             *sites.entry(format!("list {o}")).or_default() += 1;
+        }
+    }
+    // Freed yet reachable: a dangling reference (the worst kind of bug here).
+    for &s in &free_lists {
+        if is(&gc.list, s as usize) {
+            let o = nodes.origin.lists.get(&s).map_or("?".to_string(), |o| o.to_string());
+            *sites.entry(format!("DANGLING list {o}")).or_default() += 1;
+        }
+    }
+    for &b in &free_boxes {
+        if is(&gc.boxes, b as usize) {
+            let o = nodes.origin.boxes.get(b as usize).copied().flatten().map_or("?".to_string(), |o| o.to_string());
+            *sites.entry(format!("DANGLING box {o}")).or_default() += 1;
         }
     }
     let mut v: Vec<_> = sites.into_iter().collect();

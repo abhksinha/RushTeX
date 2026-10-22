@@ -489,8 +489,13 @@ impl Machine<'_, '_> {
                     Some(p) => {
                         let Field::Mlist(a, b) = self.noads[inc].supscr else { unreachable!("a fraction's numerator is a list") };
                         let cut = (a + (self.delim.max(0) as u32 + 1)).min(b);
-                        self.noads[inc].supscr = Field::Mlist(cut, b);
+                        // The numerator after the cut gets a block of its own (model M frees
+                        // whole blocks); the nodes before it move into `q`.
+                        let num = self.e.nodes.get((cut, b)).to_vec();
                         let mut q = self.e.nodes.get((a, cut)).to_vec();
+                        self.e.nodes.free_block((a, b));
+                        let (na, nb) = self.e.nodes.store(&num);
+                        self.noads[inc].supscr = Field::Mlist(na, nb);
                         q.extend([noad_node(inc as u32), p]);
                         q
                     }
@@ -772,20 +777,23 @@ impl Machine<'_, '_> {
             }
             _ => (0, 0),
         };
-        let repack = |m: &mut Self, width: i32| {
+        // §1201: `free_node(b)`, then the same list packed again; its nodes move.
+        let repack = |m: &mut Self, b: u32, width: i32| {
             let start = m.cur.len();
             m.cur.extend_from_slice(&m.e.nodes.list[list.0 as usize..list.1 as usize]);
+            m.e.nodes.free_block(list);
+            m.e.nodes.free_box(b);
             let r = m.hpack(start, width, true);
             m.e.nodes.add_box(r)
         };
         if w + q > z {
             // §1201
             if e != 0 && (w - shrink[0] + q <= z || shrink[1..].iter().any(|&t| t != 0)) {
-                b = repack(self, z - q);
+                b = repack(self, b, z - q);
             } else {
                 e = 0;
                 if w > z {
-                    b = repack(self, z);
+                    b = repack(self, b, z);
                 }
             }
             w = self.e.nodes.boxes[b as usize].width;
@@ -794,6 +802,7 @@ impl Machine<'_, '_> {
         let mut d = half(z - w);
         if e > 0 && d < 2 * e {
             d = half(z - w - e);
+            let list = self.e.nodes.boxes[b as usize].list;
             if self.e.nodes.get(list).first().is_some_and(|n| n.kind == Kind::Glue) {
                 d = 0;
             }

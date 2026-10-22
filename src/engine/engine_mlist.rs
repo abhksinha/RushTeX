@@ -242,6 +242,7 @@ impl Machine<'_, '_> {
         self.e.fonts.list[f as usize].metrics.tag(c)
     }
 
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     fn new_box(&mut self, b: BoxRec) -> u32 {
         self.e.nodes.add_box(b)
     }
@@ -255,6 +256,7 @@ impl Machine<'_, '_> {
     }
 
     /// `hpack(list, natural)` of nodes not in the build buffer.
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub(super) fn hpack_nodes(&mut self, list: &[Node], w: i32, exact: bool) -> u32 {
         let start = self.cur.len();
         self.cur.extend_from_slice(list);
@@ -263,6 +265,7 @@ impl Machine<'_, '_> {
     }
 
     /// `vpack(list, natural)`: `vpackage` with no depth limit.
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     fn vpack_nodes(&mut self, list: &[Node]) -> u32 {
         let start = self.cur.len();
         self.cur.extend_from_slice(list);
@@ -428,10 +431,37 @@ impl Machine<'_, '_> {
         list.push(self.e.nodes.glue_node(ss, 0));
         list.extend_from_slice(&inner);
         list.push(self.e.nodes.glue_node(ss, 0));
+        // §715: a horizontal box's nodes moved into the new one, and it is freed.
+        if !r.vertical {
+            self.e.nodes.free_block(r.list);
+            self.e.nodes.free_box(b);
+        }
         self.hpack_nodes(&list, w, true)
     }
 
+    /// §698 `flush_node_list` of a math list: noads free the boxes and lists in their
+    /// fields, other nodes what they own.
+    pub(super) fn flush_mlist(&mut self, l: (u32, u32)) {
+        for i in l.0..l.1 {
+            let n = self.e.nodes.list[i as usize];
+            if n.kind == Kind::Noad {
+                let q = self.noads[n.a as usize];
+                for f in [q.nucleus, q.supscr, q.subscr, q.extra] {
+                    match f {
+                        Field::Box(b) => self.e.nodes.flush_box(b),
+                        Field::Mlist(a, b) => self.flush_mlist((a, b)),
+                        _ => {}
+                    }
+                }
+            } else {
+                self.e.nodes.flush_node(n);
+            }
+        }
+        self.e.nodes.free_block(l);
+    }
+
     /// §720 `clean_box`: field `p` as a box in style `s`.
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     fn clean_box(&mut self, p: Field, s: u8) -> u32 {
         let save = self.math.style;
         let q: Vec<Node> = match p {
@@ -444,6 +474,8 @@ impl Machine<'_, '_> {
             Field::Box(b) => vec![boxed(b)],
             Field::Mlist(a, b) => {
                 let list = self.e.nodes.get((a, b)).to_vec();
+                // §720: the list is converted, its nodes taken.
+                self.e.nodes.free_block((a, b));
                 let l = self.mlist_to_hlist(list, s, false);
                 self.set_style(save);
                 l
@@ -454,17 +486,17 @@ impl Machine<'_, '_> {
             }
         };
         let x = match q[..] {
-            [n] if n.kind == Kind::Box && self.bx(n.a as u32).shift == 0 => {
-                let r = self.bx(n.a as u32);
-                self.new_box(r)
-            }
+            // §720: a lone unshifted box is clean already.
+            [n] if n.kind == Kind::Box && self.bx(n.a as u32).shift == 0 => n.a as u32,
             _ => self.hpack_nodes(&q, 0, false),
         };
         // §721: an italic correction after a lone character is not needed.
         let r = self.bx(x);
-        if let [c, k] = self.e.nodes.get(r.list) {
+        if let &[c, k] = self.e.nodes.get(r.list) {
             if c.kind == Kind::Char && k.kind == Kind::Kern && !r.vertical {
-                self.bx_mut(x).list.1 -= 1;
+                // The kern is dropped: the character alone gets a block of its class.
+                self.e.nodes.free_block(r.list);
+                self.bx_mut(x).list = self.e.nodes.store(&[c]);
             }
         }
         x
@@ -520,10 +552,13 @@ impl Machine<'_, '_> {
                     Kind::Glue if n.sub == MU_GLUE => {
                         let g = math_glue(self.e.nodes.glue(&n), self.math.mu);
                         ml[i] = self.e.nodes.glue_node(g, 0);
+                        // §732: the mu glue gives way to its converted copy.
+                        self.e.nodes.flush_node(n);
                     }
                     Kind::Glue if n.sub == COND_MATH_GLUE && self.math.size != TEXT_SIZE => {
                         if ml.get(i + 1).is_some_and(|p| matches!(p.kind, Kind::Glue | Kind::Kern)) {
-                            ml.remove(i + 1);
+                            let p = ml.remove(i + 1);
+                            self.e.nodes.flush_node(p);
                         }
                     }
                     // §717 `math_kern`
@@ -592,7 +627,16 @@ impl Machine<'_, '_> {
                         self.noads[q] = Noad { sub: self.math.style, ..Noad::new(STYLE) };
                         if let Field::Mlist(a, b) = chosen {
                             let list = self.e.nodes.get((a, b)).to_vec();
+                            self.e.nodes.free_block((a, b));
                             ml.splice(i + 1..i + 1, list);
+                        }
+                        // §731: the other three lists are flushed.
+                        for f in [c.nucleus, c.supscr, c.subscr, c.extra] {
+                            if f != chosen {
+                                if let Field::Mlist(a, b) = f {
+                                    self.flush_mlist((a, b));
+                                }
+                            }
                         }
                         (convert, measure) = (false, false);
                     }
@@ -658,6 +702,7 @@ impl Machine<'_, '_> {
             Field::Mlist(a, b) => {
                 let save = self.math.style;
                 let list = self.e.nodes.get((a, b)).to_vec();
+                self.e.nodes.free_block((a, b));
                 let h = self.mlist_to_hlist(list, save, false);
                 self.set_style(save);
                 let b = self.hpack_nodes(&h, 0, false);
@@ -785,6 +830,8 @@ impl Machine<'_, '_> {
             m.supscr = Field::Empty;
             m.subscr = Field::Empty;
             m.nucleus = Field::Mlist(span.0, span.1);
+            // §742: the first box is flushed.
+            self.e.nodes.flush_box(x);
             x = self.clean_box(self.noads[q].nucleus, self.math.style);
             delta += self.bx(x).height - h;
             h = self.bx(x).height;
@@ -801,6 +848,7 @@ impl Machine<'_, '_> {
             // §739
             let mut list = vec![kern(h - vr.height)];
             list.extend_from_slice(self.e.nodes.get(vr.list));
+            self.e.nodes.free_block(vr.list);
             let list = self.e.nodes.store(&list);
             let b = self.bx_mut(v);
             b.list = list;
@@ -923,6 +971,9 @@ impl Machine<'_, '_> {
                 let shift_up = (self.mathex(11) - xr.depth).max(self.mathex(9));
                 list.extend([kern(self.mathex(13)), boxed(x), kern(shift_up)]);
                 height += self.mathex(13) + xr.height + xr.depth + shift_up;
+            } else {
+                // §751: an empty superscript's box is freed.
+                self.e.nodes.flush_box(x);
             }
             list.push(boxed(y));
             if n.subscr != Field::Empty {
@@ -930,6 +981,8 @@ impl Machine<'_, '_> {
                 let shift_down = (self.mathex(12) - zr.height).max(self.mathex(10));
                 list.extend([kern(shift_down), boxed(z), kern(self.mathex(13))]);
                 depth += self.mathex(13) + zr.height + zr.depth + shift_down;
+            } else {
+                self.e.nodes.flush_box(z);
             }
             let v = self.vlist_box(&list, width, height, depth);
             let start = buf.len() as u32;

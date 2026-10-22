@@ -27,8 +27,8 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - [x] Zero-GC memory rules written into the spec (§6a)
 
 ### Z. Zero-GC exact core, before P1 (model M: `2026-10-22-zero-gc-core-model.md`)
-- [ ] Z1a. Pools: size-class span blocks and free lists for each side table in `Nodes`, plus the ownership-check build (poisoned slots).
-- [ ] Z1b. `flush_list` (§202) and `copy_list` (§204); `\copy`/`\unhcopy`/`\unvcopy` deep-copy.
+- [x] Z1a. Pools: size-class span blocks and free lists for each side table in `Nodes`, plus the ownership-check build (poisoned slots).
+- [x] Z1b. `flush_list` (§202) and `copy_list` (§204); `\copy`/`\unhcopy`/`\unvcopy` deep-copy.
 - [ ] Z1c. Free points: `\shipout`, `\setbox` overwrite, group restore, `\box` and `\unvbox` moves, discards (§1105, line break, page builder).
 - [ ] Z1d. `collect_nodes` deleted; 85/85 under the checker; RSS per page flat on listings.
 - [ ] Z2. Build buffers (`cur`, line-break scratch) with capacity reserved once and reset per list.
@@ -43,6 +43,11 @@ The one place to see what is done and what is next. Tick an item when its gate p
 
 ### P. Native port (per `native-port-plan.md`)
 - [ ] P0 rest: `RT_PROFILE` (expansions and time per format macro, which picks the next command to port), `RT_STATE`, `RT_NATIVE=cmd,…`, engine-against-engine `engine_boxdiff.py`, `rushtex-gen` skeleton, arXiv package sample, pinned LaTeX version
+- [ ] P0b. Document-needs gate (user, 2026-10-22: load only what the document uses, fewer tokens, incremental). This follows from the native module split.
+  - Built at generation time: a sorted table mapping each command and environment name to its module ID (kernel part, package, class, font family). A static XOR filter answers "is this name any module's command?" so user macros miss without a table probe.
+  - At compile time, one pass over the source's control-sequence names and `\usepackage` lines gives a needs bitset of `u64` words over module IDs. Only modules whose bit is set are loaded or initialised.
+  - Incremental: each block keeps its own needs bitset. An edit diffs the old and new bitset, so a newly used command loads one module and nothing else is reread.
+  - Measured by tokens expanded and RSS per corpus document, against everything loaded.
 - [ ] P1. Fonts and NFSS as generated tables
 - [ ] P2. Kernel core (small2e, sample2e, lppl at zero format expansions)
 - [ ] P3. Output routine and floats

@@ -194,6 +194,9 @@ fn main() -> ExitCode {
 
     #[cfg(not(target_arch = "wasm32"))]
     if !native {
+        if !enable_compression || threads {
+            eprintln!("[WARN] --no-compress and --threads apply to the native pipeline only (add --native)");
+        }
         let output = output_file_path.clone().unwrap_or_else(|| input_path.with_extension("pdf"));
         if let Some(code) = compile_engine(&input_path, &output, format_path) {
             return code;

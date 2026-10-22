@@ -25,3 +25,10 @@ The run loop keeps the PDF of the run whose written files repeat what it read. T
 - **Memory on large documents.** polydemo uses 48 MB against pdflatex's 31 MB. Each run undumps the whole format, and the node and token arenas grow. Measure where it goes before changing anything.
 - **Watch and stdin modes** still use the native pipeline.
 - **No `.aux` file is written to disk**, so every invocation repeats the runs from scratch. Seeding a run from the previous invocation's files would make a stable document compile in 1 run.
+
+## Measured (user path)
+- A format made from scratch by the command (`RUSHTEX_CACHE` empty, fixed date) is not byte-identical to `target/parity/pdflatex.rfmt`; the first difference is at byte 1,651,633.
+- All 85 PDFs it produces are byte-identical to the harness PDFs, which are at zero shift. So `Kpse` resolves the files `pdflatex.ini` loads to the same content `kpsewhich` did.
+- Follow-ups:
+  - `--no-compress` and `--threads` now warn that they apply only with `--native`.
+  - `format_smoke` takes the job name from `file_stem`, as the command does.

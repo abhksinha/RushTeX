@@ -1029,7 +1029,7 @@ mod tests {
         let fmt_in = std::env::var("RT_FMT_IN").ok();
         let now = crate::engine::engine_host::run_date();
         // §532: the job is named after the first file read.
-        let job_name = path.rsplit('/').next().unwrap_or(&path).split('.').next().unwrap_or("texput").to_string();
+        let job_name = std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("texput").to_string();
         let setup = |m: &mut Machine| {
             m.trace = std::env::var("RT_TRACE").is_ok();
             if let Some(n) = std::env::var("RT_MAXEXP").ok().and_then(|v| v.parse().ok()) {

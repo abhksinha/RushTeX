@@ -1,6 +1,6 @@
 # SUPER IMPORTANT: RushTeX native architecture (the long-term design; living spec)
 Author: abhi+claude | Date: 2026-10-22 (living spec: update in place, record each change in a dated note)
-Files: `src/data/data_tfm.rs`, `src/bin/rushtex_gen.rs`, `src/engine/engine_microtype.rs`, `src/backend/backend_ship.rs`, `src/lib.rs`, `src/main.rs`, `src/engine/engine_mod.rs`, `src/engine/engine_node.rs`, `src/engine/engine_pack.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_page.rs`, `src/engine/engine_mlist.rs`, `src/engine/engine_font.rs`, `src/engine/engine_ship.rs`, `src/frontend/frontend_parser.rs`, `src/expand/expand_mod.rs`, `src/layout/layout_engine.rs`, `src/layout/layout_hyphen.rs`, `Resource_Conscious_Software_Engineering.md`, `memorycastle/journal/tex-weaknesses-roadmap.md`, `scripts/bench_corpus.py`, `scripts/parity/parity.py`, `scripts/parity/engine_boxdiff.py`
+Files: `src/data/data_mod.rs`, `src/data/data_blob.rs`, `src/data/data_tfm.rs`, `Cargo.toml`, `.github/workflows/ci.yml`, `src/bin/rushtex_gen.rs`, `src/engine/engine_microtype.rs`, `src/backend/backend_ship.rs`, `src/lib.rs`, `src/main.rs`, `src/engine/engine_mod.rs`, `src/engine/engine_node.rs`, `src/engine/engine_pack.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_page.rs`, `src/engine/engine_mlist.rs`, `src/engine/engine_font.rs`, `src/engine/engine_ship.rs`, `src/frontend/frontend_parser.rs`, `src/expand/expand_mod.rs`, `src/layout/layout_engine.rs`, `src/layout/layout_hyphen.rs`, `Resource_Conscious_Software_Engineering.md`, `memorycastle/journal/tex-weaknesses-roadmap.md`, `scripts/bench_corpus.py`, `scripts/parity/parity.py`, `scripts/parity/engine_boxdiff.py`
 
 ## Context
 **Status: SUPER IMPORTANT.** This is the main architecture RushTeX follows from now on. It is built carefully and completely, never hastily. "Looks right in Rust" is not the bar: the code must use the machine's native capability, with the least work and the least data movement.
@@ -12,17 +12,18 @@ Where it came from (2026-10-22):
 - The user chose a fully native design: LaTeX's behaviour written in Rust, zero runtime dependencies, bare-metal speed, real-time incremental compile. The user's own simplified preamble and document language sits on top of it.
 
 ## Decision
-RushTeX implements LaTeX natively (approach A); nothing is interpreted:
-- The kernel and the supported packages are Rust code that builds node lists directly into the exact typesetting core.
+RushTeX implements LaTeX natively first (approach A), with the engine as a whole-document fallback:
+- The kernel and the most-used packages (chosen by measured usage) are Rust code that builds node lists directly into the exact typesetting core.
 - Static knowledge (fonts, metrics, encodings, class and package parameters, hyphenation) is generated at build time into `static` tables.
-- The TeX engine stays as a development oracle that proves exactness, and is compiled out of releases.
+- The TeX engine proves exactness in development. It also ships in releases as the fallback for any document the native path cannot run (§2a).
 - Incremental real-time compile is designed in from the start.
 
 The full specification follows. Every change to rushtex is checked against it.
 
 ### 1. Invariants (never traded away)
 - **Exact output.** In compatibility mode the output is identical to pdfLaTeX: zero shift, the same pages, every glyph and path at the same place, the same links and outlines, 0 differing pixels.
-- **Zero runtime dependency.** One binary. No TeX Live, no `kpsewhich`, no first-run format build, no files read except the document and its own inputs (images, `\input` files).
+- **Zero runtime dependency on the native path.** One binary. No TeX Live, no `kpsewhich`, no first-run format build, no files read except the document and its own inputs (images, `\input` files). Only a document that falls back to the engine (§2a) needs TeX files: its own, plus the kernel and any unported package from TeX Live or the pinned snapshot.
+- **Backward compatible.** Every document pdfLaTeX compiles also compiles in RushTeX, natively or through the fallback, with identical output.
 - **Least work, least movement, least memory**, measured on every change.
 - **Values from TeX, methods ours.** tex.web, pdftex.web, `latex.ltx` and the `.sty` sources define what the numbers are. Our representation and algorithms decide how they are computed.
 
@@ -40,9 +41,24 @@ The full specification follows. Every change to rushtex is checked against it.
 4. **Native packages.** One Rust module each, with option bitflags and hooks at fixed kernel hook points.
 5. **Exact typesetting core**, today's `engine_box`, `engine_pack`, `engine_chars`, `engine_linebreak`, `engine_hyph`, `engine_align`, `engine_page`, `engine_noad`/`engine_mlist`, `engine_font`/`engine_vf`, `engine_microtype`, `engine_ship`, `engine_pdfdoc`, `engine_image`: about 11k lines, already exact.
 6. **Output:** PDF pages, or a direct preview for real-time mode.
-7. **Oracle (dev only, cargo feature `oracle`):** interpretation of `latex.ltx`, expl3 and the `.sty`/`.cls` files, plus `engine_job`/`engine_host` and the format build.
+7. **Engine (cargo feature `oracle`, on in releases since 2026-10-22, §2a):** interpretation of `latex.ltx`, expl3 and the `.sty`/`.cls` files, plus `engine_job`/`engine_host` and the format build. It is the oracle in development and the whole-document fallback in releases.
    - **Boundary (corrected 2026-10-22, `native-port-plan.md` §1):** TeX's expansion semantics (`engine_macro`, `engine_cond`, `engine_value`, `engine_scan`; tex.web §366–§401, §487–§510) stay in the product, because documents' own macros (`\def`, `\expandafter`, `\csname`, catcodes) need them for backward compatibility.
    - Every LaTeX command they reach is a native primitive. What leaves the product is LaTeX's macro implementation and TeX Live, not the expansion machinery.
+
+### 2a. Native first, whole-document engine fallback (user, 2026-10-22)
+This replaces the native-only rule decided earlier the same day, under which a release refused unported packages.
+- **What is native.** The kernel plus the packages and classes that measured usage ranks highest. The corpus loads about 100–150 distinct `.sty`/`.cls` files; the real set comes from a larger sample (A3, arXiv sources), and it grows as the fallback measurements say.
+- **What falls back.** The pre-scan (D3) decides per document. The whole document runs on the engine when it:
+  - loads a local `.sty`/`.cls`;
+  - loads an unported package;
+  - redefines LaTeX internals in its preamble (`\makeatletter` with `\renewcommand\@seccntformat` and the like), which native code cannot honour.
+- **Why the whole document.** An unknown `.sty` expects LaTeX's internals to be macros. Native code holds them as Rust, so mixing the two in one document is not reliably exact.
+- **What the fallback costs.**
+  - Engine speed: about 1.4–3× faster than pdflatex today, not 20×.
+  - No per-block incremental compile.
+  - TeX files at run time: the document's own, plus the kernel and unported packages from an installed TeX Live or the pinned snapshot.
+- **What it gives.** Full backward compatibility, and a measured list of fallback triggers that sets the porting order.
+- **Native-path invariants unchanged.** A native document still needs no TeX Live, interprets no LaTeX macros and compiles incrementally.
 
 ### 3. Build time, not run time
 - A generator (`rushtex-gen`, dev only) reads the pinned TeX Live files once and emits `src/generated/*.rs` and compressed blobs. Everything lands in the binary's read-only data:
@@ -51,6 +67,49 @@ The full specification follows. Every change to rushtex is checked against it.
   - only the pages a document touches are ever loaded.
 - Parameters are extracted by running the oracle, not copied by hand. For example, `article` with `11pt,twocolumn` dumps `\textwidth`, `\baselineskip`, the `\@startsection` arguments and the list indents, so the values are pdfLaTeX's by construction.
 - Behaviour is ported code; numbers are tables. A routine's logic never contains a magic constant that a generated table could hold.
+
+### 3a. Storage: data, constants and code (user, 2026-10-22)
+Three kinds of things are stored, each in its own form.
+
+| Kind | Examples | Form |
+|---|---|---|
+| Bulk data | font metrics, glyph programs, hyphenation patterns, NFSS maps, encodings, the package registry | `.rtdb` blobs (the D1 format), embedded with `include_bytes!` |
+| Data the code names or branches on | `ClassParams`, option bits, `CommandId`s, hook slots, `CounterId`s | generated Rust `const`s |
+| Behaviour | `\section`, `\selectfont`, amsmath environments, the output routine | handwritten Rust, one module per package |
+
+**The rule.** If code names a value or branches on it, it is a generated `const`, so the compiler folds it into the code. If code only indexes it, it goes in a blob, read in place, with no compile-time cost.
+
+**Data.**
+- **Embedded, never loaded from files.** The OS pages in only what a document touches, which is demand loading at no cost. Nothing is opened, parsed or copied.
+- **Built with the code, so the two cannot disagree.** One fingerprint compare at start-up is the only check.
+- **One blob per domain:** `fonts`, `nfss`, `hyph`, `glyphs`, `pkg`.
+  - All share the one format: a perfect hash, SoA columns, CSR lists and bitsets.
+  - Each domain is regenerated on its own; a combined fingerprint ties them to one pin.
+- **Joined by IDs.** `FontId`, `FamilyId`, `EncodingId`, `PackageId`, `CommandId`, `LanguageId` and `CounterId` connect the tables. A name becomes an ID once, through a perfect hash; tables refer to each other only by ID.
+- **Ordered by popularity,** so a typical document's data shares pages, as the font tiers do.
+- **Committed to the repository.** Blobs are generated by `rushtex-gen` from the pinned TeX Live, so a build needs no TeX installation. CI regenerates them and requires identical bytes, so a table cannot drift from its source.
+
+**Code.**
+- **Layout:** `src/kernel/`, `src/pkg/<package>/`, `src/cls/<class>/`. Behaviour only; a module's numbers live in tables.
+- **Dispatch:** a name gives a `CommandId` through the perfect hash, once, when the document is read. The `CommandId` indexes a static array of function pointers: one indirect call per use. No trait objects, no maps of closures, no interpretation.
+- **Loading a package** sets its bit in the loaded bitset and runs its setup function. All code is compiled in; pages never used are never touched.
+- **No plugins or dynamic libraries:** they cost load time and break WASM and the security model. Cargo features may trim the package set for a small WASM build later.
+- **No hidden state.** Document state lives in central arrays by ID (counters, lengths, toggles as a bitset, the current font). A package owns behaviour, not state.
+- **User macros** (`\newcommand` and `\def` in the document) go through the minimal expander with its own token arena. Package internals are never interpreted.
+
+**How it serves the three goals, and what each still needs.**
+
+| Goal | Given by this design | Still needed |
+|---|---|---|
+| Incremental compile | immutable tables (never checkpointed), state as arrays by ID, IDs fixed at build time, a checkpoint as a few small arrays or a length | per-block dependency bitsets (D3, P8); an interner kept across recompiles so user names keep their IDs |
+| No garbage collection | static tables and code, append-only arenas, fixed-size state | token model M for user macros, where a redefinition frees the old text at once (Z3) |
+| No interpretation | native packages, static dispatch, names resolved once | the minimal expander, for the document's own macros only |
+
+**Unsafe code stays forbidden** (`#![forbid(unsafe_code)]`).
+- Bounds checks are already removed by verifying lengths once and by iterators.
+- `from_le_bytes` compiles to a plain load on little-endian CPUs.
+- Undefined behaviour would weaken both the security of untrusted documents (A2) and the meaning of a zero-shift proof.
+- The one future exception: explicit SIMD in a loop where a profile shows a large measured gain, isolated in one small module with a safe interface and tested under Miri.
 
 ### 4. Data structures by kind
 - **Closed sets** (commands, packages, options, colours, encodings):
@@ -332,7 +391,7 @@ Constraints: safe Rust only (`#![forbid(unsafe_code)]`), std only, stable compil
 - **N3:** native kernel: small2e, sample2e, lppl exact natively, then the kernel-only corpus documents.
 - **N4:** packages by usage frequency, each oracle-diffed.
 - **N5:** in-memory references with one layout pass where possible, then the block-level incremental pipeline.
-- **N6:** the oracle (`latex.ltx` interpretation, format build, `engine_host`) out of the release. One native binary that keeps TeX's expansion for the document's own macros.
+- **N6:** native is the default; the engine stays in the release only as the whole-document fallback (§2a). A native document needs no TeX Live, and TeX's expansion is kept for the document's own macros.
 - **Detailed phases P0–P8, inventory and trackers:** `native-port-plan.md`. The port grows inside the engine as native primitives, verified per command against the macro version. The old native pipeline is frozen and retired at P7, replacing N1's migration of it.
 
 ### 12. Review checklist (every change)
@@ -344,7 +403,7 @@ Constraints: safe Rust only (`#![forbid(unsafe_code)]`), std only, stable compil
 6. Is the output still zero shift, and are the benchmark and RSS numbers equal or better?
 7. Is the § or macro of the source cited in a code comment (`// §1057`, `` `\@startsection` ``)?
 8. Can the state this change adds be checkpointed at a block boundary, diffed and replayed per block (§9, pillar 4)? Is it reached through IDs and arrays, with no hidden global mutation?
-9. Is this the design that does the least work and moves the least data per operation (§5a)? Work at use that could move to load, or work at load that could move to build time, is a defect.
+9. Is this the design that does the least work and moves the least data per operation (§5a)? Is each value stored in the form §3a gives it? Work at use that could move to load, or work at load that could move to build time, is a defect.
 
 ## Rejected
 - **Approach B (engine plus native fast paths for hot macros) as the product.** It keeps every package working, but it pays for token interpretation on every non-shortcut macro. Its checkpoints are megabytes (the whole equivalents table and token store), and any macro can change any state, so dependencies cannot be tracked exactly. Real-time incremental compile would degrade with document size. The engine is kept only as the oracle.
@@ -352,6 +411,11 @@ Constraints: safe Rust only (`#![forbid(unsafe_code)]`), std only, stable compil
 - **Generic runtime `HashMap`s for static data.** Perfect hashes and direct indexes are smaller and faster, and never allocate.
 - **Bloom filters as the source of truth for dependencies.** They do not pinpoint (see `tex-weaknesses-roadmap.md`). They are allowed only as gates in front of exact structures.
 - **Haste.** Porting a routine "to look right" without the oracle's node-level proof, or optimising before the design removes the work.
+- **Native-only releases** (decided and reversed 2026-10-22). Refusing unported packages would block real documents that ship their own `.sty`/`.cls` or journal classes. Replaced by the whole-document fallback (§2a).
+- **Mixing native and interpreted code inside one document.** An unknown package expects LaTeX's internals as macros, so the result cannot be proved exact. The whole document falls back instead.
+- **Generating tables in `build.rs`.** Every build would need the pinned TeX Live. Committed blobs plus CI regeneration give the same guarantee without it.
+- **Plugins and dynamic libraries for packages:** load time, ABI coupling, no WASM, a weaker security model.
+- **Unsafe code for speed:** it removes checks, not work; see §3a.
 
 ## Measured
 Baseline at adoption (2026-10-22, `scripts/bench_corpus.py`, 85 documents, 2,137 pages):
@@ -363,5 +427,6 @@ Baseline at adoption (2026-10-22, `scripts/bench_corpus.py`, 85 documents, 2,137
 ## Open
 - Which expl3 parts the native kernel must mirror: `latex.ltx` now relies on `l3kernel` for hooks, keyval and text case.
 - Package coverage list and order: measure usage frequency over a large sample of real documents (arXiv sources), not only the corpus.
-- **Unported package (decided 2026-10-22, the user's native-only rule):** a release gives a clear error naming the package; the oracle fallback exists only in dev builds.
+- **Unported package:** decided 2026-10-22 as a release error, then replaced the same day by the whole-document engine fallback (§2a).
+- **How often documents fall back.** To be measured on A3 and a larger arXiv sample: the triggers, ranked, set the porting order.
 - Licensing record for the generated tables (LPPL permits redistribution; keep the attribution and pinned versions in the binary's notices).

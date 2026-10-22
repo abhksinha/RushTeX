@@ -1,6 +1,6 @@
 # Zero-GC core: TeX ownership on size-class pools (model M)
 Author: abhi+claude | Date: 2026-10-22
-Files: `src/engine/engine_node.rs`, `src/engine/engine_chars.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_image.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_xform.rs`, `src/engine/engine_box.rs`, `src/engine/engine_page.rs`, `src/engine/engine_eqtb.rs`, `src/engine/engine_gc.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_run.rs`, `src/engine/engine_job.rs`, `src/engine/engine_align.rs`, `src/engine/engine_mlist.rs`, `src/engine/engine_noad.rs`, `src/engine/engine_pack.rs`, `Cargo.toml`, `memorycastle/journal/native-architecture.md`, `memorycastle/journal/progress.md`
+Files: `src/engine/engine_node.rs`, `src/engine/engine_chars.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_image.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_xform.rs`, `src/engine/engine_box.rs`, `src/engine/engine_page.rs`, `src/engine/engine_eqtb.rs`, `src/engine/engine_gc.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_run.rs`, `src/engine/engine_job.rs`, `src/engine/engine_align.rs`, `src/engine/engine_mlist.rs`, `src/engine/engine_noad.rs`, `src/engine/engine_pack.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_microtype.rs`, `Cargo.toml`, `memorycastle/journal/native-architecture.md`, `memorycastle/journal/progress.md`
 Supersedes: 2026-10-21-engine-boxes-b1.md
 
 ## Context
@@ -71,3 +71,18 @@ Z1c, second half (2026-10-22):
   - amsldoc: boxes 88 → 0, glues 59 → 0;
   - listings: boxes 16, glues 7.
 - Gate: 85/85 and checker-clean on all documents.
+
+Z1c done, Z1d (2026-10-22):
+- Last free points:
+  - `replace_word` flushes the word's old nodes (§903);
+  - `hpack` frees a `\vadjust` block whose material moves to the adjustment list (§655).
+- `subst_disc` (pdfTeX font expansion) changes the discretionary's texts in place instead of making a new record. Under model M the line owns it; the old "finished lists never change" rule belonged to the shared-list era.
+- `collect_nodes` is deleted, along with its remapping (`remap`, `remap_node`, `remap_noads`, `Live::rank`/`keep`/`seal`), `MIN_NODE_COLLECT`, `Free::clear` and the machine's `node_collect_at` and `node_gc`. Node marking (`NodeGc`, `Root`, `for_each_node_root`, `Eqtb::for_each_box`, `Align::for_each_node`, `Page::for_each_node_root`) survives only under `cfg(test)`, for the `RT_LEAKS` audit.
+- The checker build also records each discretionary's last holder (`Origins::disc_seen`) and each ligature's origin. That is how the expansion leak was found.
+- Measured:
+  - `RT_LEAKS` reports 0 in every table on all 85 documents;
+  - the checker build runs all 85 with no panic; zero shift 85/85;
+  - listings' node arena stays at 40,942 entries (0.5 MB) over 236 pages, with no tracing;
+  - peak RSS, pre-Z1 binary against now, same machine and interleaved: listings 55 → 45 MB, fancyhdr 60 → 54 MB, multicolrule 56 → 54 MB, array 45 → 37 MB, testmath 26 MB, small2e 22 MB;
+  - time is unchanged (listings 2.96 s against 2.97 s, fancyhdr 7.54 s against 7.40 s).
+- The rest of RSS is the token arena (`collect_tokens`, Z3) and the format's state.

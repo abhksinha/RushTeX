@@ -651,7 +651,10 @@ impl Machine<'_, '_> {
                 break;
             }
         }
-        par.splice(keep..=hb, out);
+        // §903: the word's old nodes are flushed (`flush_node_list`).
+        for n in par.splice(keep..=hb, out) {
+            self.e.nodes.flush_node(n);
+        }
     }
 
     /// §905–§911 `reconstitute`: the translation of `hu[j..=n]` up to its first cut, into

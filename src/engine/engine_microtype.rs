@@ -494,24 +494,20 @@ impl Machine<'_, '_> {
         self.expand_font(f, e)
     }
 
-    /// The characters of a discretionary's texts in the copies `ratio` asks for: a new
-    /// discretionary record (finished lists never change).
+    /// The characters of a discretionary's texts in the copies `ratio` asks for, changed in
+    /// place: the line owns the discretionary and its texts (model M).
     fn subst_disc(&mut self, n: &mut Node, ratio: i32) {
         if n.a < 0 {
             return;
         }
-        let spans = self.e.nodes.discs[n.a as usize];
-        let mut out = [(0, 0); 2];
-        for (i, span) in spans.iter().enumerate() {
-            let mut list = self.e.nodes.get(*span).to_vec();
-            for m in list.iter_mut() {
-                if let Some((f, c)) = shown_char(m) {
-                    m.font = self.subst_font(f, c, ratio);
+        for (s, e) in self.e.nodes.discs[n.a as usize] {
+            for i in s as usize..e as usize {
+                let m = self.e.nodes.list[i];
+                if let Some((f, c)) = shown_char(&m) {
+                    self.e.nodes.list[i].font = self.subst_font(f, c, ratio);
                 }
             }
-            out[i] = self.e.nodes.store(&list);
         }
-        n.a = self.e.nodes.add_disc(out) as i32;
     }
 
     /// pdfTeX's font expansion of a finished line (`hpack` with `cal_expand_ratio`, then

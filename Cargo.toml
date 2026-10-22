@@ -24,8 +24,11 @@ crate-type = ["rlib", "cdylib"]
 # The TeX engine as exactness oracle (native-architecture.md §2 layer 7): the LaTeX format's
 # build and load, kpathsea lookup and the multi-run job. Default until P7, when native output
 # becomes the default and releases build without it.
-default = ["oracle"]
+default = ["oracle", "fonts-core"]
 oracle = []
+# D2b tier 1: the font programs most documents use, carried in the binary
+# (`assets/tables/embed.set`, about 4 MB), so they need no TeX installation.
+fonts-core = []
 # The table builders (`src/data/`): `rushtex-gen` and tests construct tables; the product
 # only reads them.
 gen = []

@@ -108,7 +108,9 @@ jobs:
           cmp assets/tables/fonts.rtdb "$RUNNER_TEMP/fonts.rtdb"
           ./target/release/rushtex-gen pkgs --list scripts/texlive/files.tsv --format target/parity/pdflatex.rfmt --out "$RUNNER_TEMP/pkgs.rtdb"
           cmp assets/tables/nfss.rtdb "$RUNNER_TEMP/nfss.rtdb"
+          ./target/release/rushtex-gen embed --list scripts/texlive/files.tsv --out "$RUNNER_TEMP/embed.rtdb"
           cmp assets/tables/pkgs.rtdb "$RUNNER_TEMP/pkgs.rtdb"
+          cmp assets/tables/embed.rtdb "$RUNNER_TEMP/embed.rtdb"
 
       - name: Zero check, all documents
         run: uv run scripts/parity/parity.py zero --engine --pixels --all

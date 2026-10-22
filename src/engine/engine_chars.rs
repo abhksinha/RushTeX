@@ -11,7 +11,6 @@ use super::engine_font::{restart, NON_CHAR, STOP_FLAG};
 use super::engine_node::{BoxRec, Kind, Node};
 use super::engine_prim::{Meaning, Prim};
 use super::engine_run::{Machine, Mode, X};
-use crate::backend::scaled::Scaler;
 
 /// A discretionary being built: which list comes next (0 pre-break, 1 post-break, 2 the
 /// replacement), and the pre-break and post-break lists so far.
@@ -200,14 +199,13 @@ impl Machine<'_, '_> {
                 },
                 Step::LigLoop1 => {
                     let font = &self.e.fonts.list[f as usize];
-                    let (prog, kerns) = font.metrics.lig_kern();
+                    let (prog, _) = font.metrics.lig_kern();
                     let j = prog.get(main_k);
                     let (skip, next, op, rem) = ((j >> 24) as u8, (j >> 16 & 0xFF) as u16, (j >> 8 & 0xFF) as u8, (j & 0xFF) as u8);
                     if next == cur_r && skip <= STOP_FLAG {
                         // §1040: a kern, or a ligature of one of the eight kinds.
                         if op >= STOP_FLAG {
-                            let k = kerns.try_get(restart(j) - 256 * STOP_FLAG as usize).map_or(0, |k| k as i32);
-                            let w = Scaler::new(font.size).scale(k);
+                            let w = font.kern(restart(j) - 256 * STOP_FLAG as usize, &self.e.fonts.info);
                             wrapup!(rt_hit);
                             self.cur.push(Node::new(Kind::Kern, w));
                             Step::Move
@@ -332,8 +330,8 @@ impl Machine<'_, '_> {
         let a_char = self.scan_char_num();
         let af = self.cur_font();
         let font = &self.e.fonts.list[af as usize];
-        let Some([a, _, _, _]) = font.dims(a_char) else { return };
-        let (x, s) = (font.params[4], font.params[0] as f64 / 65536.0);
+        let Some([a, _, _, _]) = font.dims(a_char, &self.e.fonts.info) else { return };
+        let (x, s) = (font.params(&self.e.fonts.info)[4], font.params(&self.e.fonts.info)[0] as f64 / 65536.0);
         self.do_assignments();
         // §1124: the character to accent.
         let f = self.cur_font();
@@ -351,12 +349,12 @@ impl Machine<'_, '_> {
             None => None,
         };
         let font = &self.e.fonts.list[f as usize];
-        let q = c.and_then(|c| font.dims(c).map(|d| (c, d)));
+        let q = c.and_then(|c| font.dims(c, &self.e.fonts.info).map(|d| (c, d)));
         let accent = Node { kind: Kind::Char, sub: 0, font: af, a: a_char as i32, b: 0 };
         match q {
             Some((c, [w, h, _, _])) => {
                 // §1125
-                let t = font.params[0] as f64 / 65536.0;
+                let t = font.params(&self.e.fonts.info)[0] as f64 / 65536.0;
                 let p = if h != x {
                     let start = self.cur.len();
                     self.cur.push(accent);

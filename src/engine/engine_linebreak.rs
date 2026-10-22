@@ -485,7 +485,7 @@ impl Machine<'_, '_> {
                 Kind::Char | Kind::Lig => {
                     let f = &fonts.list[n.font as usize];
                     let c = n.a as u8;
-                    w[0] = u8::try_from(n.a).ok().and_then(|c| f.dims(c)).map_or(0, |d| d[0]);
+                    w[0] = u8::try_from(n.a).ok().and_then(|c| f.dims(c, &fonts.info)).map_or(0, |d| d[0]);
                     if expand.is_some() && fonts.micro.expand(n.font).step != 0 {
                         w[6] = self.char_flex(n.font, c, false);
                         w[7] = self.char_flex(n.font, c, true);

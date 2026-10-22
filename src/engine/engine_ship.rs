@@ -86,6 +86,8 @@ fn vet_glue(g: f64) -> f64 {
 struct Walk<'a> {
     nodes: &'a Nodes,
     fonts: &'a [Font],
+    /// `Fonts::info`: the fonts' scaled values.
+    info: &'a [i32],
     micro: &'a Micro,
     vf: &'a VfTable,
     text: TextState,
@@ -612,7 +614,7 @@ impl PacketOut for Walk<'_> {
     /// way the character's own width is the advance.
     fn packet_char(&mut self, f: u16, c: u8, h: i32, v: i32, depth: u8) -> i32 {
         let font = &self.fonts[f as usize];
-        let Some([w, _, _, _]) = font.dims(c) else { return 0 };
+        let Some([w, _, _, _]) = font.dims(c, self.info) else { return 0 };
         let vf = self.vf;
         match vf.get(f) {
             Some(packets) => packets.typeset(font.size, c, h, v, depth, self),
@@ -718,7 +720,7 @@ impl Machine<'_, '_> {
             me.show(me.e.toks.get(super::engine_token::Span { start: a as u32, end: b as u32 }), &mut s);
             s
         };
-        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new(), positions: Vec::new(), matrices: Vec::new(), saves: Vec::new(), last_rect: [0; 4] };
+        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, info: &self.e.fonts.info, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new(), positions: Vec::new(), matrices: Vec::new(), saves: Vec::new(), last_rect: [0; 4] };
         // `pdf_out_colorstack_startpage`, at the page's origin.
         if page.is_some() {
             for (mode, s) in walk.colors.page_start() {
@@ -788,9 +790,9 @@ impl Machine<'_, '_> {
                 // Only a font with its own PDF object is written; the others name it.
                 let own = self.page.font_base.get(i) == Some(&(i as u16));
                 own.then(|| crate::backend::backend_ship::DocFont {
-                    name: f.name.clone(),
+                    name: f.name.to_string(),
                     size: f.size as i64,
-                    widths: std::array::from_fn(|c| f.dims(c as u8).map_or(0, |d| d[0])),
+                    widths: std::array::from_fn(|c| f.dims(c as u8, &self.e.fonts.info).map_or(0, |d| d[0])),
                     pk: self.page.font_pk.get(i).filter(|&&s| s != 0).map(|&scale| crate::backend::backend_ship::PkFont {
                         dpi: crate::backend::backend_pk::pk_dpi(f.size as i64, f.design as i64, self.pk_resolution()),
                         scale,

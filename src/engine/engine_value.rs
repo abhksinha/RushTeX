@@ -171,7 +171,7 @@ impl Machine<'_, '_> {
             Meaning::Prim(Prim::MuExpr) => return Some(self.scan_expr(Level::Mu)),
             Meaning::Prim(Prim::ETeXVersion) => return Some(Value::Int(2)),
             Meaning::Prim(Prim::FontDimen) => {
-                let v = self.find_font_dimen().map_or(0, |(f, k)| self.e.fonts.list[f as usize].params[k]);
+                let v = self.find_font_dimen().map_or(0, |(f, k)| self.e.fonts.params(f)[k]);
                 return Some(Value::Dimen(v));
             }
             Meaning::Prim(p @ (Prim::HyphenChar | Prim::SkewChar)) => {
@@ -459,7 +459,7 @@ impl Machine<'_, '_> {
         for (kw, param) in [("em", 5), ("ex", 4)] {
             if self.scan_keyword(kw) {
                 let font = self.cur_font() as usize;
-                let unit = self.e.fonts.list.get(font).and_then(|x| x.params.get(param)).copied().unwrap_or(0) as i64;
+                let unit = self.e.fonts.list.get(font).and_then(|x| x.params(&self.e.fonts.info).get(param)).copied().unwrap_or(0) as i64;
                 self.skip_one_space();
                 return (sign(times_unit(int_part, f as i32, unit)), 0);
             }

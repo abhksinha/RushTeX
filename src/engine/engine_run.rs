@@ -1173,7 +1173,7 @@ mod tests {
         // `RT_FONTS=1`: the TFM name of every font the run loaded, one `FONT` line each
         // (font popularity, the font table's order and tiers).
         if std::env::var("RT_FONTS").is_ok() {
-            let mut names: Vec<&str> = m.e.fonts.list.iter().skip(1).map(|f| f.name.as_str()).collect();
+            let mut names: Vec<&str> = m.e.fonts.list.iter().skip(1).map(|f| &*f.name).collect();
             names.sort_unstable();
             names.dedup();
             names.iter().for_each(|n| eprintln!("FONT {n}"));

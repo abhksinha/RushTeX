@@ -245,14 +245,9 @@ impl Machine<'_, '_> {
         let base = &self.e.fonts.list[f as usize];
         let name = format!("{}{}{e}", base.name, if e > 0 { "+" } else { "" });
         let size = base.size;
-        let found = self.e.fonts.list.iter().position(|g| g.name == name && g.size == size);
-        let k = match found {
-            Some(k) => k as u16,
-            None => {
-                let copy = Font { name, size, design: base.design, params: base.params.clone(), hyphen_char: base.hyphen_char, skew_char: base.skew_char, metrics: base.metrics.clone(), ident: base.ident, expand: e as i16 };
-                self.e.fonts.list.push(copy);
-                (self.e.fonts.list.len() - 1) as u16
-            }
+        let k = match self.e.fonts.find(&name, size) {
+            Some(k) => k,
+            None => self.e.fonts.push_expanded(f, std::borrow::Cow::Owned(name), e as i16),
         };
         // `copy_expand_params`.
         let (step, auto) = {
@@ -357,7 +352,7 @@ pub(super) fn char_pw(fonts: &Fonts, n: Option<Node>, right: bool) -> i32 {
     if c == 0 {
         return 0;
     }
-    let quad = fonts.list[n.font as usize].params.get(5).copied().unwrap_or(0);
+    let quad = fonts.params(n.font).get(5).copied().unwrap_or(0);
     round_xn_over_d(quad, c, 1000)
 }
 
@@ -416,15 +411,14 @@ impl Machine<'_, '_> {
 
 /// pdftex.web `get_kern`: the kern font `f`'s program puts between `lc` and `rc` (0 for
 /// none), scaled to the font, expanded copies included.
-fn get_kern(font: &Font, lc: u8, rc: u8) -> i32 {
+fn get_kern(font: &Font, info: &[i32], lc: u8, rc: u8) -> i32 {
     use super::engine_font::{restart, STOP_FLAG};
     let Some(mut k) = font.metrics.lig_kern_start(lc) else { return 0 };
-    let (prog, kerns) = font.metrics.lig_kern();
+    let (prog, _) = font.metrics.lig_kern();
     while let Some(j) = prog.try_get(k) {
         let (skip, next, op) = ((j >> 24) as u8, (j >> 16 & 0xFF) as u8, (j >> 8 & 0xFF) as u8);
         if next == rc && skip <= STOP_FLAG && op >= STOP_FLAG {
-            let w = kerns.try_get(restart(j) - 256 * STOP_FLAG as usize).map_or(0, |k| k as i32);
-            return font.expanded(crate::backend::scaled::Scaler::new(font.size).scale(w));
+            return font.expanded(font.kern(restart(j) - 256 * STOP_FLAG as usize, info));
         }
         if skip >= STOP_FLAG {
             return 0;
@@ -442,7 +436,7 @@ fn shown_char(n: &Node) -> Option<(u16, u8)> {
 
 impl Machine<'_, '_> {
     fn char_width(&self, f: u16, c: u8) -> i32 {
-        self.e.fonts.list[f as usize].dims(c).map_or(0, |d| d[0])
+        self.e.fonts.dims(f, c).map_or(0, |d| d[0])
     }
 
     /// pdftex.web `char_stretch` (`shrink` false) and `char_shrink`: what the character
@@ -471,7 +465,7 @@ impl Machine<'_, '_> {
         if fl != fr || k == 0 {
             return 0;
         }
-        let d = get_kern(&self.e.fonts.list[k as usize], cl, cr);
+        let d = get_kern(&self.e.fonts.list[k as usize], &self.e.fonts.info, cl, cr);
         round_xn_over_d(if shrink { kern - d } else { d - kern }, self.e.fonts.micro.ef(fl, cl), 1000)
     }
 

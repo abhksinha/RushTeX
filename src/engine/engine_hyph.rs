@@ -669,9 +669,8 @@ impl Machine<'_, '_> {
         // The font is read while ligature nodes are made: two disjoint parts of the engine.
         let (fonts, nodes) = (&self.e.fonts, &mut self.e.nodes);
         let font = &fonts.list[hf as usize];
-        let (prog, kerns) = font.metrics.lig_kern();
+        let (prog, _) = font.metrics.lig_kern();
         let bchar_label = font.metrics.boundary().1;
-        let scaler = crate::backend::scaled::Scaler::new(font.size);
         let ch = |c: u16| Node { kind: Kind::Char, sub: 0, font: hf, a: c as i32, b: 0 };
         w.hyphen_passed = 0;
         w.hold.clear();
@@ -816,7 +815,7 @@ impl Machine<'_, '_> {
                             }
                             continue 'cont;
                         }
-                        kern = scaler.scale(kerns.try_get(restart(q) - 256 * STOP_FLAG as usize).map_or(0, |k| k as i32));
+                        kern = font.kern(restart(q) - 256 * STOP_FLAG as usize, &fonts.info);
                         break 'done;
                     }
                     if skip >= STOP_FLAG {

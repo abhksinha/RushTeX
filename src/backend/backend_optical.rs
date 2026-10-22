@@ -229,31 +229,6 @@ static MASTERS: [MasterRecord; OpticalMaster::COUNT] = [
     /* Tcrm2488 */ MasterRecord { widths: &ts1::TCRM2488_WIDTHS.0, glue: [304.235, 152.367, 101.578, 430.350, 101.578], fix: &ts1::TCRM2488_FIX, ligkern: None, program: &ts1::TCRM2488_PROGRAM, tounicode: Some(&ts1::TS1_TOUNICODE) },
 ];
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn selects_latex_design_sizes() {
-        let cm = FontFamily::ComputerModern;
-        assert_eq!(OpticalMaster::select(cm, Face::Roman, 10.0), None);
-        assert_eq!(OpticalMaster::select(cm, Face::Roman, 10.95), None);
-        assert_eq!(OpticalMaster::select(cm, Face::Roman, 12.0), Some(OpticalMaster::Cmr12));
-        assert_eq!(OpticalMaster::select(cm, Face::Roman, 14.4), Some(OpticalMaster::Cmr12));
-        assert_eq!(OpticalMaster::select(cm, Face::Roman, 17.28), Some(OpticalMaster::Cmr17));
-        assert_eq!(OpticalMaster::select(cm, Face::Bold, 14.4), Some(OpticalMaster::Cmbx12));
-        assert_eq!(OpticalMaster::select(cm, Face::Roman, 9.0), Some(OpticalMaster::Cmr9));
-        assert_eq!(OpticalMaster::select(cm, Face::Italic, 6.0), Some(OpticalMaster::Cmti7));
-        assert_eq!(OpticalMaster::select(cm, Face::SmallCaps, 14.4), None);
-        assert_eq!(OpticalMaster::select(FontFamily::Times, Face::Roman, 14.4), None);
-        for v in 0..OpticalMaster::COUNT as u8 {
-            assert_eq!(OpticalMaster::from_u8(v) as u8, v);
-        }
-        // cmr12 is narrower than cmr10 relative to its size.
-        assert!(OpticalMaster::Cmr12.widths()[b'a' as usize] < crate::backend::fonts::CMR10_WIDTHS.0[b'a' as usize]);
-    }
-}
-
 /// The embedded program of the font file `name` (`cmr10`, `tcrm1095`), from the base faces
 /// and the design-size masters; `None` for a font that is not embedded.
 pub fn program_by_name(name: &str) -> Option<&'static CmFontProgram> {
@@ -286,4 +261,29 @@ pub fn tounicode_by_name(name: &str) -> Option<&'static [u16; 128]> {
         "cmr" | "cmbx" | "cmti" | "cmsl" | "cmss" | "cmssbx" | "cmcsc" | "cmbxti" | "cmssi" => &CMR_TO_UNICODE,
         _ => return (0..OpticalMaster::COUNT as u8).map(OpticalMaster::from_u8).find(|m| m.program().name.eq_ignore_ascii_case(name)).and_then(|m| m.own_tounicode()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_latex_design_sizes() {
+        let cm = FontFamily::ComputerModern;
+        assert_eq!(OpticalMaster::select(cm, Face::Roman, 10.0), None);
+        assert_eq!(OpticalMaster::select(cm, Face::Roman, 10.95), None);
+        assert_eq!(OpticalMaster::select(cm, Face::Roman, 12.0), Some(OpticalMaster::Cmr12));
+        assert_eq!(OpticalMaster::select(cm, Face::Roman, 14.4), Some(OpticalMaster::Cmr12));
+        assert_eq!(OpticalMaster::select(cm, Face::Roman, 17.28), Some(OpticalMaster::Cmr17));
+        assert_eq!(OpticalMaster::select(cm, Face::Bold, 14.4), Some(OpticalMaster::Cmbx12));
+        assert_eq!(OpticalMaster::select(cm, Face::Roman, 9.0), Some(OpticalMaster::Cmr9));
+        assert_eq!(OpticalMaster::select(cm, Face::Italic, 6.0), Some(OpticalMaster::Cmti7));
+        assert_eq!(OpticalMaster::select(cm, Face::SmallCaps, 14.4), None);
+        assert_eq!(OpticalMaster::select(FontFamily::Times, Face::Roman, 14.4), None);
+        for v in 0..OpticalMaster::COUNT as u8 {
+            assert_eq!(OpticalMaster::from_u8(v) as u8, v);
+        }
+        // cmr12 is narrower than cmr10 relative to its size.
+        assert!(OpticalMaster::Cmr12.widths()[b'a' as usize] < crate::backend::fonts::CMR10_WIDTHS.0[b'a' as usize]);
+    }
 }

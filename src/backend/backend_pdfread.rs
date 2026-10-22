@@ -610,42 +610,6 @@ pub fn decode(d: &Dict, raw: &[u8]) -> Option<Vec<u8>> {
     super::backend_png::unfilter(&out, &mut at, rows, stride, bpp)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn objects_parse() {
-        let mut lx = Lexer { s: b"<< /A 1 0 R /B [1 2.5 (a\\)b) <414> /N#20x] /C true >>", i: 0 };
-        let Some(Obj::Dict(d)) = lx.obj() else { panic!() };
-        assert_eq!(get(&d, b"A"), Some(&Obj::Ref(1, 0)));
-        assert_eq!(get(&d, b"B"), Some(&Obj::Array(vec![Obj::Int(1), Obj::Real(2.5), Obj::Str(b"a)b".to_vec()), Obj::Str(b"A@".to_vec()), Obj::Name(b"N x".to_vec())])));
-        assert_eq!(get(&d, b"C"), Some(&Obj::Bool(true)));
-    }
-
-    #[test]
-    fn classic_xref_reads_a_page() {
-        let mut pdf = b"%PDF-1.4\n".to_vec();
-        let mut offs = Vec::new();
-        for body in ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 50] >>", "<< /Type /Page /Parent 2 0 R /Rotate 90 >>"] {
-            offs.push(pdf.len());
-            pdf.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offs.len()).as_bytes());
-        }
-        let x = pdf.len();
-        pdf.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
-        for o in &offs {
-            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-        }
-        pdf.extend_from_slice(format!("trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n").as_bytes());
-        let f = PdfFile::open(pdf).unwrap();
-        assert_eq!(f.page_count(), 1);
-        let (p, n) = f.page(1).unwrap();
-        assert_eq!(n, 3);
-        assert_eq!(p.boxes[1], [0.0, 0.0, 100.0, 50.0]);
-        assert_eq!(p.rotate, 90);
-    }
-}
-
 /// pdftoepdf.cc `convertNumToPDF`: a real with at most six decimals, trailing zeros and a
 /// bare dot dropped, below 0.5e-6 in magnitude `0`.
 fn print_real(out: &mut Vec<u8>, mut n: f64) {
@@ -929,4 +893,40 @@ pub fn write_form(f: &PdfFile, spec: &FormSpec, obj: i32, objs: &mut Vec<(i32, V
     objs.push((obj, out));
     c.write_refs(objs, next);
     Some(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn objects_parse() {
+        let mut lx = Lexer { s: b"<< /A 1 0 R /B [1 2.5 (a\\)b) <414> /N#20x] /C true >>", i: 0 };
+        let Some(Obj::Dict(d)) = lx.obj() else { panic!() };
+        assert_eq!(get(&d, b"A"), Some(&Obj::Ref(1, 0)));
+        assert_eq!(get(&d, b"B"), Some(&Obj::Array(vec![Obj::Int(1), Obj::Real(2.5), Obj::Str(b"a)b".to_vec()), Obj::Str(b"A@".to_vec()), Obj::Name(b"N x".to_vec())])));
+        assert_eq!(get(&d, b"C"), Some(&Obj::Bool(true)));
+    }
+
+    #[test]
+    fn classic_xref_reads_a_page() {
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offs = Vec::new();
+        for body in ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 50] >>", "<< /Type /Page /Parent 2 0 R /Rotate 90 >>"] {
+            offs.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offs.len()).as_bytes());
+        }
+        let x = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+        for o in &offs {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n").as_bytes());
+        let f = PdfFile::open(pdf).unwrap();
+        assert_eq!(f.page_count(), 1);
+        let (p, n) = f.page(1).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(p.boxes[1], [0.0, 0.0, 100.0, 50.0]);
+        assert_eq!(p.rotate, 90);
+    }
 }

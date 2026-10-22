@@ -163,7 +163,7 @@ impl Machine<'_, '_> {
             Prim::ItalCorr => {
                 if let Some(t) = self.tail().filter(|t| matches!(t.kind, Kind::Char | Kind::Lig)) {
                     let f = &self.e.fonts.list[t.font as usize];
-                    let ic = u8::try_from(t.a).ok().and_then(|c| f.dims(c)).map_or(0, |d| d[3]);
+                    let ic = u8::try_from(t.a).ok().and_then(|c| f.dims(c, &self.e.fonts.info)).map_or(0, |d| d[3]);
                     self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, ic) });
                 }
             }
@@ -658,12 +658,12 @@ impl Machine<'_, '_> {
             let mut g = if space != Glue::default() {
                 space
             } else {
-                let p = &self.e.fonts.list[self.cur_font() as usize].params;
+                let p = self.e.fonts.params(self.cur_font());
                 Glue { width: p[1], stretch: p[2], shrink: p[3], stretch_order: 0, shrink_order: 0 }
             };
             if sf != 1000 {
                 if sf >= 2000 {
-                    g.width += self.e.fonts.list[self.cur_font() as usize].params[6];
+                    g.width += self.e.fonts.params(self.cur_font())[6];
                 }
                 g.stretch = xn_over_d(g.stretch, sf, 1000);
                 g.shrink = xn_over_d(g.shrink, 1000, sf);

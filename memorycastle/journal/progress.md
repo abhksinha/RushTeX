@@ -59,9 +59,10 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - [ ] Z2. Build buffers reserved once: the per-line adjustment list, per-word hyphenation scratch, per-paragraph `par`/`breaks`/`carry`/active lists. Allocator share measured before and after.
 - [ ] Z3. Token model M: macro texts and token lists in size-class blocks with one owner, or a count where TeX shares (§200 `token_ref_count`: `\let`, `\toks` copies, a body being read §390). Redefinition frees (§275 `eq_destroy`); `collect_tokens` deleted. This is the product's expander for user macros, so it stays.
 - [ ] Z4. Capacity reserved from the source size; RSS flat per page on listings.
+- [ ] H1. Hardware-counter tool `scripts/hw_profile.py`: `perf stat` on x86 Linux (CI and a floor-class machine), `xctrace` on macOS. Baseline for all 85 documents: instructions per glyph, IPC, L1 and last-level misses per page, branch mispredicts. Budgets and floor in `native-architecture.md` §7a.
 - [ ] B1–B2. Copies and clones removed from the expander and the core (`toks.get(..).to_vec()`, `nodes.get(..).to_vec()`, the math `Vec<Node>` returns).
 - [ ] B3. Layout table beside every core record (size, fields, SoA or AoS and why).
-- [ ] B4. Hot-loop census of the core and the expander over 85 documents (`profile_doc.py`): every function above 2% with its cost per call, each one removed or justified.
+- [ ] B4. Hot-loop census of the core and the expander over 85 documents (`profile_doc.py` plus H1): every function above 2% with its cost per call and its working set against the §7a floor, each one removed or justified. Known: mid-vector inserts (protrusion, math lists), per-call math vectors, name hashing per lexed name.
 
 ### Phase 2. Tables and demand loading (shared by the oracle now and native later)
 - [ ] D1. Table library, std only, with tests and size reports: a static perfect hash with an 8-bit fingerprint per slot (name to ID and membership in one probe), SoA tables by ID, CSR lists (offsets plus IDs), bitsets, Roaring-style compressed bitmaps.

@@ -142,6 +142,47 @@ The native path never traces, never compacts and never moves live data. Every by
 - **Batch at boundaries.** One PDF text operator per run of glyphs; one hyphenation call per word; one call to the page builder per paragraph.
 - **Profile, then prove.** Every hot loop that survives is listed in its module's comments with its measured cost.
 
+### 7a. Hardware model and budgets (user, 2026-10-22: design for the conservative floor, not the dev machine)
+Design budgets come from the weakest common machine, not from the Apple M5 the work is done on.
+
+| | Floor (design target: older Intel/AMD laptop, e.g. Skylake or Zen 2 class) | Apple M5 (dev) |
+|---|---|---|
+| L1 data per core | 32 KB | 128 KB |
+| L2 per core | 256 KB–512 KB | 16 MB shared |
+| L3 shared | 4–8 MB | system cache |
+| Cache line | 64 B | 128 B |
+| Memory page | 4 KB | 16 KB |
+| DRAM latency | about 80–120 ns | about 100 ns |
+| Instruction set | x86-64 baseline (SSE2 only guaranteed), ARMv8 NEON, wasm32 | |
+
+**Budgets:**
+- the working set of a per-character or per-node loop fits in 32 KB;
+- a paragraph's or page's working state fits in 256 KB;
+- the static tables a typical document touches fit in 4 MB;
+- every table's layout is decided for 64 B lines;
+- data written by different threads is kept 128 B apart, which covers Intel's adjacent-line prefetch and Apple's lines;
+- table ordering by use assumes 4 KB pages.
+
+**Portability rules:**
+- No `-C target-cpu=native` in releases.
+- `std::arch` intrinsics need `unsafe`, which the crate forbids, so wide work uses portable SWAR (integer bit tricks on `u64`/`u128`) and loops simple enough for the compiler to vectorise on baseline SSE2/NEON. `std::simd` is nightly and not used.
+- Generated blobs are little-endian by declaration (`from_le_bytes`), never by assumption.
+- On x86 with hyper-threading, two threads share a core's L1 and L2, so worker threads number at most the physical cores.
+
+**Order of thought for every feature:**
+1. remove the work (build time, demand, incremental);
+2. shrink the data (smallest types, hot/cold split);
+3. access it in order (contiguous spans, allocation order follows use order, SoA where one field is scanned);
+4. move nothing that can be borrowed;
+5. only then tune the inner loop:
+   - the common case as the straight path, `#[cold]` errors;
+   - no allocation, string hashing, formatting or `dyn` per item;
+   - slice iteration so bounds checks are hoisted;
+   - TeX's integer arithmetic kept exactly.
+- Output stays byte-identical whatever the machine or thread count. Parallel work (page stream compression, image decoding, font subsetting, the pre-scan) is written back in page order.
+
+**Measured, not guessed:** hardware counters per document (instructions, cycles, IPC, L1 and last-level misses, branch mispredicts): `perf stat` on x86 Linux (CI's runners and a floor-class machine), `xctrace` CPU Counters on macOS. Budgets per document are instructions per output glyph and cache misses per page, next to the speed ratio. Every surviving hot loop states its per-item work, its working set against the floor budgets, and its measured cost in its module comment.
+
 ### 8. Exactness method (the oracle)
 - Every native routine is developed against the oracle's box output:
   - `RT_BOXES` against the native node lists, diffed node by node by `scripts/parity/engine_boxdiff.py`;
@@ -184,7 +225,7 @@ The native path never traces, never compacts and never moves live data. Every by
 ### 12. Review checklist (every change)
 1. Does any work run at run time that could run at build time?
 2. Does any string, `Vec` or node list get copied where an ID or a range would do?
-3. Is there a loop that searches, rescans or allocates in a hot path?
+3. Is there a loop that searches, rescans or allocates in a hot path? Which cache lines does it touch per item, is the access sequential, and does its working set fit the floor budgets (§7a: 32 KB, 256 KB, 4 MB, 64 B lines)?
 4. Is each structure chosen by §5, and each SoA/AoS choice justified by the access pattern?
 5. Does memory stay bounded by the working set? Is every allocation owned by a region or pool with a known lifetime, with no tracing, compaction or moving of live data?
 6. Is the output still zero shift, and are the benchmark and RSS numbers equal or better?

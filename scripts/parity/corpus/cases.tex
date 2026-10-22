@@ -1,0 +1,214 @@
+\documentclass[DIV=9, pagesize=auto]{scrartcl}
+
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage{textcomp}
+\usepackage{amsmath}
+\usepackage{cases}
+\usepackage{microtype}
+\usepackage{shortvrb}
+\usepackage[colorlinks]{hyperref}
+\MakeShortVerb"
+\newcommand*\kp[1]{\kern#1pt}
+\newcommand*{\fancybreak}{%
+  \par \medbreak \vspace{0pt plus 1cm}\penalty 500 \vspace{0pt plus -1cm}%
+}
+\newcommand*{\mail}[1]{\href{mailto:#1}{\texttt{#1}}}
+\newcommand*{\pkg}[1]{\textsf{#1}}
+\newcommand*{\cmd}[1]{\texttt{\string#1}}
+\newcommand*{\env}[1]{\texttt{#1}}
+\newcommand*{\meta}[1]{\textlangle\textsl{#1}\textrangle}
+\newcommand*{\opt}[1]{\texttt{[#1]}}
+
+%\addtokomafont{title}{\rmfamily}
+
+\title{The \pkg{cases} package%
+  \textnormal{\thanks{~~This manual corresponds to \pkg{cases}~v3.2, dated 2020/03/29.}}}
+\author{Donald Arseneau\\\mail{asnd@triumf.ca}}
+\date{Mar 2020}
+
+
+\begin{document}
+
+\maketitle
+
+\begin{small}
+\noindent
+Copyright \textcopyright~1993, 1994, 1995, 2000, 2002, 2020 by Donald Arseneau, \mail{asnd@triumf.ca}.
+These macros may be freely transmitted, reproduced, or modified 
+provided that this notice is left intact.  Sub-equation numbering
+is based on \pkg{subeqn.sty} by Stephen Gildea; parts are based
+on \LaTeX's \env{eqnarray} by Leslie Lamport and the \LaTeX3 team;
+and some on amsmath.sty by the American Mathematical Society.
+\par
+\end{small}
+
+\section*{Description}
+
+The \pkg{cases} package provides a \LaTeX\ environment \env{numcases} to produce 
+multi-case equations with a separate equation number for each case.  There is
+also \env{subnumcases} which numbers each case with the overall equation
+number plus a letter [8a, 8b, etc.].   The syntax is
+%
+\begin{flushleft}
+"\begin{numcases}{"~\meta{left side}~"}"\\
+\quad  \meta{case 1\kp1} "&" \meta{explanation 1\kp1} "\\" \\
+\quad  \meta{case 2\kp2} "&" \meta{explanation 2\kp2} "\\" \\
+\quad  .~.~.\\
+\quad  \meta{case $n$} "&" \meta{explanation $n$} \\
+"\end{numcases}"
+\end{flushleft}
+%
+Each \meta{case} is a math formula, to be typeset in display-math mode, like
+in a regular numbered equation. Each \meta{explanation} is a piece of lr-mode
+text (which may contain math mode in "\("\,\dots"\)" or "$"\,\dots"$").  The explanations
+are optional.  Equation numbers are inserted automatically, just as for
+the \env{eqnarray} environment.  In particular, the \cmd{\nonumber} command suppresses
+an equation number and the \cmd{\label} command allows reference to a particular 
+case. In a \env{subnumcases} environment, a \cmd{\label} in the \meta{left side} of the 
+equation gives the overall equation number, without any letter. 
+
+To use this package, 
+include "\usepackage{cases}" after \cmd{\documentclass}, and also after 
+"\usepackage{amsmath}" if you are using that.
+
+\fancybreak
+
+\noindent \emph{Question:} Is there a \env{numcases*} environment for
+unnumbered cases?\\
+\emph{Answer:} That would have the natural name \env{cases}, and it is 
+provided by \AmS-\LaTeX\ (\pkg{amsmath} package), or by this package given 
+the \opt{cases} option. It can also be achieved by using an ordinary \LaTeX\ array 
+between `"\left\lbrace\ "' and `"\right."'.
+
+Speaking of \pkg{amsmath} and package options, there are differences between the 
+style used for this package and the cases done by \pkg{amsmath} (see below), but cases.sty
+has options to increase compatibility.  Here is the full list of options for 
+this package.
+\begin{description}
+\item[\opt{subnum}] Force all \env{numcases} environments to be treated as 
+    \env{subnumcases}.
+\item[\opt{amsstyle}] For compatibility with \pkg{amsmath}'s \env{cases}, make \env{numcases}
+    use cramped math style (\cmd{\textstyle}), and put explanations in the same math style.
+\item[\opt{casesstyle}] Change \pkg{amsmath}'s \env{cases} environment to work in the text/math style
+    of \env{numcases}.
+\item[\opt{cases}] Define a \env{cases} environment for use without \pkg{amsmath}. (This 
+    is actually the same as the \opt{casesstyle} option.)
+\item[\opt{fleqn}] Flush-left equation alignment, indented by \cmd{\mathindent}
+    or \cmd{\mathmargin}. (Usually inherited from the \cmd{\documentclass} options.)
+\item[\opt{leqno}] Left-side equation numbering (usually inherited from the \cmd{\documentclass}
+    options). This looks silly with numbered cases!
+\end{description}
+
+\section*{Examples}
+
+A simple example is:
+%
+\begin{verbatim}
+     \begin{numcases} {|x|=}
+       x, & for $x \geq 0$\\
+       -x, & for $x < 0$
+     \end{numcases}
+\end{verbatim}
+%
+Giving:
+%
+\begin{numcases} {|x|=}
+  x, & for $x \geq 0$\label{x}\\
+  -x, & for $x < 0$\label{-x}
+\end{numcases}
+
+\fancybreak
+\noindent
+Another example, employing sub-numbering, is calculating the square root 
+of a complex number $c+id$. First compute
+\begin{subnumcases} {\label{weqn} w\equiv}
+  0       & for $c = d = 0$\label{wzero}\\
+  \sqrt{|c|}\,\sqrt{\frac{1 + \sqrt{1+(d/c)^2}}{2}} & for $|c| \geq |d|$ \\
+  \sqrt{|d|}\,\sqrt{\frac{|c/d| + \sqrt{1+(c/d)^2}}{2}} & for $|c| < |d|$
+\end{subnumcases}
+Then, using $w$ from eq.~(\ref{weqn}), the square root is
+\begin{subnumcases}{\label{sqrteqn} \sqrt{c+id}=}
+  0\,,              \label{aaa}   & $w=0$ (case \ref{wzero})\\
+  w+i\frac{d}{2w}\,,   & $w \neq 0$, $c \geq 0$ \\
+  \frac{|d|}{2w} + iw\,, & $w \neq 0$, $c < 0$, $d \geq 0$ \\
+  \frac{|d|}{2w} - iw\,,\label{ddd} & $w \neq 0$, $c < 0$, $d < 0$ 
+\end{subnumcases}
+These equations, eq.~(\ref{weqn}) and (\ref{sqrteqn}), were produced by:
+\begin{small}
+\begin{verbatim}
+Another example, employing sub-numbering, is calculating the square root 
+of a complex number $c+id$. First compute
+\begin{subnumcases} {\label{weqn} w\equiv}
+  0       & for $c = d = 0$\label{wzero}\\
+  \sqrt{|c|}\,\sqrt{\frac{1 + \sqrt{1+(d/c)^2}}{2}} & for $|c| \geq |d|$ \\
+  \sqrt{|d|}\,\sqrt{\frac{|c/d| + \sqrt{1+(c/d)^2}}{2}} & for $|c| < |d|$
+\end{subnumcases}
+Then, using $w$ from eq.~(\ref{weqn}), the square root is
+\begin{subnumcases}{\label{sqrteqn} \sqrt{c+id}=}
+  0\,,                 & $w=0$ (case \ref{wzero})\\
+  w+i\frac{d}{2w}\,,   & $w \neq 0$, $c \geq 0$ \\
+  \frac{|d|}{2w} + iw\,, & $w \neq 0$, $c < 0$, $d \geq 0$ \\
+  \frac{|d|}{2w} - iw\,, & $w \neq 0$, $c < 0$, $d < 0$ 
+\end{subnumcases}
+\end{verbatim}
+\end{small}
+
+\section*{Compatibilibility with amsmath}
+
+When used in conjunction with amsmath.sty, the cases package will obey the the variant 
+commands \cmd{\tag}, \cmd{\notag}, and \cmd{\mathmargin}, however the formatting details
+differ between \pkg{amsmath}'s \env{cases} environment and \env{numcases}.
+For comparison, equation~(\ref{weqn}) formatted by \pkg{amsmath} and its \env{cases} environment
+may be  entered as
+\begin{flushleft}\small
+\begin{verbatim}
+\begin{equation}
+\label{wams} w \equiv
+\begin{cases}
+ 0    & \text{for}\ c = d = 0\\
+ \sqrt{|c|}\,\sqrt{\frac{1+\sqrt{1+(d/c)^2}}{2}} &\text{for}\ |c| \geq |d|\\
+ \sqrt{|d|}\,\sqrt{\frac{|c/d| + \sqrt{1+(c/d)^2}}{2}} &\text{for}\ |c|<|d|
+\end{cases}
+\end{equation}
+\end{verbatim}
+\end{flushleft}
+which produces
+\begin{equation}
+\label{wams} w\equiv
+\begin{cases}
+  0    & \text{for }c = d = 0\\
+  \sqrt{|c|}\,\sqrt{\frac{1+\sqrt{1+(d/c)^2}}{2}} & \text{for}\ |c| \geq |d| \\
+  \sqrt{|d|}\,\sqrt{\frac{|c/d| + \sqrt{1+(c/d)^2}}{2}} & \text{for}\ |c| < |d|
+\end{cases}
+\end{equation}
+To get this more compact layout with \env{numcases} you can insert "\textstyle" 
+at the beginning of each case, as needed, or use the \pkg{cases} 
+package option \opt{amsstyle}. 
+To have  the (unnumbered) \env{cases} environment give the more open layout of
+eq.~(\ref{weqn}) you can put "\displaystyle" at the beginning of each case, or use
+the option \opt{casesstyle} for the \pkg{cases} package. (Yes these go with the
+\pkg{cases} package, they are not options for \pkg{amsmath}.)
+
+Another slight difference is that the cases within \env{numcases} can be right-justified by
+inserting \cmd{\hfill} at the beginning of each, which might be desired in rare situations,
+like maybe the absolute value example numbered (\ref{x}) and (\ref{-x}) above.
+
+For full disclosure, even without any relevant package options, cases.sty will 
+slightly adjust the \env{cases} environment from \pkg{amsmath}, by adding a little
+space after the left brace.
+
+\section*{Sub-numbering}
+For control of the sub-equation-numbering style, see the
+\AmS-\LaTeX\ documentation for \env{subequations}, currently 
+in section 3.11.3. If you are not using amsmath, that documentation
+still mostly applies, except the name for regular equation numbers
+is then `mainequation' instead of `parentequation'. Also, the
+sub-numbering style can be controlled more easily by defining
+\cmd{\thesubequation}. An example for capitalized letters is
+\begin{verbatim}
+\renewcommand\thesubequation{\themainequation.\Alph{equation}} % 13.C
+\end{verbatim}
+(noting that the counter to reference is `equation' not `subequation').
+
+\end{document}

@@ -129,6 +129,35 @@ The native path never traces, never compacts and never moves live data. Every by
 - At least 20× pdflatex on every document, aiming for 50×, with zero shift. The oracle is 1.4–3× today; the gap is macro interpretation, which only native translation removes.
 - `bench_corpus.py` reports the ratio per document. A commit that lowers any document's ratio is a regression.
 
+### 6d. Computation and data-movement ledger (user, 2026-10-22)
+For each stage of the native pipeline: what work is required, what is eliminated, and how.
+
+| Stage | Required | Eliminated | How |
+|---|---|---|---|
+| Read source | read the bytes once | copies into `String`, re-reading | borrow slices of one buffer |
+| Pre-scan and block split | one pass giving block boundaries and command IDs per block | a separate pre-scan pass; an AST of the whole document | fused into the lexer's single pass |
+| Commands | dispatch by ID | expansion of LaTeX's internal macros, string compares, run-time option parsing | native code; options as build-time bitflags |
+| Fonts | metrics of the characters used | TFM parsing at run time, unused fonts, rescaling per use | static tables; scaled once per used (font, size), cached by ID |
+| Characters to nodes | ligature and kern program per pair | hashing per character | direct index into per-font tables |
+| Hyphenation | only when a paragraph's first pass fails (TeX's rule) | every word; unused languages; repeated words | cache by (language, `\lefthyphenmin`, `\righthyphenmin`, word), cleared when `\hyphenation` or patterns change |
+| Line breaking | Knuth–Plass over feasible breaks | re-accumulating widths per candidate; a second pass after a successful first | prefix sums; TeX's pass order |
+| Math | Appendix G conversion | node vectors copied between steps | conversion in place into the build buffer |
+| Page building | once per paragraph's lines | rebuilding unchanged pages | incremental early cutoff (§9) |
+| References | resolve each `\ref`, `\pageref`, `\cite` | pdflatex's 2–3 whole-document runs | one run with references in memory; only pages whose resolved values changed are laid out again |
+| PDF output | operators for glyphs and rules; compression | re-embedding fonts per page, generic number formatting, holding all pages, recompressing unchanged objects | fonts subset once at the end, a custom integer and fixed-point formatter, pages streamed, compression on a worker thread in page order |
+
+| Data | Representation | Moves |
+|---|---|---|
+| Source | one buffer, borrowed slices | read once, never copied |
+| Commands and tokens | `u16`/`u32` IDs | no strings after lexing |
+| Nodes | written once into the arena | moved by span index, freed at shipout; copied only by `\copy` (§204) |
+| Paragraph working data | SoA arrays plus prefix sums in a reused buffer | built once per paragraph |
+| Font metrics | static tables through IDs | never copied |
+| Page to PDF | streamed into a reused buffer | written once, in page order |
+| Static tables | the binary's read-only data | the OS pages in only what is touched |
+
+**Budgets per page, measured by H1:** bytes allocated, bytes copied, instructions per glyph and cache misses. A change that raises one must justify it in its note.
+
 ### 7. Hot loops: minimal or none
 - **Eliminate before optimising** (§1). Every per-character, per-node or per-line loop must justify existing.
 - Prefer:

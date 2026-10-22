@@ -229,7 +229,9 @@ impl Machine<'_, '_> {
                     _ => Kind::Penalty,
                 };
                 if self.tail().is_some_and(|t| t.kind == kind && !t.is_margin_kern()) {
-                    self.cur.pop();
+                    if let Some(n) = self.cur.pop() {
+                        self.e.nodes.flush_node(n);
+                    }
                 }
             }
             Prim::Char => {
@@ -422,15 +424,10 @@ impl Machine<'_, '_> {
         self.box_end(f.ctx, Some(idx));
     }
 
-    /// Box `b` with shift `s`: the same record if it already has it, else a copy (boxes are
-    /// never changed once made, since `\copy` shares them).
+    /// Box `b` with shift `s` (§1076): the box itself changes, since it has one owner.
     fn with_shift(&mut self, b: u32, s: i32) -> u32 {
-        let r = self.e.nodes.boxes[b as usize];
-        if r.shift == s {
-            b
-        } else {
-            self.e.nodes.add_box(BoxRec { shift: s, ..r })
-        }
+        self.e.nodes.boxes[b as usize].shift = s;
+        b
     }
 
     /// §1075 `box_end`.
@@ -519,15 +516,14 @@ impl Machine<'_, '_> {
         let n = self.scan_box_num();
         self.scan_optional_equals();
         let v = self.scan_dimen(false).0;
+        // §1247: the box itself changes (it has one owner, model M).
         if let Some(b) = self.e.eqtb.box_reg(n) {
-            let mut r = self.e.nodes.boxes[b as usize];
+            let r = &mut self.e.nodes.boxes[b as usize];
             match p {
                 Prim::Wd => r.width = v,
                 Prim::Ht => r.height = v,
                 _ => r.depth = v,
             }
-            let nb = self.e.nodes.add_box(r);
-            self.e.eqtb.replace_box(n, Some(nb));
         }
     }
 
@@ -558,6 +554,8 @@ impl Machine<'_, '_> {
             // §1110: the list moves into the current one.
             self.cur.extend_from_slice(self.e.nodes.get(r.list));
             self.e.eqtb.replace_box(n, None);
+            self.e.nodes.free_block(r.list);
+            self.e.nodes.free_box(b);
         } else {
             // §1110 `copy_node_list`.
             let mut cur = std::mem::take(&mut self.cur);

@@ -1,6 +1,6 @@
 # Zero-GC core: TeX ownership on size-class pools (model M)
 Author: abhi+claude | Date: 2026-10-22
-Files: `src/engine/engine_node.rs`, `src/engine/engine_chars.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_image.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_xform.rs`, `src/engine/engine_box.rs`, `src/engine/engine_page.rs`, `src/engine/engine_eqtb.rs`, `src/engine/engine_gc.rs`, `memorycastle/journal/native-architecture.md`, `memorycastle/journal/progress.md`
+Files: `src/engine/engine_node.rs`, `src/engine/engine_chars.rs`, `src/engine/engine_hyph.rs`, `src/engine/engine_image.rs`, `src/engine/engine_microtype.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_xform.rs`, `src/engine/engine_box.rs`, `src/engine/engine_page.rs`, `src/engine/engine_eqtb.rs`, `src/engine/engine_gc.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_run.rs`, `src/engine/engine_job.rs`, `Cargo.toml`, `memorycastle/journal/native-architecture.md`, `memorycastle/journal/progress.md`
 Supersedes: 2026-10-21-engine-boxes-b1.md
 
 ## Context
@@ -30,3 +30,22 @@ Z1a, allocator half (2026-10-22):
 - Every direct `push` onto a side table now goes through these (`engine_chars`, `engine_hyph`, `engine_microtype`, `engine_page`, `engine_image`, `engine_xform`).
 - Until Z1d deletes it, the oracle's `collect_nodes` keeps whole blocks live (`Nodes::block`) and clears `Free`.
 - Nothing is freed yet. Gate: 85/85 zero shift, tests and suites pass. The ownership-check build is still to come.
+
+Z1c, first free points (2026-10-22):
+- Free points wired:
+  - `ship_out` flushes the shipped box;
+  - `set_box` and `unsave` release replaced boxes per §277/§279/§283 through `kill_box` and `take_dead_boxes`, and the machine flushes them between commands (`flush_dead_boxes`);
+  - `unpackage` frees the moved list's block and record;
+  - `alter_box_dimen` and `with_shift` change the record in place;
+  - `vsplit` frees the split box;
+  - `prune_page_top` flushes its discards;
+  - `post_line_break` flushes break glue, discards and a discretionary's replaced nodes, freeing its texts' blocks (`free_disc`);
+  - `line_break` flushes the final glue (§816);
+  - `\unskip` flushes;
+  - page discards (§1000) are flushed;
+  - `fire_up` frees consumed insertions (`free_insert`) and the class box;
+  - `box_error` cases are flushed.
+- `just_box` is no longer a root.
+- Leak audit (`RT_LEAKS`, `node_leaks`, and in the checker build `leak_sites` grouping by the `#[track_caller]` origin of each block, box and glue). On listings, before → after: boxes 6,581 → 201, glues 6,206 → 30, discretionaries 133 → 0, insertions 6 → 0.
+- Checker build: all 85 documents run with no double free and no use-after-free. Gate 85/85.
+- Still leaking (listings): math lists (`engine_noad.rs:532`), alignment unset rows and entries, `box_end`, ligature characters.

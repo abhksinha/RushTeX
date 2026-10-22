@@ -420,10 +420,10 @@ fn get_kern(font: &Font, lc: u8, rc: u8) -> i32 {
     use super::engine_font::{restart, STOP_FLAG};
     let Some(mut k) = font.metrics.lig_kern_start(lc) else { return 0 };
     let (prog, kerns) = font.metrics.lig_kern();
-    while let Some(&j) = prog.get(k) {
+    while let Some(j) = prog.try_get(k) {
         let (skip, next, op) = ((j >> 24) as u8, (j >> 16 & 0xFF) as u8, (j >> 8 & 0xFF) as u8);
         if next == rc && skip <= STOP_FLAG && op >= STOP_FLAG {
-            let w = kerns.get(restart(j) - 256 * STOP_FLAG as usize).copied().unwrap_or(0);
+            let w = kerns.try_get(restart(j) - 256 * STOP_FLAG as usize).map_or(0, |k| k as i32);
             return font.expanded(crate::backend::scaled::Scaler::new(font.size).scale(w));
         }
         if skip >= STOP_FLAG {

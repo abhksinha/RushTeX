@@ -88,14 +88,28 @@ impl U16s<'_> {
     }
 }
 
-/// A column of `u32` read in place.
-#[derive(Clone, Copy)]
+/// A column of `u32` read in place: little-endian quads, from a blob or an owned buffer of
+/// the same layout.
+#[derive(Clone, Copy, Default)]
 pub struct U32s<'a>(&'a [[u8; 4]]);
 
-impl U32s<'_> {
+impl<'a> U32s<'a> {
+    #[inline]
+    pub fn new(quads: &'a [[u8; 4]]) -> U32s<'a> {
+        U32s(quads)
+    }
+    /// The quads themselves.
+    #[inline]
+    pub fn quads(&self) -> &'a [[u8; 4]] {
+        self.0
+    }
     #[inline]
     pub fn get(&self, i: usize) -> u32 {
         u32::from_le_bytes(self.0[i])
+    }
+    #[inline]
+    pub fn try_get(&self, i: usize) -> Option<u32> {
+        self.0.get(i).map(|&q| u32::from_le_bytes(q))
     }
     #[inline]
     pub fn len(&self) -> usize {
@@ -105,9 +119,14 @@ impl U32s<'_> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-    pub fn iter(&self) -> impl Iterator<Item = u32> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = u32> + 'a {
         self.0.iter().map(|&b| u32::from_le_bytes(b))
     }
+}
+
+/// `v` as little-endian quads, the layout `U32s` reads.
+pub fn quads(v: impl IntoIterator<Item = u32>) -> Vec<[u8; 4]> {
+    v.into_iter().map(u32::to_le_bytes).collect()
 }
 
 /// Builds a blob: sections in the order added.

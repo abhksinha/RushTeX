@@ -746,7 +746,7 @@ impl Machine<'_, '_> {
                 let Some(mut k) = start else { break 'done };
                 let test_char = if cur_rh < NON_CHAR { cur_rh } else { cur_r };
                 loop {
-                    let q = prog[k];
+                    let q = prog.get(k);
                     let (skip, next, op, rem) = ((q >> 24) as u8, (q >> 16 & 0xFF) as u16, (q >> 8 & 0xFF) as u8, (q & 0xFF) as u16);
                     if next == test_char && skip <= STOP_FLAG {
                         if cur_rh < NON_CHAR {
@@ -816,7 +816,7 @@ impl Machine<'_, '_> {
                             }
                             continue 'cont;
                         }
-                        kern = scaler.scale(kerns.get(restart(q) - 256 * STOP_FLAG as usize).copied().unwrap_or(0));
+                        kern = scaler.scale(kerns.try_get(restart(q) - 256 * STOP_FLAG as usize).map_or(0, |k| k as i32));
                         break 'done;
                     }
                     if skip >= STOP_FLAG {

@@ -8,7 +8,8 @@
 use super::engine_names::param;
 use super::engine_prim::{Meaning, Prim};
 use super::engine_run::Machine;
-use crate::backend::backend_tfm::{by_name, Tfm};
+use crate::data::data_blob::{quads, U32s};
+use crate::data::data_tfm::{self, TfmParts, TfmView};
 use crate::backend::scaled::{xn_over_d, Scaler};
 
 /// One loaded font (§549's per-font arrays).
@@ -54,27 +55,35 @@ impl Font {
     }
 }
 
-/// Where a font's character metrics come from: an embedded TFM, or one read from a file.
+/// Where a font's character metrics come from. Both kinds hold the same layout: §539's
+/// word arrays as little-endian quads (`data_tfm::TfmView`), so the per-character paths
+/// below read one representation.
 #[derive(Clone)]
 pub enum Metrics {
     None,
-    Static(&'static Tfm),
+    /// A pinned font: its rows in the static table (`data_tfm::fonts`), resolved once at
+    /// `\font`, and its table ID (what the format stores).
+    Table(TfmView<'static>, u32),
+    /// A TFM outside the table, read from its file.
     File(std::rc::Rc<FileTfm>),
 }
 
-/// The parts of a TFM file (§539–§545) the engine reads: each character's `char_info` word
-/// and the dimension tables, all fix_words.
+/// The parts of a TFM file read at run time (§539–§546), in the table's quad layout.
 pub struct FileTfm {
     bc: u8,
-    info: Vec<u32>,
-    widths: Vec<i32>,
-    heights: Vec<i32>,
-    depths: Vec<i32>,
-    italics: Vec<i32>,
-    lig_kern: Vec<u32>,
-    kerns: Vec<i32>,
-    /// §546 extensible recipes: top, mid, bot, rep.
-    exten: Vec<u32>,
+    design: i32,
+    /// In `data_tfm::POOLS` order.
+    pools: [Vec<[u8; 4]>; 9],
+}
+
+impl FileTfm {
+    fn new(p: &TfmParts) -> FileTfm {
+        FileTfm { bc: p.bc, design: p.design, pools: std::array::from_fn(|k| quads(p.pools[k].iter().copied())) }
+    }
+
+    fn view(&self) -> TfmView<'_> {
+        TfmView::from_pools(self.bc, self.design, std::array::from_fn(|k| U32s::new(&self.pools[k])))
+    }
 }
 
 /// §545: `char_tag` of a character with a lig/kern program.
@@ -84,19 +93,43 @@ pub const STOP_FLAG: u8 = 128;
 /// §549 `non_char`: no boundary character.
 pub const NON_CHAR: u16 = 256;
 
+/// The `char_info` word of `c` (zero when absent).
+#[inline]
+fn info_of(v: &TfmView, c: u8) -> u32 {
+    c.checked_sub(v.bc).and_then(|i| v.info.try_get(i as usize)).unwrap_or(0)
+}
+
+/// §554: width, height, depth and italic correction of `c` at `size`, if `c` exists.
+#[inline]
+fn dims_of(v: &TfmView, c: u8, size: i32) -> Option<[i32; 4]> {
+    let info = info_of(v, c);
+    let w = (info >> 24) as usize;
+    if w == 0 {
+        return None;
+    }
+    let s = Scaler::new(size);
+    let at = |t: U32s, i: usize| s.scale(t.try_get(i).map_or(0, |x| x as i32));
+    Some([at(v.widths, w), at(v.heights, (info >> 20 & 15) as usize), at(v.depths, (info >> 16 & 15) as usize), at(v.italics, (info >> 10 & 63) as usize)])
+}
+
 impl Metrics {
     /// The `char_info` word of `c` (zero when absent).
+    #[inline]
     fn info(&self, c: u8) -> u32 {
         match self {
             Metrics::None => 0,
-            Metrics::Static(t) => {
-                if c < 128 {
-                    t.info[c as usize]
-                } else {
-                    0
-                }
-            }
-            Metrics::File(f) => c.checked_sub(f.bc).and_then(|i| f.info.get(i as usize)).copied().unwrap_or(0),
+            Metrics::Table(v, _) => info_of(v, c),
+            Metrics::File(f) => info_of(&f.view(), c),
+        }
+    }
+
+    /// Width, height, depth and italic correction of `c` at `size`, if `c` exists (§554).
+    #[inline]
+    pub fn dims(&self, c: u8, size: i32) -> Option<[i32; 4]> {
+        match self {
+            Metrics::None => None,
+            Metrics::Table(v, _) => dims_of(v, c, size),
+            Metrics::File(f) => dims_of(&f.view(), c, size),
         }
     }
 
@@ -106,12 +139,13 @@ impl Metrics {
         (info >> 8 & 3, info as u8)
     }
 
-    /// §546 extensible recipe `r`: top, mid, bot, rep.
+    /// §546 extensible recipe `r`: top, mid, bot, rep (the word's bytes, high first).
     pub fn exten(&self, r: u8) -> [u8; 4] {
+        let get = |v: &TfmView| v.exten.try_get(r as usize).map_or([0; 4], u32::to_be_bytes);
         match self {
             Metrics::None => [0; 4],
-            Metrics::Static(t) => t.exten.get(r as usize).copied().unwrap_or([0; 4]),
-            Metrics::File(f) => f.exten.get(r as usize).map_or([0; 4], |w| w.to_be_bytes()),
+            Metrics::Table(v, _) => get(v),
+            Metrics::File(f) => get(&f.view()),
         }
     }
 
@@ -120,12 +154,13 @@ impl Metrics {
         self.info(c) >> 24 != 0
     }
 
-    /// The lig/kern program and its kerns (unscaled fix_words).
-    pub fn lig_kern(&self) -> (&[u32], &[i32]) {
+    /// The lig/kern program and its kerns (unscaled fix_words, read `as i32`). One match
+    /// here, then the walkers index the two columns with no branch per word.
+    pub fn lig_kern(&self) -> (U32s<'_>, U32s<'_>) {
         match self {
-            Metrics::None => (&[], &[]),
-            Metrics::Static(t) => (t.lig_kern, t.kerns),
-            Metrics::File(f) => (&f.lig_kern, &f.kerns),
+            Metrics::None => Default::default(),
+            Metrics::Table(v, _) => (v.lig_kern, v.kerns),
+            Metrics::File(f) => (U32s::new(&f.pools[5]), U32s::new(&f.pools[6])),
         }
     }
 
@@ -138,7 +173,7 @@ impl Metrics {
         }
         let (prog, _) = self.lig_kern();
         let k = (info & 0xFF) as usize;
-        let j = *prog.get(k)?;
+        let j = prog.try_get(k)?;
         Some(if (j >> 24) as u8 > STOP_FLAG { restart(j) } else { k })
     }
 
@@ -146,12 +181,12 @@ impl Metrics {
     /// none) and where the left boundary's program begins.
     pub fn boundary(&self) -> (u16, Option<usize>) {
         let (prog, _) = self.lig_kern();
-        let bchar = match prog.first() {
-            Some(&j) if j >> 24 == 255 => (j >> 16 & 0xFF) as u16,
+        let bchar = match prog.try_get(0) {
+            Some(j) if j >> 24 == 255 => (j >> 16 & 0xFF) as u16,
             _ => NON_CHAR,
         };
-        let label = match prog.last() {
-            Some(&j) if j >> 24 == 255 => Some(restart(j)).filter(|&l| l < prog.len()),
+        let label = match prog.len().checked_sub(1).and_then(|l| prog.try_get(l)) {
+            Some(j) if j >> 24 == 255 => Some(restart(j)).filter(|&l| l < prog.len()),
             _ => None,
         };
         (bchar, label)
@@ -162,53 +197,6 @@ impl Metrics {
 #[inline]
 pub fn restart(j: u32) -> usize {
     (j >> 8 & 0xFF) as usize * 256 + (j & 0xFF) as usize
-}
-
-impl Metrics {
-    /// Width, height, depth and italic correction of `c` at `size`, if `c` exists (§554).
-    pub fn dims(&self, c: u8, size: i32) -> Option<[i32; 4]> {
-        match self {
-            Metrics::None => None,
-            Metrics::Static(tfm) => tfm.exists(c).then(|| tfm.dims_sp(c, &Scaler::new(size))),
-            Metrics::File(f) => {
-                let info = *f.info.get(c.checked_sub(f.bc)? as usize)?;
-                let w = (info >> 24) as usize;
-                if w == 0 {
-                    return None;
-                }
-                let s = Scaler::new(size);
-                let at = |t: &[i32], i: usize| s.scale(t.get(i).copied().unwrap_or(0));
-                Some([at(&f.widths, w), at(&f.heights, (info >> 20 & 15) as usize), at(&f.depths, (info >> 16 & 15) as usize), at(&f.italics, (info >> 10 & 63) as usize)])
-            }
-        }
-    }
-}
-
-/// §560 `read_font_info`: the design size, the parameters and the metrics of a TFM file;
-/// `None` when the file is not a well-formed TFM.
-pub fn parse_tfm(b: &[u8]) -> Option<(i32, Vec<i32>, FileTfm)> {
-    let half = |i: usize| -> Option<usize> { Some(u16::from_be_bytes([*b.get(2 * i)?, *b.get(2 * i + 1)?]) as usize) };
-    let word = |i: usize| -> Option<i32> { Some(i32::from_be_bytes(b.get(4 * i..4 * i + 4)?.try_into().ok()?)) };
-    let (lf, lh, bc, ec) = (half(0)?, half(1)?, half(2)?, half(3)?);
-    let (nw, nh, nd, ni, nl, nk, ne, np) = (half(4)?, half(5)?, half(6)?, half(7)?, half(8)?, half(9)?, half(10)?, half(11)?);
-    let chars = if ec + 1 >= bc { ec + 1 - bc } else { return None };
-    if b.len() < 4 * lf || lf != 6 + lh + chars + nw + nh + nd + ni + nl + nk + ne + np || lh < 2 || ec > 255 {
-        return None;
-    }
-    let design = word(7)? >> 4;
-    let mut at = 6 + lh;
-    let mut table = |n: usize| -> Option<Vec<i32>> {
-        let v = (at..at + n).map(word).collect::<Option<Vec<i32>>>();
-        at += n;
-        v
-    };
-    let info: Vec<u32> = table(chars)?.into_iter().map(|w| w as u32).collect();
-    let (widths, heights, depths, italics) = (table(nw)?, table(nh)?, table(nd)?, table(ni)?);
-    let lig_kern: Vec<u32> = table(nl)?.into_iter().map(|w| w as u32).collect();
-    let kerns = table(nk)?;
-    let exten: Vec<u32> = table(ne)?.into_iter().map(|w| w as u32).collect();
-    let params = table(np)?;
-    Some((design, params, FileTfm { bc: bc as u8, info, widths, heights, depths, italics, lig_kern, kerns, exten }))
 }
 
 impl Fonts {
@@ -226,17 +214,17 @@ impl Fonts {
             w.i32(f.skew_char);
             match &f.metrics {
                 Metrics::None => w.u8(0),
-                Metrics::Static(_) => w.u8(1),
+                Metrics::Table(_, id) => {
+                    w.u8(1);
+                    w.u32(*id);
+                }
                 Metrics::File(t) => {
                     w.u8(2);
                     w.u8(t.bc);
-                    w.all(&t.info);
-                    for v in [&t.widths, &t.heights, &t.depths, &t.italics] {
-                        w.all(v);
+                    w.i32(t.design);
+                    for pool in &t.pools {
+                        w.all(&pool.iter().map(|&q| u32::from_le_bytes(q)).collect::<Vec<u32>>());
                     }
-                    w.all(&t.lig_kern);
-                    w.all(&t.kerns);
-                    w.all(&t.exten);
                 }
             }
             w.u32(f.ident);
@@ -251,8 +239,18 @@ impl Fonts {
             let (name, size, design, params, hyphen_char, skew_char) = (r.str()?, r.i32()?, r.i32()?, r.all()?, r.i32()?, r.i32()?);
             let metrics = match r.u8()? {
                 0 => Metrics::None,
-                1 => Metrics::Static(by_name(&name)?),
-                2 => Metrics::File(std::rc::Rc::new(FileTfm { bc: r.u8()?, info: r.all()?, widths: r.all()?, heights: r.all()?, depths: r.all()?, italics: r.all()?, lig_kern: r.all()?, kerns: r.all()?, exten: r.all()? })),
+                1 => {
+                    let (table, id) = (data_tfm::fonts()?, r.u32()?);
+                    (id < table.len() as u32).then(|| Metrics::Table(table.view(id), id))?
+                }
+                2 => {
+                    let (bc, design) = (r.u8()?, r.i32()?);
+                    let mut pools: [Vec<[u8; 4]>; 9] = Default::default();
+                    for pool in &mut pools {
+                        *pool = quads(r.all::<u32>()?);
+                    }
+                    Metrics::File(std::rc::Rc::new(FileTfm { bc, design, pools }))
+                }
                 _ => return None,
             };
             let ident = r.u32()?;
@@ -321,11 +319,14 @@ impl Machine<'_, '_> {
                 }
             }
         }
-        // The embedded TFMs first, then the file `<name>.tfm` from the resolver.
-        let (design, raw, metrics) = match by_name(name) {
-            Some(tfm) => (tfm.design >> 4, tfm.params.to_vec(), Metrics::Static(tfm)),
-            None => match self.read_file.as_ref().and_then(|read| read(&format!("{name}.tfm"))).as_deref().and_then(parse_tfm) {
-                Some((design, params, file)) => (design, params, Metrics::File(std::rc::Rc::new(file))),
+        // The static table first (no file read, rows borrowed in place), then the file
+        // `<name>.tfm` from the resolver.
+        let key = name.strip_suffix(".tfm").unwrap_or(name);
+        let pinned = data_tfm::fonts().and_then(|t| t.lookup(key).map(|id| (t.view(id), id)));
+        let (design, raw, metrics) = match pinned {
+            Some((v, id)) => (v.design, v.params.iter().map(|p| p as i32).collect::<Vec<i32>>(), Metrics::Table(v, id)),
+            None => match self.read_file.as_ref().and_then(|read| read(&format!("{name}.tfm"))).as_deref().and_then(data_tfm::parse) {
+                Some(p) => (p.design, p.pools[8].iter().map(|&x| x as i32).collect(), Metrics::File(std::rc::Rc::new(FileTfm::new(&p)))),
                 None => {
                     // §561: `Font \x=name at 12.0pt not loadable: …`.
                     let mut msg = String::from("Font ");

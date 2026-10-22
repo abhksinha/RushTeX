@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The pinned TeX Live snapshot (progress.md A1): what RushTeX's zero shift is proven against.
 
-    scripts/texlive/pin.py files     # run the corpus with RT_FILES, list every TeX file read (files.tsv)
+    scripts/texlive/pin.py files     # every TeX file the corpus reads (RT_FILES) plus the font table's TFMs (fonts.txt)
     scripts/texlive/pin.py record    # manifest.tsv: TeX Live, pdfTeX, LaTeX kernel, package revisions
     scripts/texlive/pin.py check     # does this installation still match? (exit 1 on drift)
     scripts/texlive/pin.py pack OUT.tar.xz     # the files, their search paths and the references
@@ -54,6 +54,13 @@ def cmd_files():
     with concurrent.futures.ThreadPoolExecutor(max(1, (os.cpu_count() or 2) // 2)) as ex:
         for s in ex.map(smoke, jobs):
             found |= s
+    # The font table's TFMs (`fonts.txt`, `rushtex-gen fonts`): the engine reads them from the
+    # table, never from files, so the runs above do not list them.
+    names = [n for n in open(os.path.join(HERE, "fonts.txt")).read().split() if n]
+    tfms = subprocess.run(["kpsewhich", *[n + ".tfm" for n in names]], capture_output=True, text=True).stdout.split()
+    if len(tfms) != len(names):
+        sys.exit(f"fonts.txt: {len(names)} fonts, kpsewhich found {len(tfms)}")
+    found |= set(tfms)
     found = sorted(p for p in found if not p.startswith(CORPUS + os.sep) and os.path.isfile(p))
     with open(FILES, "w") as f:
         for p in found:

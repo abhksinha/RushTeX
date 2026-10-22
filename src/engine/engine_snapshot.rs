@@ -491,6 +491,9 @@ fn fingerprint() -> u64 {
         eat(name);
         eat(&format!("{}:{slot}", *region as u8));
     }
+    // The font table's contents: the format stores pinned fonts by table ID, so a
+    // regenerated table must refuse formats made with another one.
+    eat(&format!("{:016x}", crate::data::data_tfm::fonts().map_or(0, |t| t.content_id())));
     h
 }
 

@@ -201,12 +201,12 @@ impl Machine<'_, '_> {
                 Step::LigLoop1 => {
                     let font = &self.e.fonts.list[f as usize];
                     let (prog, kerns) = font.metrics.lig_kern();
-                    let j = prog[main_k];
+                    let j = prog.get(main_k);
                     let (skip, next, op, rem) = ((j >> 24) as u8, (j >> 16 & 0xFF) as u16, (j >> 8 & 0xFF) as u8, (j & 0xFF) as u8);
                     if next == cur_r && skip <= STOP_FLAG {
                         // §1040: a kern, or a ligature of one of the eight kinds.
                         if op >= STOP_FLAG {
-                            let k = kerns.get(restart(j) - 256 * STOP_FLAG as usize).copied().unwrap_or(0);
+                            let k = kerns.try_get(restart(j) - 256 * STOP_FLAG as usize).map_or(0, |k| k as i32);
                             let w = Scaler::new(font.size).scale(k);
                             wrapup!(rt_hit);
                             self.cur.push(Node::new(Kind::Kern, w));

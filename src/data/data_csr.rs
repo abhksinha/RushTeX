@@ -29,6 +29,11 @@ impl<'a> Csr<'a> {
         self.len() == 0
     }
 
+    /// List `i` as a column, resolved once by a caller that reads it many times.
+    pub fn row_slice(&self, i: u32) -> U32s<'a> {
+        U32s::new(&self.ids.quads()[self.offs.get(i as usize) as usize..self.offs.get(i as usize + 1) as usize])
+    }
+
     /// List `i`, in stored order.
     pub fn row(&self, i: u32) -> impl Iterator<Item = u32> + 'a {
         let ids = self.ids;

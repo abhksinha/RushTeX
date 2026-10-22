@@ -15,6 +15,10 @@ name = "rushtex"
 path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
+[features]
+# Model M's checker: freed node blocks are poisoned, and reading or freeing one twice panics.
+ownership-check = []
+
 [profile.release]
 lto = true
 codegen-units = 1

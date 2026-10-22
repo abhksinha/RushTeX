@@ -129,7 +129,25 @@ pub struct Nodes {
     /// The free blocks and slots of each table (model M: one owner per list or record,
     /// freed where TeX frees it; nothing is traced or moved).
     pub free: Free,
+    /// Reused scratch of `flush_list` (lists still to free) and `copy_list` (copies being
+    /// built, one segment per nesting level).
+    pub(super) work: Vec<(u32, u32)>,
+    pub(super) copy_buf: Vec<Node>,
 }
+
+/// Leaders glue (§149 subtypes 100–102) has its box in `b`; rule leaders (110–112) its rule.
+#[inline]
+pub fn leader(sub: u8) -> Option<bool> {
+    match sub {
+        100..=102 => Some(true),
+        110..=112 => Some(false),
+        _ => None,
+    }
+}
+
+/// What a freed block holds in the ownership-check build, so a read of it is caught.
+#[cfg(feature = "ownership-check")]
+const POISON: Node = Node { kind: Kind::Noad, sub: 0xEE, font: 0xDEAD, a: -0x0EAD, b: -0x0EAD };
 
 /// Size classes of list and ligature blocks: exact lengths 1–16, then powers of two up to
 /// 2³¹, so a freed block of a class fits any list of that class.
@@ -202,7 +220,10 @@ impl Nodes {
     /// The nodes of a finished list.
     #[inline]
     pub fn get(&self, list: (u32, u32)) -> &[Node] {
-        &self.list[list.0 as usize..list.1 as usize]
+        let l = &self.list[list.0 as usize..list.1 as usize];
+        #[cfg(feature = "ownership-check")]
+        assert!(!l.contains(&POISON), "node list {list:?} read after it was freed");
+        l
     }
 
     /// Stores a finished list in a block of its size class (a freed one when there is
@@ -283,6 +304,160 @@ impl Nodes {
             }
         }
         Node { kind: Kind::Lig, sub: (len.min(63) as u8) << 2 | hits, font: f, a: c as i32, b: start as i32 }
+    }
+
+    /// Frees list `l`'s block alone: its nodes have moved to a new owner (`\unvbox`).
+    pub fn free_block(&mut self, l: (u32, u32)) {
+        if l.0 >= l.1 {
+            return;
+        }
+        let (c, cap) = size_class((l.1 - l.0) as usize);
+        #[cfg(feature = "ownership-check")]
+        {
+            assert!(self.list[l.0 as usize] != POISON, "node list {l:?} freed twice");
+            self.list[l.0 as usize..l.0 as usize + cap].fill(POISON);
+        }
+        let _ = cap;
+        self.free.spans[c].push(l.0);
+    }
+
+    /// Frees box record `b` alone: its list has moved to a new owner.
+    pub fn free_box(&mut self, b: u32) {
+        self.free.boxes.push(b);
+    }
+
+    /// §202 `flush_node_list`: list `l` and everything its nodes own.
+    pub fn flush_list(&mut self, l: (u32, u32)) {
+        let mut work = std::mem::take(&mut self.work);
+        work.push(l);
+        while let Some(l) = work.pop() {
+            for i in l.0..l.1 {
+                let x = self.list[i as usize];
+                self.flush_owned(x, &mut work);
+            }
+            self.free_block(l);
+        }
+        self.work = work;
+    }
+
+    /// §202: frees what node `x` owns (its lists go on `work`); the node itself is a value.
+    pub fn flush_node(&mut self, x: Node) {
+        let mut work = std::mem::take(&mut self.work);
+        self.flush_owned(x, &mut work);
+        self.work = work;
+        while let Some(l) = self.work.pop() {
+            self.flush_list(l);
+        }
+    }
+
+    /// §202 for one box: its list and its record.
+    pub fn flush_box(&mut self, b: u32) {
+        let l = self.boxes[b as usize].list;
+        self.free_box(b);
+        self.flush_list(l);
+    }
+
+    fn flush_owned(&mut self, x: Node, work: &mut Vec<(u32, u32)>) {
+        match x.kind {
+            Kind::Box => {
+                work.push(self.boxes[x.a as usize].list);
+                self.free.boxes.push(x.a as u32);
+            }
+            Kind::Rule => self.free.rules.push(x.a as u32),
+            Kind::Glue => {
+                self.free.glues.push(x.a as u32);
+                match leader(x.sub) {
+                    Some(true) => {
+                        work.push(self.boxes[x.b as usize].list);
+                        self.free.boxes.push(x.b as u32);
+                    }
+                    Some(false) => self.free.rules.push(x.b as u32),
+                    None => {}
+                }
+            }
+            Kind::Lig if x.sub >> 2 > 0 => self.free.ligs[size_class((x.sub >> 2) as usize).0].push(x.b as u32),
+            Kind::Disc if x.a >= 0 => {
+                let [pre, post] = self.discs[x.a as usize];
+                work.push(pre);
+                work.push(post);
+                self.free.discs.push(x.a as u32);
+            }
+            Kind::Ins => {
+                work.push(self.inserts[x.a as usize].list);
+                self.free.inserts.push(x.a as u32);
+            }
+            Kind::Adjust => work.push((x.a as u32, x.b as u32)),
+            Kind::Whatsit if super::engine_whatsit::sized(x.sub) => self.free.rules.push(x.a as u32),
+            _ => {}
+        }
+    }
+
+    /// §204 `copy_node_list`: a new list with copies of everything `l`'s nodes own.
+    pub fn copy_list(&mut self, l: (u32, u32)) -> (u32, u32) {
+        let mut buf = std::mem::take(&mut self.copy_buf);
+        let mark = buf.len();
+        self.copy_into(l, &mut buf);
+        let c = self.store(&buf[mark..]);
+        buf.truncate(mark);
+        self.copy_buf = buf;
+        c
+    }
+
+    /// §204: copies of `l`'s nodes, appended to `out` (`\unvcopy` copies straight into
+    /// the list being built).
+    pub fn copy_into(&mut self, l: (u32, u32), out: &mut Vec<Node>) {
+        for i in l.0..l.1 {
+            let x = self.list[i as usize];
+            let c = self.copy_node(x);
+            out.push(c);
+        }
+    }
+
+    /// §204–§206 for one node: the node with copies of what it owns.
+    pub fn copy_node(&mut self, mut x: Node) -> Node {
+        match x.kind {
+            Kind::Box => x.a = self.copy_box(x.a as u32) as i32,
+            Kind::Rule => x.a = self.add_rule(self.rules[x.a as usize]) as i32,
+            Kind::Glue => {
+                let g = self.glues[x.a as usize];
+                x.a = slot(&mut self.glues, &mut self.free.glues, g) as i32;
+                match leader(x.sub) {
+                    Some(true) => x.b = self.copy_box(x.b as u32) as i32,
+                    Some(false) => x.b = self.add_rule(self.rules[x.b as usize]) as i32,
+                    None => {}
+                }
+            }
+            Kind::Lig if x.sub >> 2 > 0 => {
+                let at = self.lig_chars.len();
+                let from = x.b as usize..x.b as usize + (x.sub >> 2) as usize;
+                self.lig_chars.extend_from_within(from);
+                x.b = self.lig_node_at(x.font, x.a as u8, at, x.sub & 3).b;
+            }
+            Kind::Disc if x.a >= 0 => {
+                let [pre, post] = self.discs[x.a as usize];
+                let d = [self.copy_list(pre), self.copy_list(post)];
+                x.a = self.add_disc(d) as i32;
+            }
+            Kind::Ins => {
+                let mut r = self.inserts[x.a as usize];
+                r.list = self.copy_list(r.list);
+                x.a = self.add_insert(r) as i32;
+            }
+            Kind::Adjust => {
+                let (a, b) = self.copy_list((x.a as u32, x.b as u32));
+                (x.a, x.b) = (a as i32, b as i32);
+            }
+            Kind::Whatsit if super::engine_whatsit::sized(x.sub) => x.a = self.add_rule(self.rules[x.a as usize]) as i32,
+            _ => {}
+        }
+        x
+    }
+
+    /// A copy of box `b` with a copy of its list (§206).
+    pub fn copy_box(&mut self, b: u32) -> u32 {
+        let mut r = self.boxes[b as usize];
+        r.list = self.copy_list(r.list);
+        self.add_box(r)
     }
 
     /// The characters a ligature was made from.

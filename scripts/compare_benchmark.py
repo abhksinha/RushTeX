@@ -85,6 +85,7 @@ def main():
     rushtex_raw_out = "/tmp/rushtex_raw.pdf"
     rushtex_raw_cmd = [
         "./target/release/rushtex",
+        "--native",
         tex_path,
         "--no-compress",
         "-o",
@@ -98,6 +99,7 @@ def main():
     rushtex_comp_out = "/tmp/rushtex_comp.pdf"
     rushtex_comp_cmd = [
         "./target/release/rushtex",
+        "--native",
         tex_path,
         "-o",
         rushtex_comp_out

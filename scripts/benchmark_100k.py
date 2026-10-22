@@ -116,7 +116,7 @@ def main():
     print("2/3 Running rushtex raw baseline (uncompressed)...")
     rushtex_bin = "./target/release/rushtex"
     raw_pdf = "/tmp/rushtex_100k_raw.pdf"
-    raw_cmd = [rushtex_bin, str(tex_path), "--no-compress", "-o", raw_pdf]
+    raw_cmd = [rushtex_bin, "--native", str(tex_path), "--no-compress", "-o", raw_pdf]
     raw_stats = run_timed_command(raw_cmd, runs=args.runs)
     raw_pages = count_pages(raw_pdf)
     raw_size_bytes = Path(raw_pdf).stat().st_size if Path(raw_pdf).exists() else 0
@@ -124,7 +124,7 @@ def main():
     # 3. Benchmark rushtex (Compressed RFC 1951 Deflate)
     print("3/3 Running rushtex standard (compressed RFC 1951 DEFLATE)...")
     comp_pdf = "/tmp/rushtex_100k.pdf"
-    comp_cmd = [rushtex_bin, str(tex_path), "-o", comp_pdf]
+    comp_cmd = [rushtex_bin, "--native", str(tex_path), "-o", comp_pdf]
     comp_stats = run_timed_command(comp_cmd, runs=args.runs)
     comp_pages = count_pages(comp_pdf)
     comp_size_bytes = Path(comp_pdf).stat().st_size if Path(comp_pdf).exists() else 0

@@ -1003,129 +1003,61 @@ mod tests {
     #[ignore]
     fn format_smoke() {
         let Ok(path) = std::env::var("RT_FORMAT") else { return };
-        let cache: std::cell::RefCell<HashMap<String, Option<Vec<u8>>>> = Default::default();
+        // `RT_DIR` overrides the TeX tree, for probing a truncated copy of a file; then the
+        // document's own directory and kpathsea's search (`engine_host`).
+        let doc_dir = std::path::Path::new(&path).parent().filter(|d| !d.as_os_str().is_empty()).map(std::path::Path::to_path_buf);
+        let host = crate::engine::engine_host::Kpse::new("pdflatex", Some(std::path::Path::new("target/parity/kpse-paths")), doc_dir).expect("a TeX installation");
         let kpse_raw = |name: &str| -> Option<Vec<u8>> {
-            // `RT_DIR` overrides the TeX tree, for probing a truncated copy of a file.
             if let Some(b) = std::env::var("RT_DIR").ok().and_then(|d| std::fs::read(format!("{d}/{name}")).ok()) {
                 return Some(b);
             }
-            // kpathsea searches the current directory first, and pdfLaTeX runs in the
-            // document's: its own figures and inputs sit beside it.
-            let doc_dir = std::path::Path::new(&path).parent().filter(|d| !d.as_os_str().is_empty());
-            if let Some(b) = doc_dir.and_then(|d| std::fs::read(d.join(name)).ok()) {
-                return Some(b);
-            }
-            // kpsewhich picks the search path by suffix; `\input` and `\openin` search the
-            // TeX inputs whatever the suffix (`kpse_tex_format`), so `.pgf` and other
-            // unregistered suffixes are looked up there too.
-            let find = |args: &[&str]| -> Option<String> {
-                let out = std::process::Command::new("kpsewhich").args(args).output().ok()?;
-                String::from_utf8(out.stdout).ok().map(|p| p.trim().to_string()).filter(|p| !p.is_empty())
-            };
-            let font_file = name.rsplit_once('.').is_some_and(|(_, ext)| matches!(ext, "tfm" | "vf" | "map" | "enc" | "pfb" | "pfa" | "otf" | "ttf") || ext.ends_with("pk"));
-            let p = find(&[name]).or_else(|| if font_file { None } else { find(&["-format=tex", name]) })?;
-            std::fs::read(p).ok()
+            host.read(name)
         };
-        // Time spent finding files (a `kpsewhich` process each), which a real run reads from
-        // memory instead: reported apart from the engine's own time.
+        // Time spent finding and reading files, reported apart from the engine's own time.
         let lookups: std::rc::Rc<std::cell::Cell<(u32, std::time::Duration)>> = Default::default();
         let looked = lookups.clone();
         let kpse = move |name: &str| -> Option<Vec<u8>> {
-            if let Some(v) = cache.borrow().get(name) {
-                return v.clone();
-            }
             let t = std::time::Instant::now();
             let v = kpse_raw(name);
             let (n, d) = looked.get();
             looked.set((n + 1, d + t.elapsed()));
-            cache.borrow_mut().insert(name.to_string(), v.clone());
             v
         };
         let src: String = kpse(&path).unwrap_or_default().iter().map(|&b| char::from(b)).collect();
         // `RT_FMT_IN=<file>`: start from a dumped format, as `pdflatex doc.tex` does, instead
         // of IniTeX.
         let fmt_in = std::env::var("RT_FMT_IN").ok();
-        // The run's date: `SOURCE_DATE_EPOCH` when `FORCE_SOURCE_DATE=1`, as web2c, else now.
-        let forced = std::env::var("FORCE_SOURCE_DATE").is_ok_and(|v| v == "1");
-        let now = std::env::var("SOURCE_DATE_EPOCH").ok().filter(|_| forced).and_then(|s| s.trim().parse::<i64>().ok()).unwrap_or_else(|| {
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
-        });
-        let mut e = match &fmt_in {
-            Some(f) => Engine::undump(&std::fs::read(f).expect("format file")).expect("a format of this build"),
-            None => {
-                let mut e = Engine::default();
-                e.eqtb.use_initex_catcodes();
-                e
+        let now = crate::engine::engine_host::run_date();
+        // §532: the job is named after the first file read.
+        let job_name = path.rsplit('/').next().unwrap_or(&path).split('.').next().unwrap_or("texput").to_string();
+        let setup = |m: &mut Machine| {
+            m.trace = std::env::var("RT_TRACE").is_ok();
+            if let Some(n) = std::env::var("RT_MAXEXP").ok().and_then(|v| v.parse().ok()) {
+                m.max_expansions = n;
             }
         };
-        // LaTeX reads back the `.aux` and `.toc` its previous run wrote, so a document is run
-        // again while those change, as latexmk runs `pdflatex` (at most 5 runs: varioref's
-        // "on the following page" texts can move a float and need more than 3).
-        let kpse = std::rc::Rc::new(kpse);
-        let mut prior: Vec<super::super::engine_io::WriteStream> = Vec::new();
-        if let Some(f) = fmt_in.as_ref().filter(|_| std::env::var("RT_ONCE").is_err()) {
-            for _ in 0..4 {
-                let mut e = Engine::undump(&std::fs::read(f).expect("format file")).expect("a format of this build");
-                let mut m = Machine::new(&mut e, &src);
-                let k = kpse.clone();
-                m.read_file = Some(Box::new(move |n: &str| k(n)));
-                m.job_name = path.rsplit('/').next().unwrap_or(&path).split('.').next().unwrap_or("texput").to_string();
-                m.typeset = true;
-                m.closed = prior.clone();
-                m.fix_date_and_time(now);
-                m.start_job();
-                m.run();
-                let wrote: Vec<_> = m.closed.split_off(prior.len());
-                if std::env::var("RT_PAGES").is_ok() {
-                    for w in &wrote {
-                        eprintln!("WROTE {} ({} bytes)", w.name, w.text.len());
-                    }
-                }
-                let same = wrote.iter().all(|w| prior.iter().rev().find(|p| p.name == w.name).is_some_and(|p| p.text == w.text));
-                prior = wrote;
-                if same {
-                    break;
-                }
-            }
-        }
-        let mut m = Machine::new(&mut e, &src);
-        m.closed = prior;
-        let k = kpse.clone();
-        m.read_file = Some(Box::new(move |n: &str| k(n)));
-        // §532: the job is named after the first file read.
-        m.job_name = path.rsplit('/').next().unwrap_or(&path).split('.').next().unwrap_or("texput").to_string();
-        m.trace = std::env::var("RT_TRACE").is_ok();
-        m.typeset = fmt_in.is_some() || std::env::var("RT_TYPESET").is_ok();
-        if let Some(n) = std::env::var("RT_MAXEXP").ok().and_then(|v| v.parse().ok()) {
-            m.max_expansions = n;
-        }
-        m.fix_date_and_time(now);
         let t = std::time::Instant::now();
-        if fmt_in.is_some() {
-            m.start_job();
-        }
-        m.run();
-        let dt = t.elapsed();
-        let prims: Vec<String> = std::env::var("RT_PRIMS").ok().and_then(|p| std::fs::read_to_string(p).ok()).map(|s| s.lines().filter_map(|l| l.split(' ').next().map(String::from)).collect()).unwrap_or_default();
-        let mut missing: HashMap<String, u32> = HashMap::new();
-        for &t in &m.out {
-            if let Meaning::Native(i) = m.meaning(t) {
-                *missing.entry(crate::engine::engine_tables::PRIMITIVES[i as usize].0.to_string()).or_default() += 1;
-            } else if let Some(id) = t.cs_id() {
-                let name = m.e.cs.name(id).to_string();
-                if prims.binary_search(&name).is_ok() {
-                    *missing.entry(name).or_default() += 1;
-                }
+        if let Some(f) = &fmt_in {
+            let fmt = std::fs::read(f).expect("format file");
+            let max = if std::env::var("RT_ONCE").is_ok() { 1 } else { crate::engine::engine_job::MAX_RUNS };
+            let job = crate::engine::engine_job::run(&fmt, &src, &crate::engine::engine_job::Opts { job_name: &job_name, now, max_runs: max }, &kpse, &mut |m| setup(m), &mut |m| report(m, &path, t.elapsed(), lookups.get())).expect("a format of this build");
+            eprintln!("{path}: {} runs", job.runs);
+            // `RT_PDF=<file>`: the shipped pages as a PDF.
+            if let Ok(out) = std::env::var("RT_PDF") {
+                let _ = std::fs::write(out, &job.pdf);
             }
+            return;
         }
-        let mut missing: Vec<_> = missing.into_iter().collect();
-        missing.sort_by_key(|m| std::cmp::Reverse(m.1));
-        let (n_files, file_t) = lookups.get();
-        eprintln!("{path}: engine {:?} ({n_files} file lookups took {file_t:?} more)", dt.saturating_sub(file_t));
-        eprintln!("{path}: {} expansions, {} out tokens, {dt:?}, {} errors, {} names, {} stored tokens, {} pages, halted at line {}", m.expansions, m.out.len(), m.errors.len(), m.e.cs.len(), m.e.toks.len(), m.page.shipped.len(), m.input.line());
-        for err in m.errors.iter().take(std::env::var("RT_ERRS").ok().and_then(|v| v.parse().ok()).unwrap_or(40)) {
-            eprintln!("  {err}");
-        }
+        let mut e = Engine::default();
+        e.eqtb.use_initex_catcodes();
+        let mut m = Machine::new(&mut e, &src);
+        m.read_file = Some(Box::new(&kpse));
+        m.job_name = job_name;
+        m.typeset = std::env::var("RT_TYPESET").is_ok();
+        setup(&mut m);
+        m.fix_date_and_time(now);
+        m.run();
+        report(&m, &path, t.elapsed(), lookups.get());
         if let Ok(path) = std::env::var("RT_NAMES") {
             let names: Vec<&str> = (0..m.e.cs.len() as u32).map(|id| m.e.cs.name(id)).filter(|n| !n.is_empty() && !n.starts_with('\0')).collect();
             let _ = std::fs::write(path, names.join("\n"));
@@ -1155,9 +1087,32 @@ mod tests {
             eprintln!("format: {} bytes, {} of {stored} tokens live, {} names; dump {dump_t:?}, load {load_t:?}", bytes.len(), back.toks.len(), back.cs.len());
             return;
         }
-        // `RT_PDF=<file>`: the shipped pages as a PDF.
         if let Ok(out) = std::env::var("RT_PDF") {
             let _ = std::fs::write(out, m.pdf());
+        }
+    }
+
+    /// `format_smoke`'s report on the last run: timing, errors, and the `RT_BOXES`,
+    /// `RT_PAGES`, `RT_OUT` and `RT_PRIMS` dumps.
+    fn report(m: &Machine, path: &str, dt: std::time::Duration, (n_files, file_t): (u32, std::time::Duration)) {
+        let prims: Vec<String> = std::env::var("RT_PRIMS").ok().and_then(|p| std::fs::read_to_string(p).ok()).map(|s| s.lines().filter_map(|l| l.split(' ').next().map(String::from)).collect()).unwrap_or_default();
+        let mut missing: HashMap<String, u32> = HashMap::new();
+        for &t in &m.out {
+            if let Meaning::Native(i) = m.meaning(t) {
+                *missing.entry(crate::engine::engine_tables::PRIMITIVES[i as usize].0.to_string()).or_default() += 1;
+            } else if let Some(id) = t.cs_id() {
+                let name = m.e.cs.name(id).to_string();
+                if prims.binary_search(&name).is_ok() {
+                    *missing.entry(name).or_default() += 1;
+                }
+            }
+        }
+        let mut missing: Vec<_> = missing.into_iter().collect();
+        missing.sort_by_key(|m| std::cmp::Reverse(m.1));
+        eprintln!("{path}: engine {:?} ({n_files} file lookups took {file_t:?} more)", dt.saturating_sub(file_t));
+        eprintln!("{path}: {} expansions, {} out tokens, {dt:?}, {} errors, {} names, {} stored tokens, {} pages, halted at line {}", m.expansions, m.out.len(), m.errors.len(), m.e.cs.len(), m.e.toks.len(), m.page.shipped.len(), m.input.line());
+        for err in m.errors.iter().take(std::env::var("RT_ERRS").ok().and_then(|v| v.parse().ok()).unwrap_or(40)) {
+            eprintln!("  {err}");
         }
         // `RT_BOXES=<file>`: every shipped page as `\showbox` prints it, for diffing against
         // pdfTeX's `\tracingoutput` log.
@@ -1188,7 +1143,7 @@ mod tests {
             }
             for (i, &b) in m.page.shipped.iter().enumerate() {
                 let mut s = String::new();
-                text(&m, b, &mut s);
+                text(m, b, &mut s);
                 let s: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
                 let end: String = s.chars().rev().take(50).collect::<Vec<_>>().into_iter().rev().collect();
                 eprintln!("PAGE {}: {} ... {}", i + 1, s.chars().take(60).collect::<String>(), end);

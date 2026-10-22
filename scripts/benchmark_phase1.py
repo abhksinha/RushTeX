@@ -49,12 +49,12 @@ def measure_process(cmd):
 def benchmark_rushtex(tex_file, iters=15):
     print(f"\n[1/2] Benchmarking RushTeX on {tex_file} ({iters} iterations)...")
     # Warmup
-    subprocess.run([RUSHTEX_BIN, tex_file, "-o", RUSHTEX_PDF], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run([RUSHTEX_BIN, "--native", tex_file, "-o", RUSHTEX_PDF], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
     times = []
     rss_list = []
     for i in range(iters):
-        wall_ms, rss_kb, code = measure_process([RUSHTEX_BIN, tex_file, "-o", RUSHTEX_PDF])
+        wall_ms, rss_kb, code = measure_process([RUSHTEX_BIN, "--native", tex_file, "-o", RUSHTEX_PDF])
         assert code == 0, f"RushTeX failed on iteration {i}"
         times.append(wall_ms)
         rss_list.append(rss_kb / 1024.0) # MB

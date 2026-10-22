@@ -20,7 +20,12 @@
 //!    ```bash
 //!    rushtex input.tex --no-compress -o uncompressed.pdf
 //!    ```
-//! 5. **Watch Mode** (recompile on every save, reusing unchanged paragraphs and pages):
+//! 5. **Native pipeline** (no TeX installation needed; files compile with the TeX engine
+//!    on the LaTeX format when one is installed):
+//!    ```bash
+//!    rushtex --native input.tex [-o output.pdf]
+//!    ```
+//! 6. **Watch Mode** (recompile on every save, reusing unchanged paragraphs and pages):
 //!    ```bash
 //!    rushtex --watch input.tex [-o output.pdf]
 //!    ```
@@ -41,6 +46,10 @@ fn main() -> ExitCode {
     let mut enable_compression = true;
     let mut threads = false;
     let mut watch = false;
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables, unused_assignments))]
+    let mut native = false;
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables, unused_assignments))]
+    let mut format_path: Option<PathBuf> = None;
 
     while let Some(argument) = cli_arguments.next() {
         match argument.as_str() {
@@ -54,6 +63,14 @@ fn main() -> ExitCode {
             "--no-compress" => enable_compression = false,
             "--threads" => threads = true,
             "--watch" => watch = true,
+            "--native" => native = true,
+            "--fmt" => match cli_arguments.next() {
+                Some(path_str) => format_path = Some(PathBuf::from(path_str)),
+                None => {
+                    eprintln!("[ERROR] --fmt requires a path");
+                    return ExitCode::from(2);
+                }
+            },
             "--ast" => dump_ast = true,
             "--expand" => dump_expanded = true,
             "--gaps" => dump_gaps = true,
@@ -175,6 +192,14 @@ fn main() -> ExitCode {
         return watch_and_compile(&input_path, &output, options);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    if !native {
+        let output = output_file_path.clone().unwrap_or_else(|| input_path.with_extension("pdf"));
+        if let Some(code) = compile_engine(&input_path, &output, format_path) {
+            return code;
+        }
+    }
+
     match rushtex::compile_file_with(&input_path, output_file_path.as_deref(), options) {
         Ok(report) => {
             let page_unit = if report.page_count == 1 {
@@ -249,6 +274,80 @@ fn watch_and_compile(_input: &std::path::Path, _output: &std::path::Path, _optio
     ExitCode::from(2)
 }
 
+/// The document as `pdflatex` runs it: the TeX engine on the LaTeX format, files found as
+/// kpathsea finds them, run again while its `.aux` and `.toc` change. The format is made
+/// from `pdflatex.ini` on first use and kept in the cache directory. `None` when there is no
+/// TeX installation; the native pipeline then compiles the document.
+#[cfg(not(target_arch = "wasm32"))]
+fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path: Option<PathBuf>) -> Option<ExitCode> {
+    use rushtex::engine::{engine_host, engine_job};
+    let start_time = std::time::Instant::now();
+    let cache = cache_dir();
+    let doc_dir = input.parent().filter(|d| !d.as_os_str().is_empty()).map(std::path::Path::to_path_buf);
+    let kpse = engine_host::Kpse::new("pdflatex", cache.as_ref().map(|c| c.join("kpse-paths")).as_deref(), doc_dir)?;
+    let read = |name: &str| kpse.read(name);
+    let fmt_path = format_path.or_else(|| cache.as_ref().map(|c| c.join("pdflatex.rfmt")))?;
+    let source: String = match std::fs::read(input) {
+        // pdfTeX reads each byte as one character code.
+        Ok(bytes) => bytes.iter().map(|&b| char::from(b)).collect(),
+        Err(err) => {
+            eprintln!("{}", rushtex::Error::Io(err));
+            return Some(ExitCode::from(1));
+        }
+    };
+    let job_name = input.file_stem().and_then(|s| s.to_str()).unwrap_or("texput");
+    let now = engine_host::run_date();
+    let mut format = std::fs::read(&fmt_path).ok();
+    // A missing format, or one an older build dumped, is made again (once).
+    for attempt in 0..2 {
+        if let Some(job) = format.as_deref().and_then(|f| engine_job::run(f, &source, &engine_job::Opts { job_name, now, max_runs: engine_job::MAX_RUNS }, &read, &mut |_| {}, &mut |_| {})) {
+            if let Err(err) = std::fs::write(output, &job.pdf) {
+                eprintln!("{}", rushtex::Error::Io(err));
+                return Some(ExitCode::from(1));
+            }
+            for err in &job.errors {
+                eprintln!("! {err}");
+            }
+            eprintln!(
+                "[DONE] Compilation of {} completed and RUSHTEX wrote {} {} in {:.3} second ({} {})",
+                input.display(),
+                job.pages,
+                if job.pages == 1 { "page" } else { "pages" },
+                start_time.elapsed().as_secs_f64(),
+                job.runs,
+                if job.runs == 1 { "run" } else { "runs" }
+            );
+            return Some(if job.errors.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) });
+        }
+        if attempt == 1 {
+            break;
+        }
+        let ini: String = kpse.read("pdflatex.ini")?.iter().map(|&b| char::from(b)).collect();
+        eprintln!("[INFO] Making the LaTeX format {} (once)", fmt_path.display());
+        let built = engine_job::build_format(&ini, "pdflatex", now, &read)?;
+        if let Some(dir) = fmt_path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&fmt_path, &built);
+        format = Some(built);
+    }
+    eprintln!("[ERROR] the format {} could not be made", fmt_path.display());
+    Some(ExitCode::from(1))
+}
+
+/// `RUSHTEX_CACHE`, else `$XDG_CACHE_HOME/rushtex`, else `~/.cache/rushtex`: where the
+/// format and the search paths are kept between runs.
+#[cfg(not(target_arch = "wasm32"))]
+fn cache_dir() -> Option<PathBuf> {
+    if let Some(d) = env::var_os("RUSHTEX_CACHE") {
+        return Some(PathBuf::from(d));
+    }
+    if let Some(d) = env::var_os("XDG_CACHE_HOME").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(d).join("rushtex"));
+    }
+    env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache").join("rushtex"))
+}
+
 fn print_help() {
     eprintln!(
         "\
@@ -263,6 +362,10 @@ USAGE:
 
 OPTIONS:
   -o, --output <path>    Output PDF file path (default: <file>.pdf)
+  --native               Use the native pipeline instead of the TeX engine (the engine,
+                         pdfLaTeX's exact output, is used when TeX Live is installed)
+  --fmt <path>           The LaTeX format to run on (default: made once from
+                         pdflatex.ini into ~/.cache/rushtex/pdflatex.rfmt)
   --no-compress          Disable FlateDecode stream compression for debugging
   --threads              Write pages on a second thread (faster wall time on long
                          documents, slightly more CPU)

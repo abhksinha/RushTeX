@@ -146,7 +146,7 @@ def compile_and_rasterize_formula(
 
     # 1. RushTeX
     rush_pdf = os.path.join(tmpdir, f"{name}_rush.pdf")
-    res_r = subprocess.run([rushtex_bin, tex_file, "-o", rush_pdf], capture_output=True, text=True)
+    res_r = subprocess.run([rushtex_bin, "--native", tex_file, "-o", rush_pdf], capture_output=True, text=True)
     if res_r.returncode != 0 or not os.path.isfile(rush_pdf):
         print(f"[{name}] RushTeX compilation error:\n{res_r.stderr}", file=sys.stderr)
         return None, None
@@ -191,7 +191,7 @@ def compile_and_rasterize_doc(
 
     doc_abs = os.path.abspath(doc_path)
     rush_pdf = os.path.join(tmpdir, f"{name}_rush.pdf")
-    res_r = subprocess.run([rushtex_bin, doc_abs, "-o", rush_pdf], capture_output=True, text=True)
+    res_r = subprocess.run([rushtex_bin, "--native", doc_abs, "-o", rush_pdf], capture_output=True, text=True)
     if res_r.returncode != 0 or not os.path.isfile(rush_pdf):
         print(f"[{name}] RushTeX compilation error:\n{res_r.stderr}", file=sys.stderr)
         return None, None

@@ -147,7 +147,7 @@ def run_rushtex(tex, pdf, env=None):
         build()
     pdf.parent.mkdir(parents=True, exist_ok=True)
     pdf.unlink(missing_ok=True)
-    r = subprocess.run([str(RUSHTEX), str(tex), "-o", str(pdf)], capture_output=True, text=True,
+    r = subprocess.run([str(RUSHTEX), "--native", str(tex), "-o", str(pdf)], capture_output=True, text=True,
                        env={**os.environ, **(env or {})})
     out = r.stdout + r.stderr
     if r.returncode or "[ERROR]" in out or not pdf.exists():
@@ -160,17 +160,25 @@ ENGINE = False
 ENGINE_FMT = OUT / "pdflatex.rfmt"
 
 
+ENGINE_BUILT = False
+
+
 def run_engine(tex, pdf):
-    """The document through the engine (latex.ltx's macros on our TeX), from the format
-    `ENGINE_FMT` (made with `RT_FMT=... RT_FORMAT=pdflatex.ini` and the `format_smoke` test)."""
+    """The document end to end through the `rushtex` command on the TeX engine (latex.ltx's
+    macros on our TeX), from the format `ENGINE_FMT` (made with `RT_FMT=...
+    RT_FORMAT=pdflatex.ini` and the `format_smoke` test, or by `rushtex` itself)."""
+    global ENGINE_BUILT
+    if not ENGINE_BUILT:
+        subprocess.run(["cargo", "build", "--release", "--quiet"], cwd=ROOT, check=True)
+        ENGINE_BUILT = True
     pdf.parent.mkdir(parents=True, exist_ok=True)
     pdf.unlink(missing_ok=True)
-    env = {**os.environ, **FIXED_DATE, "RT_PDF": str(pdf), "RT_FMT_IN": str(ENGINE_FMT), "RT_FORMAT": str(tex), "RT_ERRS": "200"}
-    r = subprocess.run(["cargo", "test", "--release", "--lib", "format_smoke", "--", "--ignored", "--nocapture"],
+    env = {**os.environ, **FIXED_DATE, "RUSHTEX_CACHE": str(OUT)}
+    r = subprocess.run([str(ROOT / "target" / "release" / "rushtex"), "--fmt", str(ENGINE_FMT), str(tex), "-o", str(pdf)],
                        cwd=ROOT, capture_output=True, text=True, env=env)
-    errs = [l.strip() for l in r.stderr.splitlines() if re.match(r"\s+l\.\d+ \[", l)]
-    if r.returncode or not pdf.exists():
-        die(f"engine failed on {tex}: exit {r.returncode}")
+    errs = [l[2:].strip() for l in r.stderr.splitlines() if re.match(r"! l\.\d+ \[", l)]
+    if not pdf.exists() or (r.returncode and not errs):
+        die(f"engine failed on {tex}: exit {r.returncode} {r.stderr[-300:]}")
     # A document may recover from errors by design (encguide skips the table of a font that
     # is not installed). Errors pass only when they are exactly pdfTeX's: same message, same
     # input line, same number of times.

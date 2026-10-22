@@ -1,6 +1,6 @@
 # SUPER IMPORTANT: RushTeX native architecture (the long-term design; living spec)
 Author: abhi+claude | Date: 2026-10-22 (living spec: update in place, record each change in a dated note)
-Files: `src/lib.rs`, `src/main.rs`, `src/engine/engine_mod.rs`, `src/engine/engine_node.rs`, `src/engine/engine_pack.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_page.rs`, `src/engine/engine_mlist.rs`, `src/engine/engine_font.rs`, `src/engine/engine_ship.rs`, `src/frontend/frontend_parser.rs`, `src/expand/expand_mod.rs`, `src/layout/layout_engine.rs`, `src/layout/layout_hyphen.rs`, `Resource_Conscious_Software_Engineering.md`, `memorycastle/journal/tex-weaknesses-roadmap.md`, `scripts/bench_corpus.py`, `scripts/parity/parity.py`, `scripts/parity/engine_boxdiff.py`
+Files: `src/data/data_tfm.rs`, `src/bin/rushtex_gen.rs`, `src/engine/engine_microtype.rs`, `src/backend/backend_ship.rs`, `src/lib.rs`, `src/main.rs`, `src/engine/engine_mod.rs`, `src/engine/engine_node.rs`, `src/engine/engine_pack.rs`, `src/engine/engine_linebreak.rs`, `src/engine/engine_page.rs`, `src/engine/engine_mlist.rs`, `src/engine/engine_font.rs`, `src/engine/engine_ship.rs`, `src/frontend/frontend_parser.rs`, `src/expand/expand_mod.rs`, `src/layout/layout_engine.rs`, `src/layout/layout_hyphen.rs`, `Resource_Conscious_Software_Engineering.md`, `memorycastle/journal/tex-weaknesses-roadmap.md`, `scripts/bench_corpus.py`, `scripts/parity/parity.py`, `scripts/parity/engine_boxdiff.py`
 
 ## Context
 **Status: SUPER IMPORTANT.** This is the main architecture RushTeX follows from now on. It is built carefully and completely, never hastily. "Looks right in Rust" is not the bar: the code must use the machine's native capability, with the least work and the least data movement.
@@ -59,13 +59,8 @@ The full specification follows. Every change to rushtex is checked against it.
 - **Open sets** (user macros, labels, citations, file names):
   - one string arena with interned `u32` IDs and one runtime hash map from name to ID, with our own std-only hasher;
   - after interning, only IDs move.
-- **Font metrics** (`.tfm`):
-  - TFM's own compact layout, kept: a packed `u32` per character indexing small width, height, depth and italic tables of `i32` sp;
-  - the widths of each font are contiguous (SoA), because line breaking reads only widths;
-  - `FontId: u16`.
-- **Kerns and ligatures:**
-  - per font, a 256-bit gate mask per left character (does any pair start here?);
-  - then a flat array of pairs sorted by (left, right), searched by binary search.
+- **Font metrics** (`.tfm`): one 16-byte record per character per loaded (font, size), scaled at load; `FontId: u16`. See §4a; this replaces the earlier choice of TFM's own `char_info` indirection with separate width, height, depth and italic arrays.
+- **Kerns and ligatures:** a per-font pair table compiled at build time, where (left, right) gives the first matching program step. One probe per pair; see §4a.
 - **Encodings:** `[u16; 256]` per encoding, direct index.
 - **NFSS:**
   - the key is (encoding `u8`, family `u16`, series `u8`, shape `u8`) packed into one `u32`;
@@ -75,10 +70,54 @@ The full specification follows. Every change to rushtex is checked against it.
 - **Options:** a `u64` bitflag per class and package.
 - **Package hooks:** fixed arrays per hook point (`[HookList; HOOKS]`), never maps. A package registers at most a few function pointers.
 - **Hyphenation:** a packed trie (`layout_hyphen`) plus a sorted exceptions array. A gate filter on word length and letters skips words that cannot hyphenate.
-- **Embedded font programs:** one compressed blob plus a static (name, offset, length) table, decompressed only for fonts a page uses.
+- **Embedded font programs:** split at build time into per-glyph byte slices behind a static (font, glyph) table, decrypted once at build time; see §4a.
 - **References:**
   - SoA columns: label to (page `u32`, number ID, block ID);
   - a reverse index from label to the blocks that cite it.
+
+### 4a. Fonts: each piece of work done once, at the earliest time it can be (user, 2026-10-22)
+Fonts are a large, permanent part of the work, so they are designed from first principles rather than by keeping TeX's 1980s layout. TeX's layout stores the fewest bytes but touches the most cache lines per operation. Every piece of work moves to the earliest point where its inputs are known: build time, then font load, then use. Exactness comes from TeX's arithmetic (the same scaling, the same first-match rule), not from TeX's data layout.
+
+**Per character: one 16-byte record.**
+- Each loaded (font, size) has one array of `[width, height, depth, italic]` `i32` records, indexed by character code minus the font's first character.
+- An absent character is marked in the record (a sentinel width), with no separate existence lookup.
+- A 128-character font is 2 KB, resident in L1. A lookup reads one record, not `char_info` plus four arrays (up to five cache lines).
+- Scaling is TeX's (§571), done once per record at font load.
+- The PDF widths array is the width column of these records, with no further lookup.
+
+**Per pair: one probe.**
+- `rushtex-gen` compiles each font's lig/kern program into a pair table: a small open-addressed table per font, key `left << 8 | right` (the boundary character as 256), value the first program step TeX's walk (§545, §1040) would reach.
+- This is exact because the walk's result depends only on the two characters.
+- Kern values are stored as indices and scaled into the loaded font's kern array at load.
+
+**Expanded fonts (microtype):** an expanded copy is another record array, with its widths, italic corrections and kerns scaled by `1000 + expand` once, when the copy is made. Nothing is scaled on use.
+
+**Font programs in the PDF.**
+- At build time each Type 1 font is decrypted and split into per-glyph charstring slices plus a fixed header.
+- At runtime each font keeps a 256-bit used-glyph set, set with one OR per character.
+- A subset is the header followed by the used glyphs' bytes, concatenated with no parsing.
+
+**Incremental compile.**
+- Loaded fonts and their arrays are append-only, so a checkpoint is a length.
+- A font's PDF bytes are cached per (font, used-glyph set) and reused unchanged when an edit adds no glyph.
+- Font numbers stay stable across recompiles (P8).
+
+**Where each piece of work happens.**
+- Build time: parsing TFM files, compiling pair tables, splitting font programs.
+- Font load: scaling records and kerns, making expanded copies.
+- Use: one record read, one pair probe, one OR into the used-glyph set.
+
+**Rejected for fonts.**
+- **Pre-scaling every common size at build time:** it saves microseconds of load-time work but adds about 3 MB of table. More data to save less computation loses (§5a).
+- **Walking the lig/kern program at run time:** repeated decoding per pair.
+- **Scaling expanded fonts on use:** a multiply and a divide per character.
+- **Parsing font programs per compile:** the same bytes, parsed again on every run.
+
+### 5a. Design heuristic: less work and less data movement win without a benchmark (user, 2026-10-22)
+The project cannot test every alternative. When one design does strictly less computation, has a simpler algorithm and moves less data per operation, it is chosen without benchmarking the others.
+- **Count data movement per operation, not in total.** One cache miss costs dozens of arithmetic operations. When less computation and less data conflict, the design that touches fewer cache lines per hot operation wins.
+- **The heuristic chooses the design; the gates prove it exact.** The zero-shift gate and the leak audit still run on every change. Measurements record what changed; they are not needed to justify a design the heuristic already decides.
+- **Benchmark only when the heuristic does not decide:** when one option saves computation but moves more data, or saves data but adds computation, and the cost model is not clear.
 
 ### 5. Choosing a structure (decision procedure)
 1. **Can the set be known at build time?** Then a static table or a perfect hash, never a runtime map.
@@ -305,6 +344,7 @@ Constraints: safe Rust only (`#![forbid(unsafe_code)]`), std only, stable compil
 6. Is the output still zero shift, and are the benchmark and RSS numbers equal or better?
 7. Is the § or macro of the source cited in a code comment (`// §1057`, `` `\@startsection` ``)?
 8. Can the state this change adds be checkpointed at a block boundary, diffed and replayed per block (§9, pillar 4)? Is it reached through IDs and arrays, with no hidden global mutation?
+9. Is this the design that does the least work and moves the least data per operation (§5a)? Work at use that could move to load, or work at load that could move to build time, is a defect.
 
 ## Rejected
 - **Approach B (engine plus native fast paths for hot macros) as the product.** It keeps every package working, but it pays for token interpretation on every non-shortcut macro. Its checkpoints are megabytes (the whole equivalents table and token store), and any macro can change any state, so dependencies cannot be tracked exactly. Real-time incremental compile would degrade with document size. The engine is kept only as the oracle.

@@ -66,6 +66,8 @@ Pipeline (all in-memory, single pass, no `.aux`/DVI): **frontend → config → 
 
 ## Project guidance documents
 
+- **`memorycastle/journal/native-architecture.md` — SUPER IMPORTANT, the binding long-term architecture.** LaTeX's kernel and packages are written natively in Rust over the exact typesetting core; static data (fonts, metrics, NFSS, class parameters, hyphenation) is generated at build time into tables; the TeX engine is a dev-only exactness oracle; incremental compile is designed in. Its data-structure, data-movement and hot-loop rules and its review checklist apply to every change.
+
 - `god_instruction.md` — mandatory performance rules: borrow over copy, allocate once/reuse on hot paths, choose SoA vs AoS by access pattern, bit-pack for cache density, keep pipelines bounded, measure.
 - `RushTeX_Math_Architecture_Blueprint.md` — governing design for math work: pursue pdfLaTeX parity through general rule-driven, font-aware geometry (Appendix G rules), **never** by per-formula/per-symbol manual tweaks.
 - Various `MATH_*_TODO.md`, `*_plan.md`, and gap-analysis notes at repo root track in-progress parity work.

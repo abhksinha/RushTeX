@@ -12,12 +12,13 @@ env:
   # The frozen native pipeline's math tests read the OpenType math fonts of TeX Live 2023
   # (`NEWCM_MATH_FILE` and kin in src/math/fonts/mod.rs): those exact releases, checksummed.
   TL2023_ARCHIVE: https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2023/tlnet-final/archive
-  # package, its archive's sha256, the math font it holds (the frozen pipeline's font tests)
+  # package, the sha256 of the math font it holds, that font (the frozen pipeline's font
+  # tests). The font is checked, not the archive: mirrors repack archives.
   MATH_FONTS: |
     newcomputermodern aaf4451dfa25760bd6e15ae78ecd6f7d4fb99c70baac81982b3575a22c0c579a NewCMMath-Regular.otf
-    stix2-otf 4bf6540d67c96d1c64e5e9a6919ebfaf083f8eb2a1e9fad0a7a36da8b3df9bf3 STIXTwoMath-Regular.otf
-    firamath 778baeecbcc6bd2c55611dcfa6985212d6e759110861fbd19be7f7843542fff3 FiraMath-Regular.otf
-    asana-math 611a292d2bd62488ba7c0e56a0a14f28cd1615761699ceae39ba1a4b69e9e6c2 Asana-Math.otf
+    stix2-otf 95bc2729e41faf93b0bcae9e96c4dc4da45855067fd0581e621e30734fe8d90b STIXTwoMath-Regular.otf
+    firamath 2028cbd3dd4d8c0cf1608520eb4759956a83a67931d7b6d8e7c313520186e35b FiraMath-Regular.otf
+    asana-math b0d9e681c08ff1f4dc6ebf085cc962585ec12cdbd25dc6225890b9f8fd12d568 Asana-Math.otf
 
 jobs:
   build_and_test:
@@ -40,9 +41,10 @@ jobs:
             [ -n "$pkg" ] || continue
             d="$RUNNER_TEMP/$pkg"; mkdir -p "$d"
             curl -fsSL --retry 5 -o "$d.tar.xz" "$TL2023_ARCHIVE/$pkg.tar.xz"
-            echo "$sum  $d.tar.xz" | sha256sum -c -
             tar -xJf "$d.tar.xz" -C "$d"
-            cp "$(find "$d" -name "$font" | head -1)" "$HOME/.rushtex/fonts/"
+            f=$(find "$d" -name "$font" | head -1)
+            echo "$sum  $f" | sha256sum -c -
+            cp "$f" "$HOME/.rushtex/fonts/"
           done
 
       - name: Release build

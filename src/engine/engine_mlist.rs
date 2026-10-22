@@ -778,11 +778,11 @@ impl Machine<'_, '_> {
         let Some(mut a) = font.metrics.lig_kern_start(c) else { return Ok(None) };
         let (prog, kerns) = font.metrics.lig_kern();
         loop {
-            let Some(&j) = prog.get(a) else { return Ok(None) };
+            let Some(j) = prog.try_get(a) else { return Ok(None) };
             let (skip, nc, op, rem) = ((j >> 24) as u8, (j >> 16 & 0xFF) as u8, (j >> 8 & 0xFF) as u8, j as u8);
             if nc == next && skip <= STOP_FLAG {
                 if op >= STOP_FLAG {
-                    let k = kerns.get(restart(j) - 256 * STOP_FLAG as usize).copied().unwrap_or(0);
+                    let k = kerns.try_get(restart(j) - 256 * STOP_FLAG as usize).map_or(0, |k| k as i32);
                     return Ok(Some(Scaler::new(font.size).scale(k)));
                 }
                 return Err((op, rem));

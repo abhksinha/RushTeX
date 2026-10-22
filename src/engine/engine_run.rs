@@ -1031,11 +1031,18 @@ mod tests {
             }
         }
         let _files = Files(&host);
+        // `RT_NO_TFM_READS=1`: every font the run loads must come from the static table
+        // (`data_tfm`, pillar 2); a `.tfm` read from a file is a failure.
+        let no_tfm = std::env::var("RT_NO_TFM_READS").is_ok();
         let kpse_raw = |name: &str| -> Option<Vec<u8>> {
+
             if let Some(b) = std::env::var("RT_DIR").ok().and_then(|d| std::fs::read(format!("{d}/{name}")).ok()) {
                 return Some(b);
             }
-            host.read(name)
+            let found = host.read(name);
+            // A TFM looked for and not found is no failure: pdfTeX does not find it either.
+            assert!(!(no_tfm && found.is_some() && name.ends_with(".tfm")), "RT_NO_TFM_READS: {name} was read from a file, not the font table");
+            found
         };
         // Time spent finding and reading files, reported apart from the engine's own time.
         let lookups: std::rc::Rc<std::cell::Cell<(u32, std::time::Duration)>> = Default::default();
@@ -1163,6 +1170,14 @@ mod tests {
     /// `format_smoke`'s report on the last run: timing, errors, and the `RT_BOXES`,
     /// `RT_PAGES`, `RT_OUT` and `RT_PRIMS` dumps.
     fn report(m: &Machine, path: &str, dt: std::time::Duration, (n_files, file_t): (u32, std::time::Duration)) {
+        // `RT_FONTS=1`: the TFM name of every font the run loaded, one `FONT` line each
+        // (font popularity, the font table's order and tiers).
+        if std::env::var("RT_FONTS").is_ok() {
+            let mut names: Vec<&str> = m.e.fonts.list.iter().skip(1).map(|f| f.name.as_str()).collect();
+            names.sort_unstable();
+            names.dedup();
+            names.iter().for_each(|n| eprintln!("FONT {n}"));
+        }
         // `RT_MEM=1`: the bytes each arena holds at the end of the run, to find what grows.
         if std::env::var("RT_MEM").is_ok() {
             let n = &m.e.nodes;

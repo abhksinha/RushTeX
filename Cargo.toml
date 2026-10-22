@@ -10,6 +10,11 @@ publish = false
 name = "rushtex"
 path = "src/main.rs"
 
+[[bin]]
+name = "rushtex-gen"
+path = "src/bin/rushtex_gen.rs"
+required-features = ["gen"]
+
 [lib]
 name = "rushtex"
 path = "src/lib.rs"

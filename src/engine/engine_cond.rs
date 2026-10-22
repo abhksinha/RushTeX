@@ -205,6 +205,11 @@ impl Machine<'_, '_> {
         let ma = self.meaning_read(a);
         let Some(b) = self.get_token() else { return false };
         let mb = self.meaning_read(b);
+        self.same_meaning(ma, mb)
+    }
+
+    /// §507: whether `\ifx` takes two meanings as equal (macros by flags and text).
+    pub(super) fn same_meaning(&self, ma: Meaning, mb: Meaning) -> bool {
         match (ma, mb) {
             (Meaning::Macro(x), Meaning::Macro(y)) => x.flags == y.flags && (x.text == y.text || self.e.toks.get(x.text) == self.e.toks.get(y.text)),
             _ => ma == mb,

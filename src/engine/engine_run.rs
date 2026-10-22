@@ -34,7 +34,7 @@ pub type FileReader<'e> = Box<dyn Fn(&str) -> Option<Vec<u8>> + 'e>;
 const SIMPLE_GROUP: u8 = 1;
 pub(super) const SEMI_SIMPLE_GROUP: u8 = 14;
 /// §236 `\globaldefs`.
-const GLOBAL_DEFS: u32 = 43;
+pub(super) const GLOBAL_DEFS: u32 = 43;
 
 /// The macro processor over one source text.
 pub struct Machine<'e, 'a> {

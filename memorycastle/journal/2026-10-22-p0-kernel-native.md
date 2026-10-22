@@ -1,6 +1,6 @@
 # P0/P1: the native-command layer, and `\get@external@font` as its first command
 Author: abhi+claude | Date: 2026-10-22
-Files: `src/engine/engine_kernel.rs`, `src/engine/engine_prim.rs`, `src/engine/engine_run.rs`, `src/engine/engine_page.rs`, `src/engine/engine_show.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_mod.rs`, `src/data/data_nfss.rs`, `assets/tables/nfss.rtdb`, `scripts/parity/kernel_diff.py`, `.github/workflows/ci.yml`
+Files: `src/engine/engine_kernel.rs`, `src/engine/engine_cond.rs`, `assets/tables/pkgs.rtdb`, `src/engine/engine_prim.rs`, `src/engine/engine_run.rs`, `src/engine/engine_page.rs`, `src/engine/engine_show.rs`, `src/engine/engine_snapshot.rs`, `src/engine/engine_mod.rs`, `src/data/data_nfss.rs`, `assets/tables/nfss.rtdb`, `scripts/parity/kernel_diff.py`, `.github/workflows/ci.yml`
 
 ## Context
 After D2, the native port begins (`native-port-plan.md` §2, the strangler method). P0 owed the per-command switch (`RT_NATIVE`), a state dump (`RT_STATE`) and a macro-against-native gate. The first command proves the whole loop and gives the D2 NFSS table its consumer. On advice, the first command is `\get@external@font`, not `\selectfont`: its contract is small (it reads `\f@encoding`…`\f@size` and defines `\external@font`), and `NfssTable` already computes it, proved on 12,027 cases.
@@ -26,6 +26,17 @@ After D2, the native port begins (`native-port-plan.md` §2, the strangler metho
 - **The gate is `scripts/parity/kernel_diff.py`.** Each corpus document runs on the macros and with `RT_NATIVE`, and the PDF bytes and state dumps must be identical. This is stronger than a box diff, so `engine_boxdiff.py` needs no engine-against-engine mode.
 - **New pin.** `texlive-2026-pin-2` adds the TFM files that D2's font table reads. CI's regeneration step failed on pin-1, which predates them.
 
+- **`\selectfont` native (second slice).** Bound by its body's name (`selectfont ` with the space), so the `\protect` wrapper stays a macro. The native path runs when:
+  - `\f@linespread` `\ifx` `\baselinestretch`;
+  - `\delayed@f@adjustment` is empty;
+  - the watched internals (`\curr@fontshape`, `\@forced@seriesfalse`, `\pickup@font`) still have the format's meaning;
+  - the font of `<shape>/<size>` is already defined.
+
+  It then does `\@forced@seriesfalse`, the global `\font@name`, selects the font, and reads the macro's own tail tokens (`\UseHook{selectfont}\size@update\enc@update`), copied from its text at binding.
+- **Watches.** An internal is unchanged if its meaning word is equal, or if its text is equal after the collector moved it.
+- **Assignment guard (both commands).** Nonzero `\globaldefs` or a pending `\afterassignment` sends the call to the macro, since either changes what the native assignments would do.
+- **Tables are generated against the pin**, never the local full TeX Live. Bare `babel` loads `nil.ldf` locally, but on the pin it fails (`errbabel.def` is not there), so the committed `pkgs.rtdb` is the pin's: 285 files, 9,973 commands. Unpack the pin and set `RUSHTEX_KPSE_PATHS` before regenerating.
+
 ## Rejected
 - **Binding in the format:** the format is pdfLaTeX's oracle, and the switch must compare both on identical state.
 - **Native for the substitution and `sub` paths now:** they write log messages and load files. That is P1's `\selectfont` work, where the `.fd` loads go away as a whole.
@@ -37,7 +48,10 @@ After D2, the native port begins (`native-port-plan.md` §2, the strangler metho
 - `nfss.rtdb` is 61,240 bytes (was 56,184, plus the 8-byte spec hashes). Tests: 350 pass; clippy clean in three configurations.
 - Without `RT_NATIVE` the engine is unchanged: one `is_some` test per `\shipout` and per job.
 
+- Second slice: `kernel_diff.py all` gives 85/85 identical; 593,402 calls native, 108,511 on the macro (corpus total, both commands). Instructions retired, best of three: testmath 2,733,819,363 → 2,675,202,966 (−2.1%), listings 65,834,192,786 → 64,598,503,676 (−1.9%). Gate: zero shift 85/85 with pixels, leak audit 85/85.
+
 ## Open
+- **The `\selectfont` macro cases left** are mostly pending series and shape changes (`\bfseries`, `\itshape`): the merge rules (`series@<a>@<b>`, `shape@<a>@<b>`) and `\set@target@series`'s drop-one-m rule. That path creates `\relax` entries for unknown rules and writes `\series@check@toks` and `\in@@`, all of which the state diff checks.
 - **Payoff timing.** Strangling one command proves correctness but removes little interpretation. The cost goes away when the whole ltfss cluster is native and no macro reads `\f@size`, `\curr@fontshape` or the shape macros, so the `.fd` loads can stop. The cluster boundary needs a trace of which macros read those names.
 - **Next:**
   - `\selectfont`'s body;

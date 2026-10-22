@@ -152,13 +152,18 @@ impl Machine<'_, '_> {
         // §655: with an adjustment list open, insertions, marks and `\vadjust` material
         // move out of the box to it.
         if let Some(adj) = self.adjust.as_mut() {
-            let nodes = &self.e.nodes;
+            let nodes = &mut self.e.nodes;
             let mut k = start;
             for i in start..self.cur.len() {
                 let n = self.cur[i];
                 match n.kind {
                     Kind::Ins | Kind::Mark => adj.push(n),
-                    Kind::Adjust => adj.extend_from_slice(nodes.get((n.a as u32, n.b as u32))),
+                    Kind::Adjust => {
+                        // The material moves out and the adjust node is freed (§655).
+                        let l = (n.a as u32, n.b as u32);
+                        adj.extend_from_slice(nodes.get(l));
+                        nodes.free_block(l);
+                    }
                     _ => {
                         self.cur[k] = n;
                         k += 1;

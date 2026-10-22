@@ -430,6 +430,7 @@ impl Eqtb {
     }
 
     /// Every box the registers and the save stack hold, as an index (for `engine_gc`).
+    #[cfg(test)]
     pub fn for_each_box(&mut self, mut f: impl FnMut(&mut u32)) {
         let saved = self.save.iter_mut().filter_map(|s| if let Saved::Box { b, .. } = s { Some(b) } else { None });
         for v in self.boxes.vals.iter_mut().chain(saved) {

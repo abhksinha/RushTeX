@@ -14,7 +14,9 @@
 //! (a macro body inside its text, a list being read from its middle) fall in one merged
 //! live range and keep their offsets in it, so sharing survives without bookkeeping.
 
-use super::engine_node::{leader, Kind, Node, Nodes};
+use super::engine_node::{Kind, Node};
+#[cfg(test)]
+use super::engine_node::{leader, Nodes};
 use super::engine_run::Machine;
 use super::engine_token::Span;
 
@@ -38,8 +40,9 @@ pub(super) fn node_span(n: &mut Node, f: &mut dyn FnMut(&mut Span)) {
 }
 
 impl Machine<'_, '_> {
-    /// Collects the token arena, and the node arena, when either has outgrown its last live
-    /// size twice over.
+    /// Collects the token arena when it has outgrown its last live size twice over, and
+    /// frees the boxes released since the last command. Nodes are never traced: model M
+    /// frees each at its owner's free point (`2026-10-22-zero-gc-core-model.md`).
     #[inline]
     pub(super) fn maybe_collect(&mut self) {
         if self.e.toks.len() as u32 >= self.collect_at {
@@ -48,15 +51,13 @@ impl Machine<'_, '_> {
         if self.e.eqtb.has_dead_boxes() {
             self.flush_dead_boxes();
         }
-        if self.e.nodes.list.len() as u32 >= self.node_collect_at {
-            self.collect_nodes();
-        }
     }
 
     /// Every holder of node-arena references outside the arena: the box registers and the
     /// save stack, the lists being built, the current page, the shipped pages a harness
     /// keeps, alignments' adjustments, open discretionaries and `\pdfxform`s. §814 `just_box` is not one: it is read only right after the line
     /// break that sets it, within one command.
+    #[cfg(test)]
     fn for_each_node_root(&mut self, f: &mut dyn FnMut(Root)) {
         self.e.eqtb.for_each_box(|b| f(Root::Box(b)));
         for x in self.cur.iter_mut().chain(self.adjust.iter_mut().flatten()).chain(self.adjust_out.iter_mut().flatten()) {
@@ -97,7 +98,7 @@ impl Machine<'_, '_> {
     pub(super) fn node_leaks(&mut self) -> String {
         self.flush_dead_boxes();
         let nodes = std::mem::take(&mut self.e.nodes);
-        let mut gc = std::mem::take(&mut self.node_gc);
+        let mut gc = NodeGc::default();
         gc.list.reset(nodes.list.len());
         gc.boxes.reset(nodes.boxes.len());
         gc.glues.reset(nodes.glues.len());
@@ -127,74 +128,10 @@ impl Machine<'_, '_> {
         #[cfg(feature = "ownership-check")]
         let s = s + &leak_sites(&nodes, &gc);
         self.e.nodes = nodes;
-        self.node_gc = gc;
         format!("LEAKS {s}")
     }
 
-    /// The noads' boxes and lists, remapped after a collection. Noads are not roots: they
-    /// live through the `Noad` nodes of the lists that hold them (§698).
-    fn remap_noads(&mut self, gc: &NodeGc) {
-        for q in &mut self.noads {
-            for field in [&mut q.nucleus, &mut q.supscr, &mut q.subscr, &mut q.extra] {
-                match field {
-                    super::engine_mlist::Field::Box(b) => gc.remap(Root::Box(b)),
-                    super::engine_mlist::Field::Mlist(a, b) => {
-                        let mut l = (*a, *b);
-                        gc.remap(Root::List(&mut l));
-                        (*a, *b) = l;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
 
-    /// Mark and compact the node arena and its side tables, in place: one live bit per
-    /// entry, marked from the roots; then each table keeps its live entries in order and
-    /// every index becomes its rank among them. Shared lists and boxes stay shared.
-    fn collect_nodes(&mut self) {
-        let nodes = std::mem::take(&mut self.e.nodes);
-        let mut gc = std::mem::take(&mut self.node_gc);
-        gc.list.reset(nodes.list.len());
-        gc.boxes.reset(nodes.boxes.len());
-        gc.glues.reset(nodes.glues.len());
-        gc.rules.reset(nodes.rules.len());
-        gc.ligs.reset(nodes.lig_chars.len());
-        gc.discs.reset(nodes.discs.len());
-        gc.inserts.reset(nodes.inserts.len());
-        let noads = std::mem::take(&mut self.noads);
-        self.for_each_node_root(&mut |r| gc.mark(&nodes, &noads, r));
-        self.noads = noads;
-        for l in [&mut gc.list, &mut gc.boxes, &mut gc.glues, &mut gc.rules, &mut gc.ligs, &mut gc.discs, &mut gc.inserts] {
-            l.seal();
-        }
-        let mut nodes = nodes;
-        gc.list.keep(&mut nodes.list);
-        gc.boxes.keep(&mut nodes.boxes);
-        gc.glues.keep(&mut nodes.glues);
-        gc.rules.keep(&mut nodes.rules);
-        gc.ligs.keep(&mut nodes.lig_chars);
-        gc.discs.keep(&mut nodes.discs);
-        gc.inserts.keep(&mut nodes.inserts);
-        for x in &mut nodes.list {
-            gc.remap_node(x);
-        }
-        for b in &mut nodes.boxes {
-            b.list = gc.list.span(b.list);
-        }
-        for d in &mut nodes.discs {
-            *d = [gc.list.span(d[0]), gc.list.span(d[1])];
-        }
-        for i in &mut nodes.inserts {
-            i.list = gc.list.span(i.list);
-        }
-        nodes.free.clear();
-        self.for_each_node_root(&mut |r| gc.remap(r));
-        self.remap_noads(&gc);
-        self.node_collect_at = (nodes.list.len() as u32).saturating_mul(2).max(MIN_NODE_COLLECT);
-        self.e.nodes = nodes;
-        self.node_gc = gc;
-    }
 
     /// Every token span the run can still reach, each given to `f` (which may move it).
     fn for_each_root(&mut self, f: &mut dyn FnMut(&mut Span)) {
@@ -255,17 +192,14 @@ impl Machine<'_, '_> {
     }
 }
 
-/// No node collection below this many nodes in the arena (about 3 MB).
-pub(super) const MIN_NODE_COLLECT: u32 = 1 << 18;
-
-/// One live bit per entry of a node table, and after `seal` the live entries before each
-/// 64-entry word, so an entry's new index is a prefix plus one popcount.
+/// One reachable bit per entry of a node table (the leak audit's).
+#[cfg(test)]
 #[derive(Debug, Default)]
 struct Live {
     bits: Vec<u64>,
-    before: Vec<u32>,
 }
 
+#[cfg(test)]
 impl Live {
     fn reset(&mut self, len: usize) {
         self.bits.clear();
@@ -281,50 +215,13 @@ impl Live {
         new
     }
 
-    fn seal(&mut self) {
-        self.before.clear();
-        let mut n = 0;
-        for w in &self.bits {
-            self.before.push(n);
-            n += w.count_ones();
-        }
-    }
 
-    /// The new index of entry `i`: the live entries before it.
-    #[inline]
-    fn rank(&self, i: u32) -> u32 {
-        let w = (i / 64) as usize;
-        self.before[w] + (self.bits[w] & ((1u64 << (i % 64)) - 1)).count_ones()
-    }
 
-    #[inline]
-    fn span(&self, (s, e): (u32, u32)) -> (u32, u32) {
-        if s >= e {
-            (0, 0)
-        } else {
-            (self.rank(s), self.rank(s) + (e - s))
-        }
-    }
 
-    /// Keeps the live entries of `v`, in order, in place.
-    fn keep<T: Copy>(&self, v: &mut Vec<T>) {
-        let mut j = 0;
-        for (w, &bits) in self.bits.iter().enumerate() {
-            let mut b = bits;
-            while b != 0 {
-                let i = w * 64 + b.trailing_zeros() as usize;
-                b &= b - 1;
-                if i < v.len() {
-                    v[j] = v[i];
-                    j += 1;
-                }
-            }
-        }
-        v.truncate(j);
-    }
 }
 
 /// A holder of node-arena references outside the arena.
+#[cfg(test)]
 pub(super) enum Root<'a> {
     /// A list, `start..end` of [`Nodes::list`].
     List(&'a mut (u32, u32)),
@@ -336,8 +233,9 @@ pub(super) enum Root<'a> {
     Noad(u32),
 }
 
-/// The node collector's reused tables: what is live in each node table, and the lists
-/// still to scan.
+/// The leak audit's tables: what is reachable in each node table, and the lists still to
+/// scan.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub(super) struct NodeGc {
     list: Live,
@@ -350,6 +248,7 @@ pub(super) struct NodeGc {
     work: Vec<(u32, u32)>,
 }
 
+#[cfg(test)]
 impl NodeGc {
     fn mark_box(&mut self, n: &Nodes, b: u32) {
         if (b as usize) < n.boxes.len() && self.boxes.set(b) {
@@ -424,38 +323,7 @@ impl NodeGc {
         }
     }
 
-    fn remap_node(&self, x: &mut Node) {
-        match x.kind {
-            Kind::Box => x.a = self.boxes.rank(x.a as u32) as i32,
-            Kind::Rule => x.a = self.rules.rank(x.a as u32) as i32,
-            Kind::Glue => {
-                x.a = self.glues.rank(x.a as u32) as i32;
-                match leader(x.sub) {
-                    Some(true) => x.b = self.boxes.rank(x.b as u32) as i32,
-                    Some(false) => x.b = self.rules.rank(x.b as u32) as i32,
-                    None => {}
-                }
-            }
-            Kind::Lig => x.b = self.ligs.rank(x.b as u32) as i32,
-            Kind::Disc if x.a >= 0 => x.a = self.discs.rank(x.a as u32) as i32,
-            Kind::Ins => x.a = self.inserts.rank(x.a as u32) as i32,
-            Kind::Adjust => {
-                let (a, b) = self.list.span((x.a as u32, x.b as u32));
-                (x.a, x.b) = (a as i32, b as i32);
-            }
-            Kind::Whatsit if super::engine_whatsit::sized(x.sub) => x.a = self.rules.rank(x.a as u32) as i32,
-            _ => {}
-        }
-    }
 
-    fn remap(&self, r: Root) {
-        match r {
-            Root::List(l) => *l = self.list.span(*l),
-            Root::Box(b) => *b = self.boxes.rank(*b),
-            Root::Node(x) => self.remap_node(x),
-            Root::Noad(_) => {}
-        }
-    }
 }
 
 /// The ownership-check build's leaks by the source line that made them, most first.
@@ -484,6 +352,18 @@ fn leak_sites(nodes: &Nodes, gc: &NodeGc) -> String {
     for (&s, o) in &nodes.origin.lists {
         if !is(&gc.list, s as usize) && !free_lists.contains(&s) {
             *sites.entry(format!("list {o}")).or_default() += 1;
+        }
+    }
+    let free_ligs: std::collections::HashSet<u32> = nodes.free.ligs.iter().flatten().copied().collect();
+    for (&s, o) in &nodes.origin.ligs {
+        if !is(&gc.ligs, s as usize) && !free_ligs.contains(&s) {
+            *sites.entry(format!("lig {o}")).or_default() += 1;
+        }
+    }
+    let free_discs: std::collections::HashSet<u32> = nodes.free.discs.iter().copied().collect();
+    for (&d, (o, freed)) in &nodes.origin.disc_seen {
+        if !is(&gc.discs, d as usize) && !free_discs.contains(&d) {
+            *sites.entry(format!("disc last {} {o}", if *freed { "freed in a list" } else { "stored" })).or_default() += 1;
         }
     }
     // Freed yet reachable: a dangling reference (the worst kind of bug here).

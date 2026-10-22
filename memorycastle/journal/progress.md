@@ -29,8 +29,8 @@ The one place to see what is done and what is next. Tick an item when its gate p
 ### Z. Zero-GC exact core, before P1 (model M: `2026-10-22-zero-gc-core-model.md`)
 - [x] Z1a. Pools: size-class span blocks and free lists for each side table in `Nodes`, plus the ownership-check build (poisoned slots).
 - [x] Z1b. `flush_list` (§202) and `copy_list` (§204); `\copy`/`\unhcopy`/`\unvcopy` deep-copy.
-- [ ] Z1c. Free points: `\shipout`, `\setbox` overwrite, group restore, `\box` and `\unvbox` moves, discards (§1105, line break, page builder).
-- [ ] Z1d. `collect_nodes` deleted; 85/85 under the checker; RSS per page flat on listings.
+- [x] Z1c. Free points: `\shipout`, `\setbox` overwrite, group restore, `\box` and `\unvbox` moves, discards (§1105, line break, page builder).
+- [x] Z1d. `collect_nodes` deleted; 85/85 under the checker; RSS per page flat on listings.
 - [ ] Z2. Build buffers (`cur`, line-break scratch) with capacity reserved once and reset per list.
 - [ ] Z3. Document macros in size-class token blocks: redefinition frees the old block (§275 `eq_destroy`); a body being read holds a count (§390). `collect_tokens` deleted.
 - [ ] Z4. Capacity reserved from the source size; RSS growth per page measured flat on listings (236 pages).

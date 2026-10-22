@@ -107,6 +107,7 @@ pub(super) struct Page {
 
 impl Page {
     /// The current page's nodes and the shipped boxes kept, for `engine_gc`.
+    #[cfg(test)]
     pub(super) fn for_each_node_root(&mut self, f: &mut dyn FnMut(super::engine_gc::Root)) {
         for n in &mut self.list {
             f(super::engine_gc::Root::Node(n));

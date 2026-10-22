@@ -149,6 +149,11 @@ pub enum Table {
 #[derive(Debug, Default)]
 pub struct Origins {
     pub lists: std::collections::HashMap<u32, &'static std::panic::Location<'static>>,
+    /// Where each ligature's characters were stored, by their start.
+    pub ligs: std::collections::HashMap<u32, &'static std::panic::Location<'static>>,
+    /// Each discretionary record's last holder: where a list holding it was stored or
+    /// freed, and whether that was the free.
+    pub disc_seen: std::collections::HashMap<u32, (&'static std::panic::Location<'static>, bool)>,
     /// The size class each live block was stored with, by its start.
     pub classes: std::collections::HashMap<u32, usize>,
     pub boxes: Vec<Option<&'static std::panic::Location<'static>>>,
@@ -234,16 +239,6 @@ impl Default for Free {
 }
 
 impl Free {
-    /// Forgets every free block and slot (the oracle's collector, `engine_gc`, compacts the
-    /// tables and so drops them).
-    pub fn clear(&mut self) {
-        for v in self.spans.iter_mut().chain(self.ligs.iter_mut()) {
-            v.clear();
-        }
-        for v in [&mut self.boxes, &mut self.glues, &mut self.rules, &mut self.discs, &mut self.inserts] {
-            v.clear();
-        }
-    }
 }
 
 /// A slot of `table` for `x`: a freed one when there is one, else a new one at the end.
@@ -295,6 +290,9 @@ impl Nodes {
         {
             self.origin.lists.insert(start as u32, std::panic::Location::caller());
             self.origin.classes.insert(start as u32, c);
+            for n in nodes.iter().filter(|n| n.kind == Kind::Disc && n.a >= 0) {
+                self.origin.disc_seen.insert(n.a as u32, (std::panic::Location::caller(), false));
+            }
         }
         (start as u32, (start + nodes.len()) as u32)
     }
@@ -370,10 +368,15 @@ impl Nodes {
                 None => self.lig_chars.resize(at + cap, 0),
             }
         }
+        #[cfg(feature = "ownership-check")]
+        if len > 0 {
+            self.origin.ligs.insert(start as u32, std::panic::Location::caller());
+        }
         Node { kind: Kind::Lig, sub: (len.min(63) as u8) << 2 | hits, font: f, a: c as i32, b: start as i32 }
     }
 
     /// Frees list `l`'s block alone: its nodes have moved to a new owner (`\unvbox`).
+    #[cfg_attr(feature = "ownership-check", track_caller)]
     pub fn free_block(&mut self, l: (u32, u32)) {
         if l.0 >= l.1 {
             return;
@@ -385,6 +388,12 @@ impl Nodes {
             // A span changed after it was stored (a sub-span, a shortened tail) would
             // free the wrong block.
             assert_eq!(self.origin.classes.remove(&l.0), Some(c), "node list {l:?} is not the span that was stored");
+            for i in l.0..l.1 {
+                let n = self.list[i as usize];
+                if n.kind == Kind::Disc && n.a >= 0 {
+                    self.origin.disc_seen.insert(n.a as u32, (std::panic::Location::caller(), true));
+                }
+            }
             self.list[l.0 as usize..l.0 as usize + cap].fill(POISON);
         }
         let _ = cap;

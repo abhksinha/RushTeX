@@ -85,7 +85,7 @@ pub(super) struct Align {
 
 impl Align {
     /// The pending adjustment nodes, for `engine_gc`.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "oracle"))]
     pub(super) fn for_each_node(&mut self, f: &mut dyn FnMut(&mut Node)) {
         for n in &mut self.adjusts {
             f(n);

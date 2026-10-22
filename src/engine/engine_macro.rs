@@ -222,7 +222,7 @@ impl Machine<'_, '_> {
         if !self.count_expansion() {
             return;
         }
-        #[cfg(test)]
+        #[cfg(all(test, feature = "oracle"))]
         if let Some(id) = name.cs_id() {
             let w = (id / 64) as usize;
             if self.used_cs.len() <= w {

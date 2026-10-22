@@ -158,7 +158,7 @@ pub struct Machine<'e, 'a> {
     /// The node-arena length at which `engine_gc` next collects nodes, and its tables.
     pub(super) dead_buf: Vec<u32>,
     /// `RT_PROFILE`: one bit per control sequence whose macro was expanded.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "oracle"))]
     pub(super) used_cs: Vec<u64>,
 }
 
@@ -180,7 +180,7 @@ pub(super) struct X {
 
 impl<'e, 'a> Machine<'e, 'a> {
     pub fn new(e: &'e mut Engine, src: &'a str) -> Self {
-        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), dead_buf: Vec::new(), #[cfg(test)] used_cs: Vec::new() }
+        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), dead_buf: Vec::new(), #[cfg(all(test, feature = "oracle"))] used_cs: Vec::new() }
     }
 
     /// Records an error with TeX's `l.<line>` context of the innermost file.
@@ -1002,7 +1002,7 @@ pub(super) fn active_key(c: char, buf: &mut [u8; 5]) -> &str {
     std::str::from_utf8(&buf[..1 + n]).unwrap_or("\0")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "oracle"))]
 mod tests {
     use super::*;
     use std::collections::HashMap;

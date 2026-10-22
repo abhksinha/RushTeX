@@ -192,7 +192,10 @@ fn main() -> ExitCode {
         return watch_and_compile(&input_path, &output, options);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    // Without the oracle the native pipeline is the only path; `--native` and `--fmt` are moot.
+    #[cfg(not(all(feature = "oracle", not(target_arch = "wasm32"))))]
+    let _ = (native, format_path);
+    #[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
     if !native {
         if !enable_compression || threads {
             eprintln!("[WARN] --no-compress and --threads apply to the native pipeline only (add --native)");
@@ -281,7 +284,7 @@ fn watch_and_compile(_input: &std::path::Path, _output: &std::path::Path, _optio
 /// kpathsea finds them, run again while its `.aux` and `.toc` change. The format is made
 /// from `pdflatex.ini` on first use and kept in the cache directory. `None` when there is no
 /// TeX installation; the native pipeline then compiles the document.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
 fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path: Option<PathBuf>) -> Option<ExitCode> {
     use rushtex::engine::{engine_host, engine_job};
     let start_time = std::time::Instant::now();
@@ -344,7 +347,7 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
 
 /// `RUSHTEX_CACHE`, else `$XDG_CACHE_HOME/rushtex`, else `~/.cache/rushtex`: where the
 /// format and the search paths are kept between runs.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
 fn cache_dir() -> Option<PathBuf> {
     if let Some(d) = env::var_os("RUSHTEX_CACHE") {
         return Some(PathBuf::from(d));

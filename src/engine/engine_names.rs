@@ -67,6 +67,7 @@ impl Names {
         self.user.is_empty()
     }
 
+    #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut super::engine_snapshot::Writer) {
         use super::engine_snapshot::Codec;
         // Sorted, so the same state always gives the same bytes.
@@ -80,6 +81,7 @@ impl Names {
         w.all(&self.next);
     }
 
+    #[cfg(feature = "oracle")]
     pub(super) fn undump(r: &mut super::engine_snapshot::Reader) -> Option<Names> {
         use super::engine_snapshot::Codec;
         let n = r.count()?;

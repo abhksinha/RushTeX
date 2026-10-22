@@ -214,6 +214,7 @@ pub fn parse_tfm(b: &[u8]) -> Option<(i32, Vec<i32>, FileTfm)> {
 impl Fonts {
     /// The fonts of a format: each one's scaled parameters, and its metrics as the name of an
     /// embedded TFM or the parts of the file read.
+    #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut super::engine_snapshot::Writer) {
         w.count(self.list.len());
         for f in &self.list {
@@ -242,6 +243,7 @@ impl Fonts {
         }
     }
 
+    #[cfg(feature = "oracle")]
     pub(super) fn undump(r: &mut super::engine_snapshot::Reader) -> Option<Fonts> {
         let n = r.count()?;
         let mut list = Vec::with_capacity(n);

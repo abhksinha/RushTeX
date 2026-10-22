@@ -77,12 +77,15 @@ struct Table<T> {
     levels: Vec<u16>,
 }
 
+#[cfg(feature = "oracle")]
 impl<T: Copy + Default + super::engine_snapshot::Codec> Table<T> {
+    #[cfg(feature = "oracle")]
     fn dump(&self, w: &mut super::engine_snapshot::Writer) {
         w.all(&self.vals);
         w.all(&self.levels);
     }
 
+    #[cfg(feature = "oracle")]
     fn undump(r: &mut super::engine_snapshot::Reader) -> Option<Self> {
         let t = Table { vals: r.all()?, levels: r.all()? };
         (t.vals.len() == t.levels.len()).then_some(t)
@@ -430,7 +433,7 @@ impl Eqtb {
     }
 
     /// Every box the registers and the save stack hold, as an index (for `engine_gc`).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "oracle"))]
     pub fn for_each_box(&mut self, mut f: impl FnMut(&mut u32)) {
         let saved = self.save.iter_mut().filter_map(|s| if let Saved::Box { b, .. } = s { Some(b) } else { None });
         for v in self.boxes.vals.iter_mut().chain(saved) {
@@ -451,7 +454,7 @@ impl Eqtb {
     /// and the values saved for restoring.
     /// Each control sequence's macro text length (0 when it is not a macro), by id: the
     /// `RT_PROFILE` audit's view of what a format holds.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "oracle"))]
     pub(super) fn macro_lengths(&self) -> Vec<u32> {
         self.meanings.vals.iter().map(|m| if let Meaning::Macro(mac) = m { mac.text.end - mac.text.start } else { 0 }).collect()
     }
@@ -475,6 +478,7 @@ impl Eqtb {
     }
 
     /// The equivalents of a format (dumped at top level, so no save stack).
+    #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut super::engine_snapshot::Writer) {
         self.ints.dump(w);
         self.dimens.dump(w);
@@ -496,6 +500,7 @@ impl Eqtb {
     }
 
     /// Reads [`Eqtb::dump`]'s form; every token list must lie within the `toks` tokens read.
+    #[cfg(feature = "oracle")]
     pub(super) fn undump(r: &mut super::engine_snapshot::Reader, toks: u32) -> Option<Eqtb> {
         let (ints, dimens, glues, mus, toks_t) = (Table::undump(r)?, Table::undump(r)?, Table::undump(r)?, Table::undump(r)?, Table::<Span>::undump(r)?);
         let codes = [Table::undump(r)?, Table::undump(r)?, Table::undump(r)?, Table::undump(r)?, Table::undump(r)?];

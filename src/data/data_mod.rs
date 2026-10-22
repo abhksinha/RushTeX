@@ -15,5 +15,6 @@ pub mod data_bits;
 pub mod data_blob;
 pub mod data_csr;
 pub mod data_nfss;
+pub mod data_pkgs;
 pub mod data_phf;
 pub mod data_tfm;

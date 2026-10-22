@@ -16,6 +16,9 @@ pub mod engine_expr;
 pub mod engine_font;
 pub mod engine_input;
 pub mod engine_io;
+pub mod engine_job;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod engine_host;
 pub mod engine_lex;
 pub mod engine_macro;
 pub mod engine_md5;

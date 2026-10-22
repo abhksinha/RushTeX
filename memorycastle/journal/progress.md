@@ -14,6 +14,9 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - **No hot loops.** Every surviving per-token, per-node or per-line loop is measured with `scripts/profile_doc.py` and justified in its module's comments.
 - **Structures by access pattern.** Every table is SoA where a phase reads one field across many records, and AoS where a record is read whole; the choice is written next to the type.
 - **Borrow, don't copy.** Pass `&[T]`, ranges and IDs; no `.to_vec()`, `.clone()` or `String` building on a per-token or per-node path.
+- **Load only what the document demands** (user, 2026-10-22). Every static table (macros, packages, fonts, hyphenation languages) is read through IDs and loaded or touched only when the document needs it. A document's cost scales with what it uses, never with what RushTeX supports. Structures: `2026-10-22-document-needs-measure.md`.
+- **Speed target: at least 20× pdflatex on every document, aiming for 50×** (user, 2026-10-22), with zero shift. Only native translation reaches it: interpretation of LaTeX's macros is the cost (`get_token` about 50%). `bench_corpus.py` reports the ratio per document, and no commit lowers it.
+- **No technical debt.** Each phase leaves one implementation per job, one table format, one pinned TeX Live, and a gate that catches drift (see "Debt guards").
 
 ### Done
 - [x] 85 CTAN documents at zero shift through the engine (2,137 pages)
@@ -25,35 +28,45 @@ The one place to see what is done and what is next. Tick an item when its gate p
 - [x] Oracle node arena reclaimed (`collect_nodes`); format and file bytes no longer held. Seven heaviest documents: median 43 MB, max 60 MB
 - [x] Profiler that tells the truth (`scripts/profile_doc.py`): `get_token` 3.3 ns/token, token volume is the cost
 - [x] Zero-GC memory rules written into the spec (§6a)
+- [x] Z1: model M on the node core; `collect_nodes` deleted; `scripts/leak_audit.py` 85/85 clean; listings RSS 55 → 45 MB
+- [x] `RT_PROFILE` first cut: documents expand 7–17% of the format's 20,445 macros
 
-### Z. Zero-GC exact core, before P1 (model M: `2026-10-22-zero-gc-core-model.md`)
-- [x] Z1a. Pools: size-class span blocks and free lists for each side table in `Nodes`, plus the ownership-check build (poisoned slots).
-- [x] Z1b. `flush_list` (§202) and `copy_list` (§204); `\copy`/`\unhcopy`/`\unvcopy` deep-copy.
-- [x] Z1c. Free points: `\shipout`, `\setbox` overwrite, group restore, `\box` and `\unvbox` moves, discards (§1105, line break, page builder).
-- [x] Z1d. `collect_nodes` deleted; 85/85 under the checker; RSS per page flat on listings.
-- [ ] Z2. Build buffers (`cur`, line-break scratch) with capacity reserved once and reset per list.
-- [ ] Z3. Document macros in size-class token blocks: redefinition frees the old block (§275 `eq_destroy`); a body being read holds a count (§390). `collect_tokens` deleted.
-- [ ] Z4. Capacity reserved from the source size; RSS growth per page measured flat on listings (236 pages).
+### Debt guards (each is a gate or a rule, not a hope)
+- **One implementation per job.** The old approximate pipeline (`src/layout`, `src/math`, `src/tables`, `--native`) is frozen: no new work, retired at P7. Typesetting is the engine core only.
+- **One product/oracle boundary,** enforced by the compiler: the `oracle` cargo feature holds `latex.ltx` interpretation, the format build and `engine_host`. CI builds without it.
+- **One pinned TeX Live** for the references, the generated tables and CI. Generated files carry a checksum, and CI regenerates and compares.
+- **One table format library** (D1) for every generated table, versioned. No ad-hoc formats per module.
+- **Every native command is proven twice** against its macro version (`RT_NATIVE` with identical boxes, state and written files), then corpus zero shift.
+- **Kernel internals stay overridable** (port plan §5): a native routine checks one meaning word and yields to a redefinition.
+- **Unported package in a release:** a clear error naming the package. The oracle fallback exists only in dev builds.
+- **Budgets per commit:** time ratio, peak RSS, binary size, leak audit, zero shift.
 
-### B. Borrowing and layout audit (the oracle's hot paths; also the core's)
-- [ ] B1. Remove the 19 `toks.get(..).to_vec()` / `nodes.get(..).to_vec()` copies: read through the span, or push the span as an input frame.
-- [ ] B2. Audit the remaining `.to_vec()`/`.clone()` sites in `src/engine` (36), keeping only cold paths.
-- [ ] B3. Layout table of every core record, with its size, its fields, and SoA or AoS and why (`Node` 12 B, `BoxRec`, `Glue`, `InsRec`, `Noad`, eqtb `Table`), written beside each type.
-- [ ] B4. Profile the 85 documents with `profile_doc.py`; list every function above 2% self time with its cost per call.
+### Phase 1. Foundations (the core and the boundary; everything later stands on them)
+- [ ] A0. `oracle` cargo feature: the product builds and passes its unit tests without `latex.ltx` interpretation, `engine_job`, `engine_host` or the format build.
+- [ ] A1. Pin one TeX Live (2023, as in CI): references, local runs and generation from it; record the version in the binary.
+- [ ] Z2. Build buffers reserved once: the per-line adjustment list, per-word hyphenation scratch, per-paragraph `par`/`breaks`/`carry`/active lists. Allocator share measured before and after.
+- [ ] Z3. Token model M: macro texts and token lists in size-class blocks with one owner, or a count where TeX shares (§200 `token_ref_count`: `\let`, `\toks` copies, a body being read §390). Redefinition frees (§275 `eq_destroy`); `collect_tokens` deleted. This is the product's expander for user macros, so it stays.
+- [ ] Z4. Capacity reserved from the source size; RSS flat per page on listings.
+- [ ] B1–B2. Copies and clones removed from the expander and the core (`toks.get(..).to_vec()`, `nodes.get(..).to_vec()`, the math `Vec<Node>` returns).
+- [ ] B3. Layout table beside every core record (size, fields, SoA or AoS and why).
+- [ ] B4. Hot-loop census of the core and the expander over 85 documents (`profile_doc.py`): every function above 2% with its cost per call, each one removed or justified.
 
-### P. Native port (per `native-port-plan.md`)
-- [ ] P0 rest: `RT_PROFILE` (expansions and time per format macro, which picks the next command to port), `RT_STATE`, `RT_NATIVE=cmd,…`, engine-against-engine `engine_boxdiff.py`, `rushtex-gen` skeleton, arXiv package sample, pinned LaTeX version
-- [ ] P0b. Document-needs gate (user, 2026-10-22: load only what the document uses, fewer tokens, incremental). This follows from the native module split.
-  - Built at generation time: a sorted table mapping each command and environment name to its module ID (kernel part, package, class, font family). A static XOR filter answers "is this name any module's command?" so user macros miss without a table probe.
-  - At compile time, one pass over the source's control-sequence names and `\usepackage` lines gives a needs bitset of `u64` words over module IDs. Only modules whose bit is set are loaded or initialised.
-  - Incremental: each block keeps its own needs bitset. An edit diffs the old and new bitset, so a newly used command loads one module and nothing else is reread.
-  - Measured by tokens expanded and RSS per corpus document, against everything loaded.
-  - First measure (`2026-10-22-document-needs-measure.md`): documents expand 7–17% of the format's 20,445 macros. Engine step after Z3: lazy format undump (a meaning is faulted in on first lookup), with the source pre-scan as a prefetch hint.
-- [ ] P1. Fonts and NFSS as generated tables
-- [ ] P2. Kernel core (small2e, sample2e, lppl at zero format expansions)
-- [ ] P3. Output routine and floats
-- [ ] P4. Tables, math, pictures
-- [ ] P5. Classes
-- [ ] P6. Packages by real usage
-- [ ] P7. Zero dependency: no `latex.ltx`; the native path is the default
-- [ ] P8. Real-time incremental compile
+### Phase 2. Tables and demand loading (shared by the oracle now and native later)
+- [ ] D1. Table library, std only, with tests and size reports: a static perfect hash with an 8-bit fingerprint per slot (name to ID and membership in one probe), SoA tables by ID, CSR lists (offsets plus IDs), bitsets, Roaring-style compressed bitmaps.
+- [ ] D2. `rushtex-gen` skeleton plus the package registry. For each `.sty`/`.cls`/`.clo`/`.fd`, recorded from an oracle run: its class (a–e of the port plan), options, `\RequirePackage` edges (CSR), the control sequences it defines, and its parameters. Generated, checksummed.
+- [ ] D3. Document pre-scan: one pass over the source gives its command names, through the D1 hash, to a module `needs` bitset with its closure. Per-block ID arrays of what each block needs and reads (P8's dependency index from day one).
+- [ ] D4. Demand loading in the core: hyphenation patterns only for the languages used, font metrics on first use, embedded font programs decompressed per used font.
+- [ ] D5. Measure: startup time and RSS per document against everything loaded.
+
+### Phase 3. Native translation (per `native-port-plan.md`, each command oracle-proven)
+- [ ] P0 rest: `RT_PROFILE` time per macro, `RT_STATE`, `RT_NATIVE=cmd,…`, engine-against-engine `engine_boxdiff.py`, arXiv package-frequency sample.
+- [ ] P1. Fonts and NFSS as generated tables (`.fd`, TFM, encodings, size functions); `\selectfont` and the size commands native.
+- [ ] P2. Kernel core (counters, lengths, spacing, boxes, paragraphs, lists, sectioning, references, `\newcommand`, `\NewDocumentCommand`, keys, hooks, files): small2e, sample2e and lppl at zero format expansions.
+- [ ] P3. Output routine and floats as an explicit state machine.
+- [ ] P4. Tables, math, pictures.
+- [ ] P5. Classes (article, report, book, their `.clo`; ltxdoc/doc; amsart, scrartcl, IEEEtran, exam): parameters as generated `const` tables, behaviour native.
+- [ ] P6. Packages by real usage. Each `.sty` becomes data (tables generated by D2) plus behaviour (one Rust module with option bitflags and fixed hook slots). Class (a) libraries are not ported; native code subsumes them.
+
+### Phase 4. Product
+- [ ] P7. Zero dependency: no `latex.ltx`, tables and fonts in the binary, native is the default. Speed gate at least 20× pdflatex on every corpus document, zero shift 85/85.
+- [ ] P8. Real-time incremental: block checkpoints, (content, state) cache, early cutoff, repagination until the breaks match, only changed pages shipped. Under 16 ms per typical edit.

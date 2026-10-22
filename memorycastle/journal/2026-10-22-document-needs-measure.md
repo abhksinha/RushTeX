@@ -14,6 +14,19 @@ Design that follows:
 - **Native path.** Modules are Rust code with needs known at generation time. The scan gives the roots, and a closure precomputed at generation time gives the module bitset.
 - **Order.** Lazy undump wants macro bodies in their own token blocks, so it comes after Z3.
 
+## Decision: loader structures (proposed to the user, 2026-10-22)
+- **Name table:** one byte blob of the format's names plus `u32` offsets (SoA), indexed by a static minimal perfect hash (about 3 bits per key) and checked against the name bytes. It has no per-entry heap; it replaces a `HashMap` for the static names.
+- **Meaning table:** SoA by name ID: kind `u8`, payload `u32` (primitive code, `\chardef` value or body offset), and body length. Macro bodies sit in one token blob, ordered by measured use frequency, so the hot ones share cache lines and pages.
+- **Filters:**
+  - **Binary fuse filter (XOR family, 8-bit fingerprints, about 9 bits per key, about 33 KB for 29.7k names):** "is this name the format's at all?" The document's own macros miss without touching the name blob. It is static, so a Bloom filter (about 1.44 times larger for the same error rate, insert support unused) is not needed.
+  - **`loaded` bitset (one bit per ID, about 2.5 KB):** checked on every lookup (one load and a mask), faulting the body in when clear.
+  - **Closure in CSR form** (an offsets array plus an ID array: an array of arrays without per-list heap): the names each macro body mentions literally. The source pre-scan seeds it, and a breadth-first search over it gives the `needs` bitset. One sorted pass loads those bodies. Fault on first lookup catches what static text cannot show (`\csname`, catcode changes).
+  - **Per block:** a sorted ID array of the block's needs. An edit diffs the old and new arrays and loads only the difference.
+- **Where bodies live:**
+  - Engine path: the format file's sections are read by position (`FileExt::read_at`, std only; the whole file on wasm).
+  - Native path (P7): the same tables are generated into the binary as static slices. A body that is never redefined is read in place (borrowed, zero copy, paged in by the OS on first touch), and only a redefinition gets an arena block (Z3).
+- `HashMap` stays only for names a document defines at run time (`CsTable`).
+
 ## Measured
 Format (LaTeX 2023 plus pdfTeX extras): 20,445 macros, 386,606 macro tokens, about 29,700 names.
 

@@ -117,6 +117,18 @@ The native path never traces, never compacts and never moves live data. Every by
 - **Capacity is reserved up front.** Each region starts from a capacity estimated from the source size (pages, paragraphs, definitions) and grows by doubling only past it. Peak RAM is about the format tables plus the document region plus one page region; it does not grow with the number of pages.
 - **The oracle is the exception.** The TeX engine stays exact to tex.web and keeps a tracing collector (`engine_gc`) as a dev tool. Its numbers are not the product's.
 
+### 6b. Load only what the document demands (user, 2026-10-22)
+- A document's cost scales with what it uses, never with what RushTeX supports.
+- Every static table (commands, packages, classes, fonts, encodings, hyphenation languages) is reached through IDs and touched only when needed. Generated tables sit in the binary's read-only data, so the OS pages in only what a document touches. Tables are ordered by measured use, so a typical document's needs share pages.
+- The source pre-scan gives a module `needs` bitset through the package registry and its `\RequirePackage` closure (CSR). A lookup of an unloaded ID loads it, so the result stays exact when names are built at run time (`\csname`).
+- **Name lookup:** a static perfect hash with an 8-bit fingerprint per slot gives membership and ID in one probe. It replaces a separate XOR filter plus hash: one cache miss fewer, and smaller.
+- **Sets:** `loaded` and `needs` are bitsets by ID; per-block needs and the reverse index (command to blocks) are Roaring-style compressed bitmaps, exact, and they feed §9.
+- Measured: documents expand 7–17% of the format's macros (`2026-10-22-document-needs-measure.md`).
+
+### 6c. Speed target (user, 2026-10-22)
+- At least 20× pdflatex on every document, aiming for 50×, with zero shift. The oracle is 1.4–3× today; the gap is macro interpretation, which only native translation removes.
+- `bench_corpus.py` reports the ratio per document. A commit that lowers any document's ratio is a regression.
+
 ### 7. Hot loops: minimal or none
 - **Eliminate before optimising** (§1). Every per-character, per-node or per-line loop must justify existing.
 - Prefer:
@@ -195,5 +207,5 @@ Baseline at adoption (2026-10-22, `scripts/bench_corpus.py`, 85 documents, 2,137
 ## Open
 - Which expl3 parts the native kernel must mirror: `latex.ltx` now relies on `l3kernel` for hooks, keyval and text case.
 - Package coverage list and order: measure usage frequency over a large sample of real documents (arXiv sources), not only the corpus.
-- Policy for an unported package in a document: a clear error naming the package, or an optional oracle fallback in a non-release build.
+- **Unported package (decided 2026-10-22, the user's native-only rule):** a release gives a clear error naming the package; the oracle fallback exists only in dev builds.
 - Licensing record for the generated tables (LPPL permits redistribution; keep the attribution and pinned versions in the binary's notices).

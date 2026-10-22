@@ -54,7 +54,7 @@ This replaces the native-only rule decided earlier the same day, under which a r
   - redefines LaTeX internals in its preamble (`\makeatletter` with `\renewcommand\@seccntformat` and the like), which native code cannot honour.
 - **Why the whole document.** An unknown `.sty` expects LaTeX's internals to be macros. Native code holds them as Rust, so mixing the two in one document is not reliably exact.
 - **What the fallback costs.**
-  - Engine speed: about 1.4–3× faster than pdflatex today, not 20×.
+  - Engine speed: about 1.4–3× faster than pdflatex today, not 30–40×.
   - No per-block incremental compile.
   - TeX files at run time: the document's own, plus the kernel and unported packages from an installed TeX Live or the pinned snapshot.
 - **What it gives.** Full backward compatibility, and a measured list of fallback triggers that sets the porting order.
@@ -226,7 +226,7 @@ The native path never traces, never compacts and never moves live data. Every by
 - Measured: documents expand 7–17% of the format's macros (`2026-10-22-document-needs-measure.md`).
 
 ### 6c. Speed target (user, 2026-10-22)
-- At least 20× pdflatex on every document, aiming for 50×, with zero shift. The oracle is 1.4–3× today; the gap is macro interpretation, which only native translation removes.
+- At least 30–40× pdflatex on every native document (user, 2026-10-22; was 20×), aiming for 50×, with zero shift. The oracle is 1.4–3× today; the gap is macro interpretation, which only native translation removes.
 - `bench_corpus.py` reports the ratio per document. A commit that lowers any document's ratio is a regression.
 
 ### 6d. Computation and data-movement ledger (user, 2026-10-22)

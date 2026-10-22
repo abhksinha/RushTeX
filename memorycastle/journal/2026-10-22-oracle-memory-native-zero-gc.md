@@ -34,3 +34,5 @@ Median 43 MB, max 60 MB (pdflatex: 34 and 40). The 7 documents take 15.4 s again
 
 ## Open
 The oracle's remaining floor is the format's interpreter state (names, meanings, macro texts, fonts, patterns). Only the native path, with tables generated at build time, removes it.
+
+Functions changed: `collect_nodes`, `for_each_node_root`, `mark`, `mark_node`, `mark_box`, `remap_node`, `remap`, `Live::keep`, `Live::rank`, `for_each_box` (`Eqtb`), `for_each_node` (`Align`), `for_each_node_root` (`Page`), `ship_out` (`keep_shipped`, `pages`), `Kpse::read`, `read_at`, `engine_job::run` (format loader), `compile_engine`.

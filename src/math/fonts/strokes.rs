@@ -2,7 +2,7 @@
 //!
 //! High-efficiency swept-pen calligraphic stroke generator and Bézier curve evaluator.
 //!
-//! Designed under `Resource_Conscious_Software_Engineering.md`:
+//! Designed under `native-architecture.md` §11b (resource rules):
 //! - 8-byte cache-aligned `StrokePoint` (exactly 8 points per 64-byte L1 CPU cache line)
 //! - Stack-resident bounded scratch arrays (zero heap allocations during stroke expansion)
 //! - Generates mathematically smooth calligraphic boundaries from skeletal control knots

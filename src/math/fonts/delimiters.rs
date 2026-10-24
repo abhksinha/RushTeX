@@ -3,7 +3,7 @@
 //! Multi-tier discrete variant advances and extensible assembly recipes extracted
 //! directly from `NewCMMath-Regular.otf`'s `MathVariants` table.
 //!
-//! Designed under `Resource_Conscious_Software_Engineering.md`:
+//! Designed under `native-architecture.md` §11b (resource rules):
 //! - Compact 4-byte variant records and 8-byte assembly definitions
 //! - $O(1)$ branchless variant lookup by target height
 //! - Zero memory allocations, 100% cache line friendly

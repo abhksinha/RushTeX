@@ -3,7 +3,7 @@
 //! Subsystem for high-performance OpenType math font parsing, `MATH` table processing,
 //! and modern ISO/IEC 14496-22 layout geometry.
 //!
-//! Designed under `Resource_Conscious_Software_Engineering.md`:
+//! Designed under `native-architecture.md` §11b (resource rules):
 //! - Pure safe Rust (`#![forbid(unsafe_code)]`)
 //! - Hardware L1/L2 cache residency with zero heap thrashing
 //! - Fast $O(1)$ pre-computed `.rodata` tables for New Computer Modern Math and STIX Two Math

@@ -1,4 +1,4 @@
-//! The GDL node builders (`direct-path-architecture.md`): the typed operations native code
+//! The GDL node builders (`guarded-direct-lowering.md`): the typed operations native code
 //! lowers a document to, each the part of TeX's `main_control` that appends to the current
 //! list once its operands are known. The primitives' own commands (`\vskip`, `\penalty`,
 //! `\hrule`, `\vadjust`) scan their operands and call these, so a native command and the

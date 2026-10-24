@@ -3,7 +3,7 @@
 //! Converts OpenType MathConstants and font metrics into exact geometric dimensions
 //! conforming to ISO/IEC 14496-22 and Microsoft OpenType mathematical layout specifications.
 //!
-//! Designed under `Resource_Conscious_Software_Engineering.md`:
+//! Designed under `native-architecture.md` §11b (resource rules):
 //! - Pure math calculations, zero memory allocations
 //! - Hardware L1 cache resident via 64-byte aligned constants
 //! - Branchless min/max arithmetic

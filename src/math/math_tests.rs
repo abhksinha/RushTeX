@@ -3533,7 +3533,7 @@ E = mc^2
         use crate::compile_into;
         use crate::math::fonts::{OpenTypeScriptGlyph, OpenTypeMathConstants};
 
-        // 1. Data Structure Cache Alignment Invariants (god_instruction.md)
+        // 1. Data Structure Cache Alignment Invariants (native-architecture.md §11b)
         assert_eq!(std::mem::size_of::<OpenTypeMathConstants>(), 128);
         assert_eq!(std::mem::align_of::<OpenTypeMathConstants>(), 64);
         assert_eq!(std::mem::size_of::<OpenTypeScriptGlyph>(), 16);

@@ -3,7 +3,7 @@
 //! Authoritative Unicode Mathematical Script / Calligraphic metrics extracted directly from
 //! `NewCMMath-Regular.otf` and `STIXTwoMath-Regular.otf`.
 //!
-//! Designed under `Resource_Conscious_Software_Engineering.md`:
+//! Designed under `native-architecture.md` §11b (resource rules):
 //! - 16 bytes per glyph record (exactly 4 glyphs per 64-byte L1 cache line)
 //! - The entire 26-letter alphabet fits inside a single 416-byte contiguous array
 //! - 100% stack/rodata resident, $O(1)$ branchless ASCII indexing

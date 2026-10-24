@@ -1,5 +1,5 @@
 //! `--features mprof`: where the macro interpreter's work goes, by the document command
-//! that caused it (`native-port-plan.md` §2 step 1, `RT_PROFILE` time per macro).
+//! that caused it (`RT_PROFILE` time per macro).
 //!
 //! Every token read is charged to the last control sequence read from the document's own
 //! text (the main file and the `.tex` and `.dtx` files it reads): `\section`

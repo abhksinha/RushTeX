@@ -2,7 +2,7 @@
 //!
 //! Variant measurements and optical positioning for large mathematical operators ($\int, \iint, \oint, \sum, \prod$).
 //!
-//! Designed under `Resource_Conscious_Software_Engineering.md`:
+//! Designed under `native-architecture.md` §11b (resource rules):
 //! - Compact static structures with zero heap allocation
 //! - Fast $O(1)$ variant scaling based on active MathStyle tier
 

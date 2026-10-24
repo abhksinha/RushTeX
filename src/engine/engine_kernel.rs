@@ -1,4 +1,4 @@
-//! LaTeX commands written natively: the port's strangler step (`native-port-plan.md` §2).
+//! LaTeX commands written natively: the port's strangler step (`guarded-direct-lowering.md`).
 //!
 //! A kernel command keeps its control-sequence name. `RT_NATIVE=name,…` (or `all`) binds
 //! the name to [`Meaning::Kernel`] at the start of a job, after the format is loaded; the
@@ -100,7 +100,7 @@ struct Switch {
 }
 
 /// The internal macros native code acts for: it runs only while each keeps the meaning the
-/// format gave it (`native-port-plan.md` §5), so a package that redefines one gets the
+/// format gave it (`guarded-direct-lowering.md` §8), so a package that redefines one gets the
 /// macro path.
 const WATCHED: [&str; 13] = [
     "curr@fontshape", "@forced@seriesfalse", "pickup@font", "merge@font@series@without@substitution", "merge@font@series@without@substitution@", "merge@font@shape@without@substitution", "merge@font@shape@without@substitution@", "set@target@series", "series@maybe@drop@one@m", "series@maybe@drop@one@m@x", "series@drop@one@m", "maybe@load@fontshape", "try@load@fontshape",

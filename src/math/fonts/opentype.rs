@@ -2,7 +2,7 @@
 //!
 //! A zero-dependency, pure safe-Rust parser for OpenType font tables (`MATH`, `CFF `, `cmap`, `head`, `hmtx`).
 //!
-//! Designed under `Resource_Conscious_Software_Engineering.md`:
+//! Designed under `native-architecture.md` §11b (resource rules):
 //! - Zero heap allocations (`#![no_std]` capable)
 //! - Operates purely on borrowed memory slices (`&'a [u8]`)
 //! - Strict bounds checking, `#![forbid(unsafe_code)]` compliant

@@ -182,7 +182,7 @@ when it decides a position, because those rules are the output.
         Build time for reading: the programs, decrypted, and their glyph names are
         carried in the program. Each document's subset is cut as pdfTeX cuts it.
   \item Compress each page's content stream.
-        Kept, with a simpler compressor that makes larger files.
+        Kept, with Huffman tables made for each block of the stream.
 \end{enumerate}
 
 So item~\ref{item:first} and the core steps are kept, and the rest are removed, done
@@ -534,8 +534,7 @@ the article class without the \texttt{twocolumn}, \texttt{titlepage}, \texttt{le
 and \texttt{fleqn} options, and two packages; graphics, amsmath's
 environments, hyperref, package options and bibliographies from BibTeX are not yet
 native, so most papers still run on the engine path, which needs an installed \TeX{}
-Live. Pages are compressed with fixed codes, so RushTeX's files are a few percent larger
-than pdfLaTeX's, and up to a quarter for long texts. The cost per page is six
+Live. RushTeX's files are now a little smaller than pdfLaTeX's. The cost per page is five
 times below pdfLaTeX's, short of the forty times the project aims for. Each of these is
 on the work list, in the order of the papers it would unblock.
 

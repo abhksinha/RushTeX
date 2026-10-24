@@ -5598,12 +5598,14 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
                             kinds[i] = c.atom_kind_in_style(crate::math::MathStyle::Text);
                         }
                         crate::math::math_spacing::normalize_atom_kinds(&mut kinds[..count]);
+                        // The math quad at this size, once per formula rather than per atom.
+                        let math_quad = crate::math::math_fonts::MathParams::at(family, size).quad;
 
                         for (i, child) in children.iter().enumerate() {
                             // Math glue that can stretch (`\colon`'s `\mskip6mu plus1mu`).
                             let glue = match child {
                                 crate::math::MathNode::Space(crate::math::math_ast::MathSkip::MuGlue(w, st)) if i > 0 => {
-                                    let quad = crate::math::math_fonts::MathParams::at(family, size).quad;
+                                    let quad = math_quad;
                                     Some((crate::backend::scaled::mu_pt(*w, quad), crate::backend::scaled::mu_pt(*st, quad)))
                                 }
                                 _ => None,
@@ -5652,7 +5654,7 @@ pub(crate) fn explode_inlines_into_family_sf<'a, 'doc>(
                                 // 5mu plus 5mu: glue the line may stretch or shrink (§716).
                                 let mu_count = crate::math::math_spacing::atom_spacing_mu(atom_kind, kinds[i + 1], true);
                                 let quad = if family == metrics::FontFamily::ComputerModern {
-                                    crate::math::math_fonts::MathParams::at(family, size).quad
+                                    math_quad
                                 } else {
                                     size
                                 };

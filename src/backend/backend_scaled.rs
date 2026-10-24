@@ -172,7 +172,9 @@ impl std::ops::Neg for Sp {
 pub struct Scaler {
     z: i64,
     alpha: i64,
-    beta: i64,
+    /// log2 of TeX's `beta` (256/alpha, always a power of two): the final division of
+    /// `store_scaled` is a shift, not a hardware divide, on every glyph measured.
+    beta_shift: u32,
 }
 
 impl Scaler {
@@ -186,7 +188,7 @@ impl Scaler {
             alpha += alpha;
         }
         let beta = 256 / alpha;
-        Self { z, alpha: alpha * z, beta }
+        Self { z, alpha: alpha * z, beta_shift: beta.trailing_zeros() }
     }
 
     #[inline]
@@ -199,7 +201,8 @@ impl Scaler {
     pub fn scale(&self, f: i32) -> i32 {
         let u = f as u32;
         let (a, b, c, d) = ((u >> 24) as i64, ((u >> 16) & 0xFF) as i64, ((u >> 8) & 0xFF) as i64, (u & 0xFF) as i64);
-        let sw = (((d * self.z) / 256 + c * self.z) / 256 + b * self.z) / self.beta;
+        // Every operand is non-negative, so the truncating divisions are shifts.
+        let sw = (((((d * self.z) >> 8) + c * self.z) >> 8) + b * self.z) >> self.beta_shift;
         (if a == 0 { sw } else { sw - self.alpha }) as i32
     }
 }

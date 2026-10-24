@@ -42,6 +42,9 @@ pub struct MathLayoutContext<'a, 'p> {
     pub out_ops: Option<&'p mut Vec<Paint>>,
     pub text_pool: Option<&'p mut Vec<&'a str>>,
     pub font_tier: FontVariantTier,
+    /// TeX's math font parameters at the text, script and scriptscript sizes, computed once
+    /// per formula: every node asks for them, and `MathParams::at` is thirty exact scalings.
+    pub font_params_by_tier: [crate::math::math_fonts::MathParams; 3],
     pub style_stack: StyleFrameStack,
     pub flags: MathContextFlags,
     pub target_middle_delim_h: Option<f32>,
@@ -79,6 +82,12 @@ impl<'a, 'p> MathLayoutContext<'a, 'p> {
         if root_style.is_display() {
             flags.set(MathContextFlags::IN_DISPLAY);
         }
+        let font_tier = FontVariantTier::new(base_font_size);
+        let font_params_by_tier = [
+            crate::math::math_fonts::MathParams::at(font_family, font_tier.font_size(MathStyle::Text)),
+            crate::math::math_fonts::MathParams::at(font_family, font_tier.font_size(MathStyle::Script)),
+            crate::math::math_fonts::MathParams::at(font_family, font_tier.font_size(MathStyle::ScriptScript)),
+        ];
         Self {
             base_font_size,
             font_family,
@@ -86,7 +95,8 @@ impl<'a, 'p> MathLayoutContext<'a, 'p> {
             text_face: Face::Roman,
             out_ops,
             text_pool,
-            font_tier: FontVariantTier::new(base_font_size),
+            font_tier,
+            font_params_by_tier,
             style_stack: StyleFrameStack::new(root_style),
             flags,
             target_middle_delim_h: None,
@@ -110,6 +120,7 @@ impl<'a, 'p> MathLayoutContext<'a, 'p> {
             out_ops: None,
             text_pool: None,
             font_tier: self.font_tier,
+            font_params_by_tier: self.font_params_by_tier,
             style_stack: self.style_stack,
             flags: self.flags,
             target_middle_delim_h: self.target_middle_delim_h,
@@ -200,7 +211,9 @@ impl<'a, 'p> MathLayoutContext<'a, 'p> {
 
     #[inline(always)]
     pub fn font_params(&self, style: MathStyle) -> crate::math::math_fonts::MathParams {
-        crate::math::math_fonts::MathParams::at(self.font_family, self.font_tier.font_size(style))
+        // Display/Text and their cramped forms share the text size (styles 0–3), Script and
+        // CrampedScript the script size (4–5), ScriptScript and its cramped form (6–7) theirs.
+        self.font_params_by_tier[((style as usize) & 0x07).saturating_sub(2) >> 1]
     }
 
     /// `(sup_drop, sub_drop)` in points from the script-size font of `style` (TeX §756).

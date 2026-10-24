@@ -28,6 +28,11 @@ pub fn divide_scaled(s: i64, m: i64, dd: u32) -> (i64, i64) {
     let neg = (s < 0) != (m < 0);
     let (sa, ma) = (s.abs(), m.abs());
     let n = sa * TEN_POW[dd as usize];
+    // The common small move (a character continuing its string): `q` rounds to 0 and `r` is
+    // all of `n`, so `out` is `sa - sa`, with no division needed.
+    if 2 * n < ma {
+        return (0, 0);
+    }
     let (mut q, mut r) = (n / ma, n % ma);
     if 2 * r >= ma {
         q += 1;

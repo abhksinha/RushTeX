@@ -219,7 +219,7 @@ impl Machine<'_, '_> {
         let list = nodes.boxes[b as usize].list;
         for n in nodes.get(list) {
             match n.kind {
-                Kind::Char | Kind::Lig if !self.vf.checked(n.font) && !todo.contains(&n.font) => todo.push(n.font),
+                Kind::Char | Kind::Lig | Kind::Word if !self.vf.checked(n.font) && !todo.contains(&n.font) => todo.push(n.font),
                 Kind::Box => self.page_fonts(n.a as u32, todo),
                 Kind::Glue if (100..110).contains(&n.sub) => self.page_fonts(n.b as u32, todo),
                 _ => {}

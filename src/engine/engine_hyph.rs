@@ -26,6 +26,9 @@ use super::engine_whatsit::LANGUAGE;
 /// §236 `uc_hyph_code`.
 const UC_HYPH: u32 = 38;
 
+/// A language's exceptions: each word's letters and its hyphen positions.
+pub type Exceptions<'a> = Vec<(&'a [u8], &'a [u8])>;
+
 /// The hyphenation tables (§920–§941), kept in a format.
 #[derive(Debug, Default)]
 pub struct Hyph {
@@ -40,6 +43,40 @@ pub struct Hyph {
     seen: HashSet<Box<[u8]>>,
     /// Built tries, per language.
     tries: Vec<Option<Trie>>,
+    /// Each word hyphenated so far, as its §923–§934 result: the key is the lowercase
+    /// letters `hc[1..=hn]`, the language, `\lefthyphenmin` and `\righthyphenmin`; the value
+    /// bit `j` is an odd `hyf[j]` after the minima are applied. Those are all §923 and §934
+    /// read, and the native job's pre-scan refuses `\patterns`, `\hyphenation` and
+    /// `\lccode`, so the patterns, exceptions and lowercase codes do not change under it;
+    /// `enter_pattern` and `add_exception` clear it all the same.
+    memo: HashMap<Box<[u8]>, u64, WordHash>,
+    /// The key being looked up, reused.
+    memo_key: Vec<u8>,
+}
+
+/// FNV-1a over a word's bytes: the memo's keys are short, and SipHash's set-up per lookup
+/// would cost more than the word.
+#[derive(Clone, Copy, Default)]
+pub struct WordHash;
+
+impl std::hash::BuildHasher for WordHash {
+    type Hasher = Fnv;
+    fn build_hasher(&self) -> Fnv {
+        Fnv(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+pub struct Fnv(u64);
+
+impl std::hash::Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
 }
 
 /// A pattern while a trie is built: its letters and its op list.
@@ -48,7 +85,7 @@ type Pat<'a> = (&'a [u8], Vec<u16>);
 /// A language's patterns as a trie: node `i`'s children are `edges[first[i]..][..count[i]]`,
 /// sorted by character; `ops[i]` is 0 or one past the start of its op list in `pool`
 /// (entries `distance << 8 | digit`, ended by 0).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 struct Trie {
     first: Vec<u32>,
     count: Vec<u16>,
@@ -122,6 +159,29 @@ impl Trie {
         me as u32
     }
 
+    /// The arrays, as `data_hyph` stores them: `first`, `count`, `ops`, `chars`, `to`, `pool`.
+    fn parts(&self) -> [Vec<u32>; 6] {
+        let wide = |v: &[u16]| v.iter().map(|&x| x as u32).collect();
+        [self.first.clone(), wide(&self.count), self.ops.clone(), self.chars.iter().map(|&c| c as u32).collect(), self.to.clone(), wide(&self.pool)]
+    }
+
+    /// The trie from [`Trie::parts`]; `None` unless every index is in bounds, so `find`
+    /// never panics on a table.
+    fn from_parts(p: [Vec<u32>; 6]) -> Option<Trie> {
+        let [first, count, ops, chars, to, pool] = p;
+        let narrow16 = |v: Vec<u32>| v.into_iter().map(|x| u16::try_from(x).ok()).collect::<Option<Vec<u16>>>();
+        let t = Trie { first, count: narrow16(count)?, ops, chars: chars.into_iter().map(|x| u8::try_from(x).ok()).collect::<Option<_>>()?, to, pool: narrow16(pool)? };
+        let nodes = t.first.len();
+        let ok = nodes > 0
+            && t.count.len() == nodes
+            && t.ops.len() == nodes
+            && t.chars.len() == t.to.len()
+            && (0..nodes).all(|i| t.first[i] as usize + t.count[i] as usize <= t.chars.len())
+            && t.to.iter().all(|&n| (n as usize) < nodes)
+            && t.ops.iter().all(|&o| o == 0 || (o as usize) <= t.pool.len() && t.pool[o as usize - 1..].contains(&0));
+        ok.then_some(t)
+    }
+
     fn child(&self, n: u32, c: u16) -> Option<u32> {
         let c = u8::try_from(c).ok()?;
         let at = self.first[n as usize] as usize;
@@ -163,6 +223,64 @@ impl Hyph {
         self.tries[lang].as_ref()
     }
 
+    /// Language `lang`'s trie as `data_hyph` stores it ([`Trie::parts`]), built from its
+    /// patterns.
+    pub fn trie_parts(&self, lang: u8) -> Option<[Vec<u32>; 6]> {
+        let records = self.patterns.get(lang as usize).filter(|r| !r.is_empty())?;
+        Some(Trie::build(records).parts())
+    }
+
+    /// Language `lang`'s trie from `data_hyph`, in place of building it from the patterns
+    /// at the first hyphenated word; `false` (and it is built as usual) if it is malformed.
+    pub fn set_trie(&mut self, lang: u8, parts: [Vec<u32>; 6]) -> bool {
+        let Some(t) = Trie::from_parts(parts) else { return false };
+        self.memo.clear();
+        let l = lang as usize;
+        if self.tries.len() <= l {
+            self.tries.resize_with(l + 1, || None);
+        }
+        self.tries[l] = Some(t);
+        true
+    }
+
+    /// Whether language `lang`'s stored trie is the one its patterns build (`rushtex-gen`).
+    pub fn trie_matches(&self, lang: u8) -> bool {
+        let l = lang as usize;
+        match (self.tries.get(l).and_then(Option::as_ref), self.patterns.get(l)) {
+            (Some(t), Some(p)) => *t == Trie::build(p),
+            _ => false,
+        }
+    }
+
+    /// Language `lang`'s pattern records and its exceptions (letters without the language
+    /// byte, positions), sorted: what `data_hyph` carries for the native job.
+    pub fn language(&self, lang: u8) -> (&[u8], Exceptions<'_>) {
+        let patterns = self.patterns.get(lang as usize).map_or(&[][..], |p| p.as_slice());
+        let mut ex: Vec<(&[u8], &[u8])> = self.exceptions.iter().filter(|(k, _)| k.last() == Some(&lang)).map(|(k, v)| (&k[..k.len() - 1], &v[..])).collect();
+        ex.sort();
+        (patterns, ex)
+    }
+
+    /// Language `lang` from its records and exceptions, as a format would leave it: the
+    /// trie ready, built on first use.
+    pub fn set_language<'e>(&mut self, lang: u8, patterns: &[u8], exceptions: impl Iterator<Item = (&'e [u8], &'e [u8])>) {
+        let l = lang as usize;
+        self.memo.clear();
+        if self.patterns.len() <= l {
+            self.patterns.resize_with(l + 1, Vec::new);
+        }
+        self.patterns[l] = patterns.to_vec();
+        if let Some(t) = self.tries.get_mut(l) {
+            *t = None;
+        }
+        for (k, v) in exceptions {
+            let mut key = k.to_vec();
+            key.push(lang);
+            self.exceptions.insert(key.into_boxed_slice(), v.into());
+        }
+        self.ready = true;
+    }
+
     #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut Writer) {
         w.count(self.patterns.len());
@@ -193,7 +311,7 @@ impl Hyph {
             exceptions.insert(k.into_boxed_slice(), v.into_boxed_slice());
         }
         // §1325: a format's trie is always ready.
-        Some(Hyph { patterns, exceptions, ready: true, seen: HashSet::new(), tries: Vec::new() })
+        Some(Hyph { patterns, exceptions, ready: true, seen: HashSet::new(), tries: Vec::new(), memo: HashMap::default(), memo_key: Vec::new() })
     }
 }
 
@@ -298,6 +416,7 @@ impl Machine<'_, '_> {
                         let mut key: Vec<u8> = hc[1..=k].iter().map(|&c| c as u8).collect();
                         key.push(lang as u8);
                         self.e.hyph.exceptions.insert(key.into_boxed_slice(), std::mem::take(&mut pos).into_boxed_slice());
+                        self.e.hyph.memo.clear();
                     }
                     if end_group {
                         return;
@@ -315,6 +434,7 @@ impl Machine<'_, '_> {
 
     /// §963–§965: a pattern of letters `hc` and digits `hyf` for language `lang`.
     fn enter_pattern(&mut self, lang: usize, hc: &[u16], hyf: &mut [u8]) {
+        self.e.hyph.memo.clear();
         let k = hc.len();
         if hc[0] == 0 {
             hyf[0] = 0;
@@ -341,6 +461,11 @@ impl Machine<'_, '_> {
     /// §891–§903 for a whole paragraph before its second pass: the word after every glue
     /// node is hyphenated (§894), with the language state that whatsits set on the way
     /// (§1362, §1363).
+    ///
+    /// Each hyphenated word's replacement is kept as an edit, and the paragraph is rebuilt
+    /// once at the end: splicing each word in moved the paragraph's tail once per word.
+    /// The walk reads only nodes after the word it replaces, and a replacement holds no
+    /// glue, math or whatsit node, so the walk is the same either way.
     pub(super) fn hyphenate_par(&mut self, par: &mut Vec<Node>, packed: i32) {
         let mut lang = (packed % 0o200000).clamp(0, 255) as usize;
         let mut l_hyf = (packed / 0o20000000).max(1) as usize;
@@ -348,6 +473,7 @@ impl Machine<'_, '_> {
         let mut k = 0;
         // §866: no hyphenation inside math (`auto_breaking`).
         let mut auto_breaking = true;
+        let mut edits: Vec<(usize, usize, Vec<Node>)> = Vec::new();
         while k < par.len() {
             let n = par[k];
             match n.kind {
@@ -356,15 +482,32 @@ impl Machine<'_, '_> {
                     (l_hyf, r_hyf) = ((n.b >> 6) as usize, (n.b & 63) as usize);
                 }
                 Kind::Math => auto_breaking = n.sub == 1,
-                Kind::Glue if auto_breaking => self.try_hyphenate(par, k, &mut lang, &mut l_hyf, &mut r_hyf),
+                Kind::Glue if auto_breaking && par.get(k + 1).is_some_and(|n| n.kind == Kind::Word) => self.hyphenate_word(par, k, lang, l_hyf, r_hyf, &mut edits),
+                Kind::Glue if auto_breaking => self.try_hyphenate(par, k, &mut lang, &mut l_hyf, &mut r_hyf, &mut edits),
                 _ => {}
             }
             k += 1;
         }
+        if edits.is_empty() {
+            return;
+        }
+        let old = std::mem::take(par);
+        par.reserve(old.len() + edits.iter().map(|e| e.2.len()).sum::<usize>());
+        let mut at = 0;
+        for (keep, hb, out) in edits {
+            par.extend_from_slice(&old[at..keep]);
+            // §903: the word's old nodes are flushed (`flush_node_list`).
+            for &n in &old[keep..=hb] {
+                self.e.nodes.flush_node(n);
+            }
+            par.extend(out);
+            at = hb + 1;
+        }
+        par.extend_from_slice(&old[at..]);
     }
 
     /// §894: the word after glue node `g`.
-    fn try_hyphenate(&mut self, par: &mut Vec<Node>, g: usize, lang: &mut usize, l_hyf: &mut usize, r_hyf: &mut usize) {
+    pub(super) fn try_hyphenate(&mut self, par: &[Node], g: usize, lang: &mut usize, l_hyf: &mut usize, r_hyf: &mut usize, edits: &mut Vec<(usize, usize, Vec<Node>)>) {
         let mut w = Word { hu: [0; 66], hyf: [0; 66], hn: 0, hf: 0, init_list: Vec::new(), init_lig: false, init_lft: false, hyphen_passed: 0, hold: Vec::new() };
         let mut hc = [0u16; 66];
         // §896: to the node before the first letter.
@@ -490,33 +633,54 @@ impl Machine<'_, '_> {
         let Some(hb) = hb else { return };
         // §923: hyphen positions from the exceptions, else the patterns.
         let hn = w.hn;
-        let mut key: Vec<u8> = hc[1..=hn].iter().map(|&c| c as u8).collect();
-        key.push(*lang as u8);
-        if let Some(pos) = self.e.hyph.exceptions.get(key.as_slice()) {
-            for &p in pos.iter() {
-                w.hyf[p as usize] = 1;
+        let hy = &mut self.e.hyph;
+        hy.memo_key.clear();
+        hy.memo_key.extend(hc[1..=hn].iter().map(|&c| c as u8));
+        hy.memo_key.extend_from_slice(&[*lang as u8, *l_hyf as u8, *r_hyf as u8]);
+        let mask = match hy.memo.get(hy.memo_key.as_slice()) {
+            Some(&m) => m,
+            None => {
+                let key = &hy.memo_key[..hn];
+                let mut exception = Vec::with_capacity(hn + 1);
+                exception.extend_from_slice(key);
+                exception.push(*lang as u8);
+                if let Some(pos) = hy.exceptions.get(exception.as_slice()) {
+                    for &p in pos.iter() {
+                        w.hyf[p as usize] = 1;
+                    }
+                } else {
+                    let Some(trie) = hy.trie(*lang) else { return };
+                    hc[0] = 0;
+                    hc[hn + 1] = 0;
+                    trie.find(&hc, hn, *r_hyf, &mut w.hyf);
+                }
+                for j in 0..*l_hyf {
+                    w.hyf[j] = 0;
+                }
+                for j in 0..*r_hyf {
+                    w.hyf[hn - j] = 0;
+                }
+                let m = (0..=hn).filter(|&j| w.hyf[j] & 1 == 1).fold(0u64, |m, j| m | 1 << j);
+                let hy = &mut self.e.hyph;
+                let key: Box<[u8]> = hy.memo_key.as_slice().into();
+                hy.memo.insert(key, m);
+                m
             }
-        } else {
-            let Some(trie) = self.e.hyph.trie(*lang) else { return };
-            hc[0] = 0;
-            hc[hn + 1] = 0;
-            trie.find(&hc, hn, *r_hyf, &mut w.hyf);
-        }
-        for j in 0..*l_hyf {
-            w.hyf[j] = 0;
-        }
-        for j in 0..*r_hyf {
-            w.hyf[hn - j] = 0;
-        }
+        };
         // §902
-        if !(*l_hyf..=hn - *r_hyf).any(|j| w.hyf[j] & 1 == 1) {
+        if mask == 0 {
             return;
         }
-        self.replace_word(par, ha, hb, w, hyf_bchar, hyf_char as u16);
+        for j in 0..=hn {
+            w.hyf[j] = (mask >> j & 1) as u8;
+        }
+        let (keep, out) = self.replace_word(par, ha, hb, w, hyf_bchar, hyf_char as u16);
+        edits.push((keep, hb, out));
     }
 
     /// §903, §913–§918: nodes `ha..=hb` replaced by the word with its discretionaries.
-    fn replace_word(&mut self, par: &mut Vec<Node>, ha: usize, hb: usize, mut w: Word, hyf_bchar: u16, hyf_char: u16) {
+    /// Returns where the replaced nodes start (`keep`) and the nodes that replace `keep..=hb`.
+    fn replace_word(&mut self, par: &[Node], ha: usize, hb: usize, mut w: Word, hyf_bchar: u16, hyf_char: u16) -> (usize, Vec<Node>) {
         let bchar = hyf_bchar;
         let hn = w.hn;
         let hf = w.hf;
@@ -654,10 +818,7 @@ impl Machine<'_, '_> {
                 break;
             }
         }
-        // §903: the word's old nodes are flushed (`flush_node_list`).
-        for n in par.splice(keep..=hb, out) {
-            self.e.nodes.flush_node(n);
-        }
+        (keep, out)
     }
 
     /// §905–§911 `reconstitute`: the translation of `hu[j..=n]` up to its first cut, into
@@ -853,6 +1014,17 @@ mod tests {
     #[test]
     fn uc_hyph_slot() {
         assert_eq!(super::super::engine_names::param("uchyph"), Some(Reg { region: Region::Int, slot: UC_HYPH }));
+    }
+
+    /// `data_hyph`'s stored trie is the one language 0's patterns build.
+    #[test]
+    fn stored_trie_is_the_built_one() {
+        let Some(h) = crate::data::data_hyph::english() else { return };
+        let t = h.trie.as_ref().expect("the table has a trie");
+        let mut hy = Hyph::default();
+        hy.set_language(0, h.patterns, h.exceptions());
+        assert!(hy.set_trie(0, t.each_ref().map(|s| s.iter().collect())));
+        assert!(hy.trie_matches(0));
     }
 
     /// Liang's example: `hy3ph he2n hena4 hen5at 1na n2at 1tio 2io o2n` hyphenate

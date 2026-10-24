@@ -2,10 +2,17 @@
 //! `backend_deflate`: stored, fixed-Huffman and dynamic-Huffman blocks, decoded through
 //! canonical code tables built once per block. Used for PNG image data.
 
-/// A canonical Huffman code: how many codes of each length, and the symbols in code order.
+/// Bits of the one-level lookup table: a code this long or shorter is decoded with one
+/// probe; longer ones bit by bit.
+const FAST: u32 = 10;
+
+/// A canonical Huffman code: how many codes of each length, the symbols in code order, and
+/// `fast`, indexed by the next `FAST` input bits (least significant first, as DEFLATE packs
+/// them): `symbol << 4 | length` for a code of at most `FAST` bits, 0 otherwise.
 struct Huffman {
     counts: [u16; 16],
     symbols: Vec<u16>,
+    fast: Vec<u16>,
 }
 
 impl Huffman {
@@ -34,33 +41,83 @@ impl Huffman {
                 offs[l as usize] += 1;
             }
         }
-        Some(Huffman { counts, symbols })
+        // RFC 1951 3.2.2: codes of one length are consecutive, in symbol order.
+        let mut fast = vec![0u16; 1 << FAST];
+        let (mut code, mut at) = (0u32, 0usize);
+        for (l, &count) in counts.iter().enumerate().take(FAST as usize + 1).skip(1) {
+            for _ in 0..count {
+                let rev = code.reverse_bits() >> (32 - l);
+                let e = symbols[at] << 4 | l as u16;
+                let mut i = rev as usize;
+                while i < fast.len() {
+                    fast[i] = e;
+                    i += 1 << l;
+                }
+                code += 1;
+                at += 1;
+            }
+            code <<= 1;
+        }
+        Some(Huffman { counts, symbols, fast })
     }
 }
 
 struct Bits<'a> {
     data: &'a [u8],
     pos: usize,
-    buf: u32,
+    buf: u64,
     count: u32,
 }
 
 impl Bits<'_> {
-    fn bits(&mut self, n: u32) -> Option<u32> {
-        while self.count < n {
-            let b = *self.data.get(self.pos)?;
+    /// At least 57 bits buffered, or all that is left.
+    #[inline]
+    fn refill(&mut self) {
+        while self.count <= 56 {
+            let Some(&b) = self.data.get(self.pos) else { return };
             self.pos += 1;
-            self.buf |= (b as u32) << self.count;
+            self.buf |= (b as u64) << self.count;
             self.count += 8;
         }
-        let v = self.buf & ((1u64 << n) - 1) as u32;
+    }
+
+    #[inline]
+    fn bits(&mut self, n: u32) -> Option<u32> {
+        if self.count < n {
+            self.refill();
+            if self.count < n {
+                return None;
+            }
+        }
+        let v = (self.buf & ((1u64 << n) - 1)) as u32;
         self.buf >>= n;
         self.count -= n;
         Some(v)
     }
 
-    /// One symbol: codes are read bit by bit, most significant first (RFC 1951 3.1.1).
+    /// To the next byte boundary, the bytes read ahead given back (a stored block).
+    fn align(&mut self) {
+        self.pos -= (self.count / 8) as usize;
+        self.buf = 0;
+        self.count = 0;
+    }
+
+    /// One symbol: through `fast` when its code is short, else bit by bit, most
+    /// significant first (RFC 1951 3.1.1).
+    #[inline]
     fn decode(&mut self, h: &Huffman) -> Option<u16> {
+        self.refill();
+        let e = h.fast[(self.buf & ((1 << FAST) - 1)) as usize];
+        let len = (e & 15) as u32;
+        if e != 0 && len <= self.count {
+            self.buf >>= len;
+            self.count -= len;
+            return Some(e >> 4);
+        }
+        self.decode_slow(h)
+    }
+
+    fn decode_slow(&mut self, h: &Huffman) -> Option<u16> {
         let (mut code, mut first, mut index) = (0i32, 0i32, 0i32);
         for len in 1..16 {
             code |= self.bits(1)? as i32;
@@ -85,13 +142,21 @@ const CL_ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 1
 
 /// Raw DEFLATE data, appended to `out`; `None` when it is malformed.
 pub fn inflate(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
+    inflate_to(data, out, usize::MAX)
+}
+
+/// [`inflate`], stopping once `out` holds at least `limit` bytes (it may hold a little
+/// more): a prefix of the data, without decoding the rest.
+pub fn inflate_to(data: &[u8], out: &mut Vec<u8>, limit: usize) -> Option<()> {
     let mut b = Bits { data, pos: 0, buf: 0, count: 0 };
     loop {
+        if out.len() >= limit {
+            return Some(());
+        }
         let last = b.bits(1)? == 1;
         match b.bits(2)? {
             0 => {
-                b.buf = 0;
-                b.count = 0;
+                b.align();
                 let len = u16::from_le_bytes([*data.get(b.pos)?, *data.get(b.pos + 1)?]) as usize;
                 b.pos += 4;
                 out.extend_from_slice(data.get(b.pos..b.pos + len)?);
@@ -103,7 +168,7 @@ pub fn inflate(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
                 l[256..280].fill(7);
                 let lit = Huffman::new(&l)?;
                 let dist = Huffman::new(&[5u8; 30])?;
-                codes(&mut b, &lit, &dist, out)?;
+                codes(&mut b, &lit, &dist, out, limit)?;
             }
             2 => {
                 let hlit = b.bits(5)? as usize + 257;
@@ -132,7 +197,7 @@ pub fn inflate(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
                 }
                 let lit = Huffman::new(&lengths[..hlit])?;
                 let dist = Huffman::new(&lengths[hlit..])?;
-                codes(&mut b, &lit, &dist, out)?;
+                codes(&mut b, &lit, &dist, out, limit)?;
             }
             _ => return None,
         }
@@ -142,8 +207,11 @@ pub fn inflate(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
     }
 }
 
-fn codes(b: &mut Bits, lit: &Huffman, dist: &Huffman, out: &mut Vec<u8>) -> Option<()> {
+fn codes(b: &mut Bits, lit: &Huffman, dist: &Huffman, out: &mut Vec<u8>, limit: usize) -> Option<()> {
     loop {
+        if out.len() >= limit {
+            return Some(());
+        }
         let sym = b.decode(lit)? as usize;
         match sym {
             0..=255 => out.push(sym as u8),
@@ -154,8 +222,12 @@ fn codes(b: &mut Bits, lit: &Huffman, dist: &Huffman, out: &mut Vec<u8>) -> Opti
                 let d = b.decode(dist)? as usize;
                 let back = *DIST_BASE.get(d)? as usize + b.bits(*DIST_EXTRA.get(d)? as u32)? as usize;
                 let start = out.len().checked_sub(back)?;
-                for i in 0..len {
-                    out.push(out[start + i]);
+                if back >= len {
+                    out.extend_from_within(start..start + len);
+                } else {
+                    for i in 0..len {
+                        out.push(out[start + i]);
+                    }
                 }
             }
         }
@@ -165,10 +237,15 @@ fn codes(b: &mut Bits, lit: &Huffman, dist: &Huffman, out: &mut Vec<u8>) -> Opti
 /// zlib data (a two-byte header, DEFLATE data, an Adler-32 checksum, which is not checked:
 /// libpng is told to ignore header mistakes too).
 pub fn zlib_decompress(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
+    zlib_decompress_to(data, out, usize::MAX)
+}
+
+/// [`zlib_decompress`] of a prefix of at least `limit` bytes ([`inflate_to`]).
+pub fn zlib_decompress_to(data: &[u8], out: &mut Vec<u8>, limit: usize) -> Option<()> {
     if data.len() < 2 || data[0] & 0x0F != 8 || (u16::from(data[0]) << 8 | u16::from(data[1])) % 31 != 0 {
         return None;
     }
-    inflate(&data[2..], out)
+    inflate_to(&data[2..], out, limit)
 }
 
 #[cfg(test)]
@@ -183,6 +260,22 @@ mod tests {
         let mut out = Vec::new();
         zlib_decompress(&packed, &mut out).expect("valid zlib");
         assert_eq!(out, text);
+    }
+
+    /// zlib's own output (level 9, one dynamic block) for text with skewed frequencies, so
+    /// some codes are longer than the `FAST` table and go through `decode_slow`; and its
+    /// prefix through `zlib_decompress_to`.
+    #[test]
+    fn dynamic_block_with_long_codes() {
+        let packed = include_bytes!("testdata/inflate-dynamic.z");
+        let text = include_bytes!("testdata/inflate-dynamic.txt");
+        let mut out = Vec::new();
+        zlib_decompress(packed, &mut out).expect("valid zlib");
+        assert_eq!(&out[..], &text[..]);
+        let mut head = Vec::new();
+        zlib_decompress_to(packed, &mut head, 100).expect("valid zlib");
+        assert!(head.len() >= 100 && head.len() < text.len());
+        assert_eq!(&head[..], &text[..head.len()]);
     }
 
     #[test]

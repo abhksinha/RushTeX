@@ -12,9 +12,12 @@
 //! checkpoint, diffed and restored. Builders exist only under `cfg(any(test, feature = "gen"))`.
 
 pub mod data_bits;
+pub mod data_class;
 pub mod data_blob;
 pub mod data_csr;
 pub mod data_embed;
+pub mod data_hyph;
+pub mod data_kernel;
 pub mod data_nfss;
 pub mod data_pkgs;
 pub mod data_phf;

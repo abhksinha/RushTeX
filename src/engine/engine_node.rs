@@ -49,6 +49,11 @@ pub enum Kind {
     /// §681–§688: a noad of a math list being built, `a` indexing the machine's noad
     /// table (see `engine_mlist`). Noads never reach a box.
     Noad,
+    /// GDL: a word of font `font` made by the main loop, entry `a` of [`Nodes::words`]. It
+    /// stands for the entry's character, ligature and kern nodes, which it owns none of;
+    /// only the native job makes them, in paragraphs, and whatever looks inside a word
+    /// reads the entry or expands it ([`Nodes::expand_words`]).
+    Word,
 }
 
 /// pdfTeX's `margin_kern_node` (`left_side`, `right_side`), as kern subtypes.
@@ -124,6 +129,8 @@ pub struct Nodes {
     pub glues: Vec<Glue>,
     pub rules: Vec<[i32; 3]>,
     pub lig_chars: Vec<u8>,
+    /// The word table's entries ([`Kind::Word`]).
+    pub words: super::engine_words::WordStore,
     pub discs: Vec<[(u32, u32); 2]>,
     pub inserts: Vec<InsRec>,
     /// The free blocks and slots of each table (model M: one owner per list or record,
@@ -557,10 +564,46 @@ impl Nodes {
         self.add_box(r)
     }
 
-    /// The characters a ligature was made from.
+    /// The characters a ligature was made from (a word entry's ligature: from the entry's).
     pub fn lig_from(&self, n: &Node) -> &[u8] {
         let at = n.b as usize;
         &self.lig_chars[at..at + (n.sub >> 2) as usize]
+    }
+
+    /// The nodes word `n` stands for. A ligature among them keeps its characters in the
+    /// entry: read them with [`WordStore::lig_from`](super::engine_words::WordStore::lig_from).
+    #[inline]
+    pub fn word_items(&self, n: &Node) -> &[Node] {
+        self.words.items(n.a as u32)
+    }
+
+    /// `list` with every word replaced by the nodes it stands for, each ligature with
+    /// characters of its own, as the main loop would have made them.
+    pub fn expand_words(&mut self, list: &mut Vec<Node>) {
+        if !list.iter().any(|n| n.kind == Kind::Word) {
+            return;
+        }
+        let old = std::mem::take(list);
+        list.reserve(old.len() * 4);
+        for n in old {
+            if n.kind != Kind::Word {
+                list.push(n);
+                continue;
+            }
+            let (s, e) = self.words.range(n.a as u32);
+            for i in s..e {
+                let m = self.words.items[i];
+                if m.kind == Kind::Lig {
+                    let mut from = [0u8; 64];
+                    let src = self.words.lig_from(&m);
+                    from[..src.len()].copy_from_slice(src);
+                    let lig = self.lig_node(m.font, m.a as u8, &from[..src.len()], m.sub & 3);
+                    list.push(lig);
+                } else {
+                    list.push(m);
+                }
+            }
+        }
     }
 
     #[inline]

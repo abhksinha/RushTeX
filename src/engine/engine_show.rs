@@ -16,7 +16,12 @@ impl Machine<'_, '_> {
             Meaning::Unset | Meaning::Undefined => out.push_str("undefined"),
             Meaning::DontExpand => ctx.esc("relax", out),
             Meaning::Prim(p) => ctx.esc(p.name(), out),
-            Meaning::Kernel(i) => ctx.esc(super::engine_kernel::kernel_name(i), out),
+            // The macro it stands for, as LaTeX shows it.
+            Meaning::Kernel(i) => match self.kernel_orig(i) {
+                Some(orig) => self.print_meaning(Token::cs(orig), out),
+                None => ctx.esc(super::engine_kernel::kernel_name(i), out),
+            },
+            Meaning::Doc(i) => ctx.esc(super::engine_doc::doc_name(i), out),
             Meaning::Native(i) => {
                 let (name, cmd) = PRIMITIVES[i as usize];
                 ctx.esc(name, out);

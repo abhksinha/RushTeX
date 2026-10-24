@@ -43,7 +43,7 @@ pub(super) struct BoxFrame {
 }
 
 /// §1058 glue of `\hfil` and its kin: (stretch, stretch order, shrink, shrink order).
-fn fil_glue(p: Prim) -> Glue {
+pub(super) fn fil_glue(p: Prim) -> Glue {
     const ONE: i32 = 65536;
     let (stretch, so, shrink, ro) = match p {
         Prim::Hfil | Prim::Vfil => (ONE, 1, 0, 0),
@@ -102,7 +102,7 @@ impl Machine<'_, '_> {
     }
 
     /// The last node of the list being built, if any.
-    fn tail(&self) -> Option<Node> {
+    pub(super) fn tail(&self) -> Option<Node> {
         (self.cur.len() > self.start as usize).then(|| self.cur[self.cur.len() - 1])
     }
 
@@ -160,13 +160,7 @@ impl Machine<'_, '_> {
             Prim::NoIndent => {}
             // §1113: the italic correction of the last character, or of a ligature's
             // character.
-            Prim::ItalCorr => {
-                if let Some(t) = self.tail().filter(|t| matches!(t.kind, Kind::Char | Kind::Lig)) {
-                    let f = &self.e.fonts.list[t.font as usize];
-                    let ic = u8::try_from(t.a).ok().and_then(|c| f.dims(c, &self.e.fonts.info)).map_or(0, |d| d[3]);
-                    self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, ic) });
-                }
-            }
+            Prim::ItalCorr => self.append_italic_correction(),
             // §1094: vertical material ends a paragraph; in a restricted horizontal list
             // (an `\hbox`) it does not belong.
             Prim::Vskip | Prim::Vfil | Prim::Vfill | Prim::Vss | Prim::VfilNeg | Prim::Hrule | Prim::Unvbox | Prim::Unvcopy if !vertical => {
@@ -191,9 +185,7 @@ impl Machine<'_, '_> {
             }
             Prim::Hskip | Prim::Vskip => {
                 let (g, fresh) = self.scan_glue_spec(false);
-                let mut n = self.e.nodes.glue_node(g, 0);
-                n.font = (fresh && g == Glue::default()) as u16;
-                self.cur.push(n);
+                self.build_glue(g, fresh);
             }
             Prim::Hfil | Prim::Hfill | Prim::Hss | Prim::HfilNeg | Prim::Vfil | Prim::Vfill | Prim::Vss | Prim::VfilNeg => {
                 let n = self.e.nodes.glue_node(fil_glue(p), 0);
@@ -207,18 +199,11 @@ impl Machine<'_, '_> {
             // §1103
             Prim::Penalty => {
                 let v = self.scan_int();
-                self.cur.push(Node::new(Kind::Penalty, v));
-                self.maybe_build_page();
+                self.build_penalty(v);
             }
             Prim::Hrule | Prim::Vrule => {
                 let dims = self.scan_rule_spec(p);
-                let n = self.e.nodes.rule_node(dims);
-                self.cur.push(n);
-                if vertical {
-                    self.aux = IGNORE_DEPTH;
-                } else if self.mode == Mode::Horizontal {
-                    self.aux = 1000;
-                }
+                self.build_rule(dims);
             }
             Prim::Unhbox | Prim::Unhcopy | Prim::Unvbox | Prim::Unvcopy => self.unpackage(p),
             // §1105 `delete_last`.
@@ -313,7 +298,6 @@ impl Machine<'_, '_> {
             }
             _ => {
                 // §1083: the group, the size, then the list in its own mode.
-                let horizontal = p == Prim::Hbox;
                 let group = match p {
                     Prim::Hbox if !matches!(ctx, Ctx::Set { .. }) && self.mode == Mode::Vertical => ADJUSTED_HBOX_GROUP,
                     Prim::Hbox => HBOX_GROUP,
@@ -327,18 +311,27 @@ impl Machine<'_, '_> {
                 } else {
                     (false, 0)
                 };
-                self.frames.push(BoxFrame { ctx, exact, size, group });
-                self.begin_group(group);
-                self.scan_left_brace();
-                if horizontal {
-                    self.push_nest(Mode::Horizontal, true, 1000);
-                    self.insert_toks(EVERY_HBOX);
-                } else {
-                    self.normal_paragraph();
-                    self.push_nest(Mode::Vertical, true, IGNORE_DEPTH);
-                    self.insert_toks(EVERY_VBOX);
-                }
+                self.open_box(group, ctx, exact, size, true);
             }
+        }
+    }
+
+    /// §1083 after the box's size: its group, its `{` when `brace` (a native opening a box
+    /// has none to read), then its list in its own mode. `group` is a box group code
+    /// ([`HBOX_GROUP`] ... [`VTOP_GROUP`], or `\vcenter`'s).
+    pub(super) fn open_box(&mut self, group: u8, ctx: Ctx, exact: bool, size: i32, brace: bool) {
+        self.frames.push(BoxFrame { ctx, exact, size, group });
+        self.begin_group(group);
+        if brace {
+            self.scan_left_brace();
+        }
+        if matches!(group, HBOX_GROUP | ADJUSTED_HBOX_GROUP) {
+            self.push_nest(Mode::Horizontal, true, 1000);
+            self.insert_toks(EVERY_HBOX);
+        } else {
+            self.normal_paragraph();
+            self.push_nest(Mode::Vertical, true, IGNORE_DEPTH);
+            self.insert_toks(EVERY_VBOX);
         }
     }
 
@@ -351,13 +344,7 @@ impl Machine<'_, '_> {
         } else {
             (false, 0)
         };
-        let group = super::engine_noad::VCENTER_GROUP;
-        self.frames.push(BoxFrame { ctx: Ctx::Shift(0), exact, size, group });
-        self.begin_group(group);
-        self.scan_left_brace();
-        self.normal_paragraph();
-        self.push_nest(Mode::Vertical, true, IGNORE_DEPTH);
-        self.insert_toks(EVERY_VBOX);
+        self.open_box(super::engine_noad::VCENTER_GROUP, Ctx::Shift(0), exact, size, true);
     }
 
     /// §403 `scan_left_brace`.
@@ -431,7 +418,7 @@ impl Machine<'_, '_> {
     }
 
     /// §1075 `box_end`.
-    fn box_end(&mut self, ctx: Ctx, b: Option<u32>) {
+    pub(super) fn box_end(&mut self, ctx: Ctx, b: Option<u32>) {
         match ctx {
             Ctx::Shift(s) => {
                 let Some(b) = b else { return };
@@ -589,11 +576,28 @@ impl Machine<'_, '_> {
         }
     }
 
-    /// §1091 `new_graf`: a paragraph starts inside a vertical box.
+    /// §1113: the italic correction of the last character, or of a ligature's character.
+    pub(super) fn append_italic_correction(&mut self) {
+        let tail = self.tail().map(|t| if t.kind == Kind::Word { self.e.nodes.word_items(&t).last().copied().unwrap_or(t) } else { t });
+        if let Some(t) = tail.filter(|t| matches!(t.kind, Kind::Char | Kind::Lig)) {
+            let f = &self.e.fonts.list[t.font as usize];
+            let ic = u8::try_from(t.a).ok().and_then(|c| f.dims(c, &self.e.fonts.info)).map_or(0, |d| d[3]);
+            self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, ic) });
+        }
+    }
+
+    /// §1091 `new_graf`: a paragraph starts inside a vertical box. In a native document,
+    /// `\everypar` holds LaTeX's paragraph hook (`Machine::para_hook`).
     pub(super) fn new_graf(&mut self, indent: bool) {
+        let parskip = self.glue_param(super::engine_pack::PAR_SKIP);
+        self.start_graf(indent, parskip, true);
+    }
+
+    /// §1091 with `\parskip` given; `every` inserts `\everypar`.
+    pub(super) fn start_graf(&mut self, indent: bool, parskip: Glue, every: bool) {
         // §1091: the main vertical list always gets `\parskip`; a box's only when not empty.
         if self.nest.is_empty() || self.cur.len() > self.start as usize {
-            let g = self.e.nodes.glue_node(self.glue_param(super::engine_pack::PAR_SKIP), super::engine_pack::PAR_SKIP as u8 + 1);
+            let g = self.e.nodes.glue_node(parskip, super::engine_pack::PAR_SKIP as u8 + 1);
             self.cur.push(g);
         }
         self.prev_graf = 0;
@@ -606,7 +610,9 @@ impl Machine<'_, '_> {
             let b = self.e.nodes.add_box(BoxRec { width: self.dimen_param(PAR_INDENT), ..BoxRec::default() });
             self.cur.push(Node::new(Kind::Box, b as i32));
         }
-        self.insert_toks(EVERY_PAR);
+        if every {
+            self.insert_toks(EVERY_PAR);
+        }
         // `if nest_ptr=1 then build_page`: the `\parskip` glue goes to the page.
         if self.typeset && self.nest.len() == 1 {
             self.build_page();
@@ -692,6 +698,8 @@ impl Machine<'_, '_> {
             Kind::Kern => 12,
             Kind::Penalty => 13,
             Kind::Noad => 15,
+            // A word's last node.
+            Kind::Word => self.e.nodes.word_items(n).last().map_or(0, |m| self.node_type(m)),
         }
     }
 

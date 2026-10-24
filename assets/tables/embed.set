@@ -16,3 +16,6 @@ usy*.pfb
 uzd*.pfb
 lm-*.enc
 8r.enc
+# article's TS1 text font (tcrm1000 is cm-super's sfrm1000 through its TS1 encoding).
+sfrm1000.pfb
+cm-super-ts1.enc

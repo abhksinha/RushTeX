@@ -8,6 +8,8 @@
 pub mod engine_assign;
 pub mod engine_align;
 pub mod engine_box;
+pub mod engine_build;
+pub mod engine_words;
 pub mod engine_catcode;
 pub mod engine_chars;
 pub mod engine_cond;
@@ -26,7 +28,10 @@ pub mod engine_lex;
 pub mod engine_macro;
 pub mod engine_md5;
 pub mod engine_mlist;
+pub mod engine_doc;
 pub mod engine_kernel;
+#[cfg(feature = "mprof")]
+pub mod engine_mprof;
 pub mod engine_native;
 pub mod engine_names;
 pub mod engine_noad;

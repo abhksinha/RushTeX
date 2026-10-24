@@ -454,11 +454,18 @@ impl Machine<'_, '_> {
         // §863: the first pass, without hyphenation; then (§891) every word is hyphenated
         // before the second, which is what TeX's word-at-a-time hyphenation in that pass
         // amounts to, since each word depends only on its own nodes.
+        // Character protrusion and font expansion read every character of the lines: the
+        // words are expanded first.
+        if self.ip(PDF_PROTRUDE_CHARS) > 0 || self.ip(PDF_ADJUST_SPACING) > 0 {
+            self.e.nodes.expand_words(&mut par);
+        }
         let first = if self.ip(PRETOLERANCE) >= 0 { self.passes(&par, &shape, background, prev_graf, false) } else { None };
         let (breaks, last_line) = match first {
             Some(b) => b,
             None => {
                 self.e.hyph.ready = true;
+                // §894 reads a word's characters: words it could read beyond are expanded.
+                self.expand_words_near(&mut par);
                 self.hyphenate_par(&mut par, par_hyph);
                 self.passes(&par, &shape, background, prev_graf, true).expect("the final pass always succeeds")
             }
@@ -505,6 +512,7 @@ impl Machine<'_, '_> {
                     }
                     add(&mut w, g);
                 }
+                Kind::Word => w[0] = nodes.words.rec(n.a as u32).width,
                 Kind::Box => w[0] = nodes.boxes[n.a as usize].width,
                 Kind::Rule => w[0] = nodes.rules[n.a as usize][0],
                 Kind::Kern | Kind::Math => w[0] = n.a,
@@ -582,6 +590,15 @@ impl Machine<'_, '_> {
                         continue;
                     }
                     Kind::Box | Kind::Rule | Kind::Lig => br.total = sum(br.total, widths(par, k)),
+                    // A word ends in a character, ligature or font kern: glue after it is a
+                    // legal break, as after a character (§868).
+                    Kind::Word => {
+                        br.total[0] += nodes.words.rec(n.a as u32).width;
+                        prev = Some(Kind::Char);
+                        prev_explicit_kern = false;
+                        k += 1;
+                        continue;
+                    }
                     // §869: a break after the pre-break text, then past the replaced text.
                     Kind::Disc => {
                         let [pre, _] = disc_lists(nodes, &n);

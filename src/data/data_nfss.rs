@@ -626,7 +626,11 @@ pub fn check_sizes(s: &GenShape) -> Vec<String> {
 /// font. Each case runs in a group with errors silenced and the error path cut short.
 #[cfg(any(test, feature = "gen"))]
 pub fn check_source(fds: &[&str], cases: &[(String, String)]) -> String {
-    let mut s = declare_source(fds);
+    check_cases(declare_source(fds), cases)
+}
+
+#[cfg(any(test, feature = "gen"))]
+fn check_cases(mut s: String, cases: &[(String, String)]) -> String {
     let end = s.rfind("\\immediate\\closeout").unwrap_or(s.len());
     s.truncate(end);
     s.push_str(concat!(
@@ -684,22 +688,44 @@ pub fn check(t: &NfssTable, fams: &[GenFamily], shapes: &[GenShape], engine_out:
 ///   empty, as its own package would have.
 #[cfg(any(test, feature = "gen"))]
 pub fn declare_source(fds: &[&str]) -> String {
-    let mut s = String::from(concat!(
-        "\\documentclass{article}\\makeatletter\n",
-        "\\newwrite\\rt@out\\immediate\\openout\\rt@out=rtnfss\n",
-        "\\let\\rt@family\\DeclareFontFamily\n",
-        "\\def\\DeclareFontFamily#1#2#3{\\@ifundefined{T@#1}{\\DeclareFontEncoding{#1}{}{}}{}\\rt@family{#1}{#2}{#3}",
-        "\\immediate\\write\\rt@out{F #1+#2 \\detokenize{#3}}}\n",
-        "\\let\\rt@shape\\DeclareFontShape@\n",
-        "\\def\\DeclareFontShape@#1#2#3#4#5#6{\\rt@shape{#1}{#2}{#3}{#4}{#5}{#6}",
-        "\\immediate\\write\\rt@out{S #1/#2/\\reserved@b/#4 \\expandafter\\string\\csname#5\\endcsname\\space\\detokenize{#6}}}\n",
-    ));
+    let mut s = DECLARE_HEAD.to_string();
     for fd in fds {
         s.push_str(&format!("\\immediate\\write\\rt@out{{D {fd}}}\\input{{{fd}}}\n"));
     }
     s.push_str("\\immediate\\closeout\\rt@out\\csname @@end\\endcsname\n");
     s
 }
+
+/// The declaration run of a package (generator only): the packages it loads, then `D <pkg>`
+/// and the package, so its own declarations are those after that line.
+#[cfg(any(test, feature = "gen"))]
+pub fn declare_package_source(deps: &[String], pkg: &str) -> String {
+    let mut s = DECLARE_HEAD.to_string();
+    for d in deps {
+        s.push_str(&format!("\\usepackage{{{d}}}\n"));
+    }
+    s.push_str(&format!("\\immediate\\write\\rt@out{{D {pkg}}}\\usepackage{{{pkg}}}\n"));
+    s.push_str("\\immediate\\closeout\\rt@out\\csname @@end\\endcsname\n");
+    s
+}
+
+/// [`check_source`] after a package's declaration run instead of `.fd` files.
+#[cfg(any(test, feature = "gen"))]
+pub fn check_package_source(deps: &[String], pkg: &str, cases: &[(String, String)]) -> String {
+    check_cases(declare_package_source(deps, pkg), cases)
+}
+
+#[cfg(any(test, feature = "gen"))]
+const DECLARE_HEAD: &str = concat!(
+    "\\documentclass{article}\\makeatletter\n",
+    "\\newwrite\\rt@out\\immediate\\openout\\rt@out=rtnfss\n",
+    "\\let\\rt@family\\DeclareFontFamily\n",
+    "\\def\\DeclareFontFamily#1#2#3{\\@ifundefined{T@#1}{\\DeclareFontEncoding{#1}{}{}}{}\\rt@family{#1}{#2}{#3}",
+    "\\immediate\\write\\rt@out{F #1+#2 \\detokenize{#3}}}\n",
+    "\\let\\rt@shape\\DeclareFontShape@\n",
+    "\\def\\DeclareFontShape@#1#2#3#4#5#6{\\rt@shape{#1}{#2}{#3}{#4}{#5}{#6}",
+    "\\immediate\\write\\rt@out{S #1/#2/\\reserved@b/#4 \\expandafter\\string\\csname#5\\endcsname\\space\\detokenize{#6}}}\n",
+);
 
 #[cfg(test)]
 mod tests {

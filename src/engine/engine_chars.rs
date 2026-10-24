@@ -44,7 +44,7 @@ pub(super) struct Item {
 
 impl Machine<'_, '_> {
     /// §1034 `adjust_space_factor`.
-    fn adjust_space_factor(&mut self, c: u8) {
+    pub(super) fn adjust_space_factor(&mut self, c: u8) {
         let s = self.e.eqtb.code(super::engine_eqtb::Code::Sf, c as u32);
         self.aux = if s == 1000 {
             1000
@@ -66,6 +66,9 @@ impl Machine<'_, '_> {
     // `wrapup!` resets flags that some of its call sites set again at once, as TeX's does.
     #[allow(unused_assignments)]
     pub(super) fn main_loop(&mut self, first: u8) {
+        if self.text_run.is_none() && self.word(first) {
+            return;
+        }
         self.adjust_space_factor(first);
         let f = self.cur_font();
         if self.mode == Mode::Horizontal && !self.inner {
@@ -159,6 +162,19 @@ impl Machine<'_, '_> {
                     Step::Lookahead
                 }
                 // §1038: the next token: another character, or the end of the word.
+                // GDL's byte run: its next character, or the end of the word at a space or
+                // at the run's end (what follows the run is not a character).
+                Step::Lookahead if self.text_run.is_some() => match self.text_run.as_mut().and_then(|(b, i)| b.get(*i).filter(|&&c| c != b' ').map(|&c| (c, i))) {
+                    Some((c, i)) => {
+                        *i += 1;
+                        cur_l_next(&mut lig_stack, c);
+                        Step::Lookahead1
+                    }
+                    None => {
+                        cur_r = bchar;
+                        Step::LigLoop
+                    }
+                },
                 Step::Lookahead => match self.get_x_token(false) {
                     None => {
                         cur_r = bchar;
@@ -410,6 +426,7 @@ impl Machine<'_, '_> {
         // The list ends at the first node that does not (§1121).
         let start = self.start as usize;
         let mut list: Vec<Node> = self.cur.drain(start..).collect();
+        self.e.nodes.expand_words(&mut list);
         if let Some(k) = list.iter().position(|n| !matches!(n.kind, Kind::Char | Kind::Kern | Kind::Box | Kind::Rule | Kind::Lig)) {
             self.error("Improper discretionary list");
             list.truncate(k);

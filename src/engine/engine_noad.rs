@@ -592,7 +592,7 @@ impl Machine<'_, '_> {
     }
 
     /// §1139 "Go into ordinary math mode".
-    fn enter_text_math(&mut self) {
+    pub(super) fn enter_text_math(&mut self) {
         self.push_math(MATH_SHIFT_GROUP, false);
         self.set_local(Region::Int, CUR_FAM, -1);
         self.insert_toks(EVERY_MATH);
@@ -650,7 +650,10 @@ impl Machine<'_, '_> {
         let quad = self.e.fonts.params(self.cur_font()).get(5).copied().unwrap_or(0);
         let mut v = jb.shift + 2 * quad;
         let mut w = -MAX_DIMEN;
-        for n in self.e.nodes.get(jb.list) {
+        // A word counts as the nodes it stands for.
+        let nodes = &self.e.nodes;
+        let list = nodes.get(jb.list).iter().flat_map(|n| if n.kind == Kind::Word { nodes.word_items(n) } else { std::slice::from_ref(n) });
+        for n in list {
             let (d, visible) = match n.kind {
                 Kind::Char | Kind::Lig => {
                     let f = &self.e.fonts.list[n.font as usize];
@@ -722,7 +725,7 @@ impl Machine<'_, '_> {
     }
 
     /// §1194 `after_math`: the `$` that ends a formula, an equation number, or a display.
-    fn after_math(&mut self) {
+    pub(super) fn after_math(&mut self) {
         let mut danger = self.math_fonts_missing();
         let mut inner = self.inner;
         let mut leqno = false;

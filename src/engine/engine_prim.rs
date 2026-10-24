@@ -647,6 +647,9 @@ pub enum Meaning {
     /// index in `kernel::KERNEL`. Bound per run by `RT_NATIVE` in place of the macro, which
     /// it calls for any case it does not take itself; unexpandable, like a primitive.
     Kernel(u16),
+    /// A LaTeX command of the native document job (`engine_doc`): its index in
+    /// `engine_doc::DOC`. Never in a format.
+    Doc(u16),
 }
 
 #[cfg(test)]

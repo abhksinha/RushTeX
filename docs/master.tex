@@ -179,8 +179,8 @@ when it decides a position, because those rules are the output.
   \item Walk each page to write its text, selecting a font for each character.
         Per word, with the font made current once per word.
   \item Read, decrypt, subset and encrypt the font programs.
-        Build time for reading: the programs and their glyph names are carried in the
-        program. Not yet done: subsetting, so whole fonts are embedded.
+        Build time for reading: the programs, decrypted, and their glyph names are
+        carried in the program. Each document's subset is cut as pdfTeX cuts it.
   \item Compress each page's content stream.
         Kept, with a simpler compressor that makes larger files.
 \end{enumerate}
@@ -534,8 +534,8 @@ the article class without the \texttt{twocolumn}, \texttt{titlepage}, \texttt{le
 and \texttt{fleqn} options, and two packages; graphics, amsmath's
 environments, hyperref, package options and bibliographies from BibTeX are not yet
 native, so most papers still run on the engine path, which needs an installed \TeX{}
-Live. Fonts are embedded whole, not subset, and pages are compressed with fixed codes,
-so RushTeX's files are about a quarter larger than pdfLaTeX's. The cost per page is six
+Live. Pages are compressed with fixed codes, so RushTeX's files are a few percent larger
+than pdfLaTeX's, and up to a quarter for long texts. The cost per page is six
 times below pdfLaTeX's, short of the forty times the project aims for. Each of these is
 on the work list, in the order of the papers it would unblock.
 

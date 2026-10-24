@@ -26,8 +26,8 @@ const RAW: u32 = 0;
 const PLAIN: u32 = 3;
 /// A `.pfb` stored decrypted.
 const PFB: u32 = 1;
-/// A `.pfb` stored decrypted and not compressed: a font without a program built into the
-/// binary is subset from it on every use, so reading it is a copy, not an inflate.
+/// A `.pfb` stored decrypted and not compressed: a font is subset from it on every use, so
+/// reading it is a copy, not an inflate.
 const PFB_PLAIN: u32 = 2;
 
 /// Type 1's eexec and charstring keys and constants (Adobe Type 1 Font Format §7.1).
@@ -305,8 +305,11 @@ pub fn write(w: &mut super::data_blob::BlobWriter, files: &[(String, Vec<u8>)]) 
         id.bytes(name.as_bytes());
         id.bytes(bytes);
         let mut body = bytes.clone();
+        // Every carried `.pfb` is subset from its decrypted text on each use (`write_font`
+        // embeds a font the map file names from its own file), so it is stored plain:
+        // reading it is a copy, not an inflate.
         let kind = if name.ends_with(".pfb") && transform_pfb(&mut body, true).is_some() {
-            if crate::backend::backend_optical::program_by_name(name.trim_end_matches(".pfb")).is_some() { PFB } else { PFB_PLAIN }
+            PFB_PLAIN
         } else if name.ends_with(".enc") || name.ends_with(".map") {
             PLAIN
         } else {

@@ -40,6 +40,20 @@ pub struct ShippedForm {
     pub resources: Vec<u8>,
 }
 
+/// Six capitals naming a subset of font `name` holding characters `used` (pdfTeX's
+/// `make_subset_tag` draws them from an MD5 of the same; any stable hash names it).
+fn subset_tag(name: &str, used: &[u64; 4]) -> String {
+    let mut h = fnv(name.as_bytes());
+    for w in used {
+        h = (h ^ w).wrapping_mul(0x100_0000_01b3);
+    }
+    (0..6).map(|_| {
+        let c = b'A' + (h % 26) as u8;
+        h /= 26;
+        char::from(c)
+    }).collect()
+}
+
 /// pdfTeX's `/XObject` resources: forms, then images.
 fn xobjects(buf: &mut Vec<u8>, forms: &[(u32, i32)], images: &[(u32, i32)]) {
     buf.extend_from_slice(b" /XObject <<");
@@ -80,10 +94,41 @@ pub struct PkFont {
 struct Doc {
     buf: Vec<u8>,
     offsets: Vec<usize>,
+    /// With `\pdfobjcompresslevel` above 0 (PDF 1.5 on), the objects that are not streams
+    /// go into object streams, as pdfTeX's `pdf_os` writes them.
+    pack: Option<Pack>,
+    deflate: crate::backend::backend_deflate::DeflateCompressor,
 }
 
+/// The packed objects' text, each object's number and where its text starts; `open` while
+/// one is being written (its text then goes to `body`, swapped with the document's).
+#[derive(Default)]
+struct Pack {
+    body: Vec<u8>,
+    ids: Vec<usize>,
+    starts: Vec<usize>,
+    open: bool,
+}
+
+/// pdfTeX's `pdf_os_max_objs`: objects per object stream.
+const OBJECTS_PER_STREAM: usize = 100;
+
 impl Doc {
+    /// Object `id`, packed into an object stream where the document packs them.
     fn begin(&mut self, id: usize) {
+        let Some(p) = &mut self.pack else { return self.begin_direct(id) };
+        if self.offsets.len() <= id {
+            self.offsets.resize(id + 1, 0);
+        }
+        self.offsets[id] = usize::MAX;
+        std::mem::swap(&mut self.buf, &mut p.body);
+        p.ids.push(id);
+        p.starts.push(self.buf.len());
+        p.open = true;
+    }
+
+    /// Object `id` written in the file itself (a stream, or any object when not packing).
+    fn begin_direct(&mut self, id: usize) {
         if self.offsets.len() <= id {
             self.offsets.resize(id + 1, 0);
         }
@@ -93,7 +138,48 @@ impl Doc {
     }
 
     fn end(&mut self) {
-        self.buf.extend_from_slice(b"endobj\n");
+        match &mut self.pack {
+            Some(p) if p.open => {
+                std::mem::swap(&mut self.buf, &mut p.body);
+                p.open = false;
+            }
+            _ => self.buf.extend_from_slice(b"endobj\n"),
+        }
+    }
+
+    /// `data` zlib-compressed.
+    fn deflated(&mut self, data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(data.len() / 2 + 64);
+        self.deflate.compress_zlib(data, &mut out);
+        out
+    }
+
+    /// The packed objects as object streams of at most `OBJECTS_PER_STREAM` objects each;
+    /// each packed object's (stream, index), by object number.
+    fn write_object_streams(&mut self) -> Vec<(u32, u32)> {
+        let Some(p) = self.pack.take() else { return Vec::new() };
+        let mut at = vec![(0u32, 0u32); self.offsets.len()];
+        let mut text = Vec::new();
+        for (chunk, ids) in p.ids.chunks(OBJECTS_PER_STREAM).enumerate() {
+            let first = chunk * OBJECTS_PER_STREAM;
+            let from = p.starts[first];
+            let to = p.starts.get(first + ids.len()).copied().unwrap_or(p.body.len());
+            let id = self.offsets.len();
+            text.clear();
+            for (k, &obj) in ids.iter().enumerate() {
+                print_int(&mut text, obj as i64);
+                text.push(b' ');
+                print_int(&mut text, (p.starts[first + k] - from) as i64);
+                text.push(b' ');
+                at[obj] = (id as u32, k as u32);
+            }
+            let head = text.len();
+            text.extend_from_slice(&p.body[from..to]);
+            let data = self.deflated(&text);
+            let dict = format!(" /Type /ObjStm /N {} /First {head}", ids.len());
+            self.stream(id, dict.as_bytes(), &data, true);
+        }
+        at
     }
 
     fn reference(&mut self, id: usize) {
@@ -102,7 +188,7 @@ impl Doc {
     }
 
     fn stream(&mut self, id: usize, dict: &[u8], data: &[u8], deflated: bool) {
-        self.begin(id);
+        self.begin_direct(id);
         self.buf.extend_from_slice(b"<<");
         self.buf.extend_from_slice(dict);
         if deflated {
@@ -392,6 +478,9 @@ pub struct DocMeta<'m> {
     pub catalog: &'m [u8],
     pub objects: &'m [(i32, Vec<u8>)],
     pub base: usize,
+    /// `\pdfobjcompresslevel`: above 0, objects other than streams are packed into object
+    /// streams (with PDF 1.5 or later).
+    pub objcompress: i32,
     /// The shipped forms.
     pub forms: &'m [ShippedForm],
 }
@@ -403,16 +492,23 @@ pub struct DocMeta<'m> {
 pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, meta: &DocMeta) -> Vec<u8> {
     let map = files("pdftex.map").map(|b| b.iter().map(|&c| char::from(c)).collect::<String>()).unwrap_or_default();
     let map = map_index(&map);
-    let mut d = Doc { buf: Vec::with_capacity(1 << 16), offsets: vec![0] };
     // pdfTeX's header: `\pdfminorversion` (4 when unset or out of range).
     let minor = if (0..=9).contains(&meta.minor) && meta.minor != 0 { meta.minor } else { 4 };
+    // Object streams need PDF 1.5 (pdftex.web `pdf_os_enable`).
+    let pack = (meta.objcompress > 0 && minor >= 5).then(Pack::default);
+    let mut d = Doc { buf: Vec::with_capacity(1 << 16), offsets: vec![0], pack, deflate: Default::default() };
     d.buf.extend_from_slice(b"%PDF-1.");
     print_int(&mut d.buf, minor as i64);
     d.buf.extend_from_slice(b"\n%\xD0\xD4\xC5\xD8\n");
     // The document's objects first, as numbered; then the catalog, the page tree, the
     // resources, one content stream per page, and the fonts.
     for (id, body) in meta.objects {
-        d.begin(*id as usize);
+        // A `\pdfobj stream` is a stream: never packed.
+        if body.windows(7).any(|w| w == b"stream\n" || w == b"stream\r") {
+            d.begin_direct(*id as usize);
+        } else {
+            d.begin(*id as usize);
+        }
         d.buf.extend_from_slice(body);
         d.end();
     }
@@ -555,6 +651,34 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
     }
     d.buf.extend_from_slice(b">>\n");
     d.end();
+    if d.pack.is_some() {
+        let at = d.write_object_streams();
+        // The cross-reference stream (PDF 1.5 §3.4.7): type 0 free, 1 at an offset, 2 in an
+        // object stream; field widths as the largest offset needs.
+        let id = d.offsets.len();
+        let xref = d.buf.len();
+        d.offsets.push(xref);
+        let n = id + 1;
+        let w = (1..=8).find(|&b| b == 8 || xref >> (8 * b) == 0).unwrap_or(8);
+        let mut rows = Vec::with_capacity(n * (w + 3));
+        for (i, &o) in d.offsets.iter().enumerate() {
+            let (kind, field, index) = match o {
+                usize::MAX => (2u8, at[i].0 as usize, at[i].1 as u16),
+                0 if i != id => (0, 0, if i == 0 { 65535 } else { 0 }),
+                o => (1, o, 0),
+            };
+            rows.push(kind);
+            rows.extend_from_slice(&field.to_be_bytes()[8 - w..]);
+            rows.extend_from_slice(&index.to_be_bytes());
+        }
+        let data = d.deflated(&rows);
+        let dict = format!(" /Type /XRef /Size {n} /W [1 {w} 2] /Root {catalog} 0 R /Info {info} 0 R");
+        d.stream(id, dict.as_bytes(), &data, true);
+        d.buf.extend_from_slice(b"startxref\n");
+        print_int(&mut d.buf, xref as i64);
+        d.buf.extend_from_slice(b"\n%%EOF\n");
+        return d.buf;
+    }
     let xref = d.buf.len();
     let n = d.offsets.len();
     d.buf.extend_from_slice(b"xref\n0 ");
@@ -676,29 +800,38 @@ impl Doc {
     }
 
     fn write_font(&mut self, id: usize, f: &DocFont, map: &std::collections::HashMap<&str, &str>, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode) {
-        let program = crate::backend::backend_optical::program_by_name(&f.name);
         let entry = map.get(f.name.as_str()).map(|l| map_entry(l));
+        // The map file's Type 1 program, decrypted: `#clear` where the file layer has it,
+        // else the file decrypted here. It is subset as pdfTeX subsets it, so a font the
+        // map names is embedded from its own file even when a whole built-in program exists.
+        let clear = |file: &str| {
+            files(&format!("{file}#clear")).and_then(|b| pfb_segments(&b)).or_else(|| {
+                let (mut data, lens) = pfb_segments(&files(file)?)?;
+                crate::data::data_embed::decrypt_binary(&mut data[lens[0]..lens[0] + lens[1]]);
+                Some((data, lens))
+            })
+        };
+        let own = entry.as_ref().and_then(|e| e.file).and_then(clear);
+        let program = if own.is_some() { None } else { crate::backend::backend_optical::program_by_name(&f.name) };
         // A font from the map file carries its glyph names; its program is embedded whole.
         // With `\pdfgentounicode`, every font's ToUnicode comes from its glyph names (the
         // `.enc` file's, else the program's built-in encoding), as pdfTeX makes it.
         let enc = entry.as_ref().and_then(|e| e.enc).and_then(files).map(|b| b.iter().map(|&c| char::from(c)).collect::<String>());
         // A built-in program's glyph names, stored as text where the file layer has them
         // (`X.pfb#names`): the `.pfb` itself is not read then.
-        let stored_names = if program.is_some() && to_unicode.is_some() && enc.is_none() { entry.as_ref().and_then(|e| e.file).and_then(|f| files(&format!("{f}#names"))) } else { None };
+        // A program read from its file needs them too, to name the glyphs it keeps.
+        let stored_names = if enc.is_none() && (program.is_none() || to_unicode.is_some()) { entry.as_ref().and_then(|e| e.file).and_then(|f| files(&format!("{f}#names"))) } else { None };
         let wants_pfb = program.is_none() || (to_unicode.is_some() && enc.is_none() && stored_names.is_none());
         // With a program of its own, only the file's clear text is used (its encoding):
         // `#head` asks for that alone, where the file layer can give it (`data_embed`).
         // Embedded, the program is subset (`backend_type1`) from its decrypted form: `#clear`
         // asks for that where the file layer has it, else the file is decrypted here.
-        let read_pfb = |file: &str| match program {
-            Some(_) => files(&format!("{file}#head")).or_else(|| files(file)).and_then(|b| pfb_segments(&b)),
-            None => files(&format!("{file}#clear")).and_then(|b| pfb_segments(&b)).or_else(|| {
-                let (mut data, lens) = pfb_segments(&files(file)?)?;
-                crate::data::data_embed::decrypt_binary(&mut data[lens[0]..lens[0] + lens[1]]);
-                Some((data, lens))
-            }),
+        let read_head = |file: &str| files(&format!("{file}#head")).or_else(|| files(file)).and_then(|b| pfb_segments(&b));
+        let mut pfb = match program {
+            None => own,
+            Some(_) if wants_pfb => entry.as_ref().and_then(|e| e.file).and_then(read_head),
+            Some(_) => None,
         };
-        let mut pfb = if wants_pfb { entry.as_ref().and_then(|e| e.file).and_then(read_pfb) } else { None };
         // A map entry's `SlantFont`/`ExtendFont` change the embedded program (writet1.c).
         let mut italic = 0;
         if let (Some(e), Some((data, lens))) = (&entry, &mut pfb) {
@@ -716,9 +849,17 @@ impl Doc {
             (None, Some(e), _) if !e.ps.is_empty() => e.ps.to_string(),
             _ => f.name.to_ascii_uppercase(),
         };
+        // A subset is named with a tag of six capitals from the glyphs it holds (PDF 1.7
+        // §5.5.3), as pdfTeX's `make_subset_tag` names it.
+        let used = |c: usize| f.used[c / 64] >> (c % 64) & 1 != 0;
+        let base = if program.is_none() && pfb.is_some() { format!("{}+{base}", subset_tag(&base, &f.used)) } else { base };
         let size = pdf_font_size(f.size);
-        let first = f.widths.iter().position(|&w| w != 0).unwrap_or(0);
-        let last = f.widths.iter().rposition(|&w| w != 0).unwrap_or(0);
+        // `/Widths` from the first to the last character used, 0 for those not used, as
+        // pdfTeX's `write_fontdict` writes them.
+        let (first, last) = match ((0..256).find(|&c| used(c)), (0..256).rev().find(|&c| used(c))) {
+            (Some(a), Some(b)) => (a, b),
+            _ => (0, 0),
+        };
         self.begin(id);
         self.buf.extend_from_slice(b"<< /Type /Font /Subtype /Type1 /BaseFont /");
         self.buf.extend_from_slice(base.as_bytes());
@@ -727,9 +868,9 @@ impl Doc {
         self.buf.extend_from_slice(b" /LastChar ");
         print_int(&mut self.buf, last as i64);
         self.buf.extend_from_slice(b" /Widths [");
-        for &w in &f.widths[first..=last] {
+        for (c, &w) in f.widths.iter().enumerate().take(last + 1).skip(first) {
             self.buf.push(b' ');
-            print_real(&mut self.buf, divide_scaled(w as i64, size, 4).0, 1);
+            print_real(&mut self.buf, if used(c) { divide_scaled(w as i64, size, 4).0 } else { 0 }, 1);
         }
         self.buf.push(b']');
         if let Some(p) = program {
@@ -774,19 +915,26 @@ impl Doc {
         self.buf.extend_from_slice(b" >>\n");
         self.end();
         if let Some(map) = map {
-            self.stream(id + 3, b"", &crate::backend::backend_pdf::build_tounicode_cmap_bytes(map), false);
+            let data = self.deflated(&crate::backend::backend_pdf::build_tounicode_cmap_bytes(map));
+            self.stream(id + 3, b"", &data, true);
         }
         if let Some(cmap) = &cmap {
-            self.stream(id + 3, b"", cmap, false);
+            let data = self.deflated(cmap);
+            self.stream(id + 3, b"", &data, true);
         }
         if let Some((mut data, mut lens)) = pfb {
             // pdfTeX's subset (`writet1.c`): the glyphs the pages used, by the encoding's
             // names (the `.enc` file's, else the program's own).
-            let names: Vec<String> = match &enc {
-                Some(enc) => encoding_names(enc).iter().map(|n| n.to_string()).collect(),
-                None => builtin_encoding_names(&data[..lens[0]]),
+            let names: Vec<String> = match (&enc, &stored_names) {
+                (Some(enc), _) => encoding_names(enc).iter().map(|n| n.to_string()).collect(),
+                (None, Some(text)) => text.split(|&c| c == b'\n').map(|l| if l.is_empty() { ".notdef".to_string() } else { String::from_utf8_lossy(l).into_owned() }).collect(),
+                (None, None) => builtin_encoding_names(&data[..lens[0]]),
             };
-            let used: Vec<&str> = (0..256).filter(|&c| f.used[c / 64] >> (c % 64) & 1 != 0).filter_map(|c| names.get(c).map(String::as_str)).collect();
+            let used: Vec<&str> = (0..256).filter(|&c| used(c)).filter_map(|c| names.get(c).map(String::as_str)).collect();
+            let tag = base.split('+').next().unwrap_or_default();
+            let clear = crate::backend::backend_type1::subset_clear(&data[..lens[0]], &|c: usize| f.used[c / 64] >> (c % 64) & 1 != 0, tag);
+            data.splice(..lens[0], clear.iter().copied());
+            lens[0] = clear.len();
             let binary = lens[0]..lens[0] + lens[1];
             let mut text = crate::backend::backend_type1::subset(&data[binary.clone()], &used).unwrap_or_else(|| data[binary.clone()].to_vec());
             crate::data::data_embed::encrypt_binary(&mut text);
@@ -800,8 +948,12 @@ impl Doc {
             self.reference(id + 2);
             self.buf.extend_from_slice(b" >>\n");
             self.end();
-            let dict = format!(" /Length1 {} /Length2 {} /Length3 {}", lens[0], lens[1], lens[2]);
-            self.stream(id + 2, dict.as_bytes(), &data, false);
+            // pdfTeX writes no trailer segment (the zeros and `cleartomark`): `/Length3 0`.
+            // The clear text is compressed; the eexec part, pseudo-random, is stored as is.
+            let dict = format!(" /Length1 {} /Length2 {} /Length3 0", lens[0], lens[1]);
+            let mut packed = Vec::with_capacity(data.len() + 64);
+            self.deflate.compress_zlib_parts(&data[..lens[0]], &data[lens[0]..lens[0] + lens[1]], &mut packed);
+            self.stream(id + 2, dict.as_bytes(), &packed, true);
             return;
         }
         let Some(p) = program else { return };

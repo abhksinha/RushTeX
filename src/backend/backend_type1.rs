@@ -1,7 +1,8 @@
 //! Type 1 subsetting, as pdfTeX's `writet1.c` subsets an embedded font: the CharStrings
 //! dictionary keeps `.notdef`, the glyphs the document uses and the `seac` components of
-//! those (`t1_mark_glyphs`), and its count is rewritten (`t1_flush_cs`). The clear text and
-//! the Subrs are kept whole.
+//! those (`t1_mark_glyphs`), and its count is rewritten (`t1_flush_cs`). A Subrs entry no
+//! kept glyph calls becomes a bare `return` (`t1_subset_charstrings`), and a built-in
+//! encoding keeps only the codes used (`t1_subset_ascii_part`).
 //!
 //! It works on the decrypted program (eexec and charstrings in clear), which is how
 //! `data_embed` stores it: only what is kept is encrypted again.
@@ -62,8 +63,19 @@ fn token(t: &[u8], i: usize) -> std::ops::Range<usize> {
     i..j
 }
 
+/// Where `what` first occurs in `t` from `from`: a scan for its first byte, compared only
+/// there (a comparison at every position was most of a font's subsetting cost).
 fn find(t: &[u8], from: usize, what: &[u8]) -> Option<usize> {
-    t.get(from..)?.windows(what.len()).position(|w| w == what).map(|p| p + from)
+    let (&head, rest) = what.split_first()?;
+    let mut i = from;
+    while i + what.len() <= t.len() {
+        i += t[i..t.len() - rest.len()].iter().position(|&b| b == head)?;
+        if &t[i + 1..i + what.len()] == rest {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 /// The CharStrings dictionary of decrypted binary text `t`: where its count is, the
@@ -95,6 +107,96 @@ fn entries(t: &[u8]) -> Option<(std::ops::Range<usize>, Vec<Entry>, usize)> {
         }
         v.push(Entry { name, line: start..end, cs });
         i = end;
+    }
+}
+
+/// The Subrs array of decrypted binary text `t`: each entry's line (`dup i len RD <bytes>
+/// NP`) and where its charstring's bytes are, indexed by subroutine number.
+fn subrs(t: &[u8]) -> Option<Vec<(std::ops::Range<usize>, std::ops::Range<usize>)>> {
+    let at = find(t, 0, b"/Subrs")? + b"/Subrs".len();
+    let n = token(t, skip_space(t, at));
+    let count: usize = std::str::from_utf8(&t[n.clone()]).ok()?.parse().ok()?;
+    let mut i = token(t, skip_space(t, n.end)).end;
+    let mut v = vec![(0..0, 0..0); count];
+    loop {
+        let start = skip_space(t, i);
+        let dup = token(t, start);
+        if &t[dup.clone()] != b"dup" {
+            return Some(v);
+        }
+        let kr = token(t, skip_space(t, dup.end));
+        let k: usize = std::str::from_utf8(&t[kr.clone()]).ok()?.parse().ok()?;
+        let len_at = token(t, skip_space(t, kr.end));
+        let len: usize = std::str::from_utf8(&t[len_at.clone()]).ok()?.parse().ok()?;
+        let rd = token(t, skip_space(t, len_at.end));
+        let cs = rd.end + 1..rd.end + 1 + len;
+        t.get(cs.clone())?;
+        let mut end = cs.end;
+        while end < t.len() && t[end] != b'\n' && t[end] != b'\r' {
+            end += 1;
+        }
+        if end < t.len() {
+            end += 1;
+        }
+        *v.get_mut(k)? = (start..end, cs);
+        i = end;
+    }
+}
+
+/// Marks in `marked` the subroutines charstring `cs` calls (in clear, its first `len_iv`
+/// bytes random), and through them the ones those call: `callsubr` with its number, and
+/// hint replacement's `n 1 3 callothersubr pop callsubr` (writet1.c `cs_mark`).
+fn mark_subrs(cs: &[u8], len_iv: usize, list: &[(std::ops::Range<usize>, std::ops::Range<usize>)], t: &[u8], marked: &mut [bool]) {
+    let mut stack: Vec<i32> = Vec::new();
+    let mut ps: Vec<i32> = Vec::new();
+    let mut i = len_iv;
+    while i < cs.len() {
+        let b = cs[i];
+        i += 1;
+        match b {
+            32..=246 => stack.push(b as i32 - 139),
+            247..=250 => {
+                let Some(&x) = cs.get(i) else { return };
+                stack.push((b as i32 - 247) * 256 + x as i32 + 108);
+                i += 1;
+            }
+            251..=254 => {
+                let Some(&x) = cs.get(i) else { return };
+                stack.push(-(b as i32 - 251) * 256 - x as i32 - 108);
+                i += 1;
+            }
+            255 => {
+                let Some(x) = cs.get(i..i + 4) else { return };
+                stack.push(i32::from_be_bytes([x[0], x[1], x[2], x[3]]));
+                i += 4;
+            }
+            10 => {
+                let Some(k) = stack.pop().and_then(|k| usize::try_from(k).ok()) else { return };
+                if k < marked.len() && !marked[k] {
+                    marked[k] = true;
+                    let r = list[k].1.clone();
+                    if !r.is_empty() {
+                        mark_subrs(&t[r], len_iv, list, t, marked);
+                    }
+                }
+            }
+            12 => {
+                let Some(&op) = cs.get(i) else { return };
+                i += 1;
+                match op {
+                    // callothersubr: its arguments go to the PostScript stack.
+                    16 => {
+                        let (Some(_), Some(n)) = (stack.pop(), stack.pop()) else { return };
+                        let n = (n.max(0) as usize).min(stack.len());
+                        ps = stack.split_off(stack.len() - n);
+                    }
+                    // pop: one value back from the PostScript stack.
+                    17 => stack.push(ps.pop().unwrap_or(0)),
+                    _ => stack.clear(),
+                }
+            }
+            _ => stack.clear(),
+        }
     }
 }
 
@@ -135,6 +237,68 @@ fn seac(cs: &[u8], len_iv: usize) -> Option<(u8, u8)> {
     None
 }
 
+/// Clear text `c` with its built-in `/Encoding` cut to the codes `used` holds, one `dup
+/// code /name put` line each, and `/FontName` given its subset `tag`, as writet1.c's
+/// `t1_subset_ascii_part` writes them; a `StandardEncoding` font's text is unchanged there.
+pub fn subset_clear(c: &[u8], used: &dyn Fn(usize) -> bool, tag: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(c.len());
+    let mut from = 0;
+    if let Some(at) = find(c, 0, b"/FontName") {
+        let name = token(c, skip_space(c, at + b"/FontName".len()));
+        if c.get(name.start) == Some(&b'/') {
+            out.extend_from_slice(&c[..name.start + 1]);
+            out.extend_from_slice(tag.as_bytes());
+            out.push(b'+');
+            from = name.start + 1;
+        }
+    }
+    let Some(enc) = find(c, from, b"/Encoding") else {
+        out.extend_from_slice(&c[from..]);
+        return out;
+    };
+    let Some(first) = find(c, enc, b"dup ") else {
+        out.extend_from_slice(&c[from..]);
+        return out;
+    };
+    let Some(end) = find(c, first, b"readonly def").or_else(|| find(c, first, b" def")) else {
+        out.extend_from_slice(&c[from..]);
+        return out;
+    };
+    out.extend_from_slice(&c[from..first]);
+    let mut i = first;
+    let mut tail = first;
+    while let Some(d) = find(c, i, b"dup ").filter(|&d| d < end) {
+        // `dup 65 /A put`, or `dup 65/A put`: the code's digits, then the name from its `/`.
+        let code_at = skip_space(c, d + 4);
+        let mut code_end = code_at;
+        while code_end < c.len() && c[code_end].is_ascii_digit() {
+            code_end += 1;
+        }
+        let code = code_at..code_end;
+        let name_at = skip_space(c, code_end);
+        let mut name_end = name_at + 1;
+        while name_end < c.len() && !c[name_end].is_ascii_whitespace() && !matches!(c[name_end], b'/' | b'[' | b'{') {
+            name_end += 1;
+        }
+        if c.get(name_at) != Some(&b'/') {
+            break;
+        }
+        let put = token(c, skip_space(c, name_end));
+        if &c[put.clone()] != b"put" {
+            break;
+        }
+        let keep = std::str::from_utf8(&c[code]).ok().and_then(|s| s.parse::<usize>().ok()).is_some_and(used);
+        if keep {
+            out.extend_from_slice(&c[d..put.end]);
+            out.push(b'\n');
+        }
+        i = put.end;
+        tail = skip_space(c, put.end);
+    }
+    out.extend_from_slice(&c[tail..]);
+    out
+}
+
 /// The binary text `t` (decrypted) with its CharStrings cut to `.notdef`, the glyphs
 /// `used` names and their `seac` components; `None` if the dictionary cannot be read
 /// (the caller then keeps the font whole).
@@ -154,7 +318,31 @@ pub fn subset(t: &[u8], used: &[&str]) -> Option<Vec<u8>> {
     }
     let kept: Vec<&Entry> = list.iter().filter(|e| keep.contains(&name(e))).collect();
     let mut out = Vec::with_capacity(t.len());
-    out.extend_from_slice(&t[..count.start]);
+    // Subrs 0 to 3 (flex and hint replacement) always stay, as writet1.c keeps them.
+    let mut from = 0;
+    if let Some(sub) = subrs(t).filter(|s| s.iter().all(|e| e.1.start <= count.start)) {
+        let mut marked: Vec<bool> = (0..sub.len()).map(|k| k < 4).collect();
+        for e in &kept {
+            mark_subrs(&t[e.cs.clone()], len_iv, &sub, t, &mut marked);
+        }
+        for (k, (line, cs)) in sub.iter().enumerate() {
+            if marked[k] || line.is_empty() || cs.len() <= len_iv {
+                continue;
+            }
+            // `dup k n RD`, the random bytes, `return`, and the line's own ending.
+            out.extend_from_slice(&t[from..line.start]);
+            out.extend_from_slice(b"dup ");
+            out.extend_from_slice(k.to_string().as_bytes());
+            out.push(b' ');
+            out.extend_from_slice((len_iv + 1).to_string().as_bytes());
+            out.extend_from_slice(&t[cs.start - 4..cs.start]);
+            out.extend_from_slice(&t[cs.start..cs.start + len_iv]);
+            out.push(11);
+            out.extend_from_slice(&t[cs.end..line.end]);
+            from = line.end;
+        }
+    }
+    out.extend_from_slice(&t[from..count.start]);
     out.extend_from_slice(kept.len().to_string().as_bytes());
     let first = list.first().map_or(end, |e| e.line.start);
     out.extend_from_slice(&t[count.end..first]);

@@ -45,7 +45,7 @@ Dated notes in `memorycastle/journal/` hold why each decision was made; `CLAUDE.
 ### Phase 2. Tables and demand loading
 - [x] D1. Table library: perfect hash, SoA tables, CSR lists, bitsets.
 - [x] D2. `rushtex-gen`: package registry, 354 TFMs, 630 NFSS shapes, class tables, all self-checked (`2026-10-22-d2-font-tables.md`, `2026-10-22-d2-nfss-tables.md`, `2026-10-22-d2-package-registry.md`).
-- [ ] D2b. Fonts: programs carried in the binary (done for the pin, `2026-10-23-carry-table-font-programs.md`, `2026-10-24-embed-plain-and-glyph-names.md`); **subsetting not done** (fonts are embedded whole, the main reason PDFs are 1.25× larger); lig/kern pair tables at build time.
+- [ ] D2b. Fonts: programs carried in the binary (done for the pin, `2026-10-23-carry-table-font-programs.md`, `2026-10-24-embed-plain-and-glyph-names.md`); subset per document as pdfTeX does, PDF within 5% of pdfLaTeX's on `docs/master.tex` (`2026-10-24-pdf-size-subsetting.md`). Left: per-glyph pieces at build time (about 10M instructions per document today); lig/kern pair tables at build time.
 - [ ] D2c. One blob per domain with a combined fingerprint; generated `const`s.
 - [x] D4b. Hyphenation memo per word (`2026-10-24-hyphenation-memo.md`).
 - [ ] D3, D4. Pre-scan fused into the lexer; demand loading of patterns, metrics and font programs.

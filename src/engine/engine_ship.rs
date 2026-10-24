@@ -28,6 +28,7 @@ const PDF_PAGE_WIDTH: u32 = 23;
 const PDF_PAGE_HEIGHT: u32 = 24;
 const PDF_GEN_TO_UNICODE: u32 = 81;
 const PDF_MINOR_VERSION: u32 = 67;
+const PDF_OBJ_COMPRESS_LEVEL: u32 = 57;
 const PDF_LINK_MARGIN: u32 = 25;
 const PDF_DEST_MARGIN: u32 = 26;
 /// `\pdfdecimaldigits` and `\pdfpkresolution` (integer slots).
@@ -857,7 +858,8 @@ impl Machine<'_, '_> {
         let minor = self.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot: PDF_MINOR_VERSION });
         let first_page = self.page.pdf.first().map_or(0, |p| p.id);
         let (objects, catalog, base) = self.pdf_doc.finish(first_page, files, self.image_hicolor());
-        let meta = crate::backend::backend_ship::DocMeta { minor, info: &self.pdf_doc.info, catalog: &catalog, objects: &objects, base: base as usize, forms: &self.pdf_doc.shipped_forms };
+        let objcompress = self.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot: PDF_OBJ_COMPRESS_LEVEL });
+        let meta = crate::backend::backend_ship::DocMeta { minor, objcompress, info: &self.pdf_doc.info, catalog: &catalog, objects: &objects, base: base as usize, forms: &self.pdf_doc.shipped_forms };
         crate::backend::backend_ship::write(&self.page.pdf, &fonts, files, to_unicode, &meta)
     }
 }

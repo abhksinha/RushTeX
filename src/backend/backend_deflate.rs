@@ -224,8 +224,13 @@ pub static LIT_TABLE: [u32; 256] = generate_lit_table();
 
 /// Computes Adler-32 checksum (RFC 1950) with 16-byte unrolled parallel arithmetic.
 pub fn adler32(data: &[u8]) -> u32 {
-    let mut s1 = 1u32;
-    let mut s2 = 0u32;
+    adler32_from(1, data)
+}
+
+/// Adler-32 continued from `state` (the checksum of the bytes before `data`).
+pub fn adler32_from(state: u32, data: &[u8]) -> u32 {
+    let mut s1 = state & 0xFFFF;
+    let mut s2 = state >> 16;
     const MOD_ADLER: u32 = 65521;
 
     for chunk in data.chunks(5552) {
@@ -340,6 +345,9 @@ impl<'a> BitWriter<'a> {
 pub struct DeflateCompressor {
     table: [u64; 4096],
     epoch: u32,
+    /// Whether the block written is the stream's last (BFINAL); false only inside
+    /// `compress_zlib_parts`.
+    last: bool,
 }
 
 impl Default for DeflateCompressor {
@@ -353,6 +361,7 @@ impl DeflateCompressor {
         Self {
             table: [0u64; 4096],
             epoch: 0,
+            last: true,
         }
     }
 
@@ -376,6 +385,26 @@ impl DeflateCompressor {
         // 3. Write Adler-32 checksum (big-endian)
         let checksum = adler32(input_data);
         destination_buffer.extend_from_slice(&checksum.to_be_bytes());
+    }
+
+    /// One zlib stream of `packed`, compressed, then `stored`, written as stored blocks:
+    /// for data known not to compress (a Type 1 font's eexec-encrypted part), whose
+    /// matching would be work for no gain. The compressed block ends with an empty stored
+    /// block (a sync flush), so the stored ones start byte-aligned.
+    pub fn compress_zlib_parts(&mut self, packed: &[u8], stored: &[u8], out: &mut Vec<u8>) {
+        if packed.is_empty() {
+            out.extend_from_slice(&[0x78, 0x9C]);
+            write_stored_block_final(stored, out);
+            out.extend_from_slice(&adler32(stored).to_be_bytes());
+            return;
+        }
+        out.extend_from_slice(&[0x78, 0x9C]);
+        self.last = false;
+        self.compress_raw(packed, out);
+        self.last = true;
+        out.extend_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
+        write_stored_block_final(stored, out);
+        out.extend_from_slice(&adler32_from(adler32(packed), stored).to_be_bytes());
     }
 
     /// Compresses raw DEFLATE stream with Fixed Huffman codes (BFINAL=1, BTYPE=01).
@@ -415,7 +444,7 @@ impl DeflateCompressor {
         let epoch_high = (curr_epoch as u64) << 40;
 
         let mut bit_writer = BitWriter::new(destination_buffer);
-        bit_writer.write_bits(0b011, 3); // BFINAL=1, BTYPE=01 (Fixed Huffman)
+        bit_writer.write_bits(if self.last { 0b011 } else { 0b010 }, 3); // BFINAL, BTYPE=01 (Fixed Huffman)
 
         let mut current_position = 0;
         let mut misses = 0u32;
@@ -551,7 +580,21 @@ impl DeflateCompressor {
 
         // Emit End of Block (EOB = 256)
         bit_writer.write_bits(LIT_LEN_CODES[256] as u64, LIT_LEN_BITS[256]);
+        if !self.last {
+            // A non-final stored block's header (BFINAL=0, BTYPE=00); the padding to the
+            // byte boundary follows, then the caller's LEN and NLEN.
+            bit_writer.write_bits(0, 3);
+        }
         bit_writer.finish();
+    }
+}
+
+/// `input` as byte-aligned stored blocks, the last final; one empty final block if empty.
+fn write_stored_block_final(input: &[u8], out: &mut Vec<u8>) {
+    if input.is_empty() {
+        out.extend_from_slice(&[0x01, 0x00, 0x00, 0xFF, 0xFF]);
+    } else {
+        write_stored_block(input, out);
     }
 }
 
@@ -571,6 +614,20 @@ fn write_stored_block(input: &[u8], out: &mut Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parts_inflate_to_both() {
+        let head = b"%!PS-AdobeFont-1.0: CMR10 /Encoding 256 array dup 65 /A put readonly def ".repeat(20);
+        let tail: Vec<u8> = (0..70000u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+        let mut out = Vec::new();
+        DeflateCompressor::new().compress_zlib_parts(&head, &tail, &mut out);
+        let mut back = Vec::new();
+        crate::backend::backend_inflate::zlib_decompress(&out, &mut back).expect("inflates");
+        assert_eq!(back.len(), head.len() + tail.len());
+        assert_eq!(&back[..head.len()], &head[..]);
+        assert_eq!(&back[head.len()..], &tail[..]);
+        assert_eq!(adler32_from(adler32(&head), &tail), adler32(&back));
+    }
 
     #[test]
     fn test_adler32() {

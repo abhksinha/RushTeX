@@ -534,10 +534,15 @@ impl<'e, 'a> Machine<'e, 'a> {
         self.mprof_report();
     }
 
+    /// Token `t` as the newest command the main loop ran (for an error's context).
+    pub(super) fn note_command(&mut self, t: Token) {
+        self.recent[self.recent_at % 16] = t;
+        self.recent_at = (self.recent_at + 1) % 16;
+    }
+
     /// §1030: one command of the main loop; `prefix` holds `\global` and its kin read so far.
     pub(super) fn command(&mut self, x: X, prefix: u8) {
-        self.recent[self.recent_at % 16] = x.t;
-        self.recent_at = (self.recent_at + 1) % 16;
+        self.note_command(x.t);
         const GLOBAL: u8 = 8;
         // §1214: a positive `\globaldefs` makes every assignment global, a negative one none.
         let global_defs = self.e.eqtb.word(Reg { region: Region::Int, slot: GLOBAL_DEFS });

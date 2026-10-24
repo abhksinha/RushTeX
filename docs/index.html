@@ -202,12 +202,12 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
   <div class="wrap">
     <p class="eyebrow">Open source · MIT or Apache-2.0 · pure safe Rust</p>
     <h1>The same PDF as pdfLaTeX. A fraction of the work.</h1>
-    <p class="lede">RushTeX is a LaTeX compiler written from scratch in Rust, with no runtime dependencies and no unsafe code. Its output is checked against pdfLaTeX <strong>glyph for glyph and pixel for pixel</strong>. On the 12-page project description it takes <strong>32.9× fewer CPU instructions</strong> than one pdfLaTeX run, and <strong>103.9× fewer</strong> than the three runs pdfLaTeX needs to finish that document.</p>
+    <p class="lede">RushTeX is a LaTeX compiler written from scratch in Rust, with no runtime dependencies and no unsafe code. Its output is checked against pdfLaTeX <strong>glyph for glyph and pixel for pixel</strong>. On the 12-page project description it takes <strong>38.8× fewer CPU instructions</strong> than one pdfLaTeX run, and <strong>120.5× fewer</strong> than the three runs pdfLaTeX needs to finish that document.</p>
     <div class="figures">
-      <div class="fig"><b>32.9×</b><span>fewer instructions than one pdfLaTeX run, 12 pages</span></div>
-      <div class="fig"><b>15.1 ms</b><span>wall time for 12 pages, against 386.6 ms</span></div>
+      <div class="fig"><b>38.8×</b><span>fewer instructions than one pdfLaTeX run, 12 pages</span></div>
+      <div class="fig"><b>17.9 ms</b><span>wall time for 12 pages, against 513.4 ms</span></div>
       <div class="fig"><b>0 px</b><span>pixels differing on 85 CTAN documents, 2,137 pages</span></div>
-      <div class="fig"><b>10.4 MB</b><span>peak memory, against 30.2 MB</span></div>
+      <div class="fig"><b>12.7 MB</b><span>peak memory, against 30.1 MB</span></div>
       <div class="fig"><b>1 pass</b><span>no <code>.aux</code> file, no reruns, references resolved in memory</span></div>
     </div>
   </div>
@@ -314,20 +314,20 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
       <table>
         <thead><tr><th>Metric</th><th>RushTeX</th><th>pdfLaTeX</th><th>Factor</th></tr></thead>
         <tbody>
-          <tr class="key"><td>Instructions, one run</td><td>102.5M</td><td>3,369.0M</td><td>32.9× fewer</td></tr>
-          <tr class="key"><td>Instructions, real workflow (pdfLaTeX needs 3 runs)</td><td>102.5M</td><td>10,645.5M</td><td>103.9× fewer</td></tr>
-          <tr><td>CPU time (user + sys), one run</td><td>13.3 ms</td><td>343.3 ms</td><td>25.8× less</td></tr>
-          <tr><td>Wall time, one run</td><td>15.1 ms</td><td>386.6 ms</td><td>25.6× less</td></tr>
-          <tr><td>Peak memory (RSS)</td><td>10.4 MB</td><td>30.2 MB</td><td>2.9× less</td></tr>
-          <tr><td>Fixed cost per document (fit intercept)</td><td>58.3M</td><td>3,165.0M</td><td>54.3× fewer</td></tr>
-          <tr><td>Cost per page (fit slope)</td><td>3.7M</td><td>20.4M</td><td>5.4× fewer</td></tr>
-          <tr><td>Same preamble, one-word body</td><td>28.4M</td><td>1,304.9M</td><td>45.9× fewer</td></tr>
-          <tr><td>PDF size</td><td>202.6 KB</td><td>193.9 KB</td><td>4.5% larger</td></tr>
+          <tr class="key"><td>Instructions, one run</td><td>125.0M</td><td>4,844.5M</td><td>38.8× fewer</td></tr>
+          <tr class="key"><td>Instructions, real workflow (pdfLaTeX needs 3 runs)</td><td>125.0M</td><td>15,061.0M</td><td>120.5× fewer</td></tr>
+          <tr><td>CPU time (user + sys), one run</td><td>16.0 ms</td><td>476.8 ms</td><td>29.8× less</td></tr>
+          <tr><td>Wall time, one run</td><td>17.9 ms</td><td>513.4 ms</td><td>28.7× less</td></tr>
+          <tr><td>Peak memory (RSS)</td><td>12.7 MB</td><td>30.1 MB</td><td>2.4× less</td></tr>
+          <tr><td>Fixed cost per document (fit intercept)</td><td>82.6M</td><td>4,596.2M</td><td>55.7× fewer</td></tr>
+          <tr><td>Cost per page (fit slope)</td><td>3.5M</td><td>22.2M</td><td>6.4× fewer</td></tr>
+          <tr><td>Same preamble, one-word body</td><td>28.6M</td><td>2,713.5M</td><td>94.9× fewer</td></tr>
+          <tr><td>PDF size</td><td>263.4 KB</td><td>229.3 KB</td><td>14.9% larger</td></tr>
           <tr><td>Operating-system process floor (<code>/usr/bin/true</code>)</td><td>8.0M</td><td>8.0M</td><td></td></tr>
         </tbody>
       </table>
     </div>
-    <p class="small muted">The fit repeats the document's body ×1, ×4 and ×10 (12, 44 and 107 pages) and fits instructions against pages: RushTeX 102.4M, 220.6M, 458.6M (12, 43, 107 pages); pdfLaTeX 3,404.5M, 4,047.7M, 5,343.4M. Fonts are subset per document as pdfLaTeX subsets them, which took the PDF from 287.8 KB to 202.6 KB for about 10M instructions. Page streams keep the fast fixed-code compressor: an encoder with per-block Huffman tables made every PDF here smaller than pdfLaTeX's, but cost about 0.6M instructions per page, so speed was kept.</p>
+    <p class="small muted">The fit repeats the document's body ×1, ×4 and ×10 (12, 47 and 116 pages) and fits instructions against pages: RushTeX 124.7M, 244.1M, 484.1M; pdfLaTeX 4,856.0M, 5,652.7M, 7,173.3M. The document now loads graphicx and includes a PDF and a PNG picture: placing and embedding them costs RushTeX about 22M instructions, while loading graphicx and its helpers costs pdfLaTeX about 1,400M. The pictures are also most of the growth in PDF size. Fonts are subset per document as pdfLaTeX subsets them. Page streams keep the fast fixed-code compressor: an encoder with per-block Huffman tables made every PDF here smaller than pdfLaTeX's, but cost about 0.6M instructions per page, so speed was kept.</p>
 
     <h3 style="margin-top:26px">Every benchmark document</h3>
     <div class="table">
@@ -337,16 +337,16 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
           <tr><th>Document</th><th>Pages</th><th>RushTeX</th><th>pdfLaTeX</th><th>Factor</th><th>RushTeX</th><th>pdfLaTeX</th><th>Factor</th><th>RushTeX</th><th>pdfLaTeX</th><th>RushTeX</th><th>pdfLaTeX</th><th>RushTeX</th><th>pdfLaTeX</th></tr>
         </thead>
         <tbody>
-          <tr><td>Project description</td><td>12</td><td>102.5M</td><td>3,427.1M</td><td class="x">33.4×</td><td>14.9 ms</td><td>382.6 ms</td><td class="x">25.7×</td><td>0.279</td><td>0.224</td><td>10.5 MB</td><td>29.1 MB</td><td>202 KB</td><td>193 KB</td></tr>
-          <tr><td>Mathematics</td><td>20</td><td>145.1M</td><td>3,286.8M</td><td class="x">22.7×</td><td>19.6 ms</td><td>376.2 ms</td><td class="x">19.2×</td><td>0.266</td><td>0.224</td><td>11.7 MB</td><td>29.8 MB</td><td>324 KB</td><td>307 KB</td></tr>
-          <tr><td>Mixed article</td><td>29</td><td>209.9M</td><td>3,861.1M</td><td class="x">18.4×</td><td>26.1 ms</td><td>427.3 ms</td><td class="x">16.4×</td><td>0.254</td><td>0.225</td><td>13.9 MB</td><td>30.0 MB</td><td>376 KB</td><td>350 KB</td></tr>
-          <tr><td>Tables</td><td>29</td><td>162.0M</td><td>2,827.5M</td><td class="x">17.5×</td><td>20.8 ms</td><td>338.5 ms</td><td class="x">16.3×</td><td>0.261</td><td>0.232</td><td>11.8 MB</td><td>29.0 MB</td><td>261 KB</td><td>231 KB</td></tr>
-          <tr><td>Running text</td><td>61</td><td>299.1M</td><td>3,307.5M</td><td class="x">11.1×</td><td>34.7 ms</td><td>389.1 ms</td><td class="x">11.2×</td><td>0.239</td><td>0.231</td><td>17.4 MB</td><td>28.8 MB</td><td>370 KB</td><td>297 KB</td></tr>
-          <tr><td>Project description ×10</td><td>95</td><td>376.3M</td><td>4,781.6M</td><td class="x">12.7×</td><td>41.4 ms</td><td>520.1 ms</td><td class="x">12.6×</td><td>0.230</td><td>0.226</td><td>18.3 MB</td><td>29.0 MB</td><td>613 KB</td><td>512 KB</td></tr>
+          <tr><td>Project description</td><td>12</td><td>124.7M</td><td>4,816.5M</td><td class="x">38.6×</td><td>17.6 ms</td><td>523.7 ms</td><td class="x">29.7×</td><td>0.277</td><td>0.227</td><td>12.6 MB</td><td>31.4 MB</td><td>263 KB</td><td>229 KB</td></tr>
+          <tr><td>Mathematics</td><td>20</td><td>140.6M</td><td>3,223.9M</td><td class="x">22.9×</td><td>19.5 ms</td><td>368.4 ms</td><td class="x">18.9×</td><td>0.270</td><td>0.228</td><td>11.5 MB</td><td>28.7 MB</td><td>324 KB</td><td>307 KB</td></tr>
+          <tr><td>Mixed article</td><td>29</td><td>203.5M</td><td>3,787.9M</td><td class="x">18.6×</td><td>25.4 ms</td><td>419.8 ms</td><td class="x">16.5×</td><td>0.253</td><td>0.223</td><td>13.0 MB</td><td>28.8 MB</td><td>377 KB</td><td>350 KB</td></tr>
+          <tr><td>Tables</td><td>29</td><td>154.4M</td><td>2,784.3M</td><td class="x">18.0×</td><td>20.5 ms</td><td>332.2 ms</td><td class="x">16.2×</td><td>0.256</td><td>0.233</td><td>11.7 MB</td><td>28.7 MB</td><td>262 KB</td><td>231 KB</td></tr>
+          <tr><td>Running text</td><td>61</td><td>277.7M</td><td>3,265.7M</td><td class="x">11.8×</td><td>33.5 ms</td><td>382.1 ms</td><td class="x">11.4×</td><td>0.240</td><td>0.235</td><td>17.1 MB</td><td>28.5 MB</td><td>371 KB</td><td>297 KB</td></tr>
+          <tr><td>Project description ×10</td><td>95</td><td>351.5M</td><td>4,718.3M</td><td class="x">13.4×</td><td>39.7 ms</td><td>515.6 ms</td><td class="x">13.0×</td><td>0.238</td><td>0.224</td><td>18.3 MB</td><td>28.6 MB</td><td>614 KB</td><td>513 KB</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="small muted">Cycles per instruction are cycles elapsed over instructions retired, both from the hardware counters: 0.23–0.28 for RushTeX and 0.22–0.23 for pdfLaTeX in the same session, so both run at close to the processor's best and the speed difference is the amount of work, not how well the processor runs it. The factor falls with length because RushTeX's fixed cost is almost gone (54× below pdfLaTeX's) while its cost per page is about 5× below; bringing the per-page cost to the same level is the current work. Long documents' PDFs are up to a quarter larger, from the fixed-code compression of page streams.</p>
+    <p class="small muted">Cycles per instruction are cycles elapsed over instructions retired, both from the hardware counters: 0.24–0.28 for RushTeX and 0.22–0.24 for pdfLaTeX in the same session, so both run at close to the processor's best and the speed difference is the amount of work, not how well the processor runs it. The factor falls with length because RushTeX's fixed cost is almost gone (56× below pdfLaTeX's) while its cost per page is about 6× below; bringing the per-page cost to the same level is the current work. Long documents' PDFs are up to a quarter larger, from the fixed-code compression of page streams.</p>
 
     <h3 style="margin-top:26px">Against Typst (earlier measurement)</h3>
     <div class="table">
@@ -362,7 +362,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 
     <dl class="spec" style="margin-top:22px">
       <dt>Setup</dt>
-      <dd class="small">Apple M5, macOS (Darwin 27.0.0). pdfTeX 3.141592653-2.6-1.40.29, TeX Live 2026, <code>pdflatex -interaction=batchmode</code>, no latexmk; the script reruns it until the PDF stops changing. RushTeX at commit <code>c84f1a2</code>, one run. Instructions are medians of 3–5 runs from <code>/usr/bin/time -l</code>, which also counts the kernel's process set-up and the dynamic loader (8.0M instructions for an empty program). Times are medians of 11 runs after a warm-up.</dd>
+      <dd class="small">Apple M5, macOS (Darwin 27.0.0). pdfTeX 3.141592653-2.6-1.40.29, TeX Live 2026, <code>pdflatex -interaction=batchmode</code>, no latexmk; the script reruns it until the PDF stops changing. RushTeX at commit <code>324255c</code>, one run. Instructions are medians of 3–5 runs from <code>/usr/bin/time -l</code>, which also counts the kernel's process set-up and the dynamic loader (8.0M instructions for an empty program). Times are medians of 11 runs after a warm-up.</dd>
       <dt>Reproduce</dt>
       <dd><pre>cargo build --release
 ./benchmark.sh docs/master.tex
@@ -396,10 +396,12 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
       <dd><code>figure</code> and <code>table</code> with <code>\caption</code> and the float queue; <code>tabular</code> with rules, <code>\multicolumn</code> and <code>\cline</code>.</dd>
       <dt>Native: mathematics</dt>
       <dd>Inline and display math, <code>equation</code>, TeX's Appendix G layout; amssymb and amsfonts with their alphabets.</dd>
+      <dt>Native: graphics</dt>
+      <dd>graphicx's <code>\includegraphics</code> with <code>width</code>, <code>height</code>, <code>scale</code> and <code>keepaspectratio</code>, for PDF and PNG files; each file embedded once; the PDF page set to the paper size as the pdfTeX driver sets it.</dd>
       <dt>Native: references</dt>
       <dd><code>\cite</code> with <code>thebibliography</code>; <code>\label</code>/<code>\ref</code> resolved in memory.</dd>
       <dt>Not native yet</dt>
-      <dd>graphicx, amsmath environments (<code>align</code>, <code>\text</code>, <code>equation*</code>), package options, UTF-8 input, hyperref, BibTeX <code>.bbl</code>, amsthm, natbib, booktabs, geometry, xcolor, two columns, other classes. Documents that use them run on the engine path. Of a sample of 169 arXiv papers, 1 runs natively today; the list above is ordered to raise that number fastest.</dd>
+      <dd>Rotated, clipped or JPEG pictures, <code>\resizebox</code>, amsmath environments (<code>align</code>, <code>\text</code>, <code>equation*</code>), package options, UTF-8 input, hyperref, BibTeX <code>.bbl</code>, amsthm, natbib, booktabs, geometry, xcolor, two columns, other classes. Documents that use them run on the engine path. Of a sample of 169 arXiv papers, 1 runs natively today; the list above is ordered to raise that number fastest.</dd>
       <dt>Your own <code>.sty</code> and <code>.cls</code></dt>
       <dd>A document with its own style files always runs whole on the engine, with the exact output, rather than being ported.</dd>
       <dt>Implementation</dt>
@@ -446,7 +448,6 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
       <div>
         <h3>Open work, in order</h3>
         <ul class="plain small">
-          <li>graphicx and <code>\includegraphics</code></li>
           <li>amsmath: <code>align</code>, <code>\text</code>, <code>equation*</code>, <code>\eqref</code></li>
           <li>Package options, UTF-8 input, hyperref</li>
           <li>BibTeX, amsthm, natbib, booktabs, geometry, xcolor</li>

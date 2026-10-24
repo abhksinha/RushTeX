@@ -1,0 +1,21 @@
+% A dummy picture for docs/master.tex: a frame with three nested boxes, the shape of
+% the box tree \includegraphics builds. Made with: pdftex dummy.tex
+\pdfpagewidth=240pt \pdfpageheight=120pt \pdfhorigin=0pt \pdfvorigin=0pt
+\pdfcompresslevel=9 \pdfminorversion=5
+\nopagenumbers \parindent=0pt \hsize=240pt \vsize=120pt
+\def\frame#1#2#3{\vbox{\hrule height#3\hbox{\vrule width#3\vbox to#2{\vss\hbox to#1{\hss}\vss}\vrule width#3}\hrule height#3}}
+\setbox0\hbox{\frame{232pt}{112pt}{2pt}}
+\setbox1\hbox{\frame{180pt}{80pt}{1pt}}
+\setbox2\hbox{\frame{120pt}{48pt}{0.6pt}}
+\vbox to120pt{\offinterlineskip
+\hbox to240pt{\hss\copy0\hss}
+\kern-100pt
+\hbox to240pt{\hss\copy1\hss}
+\kern-66pt
+\hbox to240pt{\hss\copy2\hss}
+\kern-36pt
+\hbox to240pt{\hss\tenbf dummy picture\hss}
+\kern4pt
+\hbox to240pt{\hss\sevenrm image inside two boxes\hss}
+\vss}
+\bye

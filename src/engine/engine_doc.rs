@@ -76,7 +76,18 @@ enum Change {
 
 /// Commands a native package table redefines that the native job runs as Rust natives
 /// (package, name, `DOC` name): the package's definition is not data, but a mechanism.
-pub const PACKAGE_NATIVES: [(&str, &str, &str); 2] = [("amsfonts", "widehat", "rt@widehat"), ("amsfonts", "widetilde", "rt@widetilde")];
+pub const PACKAGE_NATIVES: [(&str, &str, &str); 3] = [("amsfonts", "widehat", "rt@widehat"), ("amsfonts", "widetilde", "rt@widetilde"), ("graphicx", "includegraphics", "rt@includegraphics")];
+
+/// `\paperwidth` and `\paperheight` of each of `data_class::PAPERS`, as article's
+/// options set them (`8.5in`, `210mm`, …), in sp.
+const PAPER_SIZES: [[i32; 2]; 6] = [[40258437, 52099153], [40258437, 66308014], [34338078, 49731010], [39158276, 55380990], [27597261, 39158276], [32818364, 46616995]];
+
+/// `\pdfpagewidth` (`\pdfpageheight` follows it).
+const PDF_PAGE_WIDTH: u32 = 23;
+
+/// Packages the native job runs as Rust alone, with no evaluated table: their commands
+/// are [`PACKAGE_NATIVES`]. graphicx (with keyval, graphics, trig and pdftex.def).
+const DRIVER_PACKAGES: [&str; 1] = ["graphicx"];
 
 /// Whether the native job writes `name` itself, so a table's macro of that name is not
 /// installed (`install`): a `DOC` native or an OT1 text symbol.
@@ -93,7 +104,7 @@ enum Alphabet {
 
 /// The native commands, by `Meaning::Doc` index. Names starting `rt@` are the steps of a
 /// command that typesets material in between (read back from the input).
-static DOC: [(&str, Native); 172] = [
+static DOC: [(&str, Native); 173] = [
     ("rt@output", |m| m.output()),
     ("rt@outputfoot", |m| m.output_page()),
     ("section", |m| m.section(0)),
@@ -308,6 +319,7 @@ static DOC: [(&str, Native); 172] = [
     ("rt@captionmid", |m| m.caption_mid()),
     ("rt@captionend", |m| m.caption_end()),
     ("rt@floatflush", |m| m.float_flush()),
+    ("rt@includegraphics", |m| m.include_graphics()),
 ];
 const OUTPUT: usize = 0;
 const OUTPUT_FOOT: usize = 1;
@@ -624,6 +636,8 @@ pub struct Doc {
     dated: bool,
     /// The first construct met that the native job does not implement.
     unsupported: Option<String>,
+    /// The class options' combination (`data_class::option_key`).
+    options: u32,
     /// A `verbatim` environment's lines, as tokens, until its setup is done.
     verbatim: Vec<Token>,
     /// `\label`'s keys and their values, in memory (no `.aux` file).
@@ -740,7 +754,7 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                 // `@` is a letter only after `\makeatletter`: an unknown name with `@` is read
                 // as its letters before the `@` (or the control symbol `\@`).
                 let have = loaded.iter().fold(KERNEL_BIT, |m, &p| m | package_bit(p));
-                let known = |name: &str| table_names(name) & have != 0 || WORDS.contains(&name) || PREAMBLE.contains(&name) || defined.contains(&name);
+                let known = |name: &str| table_names(name) & have != 0 || PACKAGE_NATIVES.iter().any(|p| p.1 == name && DRIVER_PACKAGES.contains(&p.0) && loaded.contains(&p.0)) || WORDS.contains(&name) || PREAMBLE.contains(&name) || defined.contains(&name);
                 if rest[..n].contains('@') && !known(&rest[..n]) {
                     n = rest[..n].find('@').unwrap_or(n);
                 }
@@ -1105,6 +1119,8 @@ fn predict(src: &str) -> Predicted {
                     _ if WORDS.contains(&name) && !matches!(name, "newcommand" | "renewcommand" | "providecommand") => {}
                     // Kernel values, operators and math macros number nothing.
                     _ if table_names(name) != 0 => {}
+                    // A driver package's command (`\includegraphics`) numbers nothing.
+                    _ if PACKAGE_NATIVES.iter().any(|p| p.1 == name && DRIVER_PACKAGES.contains(&p.0)) => {}
                     _ => return out,
                 }
             }
@@ -1310,6 +1326,7 @@ fn job(text: &str, class: &'static ClassTable<'static>, key: u32, now: i64, read
     m.load_class_with(class, key)?;
     m.fix_date_and_time(now);
     if let Some(doc) = m.doc.as_mut() {
+        doc.options = key;
         doc.predicted.clone_from(&predicted.labels);
         doc.contents = predicted.complete.then(|| predicted.toc.clone());
     }
@@ -1477,7 +1494,7 @@ impl Machine<'_, '_> {
                 self.e.eqtb.set_meaning(id, Meaning::Reg(r), true);
             }
         }
-        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, ids, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, trivlist_then: |_| {}, dated: false, unsupported: None, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special_plain: false, empty_foot: false, regs }));
+        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, ids, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, trivlist_then: |_| {}, dated: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special_plain: false, empty_foot: false, regs }));
         self.strut_update();
         let fixed = FONT_FIXED.iter().map(|name| {
             let id = self.e.cs.intern(name);
@@ -1690,6 +1707,39 @@ impl Machine<'_, '_> {
     /// with the head a `\vbox to\headheight` of depth 0, the column after `\lineskip` glue
     /// (`\baselineskip`, `\lineskip` and `\lineskiplimit` are 0) and the foot at
     /// `\baselineskip\footskip`. Then `\stepcounter{page}`.
+    /// LaTeX's shipout background (`\__shipout_add_background_box:n`), there once a package
+    /// fills `\@kernel@before@shipout@background` (pdftex.def's page colour, empty here): the
+    /// page `b` repacked to its height plus depth after a box of size zero holding
+    /// `\kern-1in\vbox to\z@{\kern-1in\hbox to\z@{\hss}\vss}`, with `\kern\z@` at its end,
+    /// then given its height and depth back. Its glue is set as before.
+    fn page_background(&mut self, b: BoxRec, d: i32) -> BoxRec {
+        let fil = Glue { stretch: 65536, stretch_order: 1, shrink: 65536, shrink_order: 1, ..Glue::default() };
+        let one_inch = 4736286;
+        let start = self.cur.len();
+        let n = self.e.nodes.glue_node(fil, 0);
+        self.cur.push(n);
+        let h = self.hpack(start, 0, true);
+        let h = self.e.nodes.add_box(h);
+        self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, -one_inch) });
+        self.cur.push(Node::new(Kind::Box, h as i32));
+        let n = self.e.nodes.glue_node(fil, 0);
+        self.cur.push(n);
+        let v = self.vpack(start, 0, true, d);
+        let v = self.e.nodes.add_box(BoxRec { vertical: true, ..v });
+        self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, -one_inch) });
+        self.cur.push(Node::new(Kind::Box, v as i32));
+        let mut tmp = self.hpack(start, 0, false);
+        (tmp.width, tmp.height, tmp.depth) = (0, 0, 0);
+        let tmp = self.e.nodes.add_box(tmp);
+        self.cur.push(Node::new(Kind::Box, tmp as i32));
+        self.cur.extend_from_slice(self.e.nodes.get(b.list));
+        self.e.nodes.free_block(b.list);
+        self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, 0) });
+        let mut r = self.vpack(start, 0, false, d);
+        (r.height, r.depth) = (b.height, b.depth);
+        r
+    }
+
     fn output_page(&mut self) {
         let Some(doc) = self.doc.as_mut() else { return };
         let Some(column) = doc.column.take() else { return };
@@ -1747,7 +1797,10 @@ impl Machine<'_, '_> {
         let n = self.e.nodes.glue_node(Glue { width: class.dimen("topmargin"), ..zero }, 0);
         self.cur.push(n);
         self.append_to_vlist(page_box);
-        let shipped = self.vpack(start, 0, false, d);
+        let mut shipped = self.vpack(start, 0, false, d);
+        if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"graphicx")) {
+            shipped = self.page_background(shipped, d);
+        }
         let shipped = self.e.nodes.add_box(BoxRec { vertical: true, ..shipped });
         self.aux = saved;
         for (p, g) in params.into_iter().zip(old) {
@@ -2041,7 +2094,7 @@ impl Machine<'_, '_> {
     }
 
     /// A macro argument: one token, or a braced group without its braces.
-    fn read_arg(&mut self, out: &mut Vec<Token>) {
+    pub(super) fn read_arg(&mut self, out: &mut Vec<Token>) {
         out.clear();
         let Some(t) = self.next_unblank() else { return };
         if t.cat() != Some(Cat::BeginGroup) {
@@ -2074,7 +2127,7 @@ impl Machine<'_, '_> {
     }
 
     /// `\@ifnextchar c`: consumes `c` when it comes next (after spaces).
-    fn next_is(&mut self, c: char) -> bool {
+    pub(super) fn next_is(&mut self, c: char) -> bool {
         let Some(t) = self.next_unblank() else { return false };
         if t == Token::char(Cat::Other, c) {
             return true;
@@ -2643,7 +2696,7 @@ impl Machine<'_, '_> {
     /// `\leavevmode` at a native's start. In vertical mode the native's token goes back and
     /// a paragraph starts (§1090 `back_input; new_graf`), so `\everypar` (the paragraph
     /// hook) runs before the native does: the caller returns when this is true.
-    fn leave_vmode(&mut self) -> bool {
+    pub(super) fn leave_vmode(&mut self) -> bool {
         if self.mode != Mode::Vertical {
             return false;
         }
@@ -3454,6 +3507,16 @@ impl Machine<'_, '_> {
         let i = data_class::CLASS_DIMENS.iter().position(|n| *n == "@maxdepth").expect("@maxdepth");
         doc.class.vals[i] = max_depth;
         let (width, height) = (doc.class.dimen("textwidth"), doc.class.dimen("textheight"));
+        // pdftex.def's `\AtBeginDocument`: with `\mag` 1000 and no stock size, the PDF page is
+        // `\paperwidth` by `\paperheight`, the class's paper option's.
+        if doc.packages.contains(&"graphicx") {
+            let [mut pw, mut ph] = PAPER_SIZES[(doc.options & 7) as usize];
+            if doc.options & 8 != 0 {
+                (pw, ph) = (ph, pw);
+            }
+            self.e.eqtb.set_word(Reg { region: Region::Dimen, slot: PDF_PAGE_WIDTH }, pw, false);
+            self.e.eqtb.set_word(Reg { region: Region::Dimen, slot: PDF_PAGE_WIDTH + 1 }, ph, false);
+        }
         self.font_defaults();
         self.set_dimen_named("vsize", height);
         self.set_dimen_named("hsize", width);
@@ -4627,7 +4690,7 @@ impl Machine<'_, '_> {
 
     /// `[#1]` after its `[`: the tokens to the first `]` outside braces, as TeX matches a
     /// delimited argument (§392).
-    fn bracket_arg(&mut self) -> Vec<Token> {
+    pub(super) fn bracket_arg(&mut self) -> Vec<Token> {
         let mut arg = Vec::new();
         let mut depth = 0;
         while let Some(t) = self.get_token() {
@@ -4906,6 +4969,19 @@ impl Machine<'_, '_> {
     /// nothing. Its families must follow the ones in use when it was evaluated (`fam0`): the
     /// table's codes and macros name them as digits.
     fn load_package(&mut self, name: &str) {
+        if let Some(&p) = DRIVER_PACKAGES.iter().find(|&&p| p == name) {
+            let Some(doc) = self.doc.as_mut() else { return };
+            if !doc.packages.contains(&p) {
+                doc.packages.push(p);
+                for &(_, cmd, native) in PACKAGE_NATIVES.iter().filter(|q| q.0 == p) {
+                    if let Some(i) = DOC.iter().position(|d| d.0 == native) {
+                        let id = self.e.cs.intern(cmd);
+                        self.e.eqtb.set_meaning(id, Meaning::Doc(i as u16), true);
+                    }
+                }
+            }
+            return;
+        }
         let Some(k) = crate::data::data_kernel::package(name) else {
             return self.not_native(&format!("package {name}"));
         };
@@ -5304,7 +5380,7 @@ pub fn names_table() -> Vec<u8> {
     for n in crate::data::data_kernel::MACRO_PRIMITIVES {
         *m.entry(n).or_default() |= KERNEL_BIT;
     }
-    for (p, n, _) in PACKAGE_NATIVES {
+    for (p, n, _) in PACKAGE_NATIVES.iter().filter(|q| package_bit(q.0) != 0) {
         *m.entry(n).or_default() |= package_bit(p);
     }
     let mut w = crate::data::data_blob::BlobWriter::default();
@@ -5335,6 +5411,12 @@ fn package_bit(name: &str) -> u32 {
 /// Package `name` and the packages it loads, into `loaded` (each once, after its own loads);
 /// `false` if one of them has no native table.
 fn require(name: &str, loaded: &mut Vec<&'static str>) -> bool {
+    if let Some(&p) = DRIVER_PACKAGES.iter().find(|&&p| p == name) {
+        if !loaded.contains(&p) {
+            loaded.push(p);
+        }
+        return true;
+    }
     let Some((p, k)) = crate::data::data_kernel::packages().find(|p| p.0 == name) else { return false };
     if loaded.contains(&p) {
         return true;

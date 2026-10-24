@@ -84,6 +84,10 @@ try:
     name = os.path.splitext(os.path.basename(tex))[0]
     src = os.path.join(work, os.path.basename(tex))
     shutil.copy(tex, src)
+    # The images the document includes, from the folders beside it (`figures/`).
+    for d in os.scandir(os.path.dirname(tex)):
+        if d.is_dir() and any(f.endswith((".pdf", ".png")) for f in os.listdir(d.path)):
+            shutil.copytree(d.path, os.path.join(work, d.name))
     # RushTeX: one run, no .aux.
     rush_pdf = os.path.join(work, "rush.pdf")
     native = "natively" in subprocess.run([rush, src, "-o", rush_pdf], cwd=work, capture_output=True, text=True).stderr

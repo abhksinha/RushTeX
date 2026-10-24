@@ -64,7 +64,7 @@ Dated notes in `memorycastle/journal/` hold why each decision was made; `CLAUDE.
 - [ ] P3. Output routine and floats: `figure`, `table`, `\caption`, the float queue native (`2026-10-24-native-floats.md`). Left: `\clearpage` in the body, `\listoffigures`, `\suppressfloats`, two columns.
 - [ ] P4. Tables, math, pictures: `tabular` with rules and spans native (`2026-10-24-native-tabular.md`); inline and display math, `equation`. Left: amsmath environments, `array`, pictures.
 - [ ] P5. Classes beyond article: report, book, amsart, IEEEtran, revtex.
-- [ ] P6. Packages by real usage: amsfonts, amssymb native (`2026-10-23-native-packages-amssymb.md`). **Next, Tier A order:** graphicx, amsmath (`align`, `\text`, `equation*`, `\eqref`), package options, UTF-8 input, hyperref, BibTeX, amsthm, natbib, booktabs, geometry, xcolor.
+- [ ] P6. Packages by real usage: amsfonts, amssymb native (`2026-10-23-native-packages-amssymb.md`). graphicx native (`2026-10-24-native-graphicx.md`: `\includegraphics` with width, height, scale, keepaspectratio; PDF and PNG). **Next, Tier A order:** amsmath (`align`, `\text`, `equation*`, `\eqref`), package options, UTF-8 input, hyperref, BibTeX, amsthm, natbib, booktabs, geometry, xcolor.
 - [ ] Known small gaps (from `docs/master.tex`): `\{`/`\}` in `\texttt`, `\[` after a blank line, `\verb`, `\textbackslash`, `\longrightarrow`.
 
 ### Speed (alongside Phase 3)

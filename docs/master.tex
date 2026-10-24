@@ -1,5 +1,6 @@
 \documentclass{article}
 \usepackage{amssymb}
+\usepackage{graphicx}
 \renewcommand{\rmdefault}{ptm}
 \title{RushTeX: Guarded Direct Lowering and the Work a Page Needs}
 \author{RushTeX Project}
@@ -44,9 +45,9 @@ engine path is a complete \TeX{} engine, also written in Rust, that runs the rea
 \LaTeX{} format and packages from an installed \TeX{} Live; it takes every document the
 native path cannot prove it handles, and it produces the same pages. Today the native
 path takes the article class, with its size, paper, \texttt{twoside},
-\texttt{landscape} and \texttt{draft} options, a growing part of the kernel and two
+\texttt{landscape} and \texttt{draft} options, a growing part of the kernel and three
 packages,
-amssymb and amsfonts\footnote{Of 169 papers in our arXiv sample, the native path
+amssymb, amsfonts and graphicx\footnote{Of 169 papers in our arXiv sample, the native path
 compiles one today; the census ranks the commands that block the rest, and the work
 follows that ranking.}, so most real documents still run on the engine.
 
@@ -432,7 +433,7 @@ Feature & Native \\
 Lists & yes \\
 Tables & yes \\
 Floats & yes \\
-Graphics & not yet \\
+Graphics & yes \\
 \end{tabular}
 \caption{Feature status at the time of writing.}
 \end{table}
@@ -448,6 +449,37 @@ A float that may go anywhere is written \texttt{[htbp]}, as the next figure is.
 Figure~\ref{fig:box} is referred to after the float itself. In pdfLaTeX the numbers of
 forward references come from the auxiliary file of an earlier run; RushTeX knows them
 in the same pass.
+
+\subsection{Graphics}\label{sec:graphics}
+
+Figure~\ref{fig:dummy} holds two dummy pictures included with \texttt{includegraphics}:
+on the left a vector drawing, a PDF page, set to a width of 55 percent of the line; on
+the right a raster image, a PNG file, at three tenths of its natural size.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=.55\linewidth]{figures/dummy}\quad
+\includegraphics[scale=.3]{figures/dummy.png}
+\caption{Dummy pictures: a PDF page scaled to a width, and a PNG image scaled by a
+factor.}\label{fig:dummy}
+\end{figure}
+
+In pdfLaTeX the command runs four packages of macros: keyval parses the options,
+graphics searches for the file under each known extension, graphicx turns the options
+into a requested size, and the pdfTeX driver asks the engine to read the file with
+\texttt{pdfximage}, measures the image in a box, writes its size back as text in big
+points and reads that text again. The scale factors are found by a loop of doublings and
+divisions written in macros, and every step expands tokens and makes assignments.
+
+RushTeX runs one Rust function for the same work, with the same arithmetic: the size
+is read back through big points, the factors come from the same doublings and
+divisions in \TeX's integer units, and a factor times a length is rounded as \TeX{}
+rounds it. The function builds the boxes the macros build, three nested boxes with the
+image between a save and a restore of the graphics state and a matrix that scales it,
+none at scale one. Only the file's header is read when the picture is placed; a PNG is
+decoded and a PDF page copied when the document is written, once per file however
+often it is shown. Loading graphicx also sets the PDF page to the paper size, as the
+pdfTeX driver does, so this document's pages are letter size.
 
 \LaTeX's output routine places floats with a queue of eighteen slots and a set of
 fractions: at most seven tenths of a page may hold top floats, three tenths bottom
@@ -531,7 +563,8 @@ which the reader may compare with the bound in the product above.
 
 The native path is young, and its limits are part of an honest description. It takes
 the article class without the \texttt{twocolumn}, \texttt{titlepage}, \texttt{leqno}
-and \texttt{fleqn} options, and two packages; graphics, amsmath's
+and \texttt{fleqn} options, and three packages; graphicx takes PDF and PNG
+pictures at a width, height or scale, but not rotated, clipped or in JPEG, and amsmath's
 environments, hyperref, package options and bibliographies from BibTeX are not yet
 native, so most papers still run on the engine path, which needs an installed \TeX{}
 Live. Pages are compressed with fixed codes, so RushTeX's files are a few percent larger

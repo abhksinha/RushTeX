@@ -203,6 +203,10 @@ fn main() -> ExitCode {
         }
     }
 
+    if let Err(message) = check_paths(&input_path, &output_file_path.clone().unwrap_or_else(|| input_path.with_extension("pdf"))) {
+        eprintln!("{message}");
+        return ExitCode::from(1);
+    }
     let options = rushtex::CompileOptions { compress: enable_compression, threads };
     if watch {
         let output = output_file_path.unwrap_or_else(|| input_path.with_extension("pdf"));
@@ -342,8 +346,8 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
             eprintln!("native job declined: {why}");
         }
         if let Ok(job) = job {
-            if let Err(err) = std::fs::write(output, &job.pdf) {
-                eprintln!("{}", rushtex::Error::Io(err));
+            if let Err(err) = write_pdf(output, &job.pdf) {
+                eprintln!("{err}");
                 return Some(ExitCode::from(1));
             }
             for err in &job.errors {
@@ -372,8 +376,8 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
                 }
             }
         }) {
-            if let Err(err) = std::fs::write(output, &job.pdf) {
-                eprintln!("{}", rushtex::Error::Io(err));
+            if let Err(err) = write_pdf(output, &job.pdf) {
+                eprintln!("{err}");
                 return Some(ExitCode::from(1));
             }
             for err in &job.errors {
@@ -482,4 +486,46 @@ fn atty_stdin() -> bool {
     // no libc crate: treat a seek(0) failure on stdin as "probably a tty"
     use std::io::IsTerminal;
     std::io::stdin().is_terminal()
+}
+
+/// An error explained in plain words, between the compiler's log banners.
+fn explain(message: &str) -> String {
+    format!("==========================================\nRUSHTEX - THE ULTRA FAST TEX FILE COMPILER\n==========================================\n[ERROR] {message}\n==========END OF COMPILER LOGS============")
+}
+
+/// Before any work: the input file must exist, and the folder the PDF goes into must
+/// exist or be made. Each failure says what is wrong and what to do.
+fn check_paths(input: &std::path::Path, output: &std::path::Path) -> Result<(), String> {
+    let here = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    match std::fs::metadata(input) {
+        Ok(m) if m.is_dir() => return Err(explain(&format!("'{}' is a folder, not a .tex file. Give the path of the .tex file to compile.", input.display()))),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(explain(&format!("The input file '{}' does not exist. Check its name, and that you run rushtex from the folder that holds it (you are in '{here}').", input.display())));
+        }
+        Err(e) => return Err(explain(&format!("The input file '{}' cannot be read: {e}.", input.display()))),
+    }
+    let Some(dir) = output.parent().filter(|d| !d.as_os_str().is_empty()) else { return Ok(()) };
+    match std::fs::metadata(dir) {
+        Ok(m) if m.is_dir() => Ok(()),
+        Ok(_) => Err(explain(&format!("The output folder '{}' you chose with -o is a file, not a folder, so '{}' cannot be written there. Choose another path with -o.", dir.display(), output.display()))),
+        Err(_) => match std::fs::create_dir_all(dir) {
+            Ok(()) => {
+                eprintln!("[NOTE] The output folder '{}' you chose with -o did not exist, so RushTeX created it.", dir.display());
+                Ok(())
+            }
+            Err(e) => Err(explain(&format!(
+                "There is no output folder '{}' (the folder you chose with -o for '{}'), and RushTeX could not create it: {e}. Create the folder yourself, or choose a folder that exists with -o.",
+                dir.display(),
+                output.display()
+            ))),
+        },
+    }
+}
+
+/// Writes the PDF to `output` (its folder checked by [`check_paths`]); an error says
+/// which file could not be written and why.
+#[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
+fn write_pdf(output: &std::path::Path, pdf: &[u8]) -> Result<(), String> {
+    std::fs::write(output, pdf).map_err(|e| explain(&format!("RushTeX could not write the PDF to '{}': {e}. Check that the folder exists and that you may write to it.", output.display())))
 }

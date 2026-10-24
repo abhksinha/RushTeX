@@ -196,6 +196,42 @@ impl<'a> Lexer<'a> {
         matches!(cats.get(t), Cat::Space | Cat::EndLine | Cat::BeginGroup | Cat::EndGroup | Cat::MathShift | Cat::AlignTab | Cat::Param | Cat::Subscript).then_some(k)
     }
 
+    /// Past a word of the table: the space after it and the first character of the next
+    /// word, read as [`Lexer::next`] reads them (§347–§348: a space token in state
+    /// `mid_line`, from a space or the line's end; the blanks after it skipped, past the
+    /// next line's start if the line ended; then a character, `mid_line` again).
+    /// `None`, with nothing read, unless a space token comes next; `Some(None)` when what
+    /// follows the space is not a letter or other character below 256, which is left unread.
+    pub fn space_then_char(&mut self, cats: &CatTable, end_line_char: i32) -> Option<Option<(u8, Cat)>> {
+        if self.state != State::MidLine {
+            return None;
+        }
+        match cats.get(*self.buf.get(self.loc)?) {
+            Cat::Space => {
+                self.loc += 1;
+                self.state = State::SkipBlanks;
+            }
+            Cat::EndLine => {
+                self.loc = self.buf.len();
+                if !self.next_line(end_line_char) {
+                    return Some(None);
+                }
+            }
+            _ => return None,
+        }
+        while self.buf.get(self.loc).is_some_and(|&c| cats.get(c) == Cat::Space) {
+            self.loc += 1;
+        }
+        let Some(&c) = self.buf.get(self.loc) else { return Some(None) };
+        let cat = cats.get(c);
+        if (c as u32) >= 256 || !matches!(cat, Cat::Letter | Cat::Other) {
+            return Some(None);
+        }
+        self.loc += 1;
+        self.state = State::MidLine;
+        Some(Some((c as u8, cat)))
+    }
+
     /// The characters from `loc` to `end` (a [`Lexer::word_run`]), as bytes.
     pub fn run_bytes(&self, end: usize) -> impl Iterator<Item = u8> + '_ {
         self.buf[self.loc..end].iter().map(|&c| c as u8)

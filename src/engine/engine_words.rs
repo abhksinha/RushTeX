@@ -18,9 +18,13 @@
 //! `RT_WORD_CHECK=1` makes every word the slow way as well and stops at the first that
 //! differs from its entry; `RT_WORD_NODES=0` copies the nodes everywhere.
 
+use super::engine_catcode::Cat;
+use super::engine_eqtb::{Reg, Region};
 use super::engine_hyph::WordHash;
+use super::engine_names::END_LINE_CHAR;
 use super::engine_node::{Kind, Node};
 use super::engine_run::{Machine, Mode};
+use super::engine_token::Token;
 use std::collections::HashMap;
 
 /// A word entry's nodes and its natural size (§656 for its characters and kerns).
@@ -184,7 +188,37 @@ impl Machine<'_, '_> {
     /// The word that starts with `first` and continues with the characters next in the file,
     /// appended from the table (made and entered the first time). `false` when the word is
     /// not one the table can hold; the main loop then reads it token by token.
+    ///
+    /// In a native job's paragraph, the space after the word and the word after that are
+    /// taken here too, as the main control takes their tokens (§1030: `char_token`, then
+    /// `app_space` for the space and the main loop for the character), without a pass
+    /// through the token loop for each.
     pub(super) fn word(&mut self, first: u8) -> bool {
+        if !self.word_one(first) {
+            return false;
+        }
+        if self.doc.is_none() || self.mode != Mode::Horizontal || self.inner || !self.building() {
+            return true;
+        }
+        let elc = self.e.eqtb.word(Reg { region: Region::Int, slot: END_LINE_CHAR });
+        loop {
+            let cats = self.e.eqtb.cats();
+            let Some(lx) = self.input.file_next() else { return true };
+            let Some(next) = lx.space_then_char(cats, elc) else { return true };
+            self.dont_expand = false;
+            self.note_command(Token::char(Cat::Space, ' '));
+            self.append_space();
+            let Some((c, cat)) = next else { return true };
+            self.note_command(Token::char(cat, c as char));
+            if !self.word_one(c) {
+                // Not a word the table holds: the main loop reads it token by token.
+                self.main_loop(c);
+                return true;
+            }
+        }
+    }
+
+    fn word_one(&mut self, first: u8) -> bool {
         if self.cancel_boundary || self.halted {
             return false;
         }
@@ -198,10 +232,6 @@ impl Machine<'_, '_> {
         let w = &mut self.words;
         w.run.clear();
         w.run.extend(lx.run_bytes(end));
-        // §581: a missing character ends the main loop early; such a word is not entered.
-        if !font.metrics.exists(first) || !w.run.iter().all(|&c| font.metrics.exists(c)) {
-            return false;
-        }
         w.key.clear();
         w.key.extend_from_slice(&f.to_le_bytes());
         w.key.extend_from_slice(&match u8::try_from(hyphen) {
@@ -213,6 +243,11 @@ impl Machine<'_, '_> {
         w.key.extend_from_slice(&w.run);
         let n = w.run.len();
         let found = w.map.get(w.key.as_slice()).copied();
+        // §581: a missing character ends the main loop early; such a word is not entered.
+        // An entry was made from characters the font has, which it keeps.
+        if found.is_none() && (!font.metrics.exists(first) || !w.run.iter().all(|&c| font.metrics.exists(c))) {
+            return false;
+        }
         if paragraph {
             self.fix_language();
         }

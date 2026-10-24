@@ -133,6 +133,9 @@ pub struct PdfDoc {
     /// `\pdfximage`s, `\pdflastximage`, and the transparency group object (0 until an
     /// image with alpha needs one).
     pub images: Vec<super::engine_image::XImage>,
+    /// graphicx's `\csname <file> image<attributes>\endcsname`: the image each file and
+    /// attribute set was read as, so a file shown again is the same image.
+    pub graphics: HashMap<String, usize>,
     pub last_ximage: i32,
     /// `\pdflastximagepages`.
     pub last_ximage_pages: i32,
@@ -166,6 +169,7 @@ impl Default for PdfDoc {
             placed: HashSet::new(),
             done: Vec::new(),
             images: Vec::new(),
+            graphics: HashMap::new(),
             last_ximage: 0,
             last_ximage_pages: 0,
             forms: Vec::new(),

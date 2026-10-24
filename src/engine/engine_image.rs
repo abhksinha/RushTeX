@@ -127,13 +127,19 @@ impl Machine<'_, '_> {
         }
         let page_box = page_box.or_else(|| param(self.image_param(PDF_PAGE_BOX))).unwrap_or(1);
         let file = self.general_text_string();
+        self.image_file(file, attr, given, page, page_box, immediate);
+    }
+
+    /// `scan_image` after its keywords: image `file` read and numbered; its index in
+    /// `pdf_doc.images`, or `None` (with pdfTeX's error) when it cannot be read.
+    pub(super) fn image_file(&mut self, file: String, attr: String, given: [Option<i32>; 3], page: i64, page_box: usize, immediate: bool) -> Option<usize> {
         let bytes = self.open_bytes(&file);
         let res = self.image_param(PDF_IMAGE_RESOLUTION).clamp(0, 65535) as i64;
         let (dims, alpha, pdf) = match bytes {
             Some(b) if b.starts_with(b"%PDF") => {
                 let Some(p) = pdf_page_info(b, page, page_box) else {
                     self.error(format!("pdfTeX error (ext1): cannot read image file `{file}'"));
-                    return;
+                    return None;
                 };
                 let (pages, p) = p;
                 self.pdf_doc.last_ximage_pages = pages;
@@ -143,7 +149,7 @@ impl Machine<'_, '_> {
             b => {
                 let Some(info) = b.as_deref().and_then(png_info) else {
                     self.error(format!("pdfTeX error (ext1): cannot read image file `{file}'"));
-                    return;
+                    return None;
                 };
                 self.pdf_doc.last_ximage_pages = 1;
                 (scale_image(info.width as i64, info.height as i64, info.x_res as i64, info.y_res as i64, res, given, false), info.alpha, None)
@@ -163,6 +169,13 @@ impl Machine<'_, '_> {
         };
         doc.images.push(XImage { obj, file, dims, attr, group, wanted: immediate, pdf });
         doc.last_ximage = obj;
+        Some(doc.images.len() - 1)
+    }
+
+    /// Image `k` of `pdf_doc.images` as a `\pdfrefximage` whatsit on the current list.
+    pub(super) fn ref_image(&mut self, k: usize) {
+        let a = self.e.nodes.add_rule(self.pdf_doc.images[k].dims) as i32;
+        self.cur.push(Node { kind: Kind::Whatsit, sub: XIMAGE, font: 0, a, b: k as i32 });
     }
 
     /// `\pdfrefximage n`: a whatsit of the image's size.
@@ -173,8 +186,7 @@ impl Machine<'_, '_> {
             return;
         };
         if self.building() {
-            let a = self.e.nodes.add_rule(self.pdf_doc.images[k].dims) as i32;
-            self.cur.push(Node { kind: Kind::Whatsit, sub: XIMAGE, font: 0, a, b: k as i32 });
+            self.ref_image(k);
         }
     }
 

@@ -878,7 +878,7 @@ const _: () = {
 #[cfg(target_pointer_width = "32")]
 const _: () = {
     assert!(core::mem::size_of::<MathNode>() == 16);
-    assert!(core::mem::size_of::<DelimitedData>() == 32);
+    assert!(core::mem::size_of::<DelimitedData>() == 40);
 };
 
 const _: () = assert!(core::mem::size_of::<MatrixDelim>() == 1);

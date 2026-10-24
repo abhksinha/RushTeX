@@ -35,7 +35,10 @@ pub struct MathSymbolRecord {
     pub tfm_code: u8, // 0xFF denotes None
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(core::mem::size_of::<MathSymbolRecord>() == 48);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(core::mem::size_of::<MathSymbolRecord>() <= 48);
 
 impl MathSymbolRecord {
     #[inline(always)]

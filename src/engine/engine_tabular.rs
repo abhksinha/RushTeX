@@ -377,40 +377,7 @@ impl Machine<'_, '_> {
     /// dimension (`nx_plus_y(n, v, xn_over_d(v, f, 65536))`, the sign last); `None` for a
     /// body that is not a plain decimal.
     fn array_stretch(&self) -> Option<impl Fn(i32) -> i32> {
-        let doc = self.doc.as_ref()?;
-        let (mut neg, mut int, mut frac) = (false, 1i64, 0i64);
-        if let Meaning::Macro(m) = self.e.eqtb.meaning(doc.stretch_id) {
-            let text = self.e.toks.get(m.text);
-            let body = text.iter().position(|t| *t == Token::END_MATCH).filter(|&k| k == 0).map(|k| &text[k + 1..])?;
-            let bytes: Vec<u8> = body.iter().map(|t| if t.cs_id().is_some() { None } else { u8::try_from(t.chr() as u32).ok() }).collect::<Option<_>>()?;
-            let s = std::str::from_utf8(&bytes).ok()?.trim_matches(' ');
-            let mut s = s.trim_start_matches(|c: char| {
-                if c == '-' {
-                    neg = !neg;
-                }
-                c == '-' || c == '+' || c == ' '
-            });
-            let digits = s.bytes().take_while(u8::is_ascii_digit).count();
-            int = if digits == 0 { 0 } else { s[..digits].parse().ok()? };
-            s = &s[digits..];
-            if let Some(d) = s.strip_prefix(['.', ',']) {
-                if !d.bytes().all(|c| c.is_ascii_digit()) {
-                    return None;
-                }
-                // §452 `round_decimals` of at most 17 digits.
-                let mut a = 0i64;
-                for c in d.bytes().take(17).rev() {
-                    a = (a + (c - b'0') as i64 * 131072) / 10;
-                }
-                frac = (a + 1) / 2;
-            } else if !s.is_empty() || digits == 0 {
-                return None;
-            }
-        }
-        Some(move |v: i32| {
-            let r = int * v as i64 + v as i64 * frac / 65536;
-            (if neg { -r } else { r }) as i32
-        })
+        self.macro_factor(self.doc.as_ref()?.stretch_id, (false, 1, 0))
     }
 
     /// `\rt@tabu` and `\rt@tabv`: the ⟨u⟩ or ⟨v⟩ steps of the entry's column.

@@ -23,6 +23,8 @@ use crate::data::data_nfss;
 
 #[path = "engine_tabular.rs"]
 mod tabular;
+#[path = "engine_float.rs"]
+mod float;
 
 type Native = fn(&mut Machine);
 
@@ -42,11 +44,32 @@ enum Op {
 pub type Read<'a> = dyn Fn(&str) -> Option<Vec<u8>> + 'a;
 
 /// What a text font command changes (`\fontseries`, `\fontshape`, `\fontfamily`, `\em`).
+/// The kernel's `\rmdefault`, `\sfdefault`, `\ttdefault`.
+const DEFAULT_FAMILIES: [&str; 3] = ["cmr", "cmss", "cmtt"];
+
+/// The font defaults the native job keeps as the kernel has them.
+const FONT_FIXED: [&str; 10] = ["familydefault", "encodingdefault", "seriesdefault", "shapedefault", "mddefault", "bfdefault", "itdefault", "sldefault", "scdefault", "updefault"];
+
+/// A family name as a `&'static str`: the families the pin's `.fd` files declare are few,
+/// so each new name is leaked once per process and reused after.
+fn family_name(name: &str) -> &'static str {
+    static NAMES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let mut v = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(n) = v.iter().find(|n| **n == name) {
+        return n;
+    }
+    let n: &'static str = Box::leak(name.to_string().into_boxed_str());
+    v.push(n);
+    n
+}
+
 #[derive(Clone, Copy)]
 enum Change {
     Series(&'static str),
     Shape(&'static str),
-    Family(&'static str),
+    /// `\rmfamily`, `\sffamily`, `\ttfamily`: the family `\rmdefault`, `\sfdefault` or
+    /// `\ttdefault` names (`Doc::families`).
+    Default(u8),
     /// `\em`: `\upshape` in a slanted font, else `\itshape`.
     Em,
 }
@@ -70,8 +93,8 @@ enum Alphabet {
 
 /// The native commands, by `Meaning::Doc` index. Names starting `rt@` are the steps of a
 /// command that typesets material in between (read back from the input).
-static DOC: [(&str, Native); 168] = [
-    ("rt@output", |m| m.output_column()),
+static DOC: [(&str, Native); 172] = [
+    ("rt@output", |m| m.output()),
     ("rt@outputfoot", |m| m.output_page()),
     ("section", |m| m.section(0)),
     ("subsection", |m| m.section(1)),
@@ -89,9 +112,9 @@ static DOC: [(&str, Native); 168] = [
     ("textsl", |m| m.text_font(Change::Shape("sl"))),
     ("textsc", |m| m.text_font(Change::Shape("sc"))),
     ("textup", |m| m.text_font(Change::Shape("n"))),
-    ("textrm", |m| m.text_font(Change::Family("cmr"))),
-    ("textsf", |m| m.text_font(Change::Family("cmss"))),
-    ("texttt", |m| m.text_font(Change::Family("cmtt"))),
+    ("textrm", |m| m.text_font(Change::Default(0))),
+    ("textsf", |m| m.text_font(Change::Default(1))),
+    ("texttt", |m| m.text_font(Change::Default(2))),
     // `\UseTextSymbol`: `\textdollar` from TS1, `\textbraceleft`/`right` from OMS.
     ("$", |m| m.text_symbol("TS1", 36)),
     // `\protected\def\{{\ifmmode\lbrace\else\textbraceleft\fi}`.
@@ -178,7 +201,8 @@ static DOC: [(&str, Native); 168] = [
     ("rt@runinend", |m| m.run_in_end()),
     ("rt@descfont", |m| {
         let (_, size) = m.font_key();
-        m.select_nfss("OT1/cmr/bx/n", size);
+        let key = m.rm_key("bx/n");
+        m.select_nfss(&key, size);
     }),    ("paragraph", |m| m.section(3)),
     ("rt@verbatim", |m| m.verbatim_setup()),
     ("rt@leavevmode", |m| {
@@ -258,17 +282,17 @@ static DOC: [(&str, Native); 168] = [
     ("slshape", |m| m.font_declaration(Change::Shape("sl"), false)),
     ("scshape", |m| m.font_declaration(Change::Shape("sc"), false)),
     ("upshape", |m| m.font_declaration(Change::Shape("n"), false)),
-    ("rmfamily", |m| m.font_declaration(Change::Family("cmr"), false)),
-    ("sffamily", |m| m.font_declaration(Change::Family("cmss"), false)),
-    ("ttfamily", |m| m.font_declaration(Change::Family("cmtt"), false)),
+    ("rmfamily", |m| m.font_declaration(Change::Default(0), false)),
+    ("sffamily", |m| m.font_declaration(Change::Default(1), false)),
+    ("ttfamily", |m| m.font_declaration(Change::Default(2), false)),
     ("normalfont", |m| m.normal_font()),
     ("bf", |m| m.font_declaration(Change::Series("bx"), true)),
     ("it", |m| m.font_declaration(Change::Shape("it"), true)),
     ("sl", |m| m.font_declaration(Change::Shape("sl"), true)),
     ("sc", |m| m.font_declaration(Change::Shape("sc"), true)),
-    ("rm", |m| m.font_declaration(Change::Family("cmr"), true)),
-    ("sf", |m| m.font_declaration(Change::Family("cmss"), true)),
-    ("tt", |m| m.font_declaration(Change::Family("cmtt"), true)),
+    ("rm", |m| m.font_declaration(Change::Default(0), true)),
+    ("sf", |m| m.font_declaration(Change::Default(1), true)),
+    ("tt", |m| m.font_declaration(Change::Default(2), true)),
     ("newpage", |m| m.new_page()),
     ("centering", |m| m.ragged_declaration(0)),
     ("raggedright", |m| m.ragged_declaration(1)),
@@ -280,6 +304,10 @@ static DOC: [(&str, Native); 168] = [
             m.normal_paragraph();
         }
     }),
+    ("caption", |m| m.caption()),
+    ("rt@captionmid", |m| m.caption_mid()),
+    ("rt@captionend", |m| m.caption_end()),
+    ("rt@floatflush", |m| m.float_flush()),
 ];
 const OUTPUT: usize = 0;
 const OUTPUT_FOOT: usize = 1;
@@ -325,6 +353,9 @@ const CLINE: usize = 143;
 const NEWLINE: usize = 59;
 const CENTER_CR: usize = 165;
 const TAB_PAR: usize = 167;
+const CAPTION_MID: usize = 169;
+const CAPTION_END: usize = 170;
+const FLOAT_FLUSH: usize = 171;
 /// The font switches `switch_font` remembers: `\bfseries`, `\mdseries`, the four shapes,
 /// the three families, `\em`'s and `\normalfont`.
 const FONT_SWITCHES: usize = 11;
@@ -338,6 +369,7 @@ const ITEM: i32 = 2;
 const ENDPE: i32 = 3;
 const RUN_IN: i32 = 4;
 const VERB_ITEM: i32 = 5;
+const MINIPAGE: i32 = 6;
 /// `\l@nohyphenation` (language.dat's third language).
 const NOHYPHENATION: i32 = 2;
 /// `\@labels`, `\@tempboxa` and `\@arstrutbox`, hidden box registers.
@@ -390,6 +422,18 @@ const R_TABCOLSEP: usize = 39;
 const R_ATRIGHTSKIP: usize = 40;
 const R_ARRAYRULEWIDTH: usize = 42;
 const R_DOUBLERULESEP: usize = 43;
+const R_FLOATSEP: usize = 44;
+const R_TEXTFLOATSEP: usize = 45;
+const R_INTEXTSEP: usize = 46;
+const R_FPTOP: usize = 47;
+const R_FPSEP: usize = 48;
+const R_FPBOT: usize = 49;
+const R_ABOVECAPTIONSKIP: usize = 50;
+const R_BELOWCAPTIONSKIP: usize = 51;
+const R_TOPNUMBER: usize = 52;
+const R_BOTTOMNUMBER: usize = 53;
+const R_TOTALNUMBER: usize = 54;
+const R_FIGURE: usize = 55;
 
 /// An open list: what its group holds as macros (`\@itemlabel`, `\makelabel`,
 /// `\if@nmbrlist`, `\@listctr`, and `\\` as `\@centercr`).
@@ -428,9 +472,9 @@ const FOOTINS: u32 = 253;
 
 /// The control words a native document may use (with the macros it defines), and its
 /// environments.
-const WORDS: [&str; 102] = [
+const WORDS: [&str; 103] = [
     "section", "subsection", "subsubsection", "emph", "textbf", "textmd", "textit", "textsl", "textsc", "textup", "textrm", "textsf", "texttt", "LaTeX", "TeX", "ldots", "dots", "textellipsis", "thinspace", "nobreakspace", "mbox", "newcommand", "renewcommand", "title", "author", "date", "begin", "end", "documentclass", "textunderscore", "footnote", "item",
-    "tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge", "maketitle", "today", "providecommand", "label", "ref", "paragraph", "pageref", "tableofcontents", "H", "u", "v", "r", "i", "j", "ss", "ae", "oe", "o", "AE", "OE", "O", "setlength", "addtolength", "setcounter", "pagestyle", "vspace", "cite", "bibitem", "sqrt", "hline", "tabularnewline", "multicolumn", "cline", "bfseries", "mdseries", "itshape", "slshape", "scshape", "upshape", "rmfamily", "sffamily", "ttfamily", "normalfont", "bf", "it", "sl", "sc", "rm", "sf", "tt", "newpage", "centering", "raggedright", "raggedleft", "hspace", "noindent", "textwidth", "textheight", "linewidth", "par",
+    "tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge", "maketitle", "today", "providecommand", "label", "ref", "paragraph", "pageref", "tableofcontents", "H", "u", "v", "r", "i", "j", "ss", "ae", "oe", "o", "AE", "OE", "O", "setlength", "addtolength", "setcounter", "pagestyle", "vspace", "cite", "bibitem", "sqrt", "hline", "tabularnewline", "multicolumn", "cline", "bfseries", "mdseries", "itshape", "slshape", "scshape", "upshape", "rmfamily", "sffamily", "ttfamily", "normalfont", "bf", "it", "sl", "sc", "rm", "sf", "tt", "newpage", "centering", "raggedright", "raggedleft", "hspace", "noindent", "textwidth", "textheight", "linewidth", "par", "caption",
 ];
 /// ot1enc.def's `\DeclareTextSymbol`s: in OT1 each is its `\OT1\name`, a `\chardef`, so
 /// the main loop's ligatures and kerns see it as a character.
@@ -438,7 +482,7 @@ const TEXT_SYMBOLS: [(&str, u32); 9] = [("i", 16), ("j", 17), ("ss", 25), ("ae",
 /// Commands of preamble code (`\makeatletter`, `\ifx`, `\let`, …); `\let` and
 /// `\providecommand` define their first name, as `\newcommand` does.
 const PREAMBLE: [&str; 13] = ["makeatletter", "makeatother", "ifx", "else", "fi", "bgroup", "egroup", "relax", "document", "enddocument", "@preamblecmds", "@notprerr", "endinput"];
-const ENVS: [&str; 16] = ["tabular", "document", "em", "quote", "quotation", "verse", "itemize", "enumerate", "center", "description", "verbatim", "flushleft", "flushright", "abstract", "equation", "thebibliography"];
+const ENVS: [&str; 20] = ["figure", "table", "figure*", "table*", "tabular", "document", "em", "quote", "quotation", "verse", "itemize", "enumerate", "center", "description", "verbatim", "flushleft", "flushright", "abstract", "equation", "thebibliography"];
 
 /// `\normalsize` among `data_class::SIZE_COMMANDS`.
 const NORMALSIZE: usize = 4;
@@ -506,10 +550,19 @@ pub struct Doc {
     /// and `\crcr`.
     tabs: Vec<tabular::Tab>,
     tab_group: u8,
+    /// The floats (`engine_float`).
+    floats: float::Floats,
+    /// The lists `\\` looks through for `\@centercr` (a float's `\@parboxrestore` hides
+    /// those around it).
+    cr_base: usize,
     cr_id: u32,
     crcr_id: u32,
     /// [`Self::switch_font`]'s memo: per font, the font each switch reaches.
     font_switch: Vec<[u16; FONT_SWITCHES]>,
+    /// `\rmdefault`, `\sfdefault`, `\ttdefault` as `\begin{document}` finds them.
+    families: [&'static str; 3],
+    /// [`FONT_FIXED`]'s bodies after the class loads.
+    font_fixed: Vec<Option<String>>,
     /// `\arraystretch`, `\omit`, `\span`, `\\`.
     stretch_id: u32,
     newline_id: u32,
@@ -661,6 +714,7 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
     let mut loaded: Vec<&'static str> = Vec::new();
     // Open `tabular`s: `&`, `\hline` and `\tabularnewline` are taken only inside one.
     let mut tabs = 0usize;
+    let mut floats = 0usize;
     let mut i = 0;
     while i < b.len() {
         match b[i] {
@@ -701,7 +755,7 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                     continue;
                 }
                 let name = &rest[..n];
-                if tabs == 0 && matches!(name, "hline" | "tabularnewline" | "multicolumn" | "cline") {
+                if tabs == 0 && matches!(name, "hline" | "tabularnewline" | "multicolumn" | "cline") || floats == 0 && name == "caption" {
                     stop(name, &mut blocked)?;
                 }
                 if name == "multicolumn" {
@@ -764,6 +818,16 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                     let env = rest[n..].strip_prefix('{').and_then(|r| r.split_once('}')).map(|r| r.0).ok_or(name)?;
                     if !ENVS.contains(&env) && !defined.contains(&env) {
                         stop(env, &mut blocked)?;
+                    }
+                    if matches!(env, "figure" | "table" | "figure*" | "table*") {
+                        // A float in a float or a tabular is `\@parmoderr`.
+                        if name == "end" {
+                            floats = floats.saturating_sub(1);
+                        } else if floats > 0 || tabs > 0 {
+                            stop("a float in a box", &mut blocked)?;
+                        } else {
+                            floats += 1;
+                        }
                     }
                     if env == "tabular" && name == "end" {
                         tabs = tabs.saturating_sub(1);
@@ -879,6 +943,7 @@ fn predict(src: &str) -> Predicted {
     let mut groups = vec![Group { label: String::new(), depth: 0, enumerate: false }];
     let (mut sec, mut enums, mut footnote, mut equation) = ([0u32; SECNUMDEPTH], [0u32; 4], 0u32, 0u32);
     let mut pending: Option<String> = None;
+    let (mut floats, mut figtab) = (Vec::new(), [0u32; 2]);
     let b = src.as_bytes();
     let next = |i: usize| src[i..].trim_start_matches([' ', '\t', '\r', '\n']).as_bytes().first().copied();
     let push = |groups: &mut Vec<Group>, pending: &mut Option<String>| {
@@ -920,6 +985,9 @@ fn predict(src: &str) -> Predicted {
                             if groups.len() > 1 {
                                 groups.pop();
                             }
+                            if matches!(env, "figure" | "table" | "figure*" | "table*") {
+                                floats.pop();
+                            }
                         } else if env == "verbatim" {
                             let Some(e) = src[i..].find("\\end{verbatim}") else { return out };
                             i += e + "\\end{verbatim}".len();
@@ -943,6 +1011,10 @@ fn predict(src: &str) -> Predicted {
                                 }
                                 // An entry is a group; `\label` there takes the label around.
                                 "em" | "document" | "tabular" => {}
+                                "figure" | "figure*" | "table" | "table*" => {
+                                    g.enumerate = false;
+                                    floats.push(env.starts_with("table") as usize);
+                                }
                                 _ => return out,
                             }
                         }
@@ -993,6 +1065,12 @@ fn predict(src: &str) -> Predicted {
                             }
                         }
                         g.label = text;
+                    }
+                    // `\caption`'s `\refstepcounter\@captype`, in the float's group.
+                    "caption" => {
+                        let Some(t) = floats.last().copied() else { return out };
+                        figtab[t] += 1;
+                        groups.last_mut().expect("a group").label = figtab[t].to_string();
                     }
                     "footnote" => {
                         if next(i) == Some(b'[') {
@@ -1399,9 +1477,56 @@ impl Machine<'_, '_> {
                 self.e.eqtb.set_meaning(id, Meaning::Reg(r), true);
             }
         }
-        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, ids, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, font_switch: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, trivlist_then: |_| {}, dated: false, unsupported: None, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special_plain: false, empty_foot: false, regs }));
+        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, ids, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, trivlist_then: |_| {}, dated: false, unsupported: None, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special_plain: false, empty_foot: false, regs }));
         self.strut_update();
+        let fixed = FONT_FIXED.iter().map(|name| {
+            let id = self.e.cs.intern(name);
+            self.macro_body(id)
+        }).collect();
+        if let Some(d) = self.doc.as_mut() {
+            d.font_fixed = fixed;
+        }
         Ok(())
+    }
+
+    /// A macro holding a decimal factor (`\renewcommand\arraystretch{1.5}`,
+    /// `\topfraction`), as a scale of dimensions: `int*v` plus §455's `xn_over_d(v, frac,
+    /// 2^16)`, the fraction from §452 `round_decimals`. `default` (sign, integer part,
+    /// fraction) when the name is not a macro; `None` when its text is not a number.
+    fn macro_factor(&self, id: u32, default: (bool, i64, i64)) -> Option<impl Fn(i32) -> i32> {
+        let (mut neg, mut int, mut frac) = default;
+        if let Meaning::Macro(m) = self.e.eqtb.meaning(id) {
+            (neg, frac) = (false, 0);
+            let text = self.e.toks.get(m.text);
+            let body = text.iter().position(|t| *t == Token::END_MATCH).filter(|&k| k == 0).map(|k| &text[k + 1..])?;
+            let bytes: Vec<u8> = body.iter().map(|t| if t.cs_id().is_some() { None } else { u8::try_from(t.chr() as u32).ok() }).collect::<Option<_>>()?;
+            let s = std::str::from_utf8(&bytes).ok()?.trim_matches(' ');
+            let mut s = s.trim_start_matches(|c: char| {
+                if c == '-' {
+                    neg = !neg;
+                }
+                c == '-' || c == '+' || c == ' '
+            });
+            let digits = s.bytes().take_while(u8::is_ascii_digit).count();
+            int = if digits == 0 { 0 } else { s[..digits].parse().ok()? };
+            s = &s[digits..];
+            if let Some(d) = s.strip_prefix(['.', ',']) {
+                if !d.bytes().all(|c| c.is_ascii_digit()) {
+                    return None;
+                }
+                let mut a = 0i64;
+                for c in d.bytes().take(17).rev() {
+                    a = (a + (c - b'0') as i64 * 131072) / 10;
+                }
+                frac = (a + 1) / 2;
+            } else if !s.is_empty() || digits == 0 {
+                return None;
+            }
+        }
+        Some(move |v: i32| {
+            let r = int * v as i64 + v as i64 * frac / 65536;
+            (if neg { -r } else { r }) as i32
+        })
     }
 
     /// The class's [`data_class::CLASS_DIMENS`] and flags as loaded (for the generator's check).
@@ -1432,9 +1557,23 @@ impl Machine<'_, '_> {
     ///
     /// Then, as `\@outputpage`'s first step, the foot's page number is typeset from tokens
     /// (the main loop's ligatures and kerns), and `\rt@outputfoot` finishes the page.
+    fn output(&mut self) {
+        // `\let\par\@@par`.
+        if let Some((id, m)) = self.doc.as_ref().map(|d| (d.par_id, d.par_prim)) {
+            self.e.eqtb.set_meaning(id, m, false);
+        }
+        let p = super::engine_names::param("outputpenalty").map_or(0, |r| self.e.eqtb.word(r));
+        if p < -10000 {
+            return self.special_output(p);
+        }
+        self.output_column();
+    }
+
     fn output_column(&mut self) {
+        self.free_mid();
         let Some(doc) = self.doc.as_ref() else { return };
-        let (class, page, font) = (doc.class, doc.page, doc.normal_font);
+        let class = doc.class;
+        let bottom = doc.floats.has_bottom();
         let Some(b) = self.e.eqtb.box_reg(255) else { return };
         let max_depth = class.dimen("@maxdepth");
         let start = self.cur.len();
@@ -1456,17 +1595,17 @@ impl Machine<'_, '_> {
         let mut depth = a.depth;
         self.cur.extend_from_slice(self.e.nodes.get(a.list));
         self.e.nodes.free_block(a.list);
-        // `footnotes-floats-legacy`: with footnotes, `\@outputbox@append{}` first, and the
-        // removed glue goes back without `\@backup@outputbox@depth`.
+        // `footnotes-floats-legacy`: with footnotes or bottom floats, `\@outputbox@append{}`
+        // first, and the removed glue goes back without `\@backup@outputbox@depth`.
         let footins = self.e.eqtb.box_reg(FOOTINS);
-        if footins.is_some() {
+        if footins.is_some() || bottom {
             let a = self.vpack(start, 0, false, max_depth);
             depth = a.depth;
             self.cur.extend_from_slice(self.e.nodes.get(a.list));
             self.e.nodes.free_block(a.list);
         }
         if let Some(g) = removed {
-            if depth > 0 && footins.is_none() {
+            if depth > 0 && footins.is_none() && !bottom {
                 let w = depth.min(self.dimen_param(super::engine_page::MAX_DEPTH));
                 let n = self.e.nodes.glue_node(Glue { width: -w, ..Glue::default() }, 0);
                 self.cur.push(n);
@@ -1501,6 +1640,7 @@ impl Machine<'_, '_> {
             self.cur.extend_from_slice(self.e.nodes.get(c.list));
             self.e.nodes.free_block(c.list);
         }
+        let depth = self.attach_floats(start, depth);
         let n = self.e.nodes.glue_node(Glue { width: -depth, ..Glue::default() }, 0);
         self.cur.push(n);
         if class.flag("raggedbottom") {
@@ -1514,6 +1654,14 @@ impl Machine<'_, '_> {
         if let Some(doc) = self.doc.as_mut() {
             doc.column = Some(column);
         }
+        self.start_foot();
+    }
+
+    /// `\@outputpage` of the column in `doc.column`, up to the foot's page number, which is
+    /// typeset from tokens; `\rt@outputfoot` finishes the page.
+    fn start_foot(&mut self) {
+        let Some(doc) = self.doc.as_ref() else { return };
+        let (page, font) = (doc.page, doc.normal_font);
         // `\@outputpage`: `\if@specialpage \global\@specialpagefalse \@nameuse{ps@\@specialstyle}
         // \fi`; `\ps@empty`'s `\@oddfoot` is `\@empty`.
         let empty = self.doc.as_mut().is_some_and(|d| {
@@ -1617,6 +1765,7 @@ impl Machine<'_, '_> {
         } else {
             self.ship_out(shipped);
         }
+        self.after_opcol();
     }
 
     fn set_int_named(&mut self, name: &str, v: i32) {
@@ -1699,6 +1848,13 @@ impl Machine<'_, '_> {
                 }
             }
             ITEM => self.item_everypar(),
+            // `\@setminipage`'s `\everypar{\@minipagefalse\everypar{}}`.
+            MINIPAGE => {
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.floats.minipage = false;
+                }
+                self.set_everypar(0);
+            }
             // `\@verbatim`'s `\everypar{\the\everypar \unpenalty}`.
             VERB_ITEM => {
                 self.item_everypar();
@@ -1847,7 +2003,7 @@ impl Machine<'_, '_> {
 
     /// `\addpenalty` (latex.ltx): a penalty before the last skip, the skip kept.
     fn add_penalty(&mut self, p: i32, ops: &mut Vec<Op>) {
-        if self.doc.as_ref().is_some_and(|d| d.nobreak) {
+        if self.doc.as_ref().is_some_and(|d| d.nobreak || d.floats.minipage) {
             return;
         }
         let last = self.last_skip();
@@ -1868,6 +2024,9 @@ impl Machine<'_, '_> {
 
     /// `\addvspace` with `\@xaddvskip` (latex.ltx): the larger of the last skip and `g`.
     fn add_vspace(&mut self, g: Glue) {
+        if self.doc.as_ref().is_some_and(|d| d.floats.minipage) {
+            return;
+        }
         let last = self.last_skip();
         if last.width == 0 {
             return self.vskip(g);
@@ -2035,7 +2194,8 @@ impl Machine<'_, '_> {
         self.set_int_named("clubpenalty", 10000);
         self.begin_group(SEMI_SIMPLE_GROUP);
         self.set_size(size);
-        self.select_nfss("OT1/cmr/bx/n", self.size_row(size).fsize);
+        let key = self.rm_key("bx/n");
+        self.select_nfss(&key, self.size_row(size).fsize);
         let g = self.e.nodes.glue_node(Glue::default(), 0);
         self.cur.push(g);
         list.push(self.doc_id(RUN_IN_END));
@@ -2073,7 +2233,8 @@ impl Machine<'_, '_> {
         }
         self.begin_group(SEMI_SIMPLE_GROUP);
         self.set_size(sec.size);
-        self.select_nfss("OT1/cmr/bx/n", self.size_row(sec.size).fsize);
+        let key = self.rm_key("bx/n");
+        self.select_nfss(&key, self.size_row(sec.size).fsize);
         // `\setbox\@tempboxa\hbox{{\hskip\z@\relax\@svsec}}`.
         self.push_nest(Mode::Horizontal, true, 1000);
         let g = self.e.nodes.glue_node(Glue::default(), 0);
@@ -2181,7 +2342,7 @@ impl Machine<'_, '_> {
         let name = self.e.cs.name(self.e.fonts.list[f as usize].ident);
         match name.rsplit_once('/') {
             Some((key, size)) if key.matches('/').count() == 3 => (key.to_string(), static_size(size)),
-            _ => ("OT1/cmr/m/n".to_string(), self.size_row(NORMALSIZE).fsize),
+            _ => (self.rm_key("m/n"), self.size_row(NORMALSIZE).fsize),
         }
     }
 
@@ -2239,9 +2400,9 @@ impl Machine<'_, '_> {
             Change::Shape("sl") => 3,
             Change::Shape("sc") => 4,
             Change::Shape("n") => 5,
-            Change::Family("cmr") => 6,
-            Change::Family("cmss") => 7,
-            Change::Family("cmtt") => 8,
+            Change::Default(0) => 6,
+            Change::Default(1) => 7,
+            Change::Default(2) => 8,
             Change::Em => 9,
             _ => FONT_SWITCHES,
         };
@@ -2271,13 +2432,64 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// The family `\rmdefault` (0), `\sfdefault` (1) or `\ttdefault` (2) names.
+    fn family(&self, k: u8) -> &'static str {
+        self.doc.as_ref().map_or(DEFAULT_FAMILIES[k as usize], |d| d.families[k as usize])
+    }
+
+    /// `OT1/\rmdefault/<series/shape>`: the key `\normalfont` and the headings start from.
+    fn rm_key(&self, series_shape: &str) -> String {
+        format!("OT1/{}/{series_shape}", self.family(0))
+    }
+
+    /// The preamble's `\rmdefault`, `\sfdefault` and `\ttdefault` become `Doc::families`.
+    /// The other font defaults (`\familydefault`, `\encodingdefault`, the series and shape
+    /// defaults) are read nowhere natively, so a document that changes one goes to the engine.
+    fn font_defaults(&mut self) {
+        let fixed = self.doc.as_ref().map(|d| d.font_fixed.clone()).unwrap_or_default();
+        if FONT_FIXED.iter().zip(&fixed).any(|(name, body)| {
+            let id = self.e.cs.intern(name);
+            self.macro_body(id) != *body
+        }) {
+            return self.not_native("a changed font default");
+        }
+        for (k, name) in ["rmdefault", "sfdefault", "ttdefault"].into_iter().enumerate() {
+            let id = self.e.cs.intern(name);
+            let Some(b) = self.macro_body(id) else { continue };
+            if b.is_empty() || !b.bytes().all(|c| c.is_ascii_alphanumeric()) {
+                return self.not_native("a font default that is not a family name");
+            }
+            if b != DEFAULT_FAMILIES[k] {
+                let fam = family_name(&b);
+                if let Some(d) = self.doc.as_mut() {
+                    d.families[k] = fam;
+                    d.font_switch.clear();
+                }
+            }
+        }
+    }
+
+    /// A parameterless macro's text, its control sequences written `\name`, `\@empty` dropped.
+    fn macro_body(&self, id: u32) -> Option<String> {
+        let Meaning::Macro(m) = self.e.eqtb.meaning(id) else { return None };
+        let text = self.e.toks.get(m.text);
+        let body = text.iter().position(|t| *t == Token::END_MATCH).filter(|&k| k == 0).map(|k| &text[k + 1..])?;
+        // `\@empty` expands to nothing (the kernel writes `\mddefault` as `m\@empty`).
+        Some(body.iter().filter_map(|t| match t.cs_id() {
+            Some(c) if self.e.cs.name(c) == "@empty" => None,
+            Some(c) => Some(format!("\\{}", self.e.cs.name(c))),
+            None => Some(t.chr().to_string()),
+        }).collect())
+    }
+
     fn font_change_by_name(&mut self, c: Change) {
         let (key, size) = self.font_key();
+        let fam = |k: u8| self.family(k);
         let mut p: Vec<&str> = key.split('/').collect();
         match c {
             Change::Series(s) => p[2] = s,
             Change::Shape(s) => p[3] = s,
-            Change::Family(s) => p[1] = s,
+            Change::Default(k) => p[1] = fam(k),
             Change::Em => p[3] = if self.e.fonts.params(self.cur_font()).first().is_some_and(|&s| s > 0) { "n" } else { "it" },
         }
         self.select_nfss(&p.join("/"), size);
@@ -2559,11 +2771,13 @@ impl Machine<'_, '_> {
 
     /// `\mbox`: `\leavevmode\hbox{#1}`.
     fn mbox(&mut self) {
-        let mut arg = Vec::new();
-        self.read_arg(&mut arg);
+        // `\leavevmode` first: the command runs again in horizontal mode, its argument
+        // still in the input.
         if self.leave_vmode() {
             return;
         }
+        let mut arg = Vec::new();
+        self.read_arg(&mut arg);
         let mut list = Vec::with_capacity(arg.len() + 3);
         list.push(Token::cs(self.e.cs.intern("hbox")));
         list.push(Token::char(Cat::BeginGroup, '{'));
@@ -2982,6 +3196,9 @@ impl Machine<'_, '_> {
             let rec = self.hpack(start, old.width, true);
             self.e.nodes.free_block(old.list);
             self.e.nodes.boxes[b as usize] = BoxRec { shift: old.shift, ..rec };
+            if (rec.height, rec.depth) != (old.height, old.depth) {
+                self.refit_contents_line(b)?;
+            }
         }
         let Some(doc) = self.doc.as_mut() else { return Ok(()) };
         doc.replay = true;
@@ -2989,6 +3206,66 @@ impl Machine<'_, '_> {
             self.ship_out(b);
         }
         Ok(())
+    }
+
+    /// A contents page box whose height or depth changed with its digits (Times' digits
+    /// differ in height, Computer Modern's do not): its line is packed again (§649, at the
+    /// same width, so its glue set is unchanged) and the interline glue above and below the
+    /// line takes up the difference, as §679 would have computed it from the final line.
+    /// A line whose neighbours are not `\baselineskip` glue, or whose new glue would fall
+    /// below `\lineskiplimit` (so §679 would have chosen `\lineskip`), is not native.
+    fn refit_contents_line(&mut self, b: u32) -> Result<(), String> {
+        const NOT: &str = "not native yet: a contents line whose height changes";
+        let roots = self.doc.as_ref().map(|d| d.deferred.clone()).unwrap_or_default();
+        let (g, i, line) = roots.iter().find_map(|&r| self.line_holding(r, b)).ok_or(NOT)?;
+        let old = self.e.nodes.boxes[line as usize];
+        if old.vertical {
+            return Err(NOT.into());
+        }
+        let start = self.cur.len();
+        let list = self.e.nodes.get(old.list).to_vec();
+        self.cur.extend(list);
+        let rec = self.hpack(start, old.width, true);
+        self.e.nodes.free_block(old.list);
+        self.e.nodes.boxes[line as usize] = BoxRec { shift: old.shift, ..rec };
+        let limit = self.dimen_param(super::engine_pack::LINE_SKIP_LIMIT);
+        let skip = super::engine_pack::BASELINE_SKIP as u8 + 1;
+        let list = self.e.nodes.boxes[g as usize].list;
+        let nodes = self.e.nodes.get(list);
+        // The glue before the line takes the height's change, the glue after it the depth's.
+        let above = (rec.height - old.height, i.checked_sub(1));
+        let below = (rec.depth - old.depth, nodes[i + 1..].iter().position(|n| n.kind == Kind::Box).map(|k| i + k));
+        for (delta, at) in [above, below] {
+            if delta == 0 {
+                continue;
+            }
+            let n = at.map(|k| self.e.nodes.get(list)[k]).ok_or(NOT)?;
+            if n.kind != Kind::Glue || n.sub != skip {
+                return Err(NOT.into());
+            }
+            let glue = &mut self.e.nodes.glues[n.a as usize];
+            glue.width -= delta;
+            if glue.width < limit {
+                return Err(NOT.into());
+            }
+        }
+        Ok(())
+    }
+
+    /// The box in `root`'s tree whose list holds box `b`: its parent list's box, its index
+    /// there, and the box.
+    fn line_holding(&self, root: u32, b: u32) -> Option<(u32, usize, u32)> {
+        let nodes = self.e.nodes.get(self.e.nodes.boxes[root as usize].list);
+        for (i, n) in nodes.iter().enumerate().filter(|(_, n)| n.kind == Kind::Box) {
+            let c = n.a as u32;
+            if self.e.nodes.get(self.e.nodes.boxes[c as usize].list).iter().any(|m| m.kind == Kind::Box && m.a as u32 == b) {
+                return Some((root, i, c));
+            }
+            if let Some(hit) = self.line_holding(c, b) {
+                return Some(hit);
+            }
+        }
+        None
     }
 
     /// Tokens for a fixed string of primitives and `rt@` natives: control words (letters and
@@ -3113,6 +3390,13 @@ impl Machine<'_, '_> {
                 self.tex("]}\\rt@bibopen ", &mut t);
                 self.back_list(&t);
             }
+            "figure" | "table" | "figure*" | "table*" => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                self.float_open(if name.starts_with("figure") { 1 } else { 2 });
+            }
             // `\tabular` inside `\begin`'s group (`\@endpefalse`).
             "tabular" => {
                 self.begin_group(SEMI_SIMPLE_GROUP);
@@ -3170,11 +3454,19 @@ impl Machine<'_, '_> {
         let i = data_class::CLASS_DIMENS.iter().position(|n| *n == "@maxdepth").expect("@maxdepth");
         doc.class.vals[i] = max_depth;
         let (width, height) = (doc.class.dimen("textwidth"), doc.class.dimen("textheight"));
+        self.font_defaults();
         self.set_dimen_named("vsize", height);
         self.set_dimen_named("hsize", width);
+        self.floats_begin(height);
         self.set_rw(R_LINEWIDTH, width, false);
-        let (key, _) = self.font_key();
+        // `\normalsize` keeps the current family; `\begin{document}`'s `\normalfont`
+        // (LaTeX's begin-document hook) starts the body in `\rmdefault`.
+        let key = if self.family(0) == DEFAULT_FAMILIES[0] { self.font_key().0 } else { self.rm_key("m/n") };
         self.apply_size(NORMALSIZE, &key);
+        let f = self.cur_font();
+        if let Some(d) = self.doc.as_mut() {
+            d.normal_font = f;
+        }
     }
 
     /// `\setlength#1#2` (`#1 #2\relax`) and `\addtolength#1#2` (`\advance#1 #2\relax`), done
@@ -3217,7 +3509,7 @@ impl Machine<'_, '_> {
         let mut name = Vec::new();
         self.read_arg(&mut name);
         let name: String = name.iter().map(|t| t.chr()).collect();
-        if !matches!(name.as_str(), "page" | "section" | "subsection" | "subsubsection" | "footnote") {
+        if !matches!(name.as_str(), "page" | "section" | "subsection" | "subsubsection" | "footnote" | "topnumber" | "bottomnumber" | "totalnumber" | "figure" | "table") {
             return self.not_native("\\setcounter of a counter the native job does not keep");
         }
         let mut value = Vec::new();
@@ -3228,6 +3520,9 @@ impl Machine<'_, '_> {
         let n = self.scan_int();
         if let Some(t) = self.get_token().filter(|&t| t != relax) {
             self.input.back(t);
+        }
+        if let Some(i) = ["topnumber", "bottomnumber", "totalnumber", "figure", "table"].iter().position(|c| *c == name) {
+            return self.set_rw(R_TOPNUMBER + i, n, true);
         }
         let Some(doc) = self.doc.as_mut() else { return };
         match name.as_str() {
@@ -3254,8 +3549,18 @@ impl Machine<'_, '_> {
 
     /// `\enddocument`: `\clearpage` (its `\newpage`), and the job's end.
     fn end_document(&mut self) {
-        let list = [self.doc_id(NEW_PAGE), self.doc_id(STOP)];
+        let list = [self.doc_id(NEW_PAGE), self.doc_id(FLOAT_FLUSH), self.doc_id(STOP)];
         self.back_list(&list);
+    }
+
+    /// `\clearpage`'s `\vbox{}\penalty-\@Mi` after its `\newpage`, when floats wait: the
+    /// output routine's `\@doclearpage` puts them on float pages. (Its `\write\m@ne{}` and
+    /// the box go with the page `\@doclearpage` drops.)
+    fn float_flush(&mut self) {
+        if !self.doc.as_ref().is_some_and(|d| d.floats.pending()) {
+            return;
+        }
+        self.run_ops(vec![Op::Call(|m| m.empty_vbox(false)), Op::Penalty(-10001)]);
     }
 
     /// `\end{name}`: the environment's end and `\endgroup`.
@@ -3277,6 +3582,7 @@ impl Machine<'_, '_> {
             // in vertical mode, so `\leavevmode` is not needed.
             "center" | "flushleft" | "flushright" | "verbatim" => self.end_trivlist(),
             "tabular" => self.tabular_end(),
+            "figure" | "table" | "figure*" | "table*" => self.float_close(),
             // `\csname endname\endcsname \endgroup`.
             _ => {
                 let list = [Token::cs(self.e.cs.intern(&format!("end{name}"))), Token::cs(self.e.cs.intern("endgroup"))];
@@ -3431,9 +3737,11 @@ impl Machine<'_, '_> {
     /// with `\unpenalty` added, `\frenchspacing` (no space factor is used: every space is
     /// `\ `); then the lines.
     fn verbatim_setup(&mut self) {
-        let parskip = self.glue_param(super::engine_pack::PAR_SKIP);
-        let g = self.e.nodes.glue_node(parskip, 0);
-        self.cur.push(g);
+        if !self.doc.as_ref().is_some_and(|d| d.floats.minipage) {
+            let parskip = self.glue_param(super::engine_pack::PAR_SKIP);
+            let g = self.e.nodes.glue_node(parskip, 0);
+            self.cur.push(g);
+        }
         let left = self.rw(R_TOTALLEFTMARGIN);
         self.set_glue_named("leftskip", Glue { width: left, ..Glue::default() });
         self.set_glue_named("rightskip", Glue::default());
@@ -3861,11 +4169,13 @@ impl Machine<'_, '_> {
             let g = self.e.nodes.glue_node(Glue { width: lm, ..Glue::default() }, 0);
             self.cur.push(g);
             self.set_labels();
-            let last = self.last_skip();
-            self.vskip(neg(last));
-            let parskip = self.glue_param(super::engine_pack::PAR_SKIP);
-            let a = glue_add(glue_add(last, self.rg(R_OUTERPARSKIP)), neg(parskip));
-            self.vskip(a);
+            if !self.doc.as_ref().is_some_and(|d| d.floats.minipage) {
+                let last = self.last_skip();
+                self.vskip(neg(last));
+                let parskip = self.glue_param(super::engine_pack::PAR_SKIP);
+                let a = glue_add(glue_add(last, self.rg(R_OUTERPARSKIP)), neg(parskip));
+                self.vskip(a);
+            }
             return self.item_rest();
         }
         let mut ops = Vec::new();
@@ -4037,14 +4347,16 @@ impl Machine<'_, '_> {
     fn label_mark(&mut self) {
         let Some(Label::Item(d)) = self.doc.as_ref().and_then(|d| d.lists.last()).map(|l| l.label) else { return };
         let (_, size) = self.font_key();
-        self.select_nfss("OT1/cmr/m/n", size);
-        let (key, c) = match d {
-            1 => ("TS1/cmr/m/n", 0x88),
-            2 => ("OT1/cmr/bx/n", 0x7b),
-            3 => ("TS1/cmr/m/n", 0x2a),
-            _ => ("TS1/cmr/m/n", 0xb7),
+        let key = self.rm_key("m/n");
+        self.select_nfss(&key, size);
+        let (enc, shape, c) = match d {
+            1 => ("TS1", "m/n", 0x88),
+            2 => ("OT1", "bx/n", 0x7b),
+            3 => ("TS1", "m/n", 0x2a),
+            _ => ("TS1", "m/n", 0xb7),
         };
-        self.select_nfss(key, size);
+        let key = format!("{enc}/{}/{shape}", self.family(0));
+        self.select_nfss(&key, size);
         self.append_char(c);
     }
 
@@ -4107,6 +4419,7 @@ impl Machine<'_, '_> {
     fn item_everypar(&mut self) {
         let Some(doc) = self.doc.as_mut() else { return };
         doc.newlist = false;
+        doc.floats.minipage = false;
         if doc.inlabel {
             doc.inlabel = false;
             // `{\setbox\z@\lastbox \ifvoid\z@ \kern-\itemindent \fi}`.
@@ -4139,7 +4452,7 @@ impl Machine<'_, '_> {
         if self.in_tabular() {
             return self.tabular_cr();
         }
-        if !self.doc.as_ref().is_some_and(|d| d.lists.iter().any(|l| l.centercr)) {
+        if !self.doc.as_ref().is_some_and(|d| d.lists[d.cr_base.min(d.lists.len())..].iter().any(|l| l.centercr)) {
             return self.normal_cr();
         }
         self.center_cr();
@@ -4307,7 +4620,8 @@ impl Machine<'_, '_> {
     fn normal_font(&mut self) {
         self.switch_font(10, |m| {
             let (_, size) = m.font_key();
-            m.select_nfss("OT1/cmr/m/n", size);
+            let key = m.rm_key("m/n");
+            m.select_nfss(&key, size);
         });
     }
 
@@ -4810,7 +5124,8 @@ impl Machine<'_, '_> {
         let w = data_nfss::decimal_sp(script).unwrap_or(0);
         self.e.eqtb.set_glue(Reg { region: Region::Glue, slot: BASELINE_SKIP }, Glue { width: w, ..Glue::default() }, false);
         self.strut_update();
-        self.select_nfss("OT1/cmr/m/n", script);
+        let key = self.rm_key("m/n");
+        self.select_nfss(&key, script);
     }
 
     /// `\ifhmode\spacefactor\@x@sf\fi`, then `\@footnotetext`: `\insert\footins{…}`.
@@ -4840,7 +5155,8 @@ impl Machine<'_, '_> {
         // the insertion's group.
         self.set_current_label(&n.to_string());
         // `\reset@font\footnotesize`.
-        self.apply_size(2, "OT1/cmr/m/n");
+        let key = self.rm_key("m/n");
+        self.apply_size(2, &key);
         // `\interlinepenalty\interfootnotelinepenalty` (100), `\splittopskip\footnotesep`,
         // `\splitmaxdepth\dp\strutbox`, `\floatingpenalty\@MM`, `\hsize\columnwidth`.
         self.set_int_named("interlinepenalty", 100);
@@ -5158,7 +5474,7 @@ mod tests {
     #[test]
     fn step_indexes_name_their_natives() {
         use super::*;
-        for (i, name) in [(OUTPUT, "rt@output"), (OUTPUT_FOOT, "rt@outputfoot"), (SEC_BOX, "rt@secbox"), (SEC_TITLE, "rt@sectitle"), (SEC_END, "rt@secend"), (TEXT_END, "rt@textend"), (TEXT_END_N, "rt@textendn"), (MAYBE_IC, "rt@maybeic"), (EVERY_MATH, "rt@everymath"), (EVERY_DISPLAY, "rt@everydisplay"), (FN_MARK_FONT, "rt@fnmarkfont"), (FN_MARK_END, "rt@fnmarkend"), (FN_SETUP, "rt@fnsetup"), (FN_END, "rt@fnend"), (STEP, "rt@step"), (PARA_HOOK, "rt@parahook"), (LIST_PAR, "rt@listpar"), (ENDPE_PAR, "rt@endpepar"), (PROPAGATE, "rt@propagate"), (ITEM_LABELS, "rt@itemlabels"), (LABEL_MARK, "rt@labelmark"), (NEW_PAGE, "rt@newpage"), (TABULAR, "rt@tabular"), (NOTPRERR, "@notprerr"), (STOP, "rt@stop"), (RUN_IN_END, "rt@runinend"), (DESC_FONT, "rt@descfont"), (VERBATIM, "rt@verbatim"), (LEAVE, "rt@leavevmode"), (PRIM_PAR, "rt@@par"), (END, "end"), (TAB_U, "rt@tabu"), (TAB_V, "rt@tabv"), (TAB_END, "rt@tabend"), (HLINE, "hline"), (TAB_SKIP, "rt@tabskip"), (MULTICOLUMN, "multicolumn"), (MC_BODY, "rt@mcbody"), (MC_TAIL, "rt@mctail"), (CLINE_CMD, "cline"), (CLINE, "rt@cline"), (NEWLINE, "\\"), (CENTER_CR, "rt@centercr"), (TAB_PAR, "rt@tabpar")] {
+        for (i, name) in [(OUTPUT, "rt@output"), (OUTPUT_FOOT, "rt@outputfoot"), (SEC_BOX, "rt@secbox"), (SEC_TITLE, "rt@sectitle"), (SEC_END, "rt@secend"), (TEXT_END, "rt@textend"), (TEXT_END_N, "rt@textendn"), (MAYBE_IC, "rt@maybeic"), (EVERY_MATH, "rt@everymath"), (EVERY_DISPLAY, "rt@everydisplay"), (FN_MARK_FONT, "rt@fnmarkfont"), (FN_MARK_END, "rt@fnmarkend"), (FN_SETUP, "rt@fnsetup"), (FN_END, "rt@fnend"), (STEP, "rt@step"), (PARA_HOOK, "rt@parahook"), (LIST_PAR, "rt@listpar"), (ENDPE_PAR, "rt@endpepar"), (PROPAGATE, "rt@propagate"), (ITEM_LABELS, "rt@itemlabels"), (LABEL_MARK, "rt@labelmark"), (NEW_PAGE, "rt@newpage"), (TABULAR, "rt@tabular"), (NOTPRERR, "@notprerr"), (STOP, "rt@stop"), (RUN_IN_END, "rt@runinend"), (DESC_FONT, "rt@descfont"), (VERBATIM, "rt@verbatim"), (LEAVE, "rt@leavevmode"), (PRIM_PAR, "rt@@par"), (END, "end"), (TAB_U, "rt@tabu"), (TAB_V, "rt@tabv"), (TAB_END, "rt@tabend"), (HLINE, "hline"), (TAB_SKIP, "rt@tabskip"), (MULTICOLUMN, "multicolumn"), (MC_BODY, "rt@mcbody"), (MC_TAIL, "rt@mctail"), (CLINE_CMD, "cline"), (CLINE, "rt@cline"), (NEWLINE, "\\"), (CENTER_CR, "rt@centercr"), (TAB_PAR, "rt@tabpar"), (CAPTION_MID, "rt@captionmid"), (CAPTION_END, "rt@captionend"), (FLOAT_FLUSH, "rt@floatflush")] {
             assert_eq!(DOC[i].0, name);
         }
     }

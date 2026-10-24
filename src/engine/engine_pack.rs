@@ -18,6 +18,7 @@ pub(super) const HANG_AFTER: u32 = 41;
 pub(super) const PAR_INDENT: u32 = 0;
 pub(super) const LINE_SKIP_LIMIT: u32 = 2;
 pub(super) const BOX_MAX_DEPTH: u32 = 7;
+pub(super) const HSIZE: u32 = 3;
 pub(super) const HFUZZ: u32 = 8;
 pub(super) const VFUZZ: u32 = 9;
 pub(super) const OVERFULL_RULE: u32 = 16;

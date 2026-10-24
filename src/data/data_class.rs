@@ -40,7 +40,7 @@ pub const CLASS_DIMENS: [&str; 9] = ["textwidth", "textheight", "oddsidemargin",
 /// LaTeX's registers the native commands use, by name: `\name`'s register, or for `count
 /// x`, `dimen x` and `skip x` that register of the insertion class `\x`. The native job
 /// keeps them at their LaTeX register numbers, so grouping restores them as in LaTeX.
-pub const CLASS_REGS: [&str; 44] = [
+pub const CLASS_REGS: [&str; 57] = [
     "footnotesep", "leftmargini", "leftmarginii", "leftmarginiii", "leftmarginiv", "leftmarginv", "leftmarginvi",
     "labelsep", "labelwidth", "leftmargin", "rightmargin", "listparindent", "itemindent", "@totalleftmargin", "linewidth",
     "@beginparpenalty", "@endparpenalty", "@itempenalty", "@clubpenalty", "@lowpenalty", "interfootnotelinepenalty",
@@ -48,6 +48,8 @@ pub const CLASS_REGS: [&str; 44] = [
     "partopsep", "topsep", "parsep", "itemsep", "@topsep", "@topsepadd", "@outerparskip",
     "skip footins", "count footins", "dimen footins", "bigskipamount", "tabcolsep", "@rightskip",
     "arraycolsep", "arrayrulewidth", "doublerulesep",
+    "floatsep", "textfloatsep", "intextsep", "@fptop", "@fpsep", "@fpbot", "abovecaptionskip", "belowcaptionskip",
+    "c@topnumber", "c@bottomnumber", "c@totalnumber", "c@figure", "c@table",
 ];
 
 /// Switches of the class, each 1 or 0: `\raggedbottom` (`\@textbottom` is a skip) and

@@ -886,6 +886,17 @@ impl Machine<'_, '_> {
         self.push_nest(Mode::Vertical, true, IGNORE_DEPTH);
     }
 
+    /// `\insert n{...}` of the vertical list `list` (§1099–§1100), with the current
+    /// `\splittopskip`, `\splitmaxdepth` and `\floatingpenalty`.
+    pub(super) fn build_insert(&mut self, n: u8, list: &[Node]) {
+        let split_top = self.glue_p(SPLIT_TOP_SKIP);
+        let depth = self.dimen_p(SPLIT_MAX_DEPTH);
+        let float_cost = self.int_p(FLOATING_PENALTY);
+        let b = self.vpack_list(list, 0, false, MAX_DIMEN);
+        let i = self.e.nodes.add_insert(InsRec { n, height: b.height + b.depth, depth, split_top, float_cost, list: b.list });
+        self.cur.push(Node::new(Kind::Ins, i as i32));
+    }
+
     /// §1100: the `}` of `\insert` or `\vadjust`.
     pub(super) fn end_insert(&mut self) {
         self.end_graf();

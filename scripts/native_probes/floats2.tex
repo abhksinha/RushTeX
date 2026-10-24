@@ -1,0 +1,25 @@
+\documentclass{article}
+\begin{document}
+\section{Many floats}
+Figures \ref{f1}, \ref{f2}, \ref{f3} and Table~\ref{t1} come later.
+
+\begin{figure}[t]\centering\mbox{One}\vspace{150pt}\caption{First.}\label{f1}\end{figure}
+\begin{figure}[t]\centering\mbox{Two}\vspace{150pt}\caption{Second.}\label{f2}\end{figure}
+\begin{figure}[htbp]\centering\mbox{Three}\vspace{150pt}\caption{Third.}\label{f3}\end{figure}
+\begin{table}[p]\centering\begin{tabular}{|c|c|}\hline x & y\\\hline\end{tabular}\caption{Page only.}\label{t1}\end{table}
+
+A paragraph of text after the floats that is long enough to go over a line or two so
+that the page has some text on it before the next floats arrive in the source text.
+
+\begin{figure}[!h]\centering\mbox{Here!}\caption{Here if possible.}\end{figure}
+
+More text, and a footnote\footnote{A note on the same page as floats.} to mix inserts
+with floats on one page.
+
+\begin{figure}[b]\centering\mbox{Bottom}\caption{Bottom one.}\end{figure}
+\begin{table}[tb]\centering\begin{tabular}{l}a\\b\end{tabular}\caption{Top or bottom.}\end{table}
+
+Closing text.
+\begin{figure}\centering\mbox{Default}\vspace{300pt}\caption{Default placement, tall.}\end{figure}
+\begin{figure}[h]\mbox{Late}\caption{Left at the end.}\end{figure}
+\end{document}

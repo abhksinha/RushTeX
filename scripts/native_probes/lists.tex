@@ -1,0 +1,67 @@
+\documentclass{article}
+\begin{document}
+\section{Displayed Text}
+
+Text is displayed by indenting it from the left margin.
+Quotations are commonly displayed.  There are short quotations
+\begin{quote}
+   This is a short quotation.  It consists of a
+   single paragraph of text.  See how it is formatted.
+\end{quote}
+and longer ones.
+\begin{quotation}
+   This is a longer quotation.  It consists of two
+   paragraphs of text, neither of which are
+   particularly interesting.
+
+   This is the second paragraph of the quotation.  It
+   is just as dull as the first paragraph.
+\end{quotation}
+Another frequently-displayed structure is a list.
+The following is an example of an \emph{itemized}
+list.
+\begin{itemize}
+   \item This is the first item of an itemized list.
+         Each item in the list is marked with a ``tick''.
+         You don't have to worry about what kind of tick
+         mark is used.
+
+   \item This is the second item of the list.  It
+         contains another list nested inside it.  The inner
+         list is an \emph{enumerated} list.
+         \begin{enumerate}
+            \item This is the first item of an enumerated
+                  list that is nested within the itemized list.
+
+            \item This is the second item of the inner list.
+                  \LaTeX\ allows you to nest lists deeper than
+                  you really should.
+         \end{enumerate}
+         This is the rest of the second item of the outer
+         list.  It is no more interesting than any other
+         part of the item.
+   \item This is the third item of the list.
+\end{itemize}
+You can even display poetry.
+\begin{verse}
+   There is an environment
+    for verse \\
+   Whose features some poets
+   will curse.
+
+   For instead of making\\
+   Them do \emph{all} line breaking, \\
+   It allows them to put too many words on a line when they'd rather be
+   forced to be terse.
+\end{verse}
+
+Mathematical formulas may also be displayed.
+\begin{enumerate}
+\item One.
+\item Two.
+\end{enumerate}
+
+\begin{itemize}
+\item A list after a paragraph break.
+\end{itemize}
+\end{document}

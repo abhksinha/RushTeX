@@ -1,0 +1,51 @@
+\documentclass{article}
+\title{Tables}
+\author{A. Author\\ Some Place}
+\begin{document}
+\maketitle
+Text \begin{tabular}{lcr}
+a & b & c \\
+long entry &   & y \\
+ spaced  &\textbf{bold} & $x^2$
+\end{tabular} after, and
+\begin{tabular}[t]{|c||c|}
+\hline
+one & two \\ \hline\hline
+three & four \\
+\hline
+\end{tabular}
+and
+\begin{tabular}[b]{@{}l@{}r@{}}
+x & y \\[2pt]
+z & w \\[-1pt]
+p & q \\*
+r & s
+\end{tabular}.
+
+\begin{center}
+\begin{tabular}{*{3}{c}|}
+1 & 2 & 3 \\
+4 & \begin{tabular}{c} in \\ ner \end{tabular} & 6 \\
+\end{tabular}
+\end{center}
+
+\begin{itemize}
+\item An item with \begin{tabular}{ll} a & b \\ c & d \end{tabular} inside.
+\end{itemize}
+\setlength{\tabcolsep}{0pt}
+\setlength{\arrayrulewidth}{1pt}
+Tight \begin{tabular}{|l|l|}\hline a&b\\\hline\end{tabular} end.
+
+{\renewcommand{\arraystretch}{1.5}%
+Stretched \begin{tabular}{|c|c|}
+\hline
+a & b \\
+
+\hline
+c & d
+
+e \\
+\hline
+\end{tabular}}
+and \renewcommand{\arraystretch}{.85}\begin{tabular}{c}x\\y\end{tabular}.
+\end{document}

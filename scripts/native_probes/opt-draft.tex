@@ -1,0 +1,33 @@
+\documentclass[draft]{article}
+\begin{document}
+\title{Class Options}\author{A. Writer}\date{1 January 2026}\maketitle
+\section{Lists}
+Text with a note.\footnote{A footnote with $x^2$ and \small small text.}
+\begin{enumerate}
+\item One, with $a_i + b^2$.
+\item Two
+  \begin{itemize}
+  \item nested
+    \begin{enumerate}
+    \item deeper
+    \end{enumerate}
+  \end{itemize}
+\end{enumerate}
+{\small Small text before a list
+\begin{itemize}
+\item small item one
+\item small item two
+\end{itemize}
+and after it.}
+{\footnotesize Footnote-size text before a list
+\begin{enumerate}
+\item tiny item
+\end{enumerate}
+done.}
+\subsection{Sizes}
+{\tiny tiny} {\scriptsize scriptsize} {\large large} {\Large Large} {\LARGE LARGE} {\huge huge} {\Huge Huge} and $\sum_{k=1}^n k$.
+\begin{quote}
+A quotation, long enough to wrap across lines in the narrower measure of the quote environment, with words.
+\end{quote}
+Overfull: \mbox{Averyveryverylongunbreakablewordthatcannotfitintothemeasureatallnomatterhowhard}.
+\end{document}

@@ -1,0 +1,33 @@
+\documentclass{article}
+\begin{document}
+\section{Flush}
+Ordinary paragraph text before the environments, long enough to wrap across a line or two in the measure of the page, so that justification is visible.
+\begin{flushleft}
+Ragged-right text that runs long enough to break across several lines, with words of different lengths so the ragged edge shows, and a second sentence for good measure.\\
+A forced break above, then more text.\\[6pt]
+After a spaced break.
+\begin{itemize}
+\item An item inside flushleft, also long enough to wrap onto a second line so the right skip shows in the list.
+\item Two
+\end{itemize}
+Back in flushleft.
+
+A new paragraph in flushleft.
+\end{flushleft}
+Between.
+\begin{flushright}
+Ragged-left text that runs long enough to break across several lines, with words of different lengths so the ragged edge shows on the left.\\
+Short line.\\*
+Another.
+\end{flushright}
+\begin{center}
+Centred inside\\ two lines
+\begin{flushleft}
+nested flushleft in center, long enough to wrap across the line so the ragged edge shows in the nested environment.
+\end{flushleft}
+\end{center}
+{\small\begin{flushright}
+Small flushright.
+\end{flushright}}
+After, with $x^2$ math and a footnote.\footnote{In a footnote, \begin{flushleft}a flushleft in a footnote\end{flushleft} back.}
+\end{document}

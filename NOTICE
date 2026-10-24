@@ -1,0 +1,54 @@
+RushTeX
+Copyright (c) 2026 Abhi and the RushTeX contributors
+
+The RushTeX source code (src/, testing/, scripts/) is licensed under either of
+
+  * Apache License, Version 2.0 (LICENSE-APACHE)
+  * MIT License (LICENSE-MIT)
+
+at your option. Unless you state otherwise, any contribution you submit for
+inclusion in RushTeX is dual licensed as above, without additional terms.
+
+Third-party data
+----------------
+
+The files in assets/ are data generated from, or copied out of, a pinned
+TeX Live 2026 snapshot (scripts/texlive/files.tsv lists every source file with
+its checksum). They are not covered by the licences above; each keeps the
+licence of the work it comes from.
+
+Font programs (assets/tables/embed.rtdb, assets/cm_fonts/)
+  * Computer Modern, AMS symbol fonts (msam, msbm) and Euler (eufm, eusm, ...),
+    Type 1 versions: Copyright (c) 1997, 2009 American Mathematical Society,
+    SIL Open Font License, Version 1.1. Reserved Font Names: CMR10 and the
+    other font names of the amsfonts package.
+  * Latin Modern (lm*): Copyright 2003-2009 B. Jackowski and J. M. Nowacki
+    (on behalf of TeX Users Groups), GUST Font License.
+  * URW clones of the PostScript base fonts (Nimbus Roman, Nimbus Sans,
+    Nimbus Mono, URW Palladio, Standard Symbols, Dingbats: utm*, uhv*, ucr*,
+    upl*, usy*, uzd*): Copyright 1997, 1999 (URW)++ Design & Development,
+    GNU General Public License, with the exception that the font program may
+    be included in a PostScript or PDF document regardless of the document's
+    licence.
+  * CM-Super (sfrm1000, the tcrm text-companion fonts, cm-super-ts1.enc): Copyright (c) 2001 Vladimir
+    Volovich, GNU General Public License.
+
+Font metrics (assets/tables/fonts.rtdb)
+  TFM metrics of the fonts above and of the other font packages in the pin,
+  each under its package's licence (LPPL, OFL, GUST Font License or GPL).
+
+LaTeX data (assets/tables/kernel.rtdb, class-article*.rtdb, nfss.rtdb,
+pkgs.rtdb, pkg-amsfonts.rtdb, pkg-amssymb.rtdb, names.rtdb)
+  Values evaluated from the LaTeX kernel, article.cls and its .clo files, the
+  .fd files and the amsfonts/amssymb packages: Copyright The LaTeX Project
+  Team and the American Mathematical Society, LaTeX Project Public License,
+  version 1.3c.
+
+Hyphenation patterns (assets/tables/hyph-en.rtdb)
+  hyph-en-us: Copyright (C) 1990, 2004, 2005 Gerard D. C. Kuiken; copying and
+  distribution, with or without modification, permitted in any medium without
+  royalty, provided the copyright notice and this notice are preserved.
+
+Reference sources (texlive-source/, not part of the published repository)
+  tex.web and pdftex.web by Donald E. Knuth and the pdfTeX team, used as the
+  reference for the algorithms; not redistributed.

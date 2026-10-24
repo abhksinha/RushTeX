@@ -1,0 +1,21 @@
+\documentclass{article}
+\begin{document}
+\noindent No indent here, then \hspace{1em}a space, \hspace*{2pt plus 1fil}starred,
+and \hspace{0pt}zero. Width \hspace{.1\textwidth}of text and \hspace{0.05\linewidth}line.
+
+{\centering A centred paragraph with a break\\ and its second line.\par}
+{\raggedright Ragged right text that is long enough to wrap onto a second line of the
+page, so that the right edge shows.\\ Forced.\par}
+{\raggedleft Ragged left\\ two lines.\par}
+
+\hspace{3pt}Paragraph started by hspace.
+\begin{center}
+In center \\ two \begin{tabular}{c} a \\ b \end{tabular}
+\end{center}
+{\centering \begin{tabular}{l} x\\ y\end{tabular}\\ after\par}
+\noindent\vspace{.02\textheight}
+\section{Heading}
+\newpage
+New page text.
+\begin{itemize}\item \newpage Item after newpage\end{itemize}
+\end{document}

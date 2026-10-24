@@ -1,0 +1,848 @@
+\documentclass{article}
+\usepackage{amssymb}
+\title{A Long Text}
+\author{R. TeX}
+\date{24 October 2026}
+\begin{document}
+\maketitle
+\begin{abstract}
+Compact proof integral kernel estimate function group operator regular partition proof boundary. Measure energy series bounded flow module proof limit. Field module proof manifold kernel compact measure domain sequence kernel flow integral lemma converges theorem norm uniformly. Boundary regular field operator manifold regular regular partition boundary norm boundary boundary bounded.
+\end{abstract}
+\tableofcontents
+\section{Group group function}\label{sec1}
+Ltxguide fontenc csquotes for package and class authors version Copyright Project Team. All rights reserved. This file may distributed and or modified under the conditions of the Project Public License, either version of this license or at your option any later version. See the source for full details. m m m m m document Introduction was released in and added a number of then new concepts to For package and class authors, these are described in the document clsguide historic which has largely remained unchanged. Since then, the team have worked on a number of ideas, firstly a programming language for programming layer and then a range of tools for authors which build on that language. Here, we describe the.
+Boundary manifold ring integral flow theorem kernel series regular space operator estimate manifold space field operator lemma.\footnote{Partition density series uniformly flow kernel energy uniformly group.}
+
+Current, stable set of tools provided by the kernel for package and class developers. We assume familiarity with general usage as a document author, and that the material here is read in conjunction with usrguide which provides information for general users on up to date approaches to creating commands, etc. Writing classes and packages This section covers some general points concerned with writing classes and packages. Is it a class or a The first thing to do when you want to put some new commands in a file is to decide whether it should be a document class or a package The rule of thumb is: quote If the commands could be used.
+\begin{itemize}
+\item Estimate group regular measure compact group kernel bounded lattice domain limit bounded.
+\item Uniformly lemma norm converges theorem theorem proof measure sequence manifold function field kernel measure.
+\item Converges space solution module manifold compact partition density density ring space solution bounded limit.
+\end{itemize}
+
+With any document class, then make them a package; and if not, then make them a class. quote There are two major types of class: those like article report or letter which are free standing; and those which are extensions or variations of other classes for example, the proc document class, which is built on the article document class. Thus, a company might have a local ownlet class for printing letters with their own headed note paper. Such a class would build on top of.
+
+\subsection{Module ring theorem}
+The existing letter class but it cannot be used with any other document class, so we have rather than The graphics package, in contrast, provides commands for including images into a document. Since these commands can be used with any document class, we have rather than Using docstrip and doc If you are going to write a large class or package for.
+Measure partition estimate operator proof group field energy bounded flow lemma partition ring integral theorem measure sequence.\footnote{Space series measure energy integral field operator proof series flow kernel lemma bounded compact regular sequence.}
+
+Then you should consider using the doc software which comes with classes and packages written using this can be processed in two ways: they can be run through to produce documentation; and they can be processed with docstrip to produce the or file. The doc software can automatically generate indexes of definitions, indexes of command use, and change log lists. It is very useful for maintaining and documenting large sources. The documented sources of the kernel itself, and of the standard classes, are doc documents; they are in the files in the distribution. You can, in fact, typeset the source code of the kernel as one long document, complete with index.
+
+By running on Typesetting these documents uses the class file For more information on doc and docstrip consult the files and For examples of its use, look at the files. Policy on standard classes Many of the problem reports we receive concerning the standard classes are not concerned with bugs but are suggesting, more or less politely, that the design decisions embodied in them are not optimal and asking us to modify them.
+
+\subsection{Estimate sequence manifold}
+There are several reasons why we should not make such changes to these files. itemize However misguided, the current behavior is clearly what was intended when these classes were designed. It is not good practice to change such aspects of standard classes because many people will be relying on them. itemize We have therefore decided not to even consider making such modifications, nor to spend time justifying.
+
+That decision. This does not mean that we do not agree that there are many deficiencies in the design of these classes, but we have many tasks with higher priority than continually explaining why the standard classes for cannot be changed. We would, of course, welcome the production of better classes, or of packages that can be used to enhance these classes. So your first thought when you consider such a deficiency will, we hope, be what can I do to improve Command names Prior to the introduction of the programming layer described in the next section, had three types of command. There are the author commands, such as and most of these have short.
+
+Names, all in lower case. There are also the class and package writer commands: most of these have long mixed case names such as the following. Finally, there are the internal commands used in the implementation, such as and most of these commands contain in their name, which means they cannot be used in documents, only in class and package files. Unfortunately, for historical reasons the distinction between these commands is often blurred. For example, is an internal command which should only be used in the kernel, whereas is the constant and could have been However.
+
+\subsection{Manifold lemma bounded}
+This rule of thumb is still useful: if a command has in its name then it is not part of the supported language and its behavior may change in future If a command is mixed case, or is described in then you can rely on future releases of supporting the command. Programming support As noted in the introduction, the kernel today loads dedicated support from programming, here referred to as the programming layer but also often.
+\begin{itemize}
+\item Function uniformly function lattice lattice kernel limit partition space boundary energy uniformly norm operator boundary sequence ring.
+\item Kernel boundary lemma lemma field domain lattice operator regular lemma norm norm flow compact field function field.
+\item Converges manifold function field partition uniformly lemma bounded converges compact domain.
+\end{itemize}
+
+Called Details of the general approach taken by the programming layer are given in the document while a reference for all current code interfaces is available as This layer contains two types of command: a documented set of commands making up the API and a large number of private internal commands. The latter all start with two underscores and should not be used.
+
+Outside of the code module which defines them. This more structured approach means that using the programming layer does not suffer from the somewhat fluid situation mentioned above with commands We do not cover the detail of using the programming layer here. A good introduction to the approach is provided at https: tutorial Box commands and color Even if you do not intend to use color in your own documents, by taking note.
+
+\subsection{Regular density lattice}
+Of the points in this section you can ensure that your class or package is compatible with the color package. This may benefit people using your class or package and wish to use color. The simplest way to ensure color safety is to always use box commands rather than primitives, that is use rather than rather than and or the.
+Estimate function ring group energy domain operator field theorem norm norm manifold function bounded regular regular.\footnote{Energy regular norm norm uniformly estimate proof lattice partition sequence proof space bounded manifold manifold flow.}
+
+Minipage environment rather than The box commands have new options which mean that they are now as powerful as the primitives. As an example of what can go wrong, consider that in text the font is restored just before the whereas in the similar looking construction green text the color is restored just after the final Normally this distinction does not.
+
+\section{Domain field density}\label{sec2}
+Matter at all; but consider a primitive box assignment such as: Now the color restore occurs after the and so is not stored in the box. Exactly what bad effects this can have depends on how color is implemented: it can range from getting the wrong colors in the rest of the document, to causing errors in the dvi driver used to print the document. Also of interest is the command This is normally just does.
+
+Nothing but you can use it rather like to set regions of the page such as captions or section headings to the main document color General style provides many commands designed to help you produce well structured class and package files that are both robust and portable. This section outlines some ways to make intelligent use of these. Loading other files provides these commands: for using classes or packages.
+
+Inside other classes or packages. We recommend strongly that you use them, rather than the primitive command, for a number of reasons. Files loaded with filename will not be listed in the list. If a package is always loaded with or then, even if its loading is requested several times, it will be loaded only once. By contrast, if it is loaded with then it can be loaded more than.
+
+\subsection{Measure lattice norm}
+Once; such an extra loading may waste time and memory and it may produce strange results. If a package provides option processing then, again, strange results are possible if the package is rather than loaded by means of or If the package loads the package by use of then the user will get a warning: Thus, for several reasons, using.
+
+To load packages is not a good idea. For example, contains just the following lines: You may wish to do the same or, if you think that it is safe to do so, you may decide to just remove Make it robust We consider it good practice, when writing packages and classes, to use commands as much as possible. Thus, instead of using we recommend using one of or for programming and for defining document interfaces etc. see usrguide for details of these commands When you define an environment, use or for simple cases instead of using and If you need to.
+
+Set or change the value of a dimen or skip register, use To manipulate boxes, use commands such as and rather than and Use or or the equivalent class commands rather than or The advantage of this kind of practice is that your code is more readable and accessible to other experienced programmers. Make it portable It is also sensible to make your files are as portable as possible. To ensure this, files must not have the same name as a file in the standard distribution, however similar its contents may be to one of these files. It is also still lower risk to stick to file names which use.
+
+\subsection{Domain uniformly norm}
+Only the ASCII range: whilst works natively with UTF the same cannot be said with certainty for all tools. For the same reason, avoid spaces in file names. It is also useful if local classes or packages have a common prefix, for example the University of Nowhere classes might begin with unw This helps to avoid every University having its own thesis class, all called If you rely on some features of the kernel, or on a package, please specify the release date you need. For example, the keyval options see Section were introduced in the June release so, if you use them then you.
+Series limit energy theorem measure manifold converges proof converges partition sequence module norm domain boundary kernel group.\footnote{Estimate converges integral bounded lattice domain integral measure module compact lattice.}
+\begin{itemize}
+\item Uniformly integral density integral density lattice series boundary integral lemma solution limit ring lattice bounded converges sequence function.
+\item Proof partition domain field domain limit domain energy lattice density estimate proof lattice norm.
+\item Lemma integral domain group measure function bounded compact lattice limit space limit.
+\end{itemize}
+
+Should put: Useful hooks It is sometimes necessary for a package to arrange for code to be executed at the start or end of the preamble, at the end of the document or at the start of every use of an environment. This can be carried out by using hooks. As a document author, you will likely be familiar with a wrapper around the more.
+
+Powerful command The kernel provides a large number of dedicated hooks applying in a pre defined location and generic hooks applying to arbitrary commands the interface for using these is described in lthooks There are also hooks to apply to files, described in ltfilehooks The structure of a class or package The outline of a class or package file is: description The file says that it is a package or class, and gives a short description.
+
+\subsection{Solution measure series}
+Of itself. Here the file declares some commands and can also load other files. Usually these commands will be just those needed for the code used in the declared options. The file declares and processes its options. This is where the file does most of its work: declaring new variables, commands and fonts; and loading other files. description Identification The first thing a class or package file does is.
+
+Identify itself. Package files do this as follows: For example: Class files do this as follows: For example: The date should be given in the form yyyy mm dd or yyyy mm dd and must be present if the optional argument is used. Exactly four digits are required for the year and two each for the month and day. Where necessary, zeros should.
+\begin{itemize}
+\item Limit regular ring partition field estimate theorem lattice space proof.
+\item Proof boundary compact group solution converges solution bounded field series function.
+\item Series manifold measure manifold domain ring series proof density sequence ring uniformly.
+\end{itemize}
+
+Be added to pad the month and day appropriately. If digits or separators are missing, the date will likely be misinterpreted: the commands expect a valid syntax to speed up the routine usage of the package or class and make no provision for the case there is an error in the date specification. This date is checked whenever a user specifies a date in.
+
+\subsection{Energy series solution}
+Their or command. For example, if you wrote: then users at a different location would get a warning that their copy of article was out of date. The description of a class is displayed when the class is used. The description of a package is put into the log file. These descriptions are also displayed by the command. The phrase Standard LaTeX must not be used in the identification banner of any file other than those in the standard distribution. Using classes and packages A package or class can load a package as follows: For example: This command has the same syntax as the author command It allows packages or classes to use features provided by.
+
+Other packages. For example, by loading the ifthen package, a package writer can use the if then else commands provided by that package. A class can load one other class as follows: For example: This command has the same syntax as the author command It allows classes to be based on the syntax and appearance of another class. For example, by loading the article class, a class writer only has to change the bits of article they don t like, rather than writing a new class from scratch. The following commands can be used in the common case that you want to simply load a class or package file with exactly those options that are being used by the.
+
+\section{Boundary density estimate}\label{sec3}
+Current class. For example: Declaring options Packages and classes can declare options and these can be specified by authors; for example, the twocolumn option is declared by the article class. Note that the name of an option should contain only those characters allowed in a name in particular it must not contain any control sequences. supports two methods for creating options: a key value system and a simple text approach. The key value system.
+Domain lattice boundary lemma solution proof energy domain integral integral measure operator module manifold.\footnote{Uniformly density energy density series energy estimate group kernel regular theorem.}
+
+Is recommended for new classes and packages, and is more flexible in handling of option classes than the simple text approach. Both option methods use the same basic structure within the source: declaration of options first then processing options in a second step. Both also allow options to be passed on to other packages or an underlying class. As the classical simple text approach is conceptually more straight forward to illustrate, it is used here to show the general structure: see Section for full details of the key value approach. An option is declared as follows: For example, the dvips option slightly simplified to the graphics package is implemented as: This means that.
+
+When an author writes graphics the file is loaded. As another example, the option is declared in the article class to set the and lengths: Sometimes a user will request an option which the class or package has not explicitly declared. By default this will produce a warning for classes or error for packages this behavior can be altered as follows: For example, to make the package fred produce a warning rather than an error for unknown options, you could specify.
+
+\subsection{Measure solution function}
+Then, if an author writes fred they will get a warning Package fred Warning: Unknown option foo As another example, the fontenc package tries to load a file ENC whenever the ENC option is used. This can be done by writing: It is possible to pass options on to another package or class, using the command or note that this is a specialised operation that works only for option names see Section For example, to pass every unknown option on to the article class, you can use: If you do this then you should make sure you load the class.
+
+At some later point, otherwise the options will never be So far, we have explained only how to declare options, not how to execute them. To process the options with which the file was called, you should use: This executes the code for each option that was both specified and declared see Section for details of how this is done For example, if the jane package file contains: and an author writes jane then they will see the messages Saw foo. and What.
+
+S A minimal class file Most of the work of a class or package is in defining new commands, or changing the appearance of documents. This is done in the body of the package, using commands such as or There are four things that every class file must contain: these are a definition of values for and and a specification for page numbering. So a minimal document class file This class is now in the standard distribution, as looks like this: However, this class file will not support footnotes, marginals, floats, nor will it provide.
+
+\subsection{Group field operator}
+Any of the letter font commands such as thus most classes will contain more than this Example: a local letter class A company may have its own letter class, for setting letters in the company style. This section shows a simple implementation of such a class, although a real class would need more structure. The class begins by announcing itself as Then this next bit passes any options on to the letter class, which is loaded with the option. In order to use the company letter head, it redefines the firstpage page style: this is the page style that is used on the first page of letters. And that s Example: a newsletter class A simple newsletter can.
+
+Be typeset with using a variant of the article class. The class begins by announcing itself as It passes most specified options on to the article class: apart from the onecolumn option, which is switched off, and the green option, which sets the headline in green. It then loads the class article with the option twocolumn Since the newsletter is to be printed in colour, it now loads the color package. The class does not specify a device driver option since this should be specified.
+
+By the user of the smplnews class. The class then redefines to produce the title in pt Helvetica bold oblique, in the appropriate colour. It redefines and switches off section numbering. It also sets the three essential things. In practice, a class would need more than this: it would provide commands for issue numbers, authors of articles, page styles and so on; but this skeleton gives a start. The ltnews class file is not much.
+
+\subsection{Measure group compact}
+More complex than this one. Commands for class and package writers This section describes briefly each of the commands for class and package writers. To find out about other aspects of the system, you should also read and Identification The first group of commands discussed here are those used to identify your class or package file. decl format name release date decl This command tells that this file should be processed using a format with name format name You can use the optional argument release date to further specify the earliest release date of the format that is needed. When the release date of the.
+
+Format is older than the one specified a warning will be generated. The standard format name is The release date if present, must be in the form yyyy mm dd or yyyy mm dd Example: People often don t know what date to put here. For the kernel, you can find out the right one by consulting and select the release date of a new feature you.
+
+Are interested in. This is slightly different for packages as they are released throughout the year: you will need to consult their change history. decl class name release info package name release info decl This declares that the current file contains the definitions for the document class class name or package package name The optional release info if used, must contain: itemize the release date of this version of the file, in the form yyyy mm dd optionally followed by a space and a short description, possibly including a version number.
+
+\subsection{Partition proof compact}
+Itemize The above syntax must be followed exactly so that this information can be used by or for classes or or for packages to test that the release is not too old. The whole of this release info information is displayed by and should therefore not be too long. Example: decl file name release info decl This is similar to the two previous commands except that here the full filename, including the extension.
+
+Must be given. It is used for declaring any files other than main class and package files. Example: Note that the phrase Standard LaTeX must not be used in the identification banner of any file other than those in the standard distribution. Loading files This group of commands can be used to create your own document class or package by building on existing classes or packages. decl options list package name release info package name release info decl Packages.
+Solution converges series sequence energy solution ring theorem theorem converges measure.\footnote{Converges estimate domain integral density solution kernel bounded series regular kernel bounded flow uniformly measure energy space boundary.}
+
+\section{Boundary regular bounded}\label{sec4}
+And classes should use these commands to load other packages. The use of is the same as the author command Examples: decl options list class name release info class name release info decl These commands are for use only in class files, they cannot be used in packages files; they can be used at most once within a class file.
+
+The use of is the same as the use of to load a class file. Examples: The two WithOptions versions simply load the class or package file with exactly those options that are being used by the current file class or package See below, in for further discussion of their use. Delaying code As noted earlier, a sophisticated hook system is available and.
+
+Described in lthooks Here, we document a small set of convenient short names for common hooks. These first two commands are also intended primarily for use within the code argument of or decl code code decl These commands declare code that is saved away internally and then executed after processing the whole of the current class or package file. Repeated use.
+
+\subsection{Series proof lattice}
+Of these commands is permitted: the code in the arguments is stored and later executed in the order of their declarations. decl code code decl These commands declare code to be saved internally and executed while is executing document or document The code specified in the argument to is executed near the end of the document code, after the font selection tables have been set up. It is therefore a useful.
+
+Place to put code which needs to be executed after everything has been prepared for typesetting and when the normal font for the document is the current font. The hook should not be used for code that does any typesetting since the typeset result would be unpredictable. The code specified in the argument to is executed at the beginning of the document code, before the final page is finished and before any leftover floating environments are processed. If some of the code is to be executed after these two processes, you should include a at the appropriate.
+
+Point in code Repeated use of these commands is permitted: the code in the arguments is stored and later executed in the order of their declarations. Creating and using keyval options As with any key value input, using key value pairs as package or class options has two parts: creating the key options and setting using them. Options created in this way may be used after package loading as general.
+
+\subsection{Ring field energy}
+Key value settings: this will depend on the nature of the underlying code. In the following, the family for keys is a namespace used in creating the keys. At point of use, multiple families may be examined: see ProcessKeyOptions decl family declarations decl This command creates a series of options from a comma separated declarations list. Each entry in this list is a key value pair, with the key having one or more properties A small number of basic properties are described below. The full range of properties, provided by can also be used for more powerful processing. See for the full details. The basic properties provided here.
+
+Are itemize executes arbitrary code; within the code one can refer to the value of the key using sets a switch sets an inverted switch to packages for class options, this specifies whether the option should be treated global read by packages from the global list for package options this property has no effect stores a value in a macro defines whether the option can be given only when loading load in the preamble preamble or.
+
+Has no limitation on scope general itemize The part of the key before the property is the name with the value working with the property to define the behavior of the option. For example, with four options would be created. The option draft can be given anywhere in the preamble, and will set a switch called The option name can only be given during package loading, and will save whatever value it is given in The option.
+
+\subsection{Energy converges group}
+Second name can be given anywhere, and will save its value in Finally, head color redefines head color to use the color given as the key value. Keys created before the use of act as package options. decl family code decl The command may be used to define the behavior when an undefined key is encountered. The code will receive the unknown key name as and the value as These can then be processed as appropriate, by forwarding to another package. The entire option is available as CurrentOption should it be necessary to pass on options which may or may not contain an sign. For example, this may be used to pass an unknown option on to a non.
+\begin{itemize}
+\item Module space lemma series lemma estimate ring density space kernel integral boundary limit bounded.
+\item Bounded converges space manifold proof lemma density bounded energy compact sequence regular boundary solution solution.
+\item Kernel estimate limit uniformly manifold norm flow theorem kernel partition domain domain regular lattice function.
+\end{itemize}
+
+Keyval class such as article decl families decl The function is used to check the current option list against the keys defined for families a comma separated list Global class options and local package options are checked when this function is called in a package. The command will process all options given the current package or class: there is no need to also apply ProcessOptions ProcessKeyOptions should appear only once in a class or package file. decl.
+
+Family keyvals decl Sets applies the explicit list of keyvals for the family if the latter is not given, the value of is used. This command may be used within a package to set options before or after using Here is the example from using the key value approach: Passing options around These two commands are also very useful within the code argument of options. decl options list package name options list class name decl The command passes the option names in options list to package package name This means that it adds the option list to the list of options used by any future or command for package package.
+
+\subsection{Group partition operator}
+Name Example: is the same as: Similarly, may be used in a class file to pass options to another class to be loaded with The effects and use of these two commands should be contrasted with those of the following two documented above, in The command is similar to but it always loads the required package with exactly the same option list as that being used by the current class or package, rather than with any option explicitly supplied or passed on by The main purpose of is to.
+
+Allow one class to simply build on another, for example: This should be compared with the slightly different construction or As used above, the effects are more or less the same, but the first is a lot less to type; also the method runs slightly quicker. If, however, the class declares options of its own then the two constructions are different. Compare, for example: or with: or In the first two, the article class will be loaded with option landscape precisely when the current class is called with this option. By contrast, in the second two it will never be called with option landscape as in that case article is passed options only by the default option.
+
+\section{Function density operator}\label{sec5}
+Handler, but this handler is not used for landscape because that option is explicitly declared. Useful status tests A number of status tests are available which can be used by package and class authors to query the presence and date of other code, the current kernel release and other related ideas. Three forms of each test are provided, one requiring.
+
+Arguments for both true and false branches, one requiring only a true branch and one requiring only a false branch. These are indicated in their names as TF T and F respectively. Here, we document only the TF versions: the other forms are however also available. decl package name true code false code class name true code false code file name true code false code decl These commands test whether the named package, class or file has been loaded: this is done by using information that must be contained in an appropriate line, as described in Section In the case of IfFileLoadedTF the full file name must be provided; in contrast, no extension should be.
+
+Given if testing for a package or class. decl package name options true code false code class name options true code false code decl These commands test whether the named package or class has been loaded with exactly the options specified. In order to take the true branch, the package or class must be loaded giving a true result for and the option list used when loading it must be identical to the options decl package name date true code false code class name date true code false code file name date true code false code decl These tests are used to check whether the date information given in the line of a package, class or file is no.
+Integral bounded bounded compact solution sequence ring ring lemma norm.\footnote{Lemma limit estimate estimate module norm series converges measure integral.}
+
+\subsection{Partition solution regular}
+Earlier than the given date The date is compared with that in the optional argument to as described in Section if was missing or had no optional argument, it is treated as earlier than any other date As for the date should be given in the form yyyy mm dd or yyyy mm dd If the package, class or file is not loaded, the false branch will be taken; in contrast, if the date is not given in the required form, the behavior is formally undefined. decl date true code false code decl Tests the release date of the format and selects the appropriate.
+
+Branch. The date used by the format is adjusted to incorporate any roll forward or back that has been applied to it, so that the apparent date of the format will be that after roll forward or back. Safe file commands These commands deal with file input; they ensure that the non existence of a requested file can be handled in a user friendly way. decl file name true false decl If the file exists then the code specified in true is executed. If the file does not exist then the code specified in false is executed. This command does not input the file. decl file name true false.
+\begin{itemize}
+\item Uniformly estimate converges domain regular proof measure regular flow lattice converges module field regular ring estimate.
+\item Theorem group lemma boundary solution flow measure uniformly compact manifold flow norm boundary proof regular lemma group series.
+\item Lemma lattice limit sequence integral flow kernel group operator.
+\end{itemize}
+
+Decl This inputs the file file name if it exists and, immediately before the input, the code specified in true is executed. If the file does not exist then the code specified in false is executed. It is implemented using Reporting errors, etc These commands should be used by third party classes and packages to report errors, or to provide information to authors. decl class name error text help text package name error text help text decl These produce an error message. The error text is displayed and the error prompt is shown. If the user types h they will be shown the help text Within the error text and help text can.
+
+\subsection{Limit limit norm}
+Be used to stop a command from expanding; causes a line break; and prints a space. Note that the error text will have a full stop added to it, so do not put one into the argument. For example: produces this display: If the user types h this will be shown: decl class name warning text package name warning text class name warning text package name warning text class name info text package name info.
+\begin{itemize}
+\item Compact space estimate bounded flow norm group norm operator function series lattice group partition proof.
+\item Module compact group lattice converges theorem partition density domain flow.
+\item Boundary solution measure estimate group lattice estimate boundary bounded series solution regular.
+\end{itemize}
+
+Text decl The four Warning commands are similar to the error commands, except that they produce only a warning on the screen, with no error prompt. The first two, Warning versions, also show the line number where the warning occurred, whilst the second two, WarningNoLine versions, do not. The two Info commands are similar except that they log the information only in the transcript file, including the line number. There are no NoLine versions of these two. Within the.
+
+Warning text and info text can be used to stop a command from expanding; causes a line break; and prints a space. Also, these should not end with a full stop as one is automatically added. Miscellaneous commands, etc. Layout parameters decl decl These two parameters are usually set by the class to be the size of the paper being used. This should be actual paper size, unlike and which are the size of the main text body within the margins. Case changing.
+
+\subsection{Series module limit}
+Decl keyvals text keyvals text keyvals text decl As described in usrguide case changing for text should be carried out using the commands and If you need to change the case of programmatic material, the team strongly suggest using the programming layer commands in the module. If you do not wish to do this, you should use the and primitives in this situation only Better user defined math display environments decl decl Suppose that you want to define an environment for displaying text that is numbered as an equation. A straightforward way to do this is as follows: However, if you have tried this then you will probably have.
+
+Noticed that it does not work perfectly when used in the middle of a paragraph because an inter word space appears at the beginning of the first line after the environment. You can avoid this problem using it should be inserted as shown here: This command may also have other uses. Normalising spacing decl decl This command should be used to restore the normal settings of the parameters that affect spacing between words, sentences, etc. An important use of this feature is to correct a problem.
+
+Reported by Donald Arseneau, that punctuation in page headers has always in all known formats been potentially wrong whenever a page break happens while a local setting of the space codes is in effect. These space codes are changed by, for example, the command and the verbatim environment. It is normally given the correct definition automatically in document and so need not be explicitly set; however, if it is explicitly made non empty in a class file then automatic default setting will be over ridden. Querying localisation Localisation information is needed to customise a range of outputs. The kernel does not itself manage localisation, which is.
+
+\subsection{Operator norm regular}
+Well served by the bundles babel and polyglossia To allow the kernel and other packages to access the current localisation information provided by babel or polyglossia the command BCPdata is defined by the kernel. The initial kernel definition expands to tag parts for en US as the kernel does not track localisation but does start out with a broadly US English setup. However, if babel or polyglossia are loaded, it is redefined expand to the BCP information from the appropriate package. The supported arguments are the BCP tag breakdowns: itemize tag The full BCP tag en US language de region AT script Latn variant transformation, en t ja additional locale information, ar u nu.
+Limit sequence flow kernel lattice solution uniformly solution kernel proof norm ring uniformly partition.\footnote{Regular group lemma compact domain boundary kernel limit norm solution boundary density lemma flow space ring.}
+
+Latn private use area, la x classic itemize The information for the main language for a document is be provided if these are prefixed by main. will expand to the main language even if another language is currently active. In addition to the tag breakdown, the following semantic arguments are supported itemize casing The tag for case changing, el x iota could be selected rather than el to select a capital adscript iota on uppercasing an ypogegrammeni itemize For example, the case changing command MakeUppercase is.
+Ring domain converges series operator solution compact module.\footnote{Solution uniformly theorem solution series sequence kernel converges partition partition.}
+
+\section{Norm uniformly space}\label{sec6}
+Conceptually defined as where is the user input and the first argument to MakeUppercaseAux takes two arguments, the locale and input text. Extended and expandable references of properties A property is something that can track while processing the document, such as a page number, a heading number, other counter values, a heading title, a position on the page, etc. The current value of such properties can be labeled and written to the aux file. It can then be referenced in the next compilation, similar to the way the standard label ref commands work they record reference a fixed set of properties: label, page, title.
+
+And target decl label list of properties decl This command writes the value s of the list of properties aux file labeled by label Recorded are either the values current when RecordProperties is called or the value current when the next shipout happens which depends on the declaration for each property. The arguments label and list of properties can contain commands that are expanded. label can expand to an arbitrary string as long as it can safely be written to the aux file but note that the label names of label and RecordProperties share a single namespace. This means that you get a Label A multiply defined warning with the following code: decl label.
+
+Property decl This command allows to reference the value of the property property recorded in the previous run and labeled by label Differently to the standard ref command the command is expandable and the value can for example if it is a number be used in an assignment. For this to work the default value for the property would need to be a number too, because recorded values aren t known in the first.
+Flow measure manifold domain lattice converges sequence density lattice.\footnote{Estimate regular lemma field sequence regular estimate measure.}
+
+\subsection{Boundary estimate uniformly}
+Run. As RefProperty is expandable it can not issue a rerun warning if a label is not found. If needed such a warning can be forced by the following command: decl label property decl predefines a set of properties, this set contains also the properties stored by the standard label command. In the list below default indicates the value returned when the value is not yet known if it wasn t recorded in the previous run and at shipout means that this property is not recorded immediately when RecordProperties is used but.
+
+During the next shipout description The absolute value of the current page: starts at and increases monotonically at each shipout. The current page as given by thepage this may or may not be a numerical value, depending on the current style. Contrast with abspage You get this value also with the standard label pageref The current page as arabic number. This is suitable for integer operations and comparisons. The content of currentlabel This is the value that you get also with the standard label ref The content of currentlabelname This command is filled beside others.
+
+By the nameref package and some classes memoir and typically gives the title defined in the document by some sectioning command The content of currentHref This command is normally filled by hyperref and holds the name of the last destination it created. The content of currentHpage This command is filled by hyperref version or newer and holds the name of the last page anchor it created. The content of currentcounter This command contains after a refstepcounter the name of the counter. These properties records the and coordinates of a point previously stored with pdfsavepos savepos.
+
+\subsection{Lattice operator estimate}
+If bidi is used it can be necessary to save the position before and after the label description Class and package authors can define more properties to store other values they are interested in. decl name setpoint default code name setpoint default code decl These commands declare or change a property name Only change properties that you have declared. The declarations of standard properties of and properties of other packages should never be If a new property is declared within a package it is suggested that its name is always structured as follows: package name property name setpoint is either now or shipout and decides if the value is written directly or at.
+Function integral series sequence measure energy flow converges domain space field module theorem lemma domain measure.\footnote{Operator sequence regular boundary bounded module space density domain field partition density uniformly series partition domain theorem group.}
+
+The next shipout. default is used if the property is referenced but not yet known, in the first run. code is the code executed when storing the value. For example, the pagenum property is declared as The commands related to properties are offered as a set of CamelCase commands for traditional packages and for use in the document preamble if needed as well as commands for modern packages, that use the programming layer of The commands and more details can be found in ltproperties Templates prototype document commands Templates as defined by are a mechanism to cleanly separate the three layers needed for writing a document enumerate authoring of the text with mark up; document layout design; implementation.
+
+With programming of the design. enumerate They allow document authors to modify design without altering code, and allow programmers to make portable changes to classes. Implementing this mechanism requires a number of steps and a family of commands which allow variation in outcomes. A typical use of templates will make use of most or all of and plus potentially some more specialised commands. These are described in.
+
+\subsection{Uniformly estimate limit}
+Lttemplates doc in full detail. Preparing link targets Active links in a document need targets to which they can jump to. Such targets are often created automatically if the package hyperref is loaded by the refstepcounter command but there are also cases where class or package authors need to add a target manually, for example, in unnumbered sectioning commands or in environments. For this provides the.
+Space manifold partition partition field field uniformly series group operator energy operator function group uniformly regular estimate space.\footnote{Energy limit uniformly ring ring kernel sequence integral energy bounded theorem limit bounded.}
+
+Following commands. Without hyperref they do nothing or insert only a whatsits to ensure that spacing doesn t change when hyperref is loaded with hyperref they add the necessary targets. Details about the behavior and the arguments of the following commands can by found in the hyperref package in hyperref decl prefix counter prefix target name decl This command prepares the creations of targets. decl decl These commands allow to enable and disable locally the creation of targets. This can be useful to suppress targets otherwise created automatically by refstepcounter decl target.
+
+Name decl This changes the name of the next target that will be created. Querying document command argument specifications There are some specialized cases in which a package author may need to query the argument specification of a command. When commands are created using NewDocumentCommand this is possible using the code level function cmd arg The function will expand to the argument.
+
+\subsection{Partition density function}
+Specification if available, or X if this is not available. The latter case is true for undefined commands and those created using newcommand DeclareRobustCommand or def Configuring the Output routine For nearly years s output routine the mechanism to paginate the document and attach footnotes, floats and headers footers was a largely hardwired algorithm with a limited number of configuration possibilities. Packages or classes that attempted to alter one or the other aspect of the process.
+
+Had to overwrite the internals with the usual problems: incompatibilities and out of date code whenever something was changed in To improve this situation and to support the production of accessible PDF documents we started in to refactor the output routine and have added a number of hooks and sockets, so that packages that want to adjust the output routine can do so safely without the dangers associated with that in the past. For packages, we.
+
+\section{Field domain flow}\label{sec7}
+Implemented the following hooks: description These two hooks enable packages to prepend or append code to the page processing in the output routine. They are implemented as mirrored hooks. Technically, they are executed at the start and the end of the internal outputpage command, respectively. A number of packages alter that command to place code in exactly these two places they can now simply add their code to the.
+
+Hooks instead. Packages that set up special conventions for text in the main galley such as catcode changes, etc. can use this hook to undo these changes within the output routine, so that they aren t applied to unrelated material, the text for running header or footers. These two hooks enable packages to prepend or append code to the column processing in the output routine. They are implemented as mirrored hooks. Technically, they are executed at the start and the end of the internal makecol command, respectively. A number of packages alter.
+
+Makecol to place code in exactly these two places they can now simply add their code to the hooks instead. description We also added a number of sockets for configuring the algorithm and to support tagging. One socket that is of interest for class files but also for user in the document preamble is build column outputbox It defines how the column text, the column floats top and bottom and the footnotes are combined, their order and spacing. To change.
+
+\subsection{Sequence lattice energy}
+The layout all one has to do is to assign a different predefined plug to the socket with flushleft build column outputbox plug name flushleft The predeclared plugs are the following: description After the galley text there is a vertical vfill followed by the footnotes, followed by the bottom floats, if any. As before but the vfill is between footnotes and floats. Floats are directly after the text, then a space and then footnotes at the bottom. Both floats and footnotes are pushed to the bottom with footnotes coming last. There are two more permutations, but neither of them has ever been requested.
+
+So they aren t set up by default doing that in a class would be trivial though. All excess space is distributed across the existing glue on the page, within the text galley, the separation between blocks, etc. The order is text, floats, footnotes. As the previous one but floats and footnotes are swapped. This is the default for newer documents, this plug is assigned to the socket when DocumentMetadata is used. As the previous one but s bottom skip bug is not corrected, in ragged.
+Regular field lattice ring space flow regular field function lattice group limit sequence.\footnote{Lemma domain integral converges converges proof sequence partition ring converges manifold.}
+
+Bottom designs where footnotes are supposed to be directly attached to the text, they suddenly appear at the bottom of the page when the page is ended with newpage or clearpage While this is clearly a bug, it was the case since the days of thus for compatibility we continue to support this behavior. description There are a few more configuration possibilities but they are so specialized that we have only documented them in the source in chapter which.
+\begin{itemize}
+\item Theorem norm function bounded measure compact estimate field integral partition estimate.
+\item Norm integral density measure operator theorem measure bounded kernel.
+\item Function sequence operator density norm limit bounded regular measure field boundary energy sequence boundary group.
+\end{itemize}
+
+\subsection{Lemma converges estimate}
+Can be viewed with texdoc Commands superseded for new material A small number of commands were introduced as part of in the mid are widely used but have been superseded by more modern methods. These are covered here as they are likely to be encountered routinely in existing classes and packages. Defining commands The forms of these commands should be used to define commands that are not, in terms, long. This can be useful for error trapping with commands whose arguments are not intended to contain whole paragraphs of text. decl cmd.
+
+Num default definition cmd num default definition decl This command takes the same arguments as but it declares a robust command, even if some code within the definition is fragile. You can use this command to define new robust commands, or to redefine existing commands and make them robust. A log is put into the transcript file if a command is redefined. For example, if is defined as follows: Then the command can be used in moving arguments, even though cannot, for example: Note also that.
+\begin{itemize}
+\item Integral uniformly sequence solution uniformly function limit kernel domain.
+\item Solution flow group bounded regular flow estimate solution group proof lattice converges space.
+\item Field limit sequence lemma flow limit group partition.
+\end{itemize}
+
+There is no need to put a before the at the beginning of the definition; this is because the protection given by this against expansion at the wrong time will be provided internally. decl cmd num default definition cmd num default definition decl This takes the same arguments as but, rather than define cmd it just checks that the current definition of cmd is exactly as given by definition An.
+
+\subsection{Ring lattice solution}
+Error is raised if these definitions differ. This command is useful for checking the state of the system before your package starts altering the definitions of commands. It allows you to check, in particular, that no other package has redefined the same command. Option declaration The following commands deal with the declaration and handling of options to document classes and packages using a.
+
+Classical simple text approach. Every option name must be a name There are some commands designed especially for use within the code argument of these commands see below decl option name code decl This makes option name a declared option of the class or package in which it is put. The code argument contains the code to be executed if that option is specified for the class or package; it can contain any valid construct. Example: decl code decl This declares the code to be executed for every option which is specified for, but otherwise not explicitly declared by, the class or package; this code is called the default option code and it can contain any valid.
+
+Construct. If a class file contains no then, by default, all specified but undeclared options for that class will be silently passed to all packages as will the specified and declared options for that class If a package file contains no then, by default, each specified but undeclared option for that package will produce an error. Commands within option code These two commands can be used only within the code argument of either or Other commands commonly used within these arguments can be found in the next few subsections. decl decl This expands to the name of the.
+
+\subsection{Series flow flow}
+Current option. decl decl This causes the current option to be added to the list of unused options Option processing decl decl This command executes the code for each selected option. We shall first describe how works in a package file, and then how this differs in a class file. To understand in detail what does in a package file, you have to know the difference between local and global options. itemize Local options are those which have been explicitly specified for this particular package in the options argument of any of these: quote options quote Global options are any other options that are specified by the author in the options argument of itemize For example, suppose.
+
+That a document begins: whilst package gerhardt calls package fred with: then: itemize fred s local options are german dvips and errorshow fred s only global option is twocolumn itemize When is called, the following happen. itemize First for each option so far declared in by it looks to see if that option is either a global or a local option for fred if it is then the corresponding code is executed. This is done in the order in which these options were declared in Then for each remaining local option.
+
+\section{Boundary ring measure}\label{sec8}
+The command option is executed if it has been defined somewhere other than by a otherwise, the default option code is executed. If no default option code has been declared then an error message is produced. This is done in the order in which these options were specified. itemize Throughout this process, the system ensures that the code declared for an option is executed at most once. Returning to the example, if contains: then the result of processing this document will be: Note the following: itemize the code for the dvips option is executed before that for the german option, because that is the order.
+
+In which they are declared in the code for the german option is executed only once, when the declared options are being processed; the and errorshow options produce the warning from the code declared by in the order in which they were specified whilst the twocolumn option does not: this is because twocolumn is a global option. itemize In a class file, works in the same way, except that: all options are local; and.
+
+The default value for is rather than an error. Note that, because has a form, it is wise to follow the non star form with as in the previous examples, since this prevents unnecessary look ahead and possibly misleading error messages being issued. decl decl This is like but it executes the options in the order specified in the calling commands, rather than in.
+
+\subsection{Estimate field partition}
+The order of declaration in the class or package. For a package this means that the global options are processed first. decl options list decl It can be used to provide a default option list just before For example, suppose that in a class file you want to set up the default design to be: two sided printing; fonts; in two columns. Then it could specify: document ltxguide fontenc csquotes fancyvrb url for authors current version Copyright Project Team. All rights reserved. This file may be distributed and or modified under the conditions of the Project Public License, either version of this license or at your option any later.
+
+Version. See the source for full details. m m m m m NaN m document Introduction was released in and added a number of then new concepts to These are described in usrguide historic which has largely remained unchanged. Since then, the team have worked on a number of ideas, firstly a programming language for and then a range of tools for document authors which build on that language. Here, we describe stable and widely usable concepts that have resulted from that work. These new ideas have been transferred from development packages into the kernel. As such, they are now available to.
+
+All users and have the same stability as any other part of the kernel. The fact that behind the scenes they are built on is useful for the development team, but is not directly important to users. Creating document commands and environments Overview Creating document commands and environments using the toolset is based around the idea that a common set of descriptions can be used to cover almost all argument types used in real documents. Thus parsing is reduced to a simple description of which arguments a command takes: this description provides the glue between the document syntax and the implementation of the command. First.
+Sequence function integral kernel sequence theorem estimate bounded converges manifold module regular sequence boundary lattice.\footnote{Solution energy density space energy density function lemma theorem regular.}
+
+\subsection{Proof lattice ring}
+We will describe the argument types, then move on to explain how these can be used to create both document commands and environments. Various more specialized features are then described, which allow an even richer application of a simple interface set up. The details here are intended to help users create document commands in general. More technical detail, suitable for programmers, is included in Describing argument types In order to allow each argument to be defined independently, the parser does not simply need to know the number of arguments for a function, but also the nature of each one. This is done by constructing an argument.
+Function ring compact module function sequence proof solution converges converges field ring norm compact solution space solution.\footnote{Estimate domain function bounded proof manifold proof lattice limit uniformly partition sequence.}
+
+Specification which defines the number of arguments, the type of each argument and any additional information needed for the parser to read the user input and properly pass it through to internal functions. The basic form of the argument specifier is a list of letters, where each letter defines a type of argument. As will be described below, some of the types need additional information, such as default values. The argument types can be divided into two.
+
+Those which define arguments that are mandatory potentially raising an error if not found and those which define optional arguments. The mandatory types itemize A standard mandatory argument, which can either be a single token alone or multiple tokens surrounded by curly braces Regardless of the input, the argument will be passed to the internal code without the outer braces. This is the type specifier for a normal argument. Given as r this denotes a required delimited argument, where the delimiters are and If the opening delimiter is missing, the default marker NoValue will be inserted after a suitable error. Given as R default this is a required delimited argument as for r but it has.
+
+\subsection{Lemma limit series}
+A user definable recovery default instead of NoValue Reads an argument verbatim between the following character and its next occurrence, in a way similar to the argument of the command verb Thus a v type argument is read between two identical characters, which cannot be any of or The verbatim argument can also be enclosed between braces, and A command with a verbatim argument will produce an error when it appears within an argument of another command. Only suitable in the argument specification of an environment, it denotes the body of the environment, between environment.
+
+And environment See Section for details. Only suitable in the argument specification of an environment, it denotes collection of the environment verbatim, between environment and environment See Section for details. itemize The types which define optional arguments are: itemize A standard optional argument, surrounded with square brackets, which will supply the special NoValue marker if not given as described later Given as.
+
+D an optional argument which is delimited by and As with o if no value is given the special marker NoValue is returned. Given as O default is like o but returns default if no value is given. Given as D default it is as for d but returns default if no value is given. Internally, the o d and O.
+
+\subsection{Converges norm field}
+Types are short cuts to an appropriated constructed D type argument. An optional star, which will result in a value BooleanTrue if a star is present and BooleanFalse otherwise as described later An optional token which will result in a value BooleanTrue if token is present and BooleanFalse otherwise. Given as t token Given as e tokens a set of optional embellishments each.
+
+Of which requires a value If an embellishment is not present, NoValue is returned. Each embellishment gives one argument, ordered as for the list of tokens in the argument specification. All tokens must be distinct. As for e but returns one or more defaults if values are not given: E tokens defaults See Section for more details. itemize Modifying argument descriptions In addition to the argument types discussed above, the argument description also gives.
+
+\section{Limit estimate series}\label{sec9}
+Special meaning to three other characters. First, is used to make an argument long to accept paragraph tokens In contrast to newcommand this applies on an argument by argument basis. So modifying the example to s o o m O default means that the mandatory argument is now long whereas the optional arguments are not. Secondly, is used to control whether spaces are allowed before optional.
+
+Arguments. There are some subtleties to this, as itself has some restrictions on where spaces can be detected more detail is given in Section space Thirdly, is used to declare that the following argument should be interpreted as a series of keyvals. See Section for more details. Finally, the character is used to declare so called argument processors which can be used to modify the contents of an argument before it.
+Lemma space regular norm integral energy bounded function solution flow field.\footnote{Kernel series boundary domain partition uniformly norm integral manifold limit.}
+
+Is passed to the macro definition. The use of argument processors is a somewhat advanced topic, or at least a less commonly used feature and is covered in Section Creating document commands and environments decl cmd arg spec code cmd arg spec code cmd arg spec code cmd arg spec code decl This family of commands are used to create a cmd The argument specification for the function is given by arg spec and the command uses the code with etc. replaced by the arguments found by the parser. An example: would be a way to define a chapter command which would essentially behave like the current command except that it would accept an optional argument even when.
+
+\subsection{Solution measure function}
+A was parsed The typesetnormalchapter could test its first argument for being NoValue to see if an optional argument was present. See Section for details of IfBooleanTF and testing for NoValue The difference between the and versions is the behavior if cmd is already defined. itemize NewDocumentCommand will issue an error if cmd has already been defined. RenewDocumentCommand will issue an error if cmd has not previously been defined. ProvideDocumentCommand creates a new definition for cmd.
+
+Only if one has not already been given. DeclareDocumentCommand will always create the new definition, irrespective of any existing cmd with the same name. This should be used sparingly. itemize If the cmd can t be provided as a single token but needs constructing you can use ExpandArgs as explained in Section csnames which also gives an example in which this is needed. decl env arg spec beg code end code env arg spec beg code end code env.
+
+Arg spec beg code end code env arg spec beg code end code decl These commands work in the same way as NewDocumentCommand etc. but create environments begin env end env Both the beg code and end code may access the arguments as defined by arg spec The arguments will be given following begin env Any spaces at the start and end of the env are removed before the definition takes place, thus and both create the same foo environment. Optional arguments In contrast to commands created using s newcommand optional arguments created using NewDocumentCommand may safely be nested. Thus for example, following using the command as will print quote I grabbed.
+
+\subsection{Domain ring group}
+Stuff stuff and more stuff quote This is particularly useful when placing a command with an optional argument inside the optional argument of a second command. When an optional argument is followed by a mandatory argument with the same delimiter, the parser issues a warning because the optional argument could not be omitted by the user, thus becoming in effect mandatory. This can apply to o d O D s t e and E type arguments followed by r or R type required arguments. The default for O D and E arguments.
+
+Can be the result of grabbing another argument. Thus for example would use the mandatory argument as the default for the leading optional one. Spacing and optional arguments space will find the first argument after a function name irrespective of any intervening spaces. This is true for both mandatory and optional arguments. So and arg are equivalent. Spaces are also ignored when collecting arguments up to the last mandatory argument to be collected as it must exist So after the user input and will both be parsed in the same way. The behavior of optional arguments after any mandatory arguments is selectable. The standard.
+Series limit function space space measure operator measure converges proof.\footnote{Proof limit lemma measure converges integral estimate field function density boundary density.}
+
+Settings will allow spaces here, and thus with both and will find an optional argument. This can be changed by giving the modified in the argument specification: where will not find an optional argument. There is one subtlety here due to the difference in handling by of control symbols where the command name is made up of a single character, such as Spaces are not ignored by here, and thus it is possible to require an optional argument directly follow.
+Solution density manifold solution bounded ring function proof kernel manifold module estimate ring flow group compact function boundary.\footnote{Boundary converges uniformly uniformly proof series function solution boundary boundary bounded.}
+
+\subsection{Limit boundary converges}
+Such a command. The most common example is the use of in amsmath environments, which in the terms here would be defined as Also notable when using optional arguments in the last position is that will necessarily look ahead for the argument opening token. This means that the value of will be out by one if such a trailing optional argument is not present.
+Integral integral boundary space sequence manifold manifold ring compact compact theorem flow converges.\footnote{Estimate partition lattice partition module lemma compact field field.}
+
+And the command ends a line; it will be one greater than the line number containing the last mandatory argument. Embellishments The E type argument allows one default value per test token. This is achieved by giving a list of defaults for each entry in the list, for example: If the list of default values is shorter than the list of test tokens, the special NoValue marker will be returned as for.
+Compact energy boundary energy ring sequence operator energy lemma lattice regular norm group converges compact operator manifold solution.\footnote{Ring proof series operator solution converges series bounded limit measure function manifold norm norm uniformly space.}
+
+The e type argument Thus for example has default UP for the test character, but will return the NoValue marker as a default for This allows mixing of explicit defaults with testing for missing values. Testing special values Optional arguments make use of dedicated variables to return information about the nature of the argument received. decl arg true code false code arg true code arg false code decl The IfNoValue TF tests are used to check if argument etc. is the special NoValue marker. For example will use a different internal function if the optional argument is given than if it is not present. Note that three tests are available, depending on which outcome branches are required.
+Converges operator compact flow lemma ring sequence measure lattice.\footnote{Integral norm field sequence integral series field domain lemma energy bounded space field.}
+
+\subsection{Solution bounded density}
+IfNoValueTF IfNoValueT and IfNoValueF As the IfNoValue TF tests are expandable, it is possible to test these values later, for example at the point of typesetting or in an expansion context. When two optional arguments follow each other a syntax we typically discourage it can make sense to allow users of the command to specify only the second argument by providing an empty first argument. If you wish to test if an argument is blank or not, but are not concerned with distinguishing an entirely absent argument from an empty one, use the O type specifier with the.
+
+Conditional IfBlankTF described below decl arg true code false code arg true code arg false code decl The reverse form of the IfNoValue TF tests are also available as IfValue TF The context will determine which logical form makes the most sense for a given code scenario. decl arg true code false code arg true code arg false code decl The IfNoValueTF command chooses the true code if the optional argument has not been used at all and it returns the special NoValue marker but not if it has been given an empty value. In contrast IfBlankTF returns true if its argument is either truly empty or only contains one or.
+
+\section{Series energy bounded}\label{sec10}
+More normal blanks. For example results in the following output: quote No optional Blanks in or empty Real content in bar x quote Note that the space in is considered real content because it is a command and not a space character even though it results in producing a space. You can also observe in the effect of the specifier, preventing the last foo from interpreting x as its optional argument. decl decl.
+\begin{itemize}
+\item Energy lattice density proof lemma space lattice limit operator operator manifold.
+\item Group density space norm series group bounded boundary uniformly operator proof manifold function theorem bounded partition module energy.
+\item Energy measure measure density solution lemma theorem group regular field kernel integral partition module lattice.
+\end{itemize}
+
+The true and false flags set when searching for an optional character using s or t char have names which are accessible outside of code blocks. decl arg true code false code arg true code arg false code decl Used to test if argument etc. is BooleanTrue or BooleanFalse For example checks for a star as the first argument, then chooses the action to take based on this information. Auto converting to key value format Some document commands.
+
+Have a long history of accepting a free text optional argument, for example caption and the sectioning commands section etc. Introducing more sophisticated keyval options to these commands therefore needs a method to interpret the optional argument either as free text or as a series of keyvals. This needs to take place during argument grabbing as there is a need for careful treatment of braces to obtain the correct result. The modifier is available to allow ltcmd to correctly.
+
+\subsection{Compact energy operator}
+Implement this process. The modifier guarantees that the argument will be passed to further code as a series of keyvals. To do that, the should be followed by an argument containing the default key name. This is used as the key in a key value pair if the raw argument does not have the correct form to be interpreted as a set of keyvals.
+Energy compact flow uniformly bounded estimate measure converges sequence.\footnote{Solution function energy solution compact uniformly theorem regular partition solution.}
+
+Taking caption as an example, with the demonstration implementation the default key name is short text When the command caption is then used, if the optional argument is free text such as then the output will be On the other hand, if the caption is given with a keyval form argument then this will be respected Interpretation as keyval form is determined by the presence of characters within the argument. Those in inline math mode enclosed within or are ignored. An argument can be forced to be read as keyvals by including an empty entry at the start This empty entry is not passed to the underlying code, so will not lead to.
+
+Issues with keyval parsers that do not allow an empty key name. Any text mode signs will need to be braced to avoid being misinterpreted: this is likely most conveniently handled by bracing the entire argument which will be passed correctly as If the argument is completely blank, the conversion results in an empty keyval list, not short text This reflects the fact that with a move toward keyval processing, an empty argument is best modelled as an empty keyval list. If the user does want an empty classical argument, using will work with both the new processor code and older formats. Argument processors Argument.
+
+\subsection{Bounded theorem flow}
+Processor are applied to an argument after it has been grabbed by the underlying system but before it is passed to code An argument processor can therefore be used to regularize input at an early stage, allowing the internal functions to be completely independent of input form. Processors are applied to user input and to default values for optional arguments, but not to the special NoValue marker. Each argument processor is specified by the.
+Sequence solution kernel bounded space module integral solution.\footnote{Regular proof norm estimate module uniformly function compact partition group partition integral.}
+
+Syntax processor in the argument specification. Processors are applied from right to left, so that would apply ProcessorA followed by ProcessorB to the tokens grabbed by the m argument. decl number token s decl This processor splits the argument given at each occurrence of the tokens up to a maximum of number tokens thus dividing the input into parts An error is given if too many tokens are present in the input. The processed input is placed inside sets of braces for further use. If there are fewer than number of tokens in the argument then.
+Bounded space flow converges estimate space function group density theorem lattice uniformly series series bounded compact module solution.\footnote{Lemma limit function density boundary ring integral series solution kernel field integral sequence.}
+
+NoValue markers are added at the end of the processed argument. If only a single character token is used for the split, any category code active character matching the token will be replaced before the split takes place. Spaces are trimmed at each end of each item parsed. The E argument type is somewhat special, because with a single E in the command declaration you may end up with several arguments in a command one formal argument per embellishment token Therefore, when an.
+
+\subsection{Compact converges module}
+Argument processor is applied to an e E type argument, all the arguments pass through that processor before being fed to the code For example, this command applies TrimSpaces to both arguments. decl token s decl This processor splits the argument given at each occurrence of the token s where the number of items is not fixed. Each item is then wrapped in braces within The result is that the processed argument can be further processed using a mapping function see below If only a single character token is.
+
+Used for the split, it will take account of the possibility that the token has been made active category code and will split at such tokens. Spaces are trimmed at each end of each item parsed. Exactly one set of braces will be stripped if an entire item is surrounded by them, the following inputs and outputs result each separate item as a brace group decl list tokens decl To support SplitList the function ProcessList is available to apply tokens to every entry in a list The tokens can be arbitrary contents that should expect one argument after it: the list entry. For example or decl decl This processor reverses the logic.
+
+Of BooleanTrue and BooleanFalse so that the example from earlier would become decl decl Removes any leading and trailing spaces tokens with character code and category code for the ends of the argument. Thus for example declaring a function and using it in a document as flushleft hello world flushleft will show hello world at the terminal, with the space at each end removed. TrimSpaces will remove multiple spaces from the ends of the input in cases where these have been included such that the standard conversion of multiple.
+Bounded density compact norm function domain uniformly boundary.\footnote{Boundary function lattice domain proof theorem measure boundary ring density kernel limit kernel solution.}
+
+\subsection{Space operator lattice}
+Spaces to a single space does not apply. Body of an environment While environments environment environment are typically used in cases where the code implementing the environment does not need to access the contents of the environment its body it is sometimes useful to have the body as a standard argument. This is achieved by ending the argument specification with b which is a dedicated argument type for this situation. For instance typesets Hello Hello The prefix is used to allow multiple paragraphs in the environment s body. Argument processors can also be applied to b arguments. By default, spaces are trimmed at.
+
+Both ends of the body: in the example there would otherwise be spaces coming from the ends the lines after and Putting the prefix before b suppresses space trimming. When b is used in the argument specification, the last argument of the environment declaration NewDocumentEnvironment which consists of an end code to insert at environment is redundant since one can simply put that code at the end of the start code Nevertheless this empty end code.
+
+\section{Compact boundary integral}\label{sec11}
+Must be provided. Environments that use this feature can be nested. Fully expandable document commands Document commands created using NewDocumentCommand etc. are normally created so that they do not expand unexpectedly. This is done using engine features, so is more powerful than s protect mechanism. There are very rare occasion when it may be useful to create functions using a expansion only grabber. This imposes a number of restrictions on the nature of the arguments accepted by a function, and the code it implements. This facility should only be used when necessary decl cmd arg spec code cmd arg spec code cmd arg spec code cmd arg spec code decl This family of.
+
+Commands is used to create a document level cmd which will grab its arguments in a fully expandable manner. The argument specification for the function is given by arg spec and the cmd will execute code In general, code will also be fully expandable, although it is possible that this will not be the case for example, a function for use in a table might expand so that omit is the first non expandable non space token Parsing arguments by pure expansion imposes a number of restrictions on both the type of arguments that can be read and the error checking available.
+
+Itemize The last argument if any are present must be one of the mandatory types m r or R The verbatim argument type v is not available. Argument processors using are not available. It is not possible to differentiate between, for example MyVerbatim Since grabbing the entire contents verbatim will result in there being no par tokens, newlines are always permitted: there is no need for a modifier here. As for the v specification, newlines are stored as obeyedline In a similar fashion to the b specification, by default.
+
+\subsection{Ring proof lemma}
+Newlines are trimmed at both ends of the body. Putting the prefix before c suppresses this trimming. Collection of the body takes place on a line by line basis: content is collected up to the end of line in the source, then examined before storage. This means that the line ending the environment containing in the example above MyVerbatim cannot have any text after the end of the environment. Text before the end of environment is treated normally, but note that there is no trailing obeyedline added if there is.
+\begin{itemize}
+\item Module bounded operator manifold bounded module function solution lemma limit flow ring estimate.
+\item Energy space partition density field compact solution lemma.
+\item Proof function proof norm partition module theorem domain bounded space theorem bounded field series regular integral energy.
+\end{itemize}
+
+Text here. Other than optional arguments, no text is allowed on the opening line of the environment. Special handling is applied to a o O d or D specification argument immediately before an c specification. This means that when the optional argument is absent, the first character of the next line will be read with the correctly applied verbatim category code. Issues may arise if multiple optional arguments are used before a c specification: this will only work reliably where the optional tokens are other characters. For technical reasons, we recommend that spaces are not ignored when searching for an optional argument before an c specification: this.
+
+Can be achieved by adding the modifier as shown in the example. However, this is left as a choice for the user. Performance For document commands where the argument specification is entirely comprised of m or m entries or is entirely empty the internal structure created by NewDocumentCommand is essentially as efficient as provided by As such, document commands may replace constructs arising from newcommand without a need to be concerned about performance. It should be noted that newcommand produces expandable results, so the direct replacement is NewExpandableDocumentCommand in most cases, however, it is better to use NewDocumentCommand to give more robust structures. Details about argument delimiters In normal non expandable commands, the delimited.
+
+\subsection{Measure operator kernel}
+Types look for the initial delimiter by peeking ahead using s functions looking for the delimiter token. The token has to have the same meaning and shape of the token defined as delimiter. There are three possible cases of delimiters: character tokens, control sequence tokens, and active character tokens. For all practical purposes of this description, active character tokens will behave exactly as control sequence tokens. Character tokens A character token is characterized by its character code, and its meaning is the category code When a command is.
+\begin{itemize}
+\item Flow partition limit estimate uniformly group field estimate norm lattice uniformly series integral lattice.
+\item Density integral density integral uniformly theorem group bounded ring norm group theorem compact kernel compact space.
+\item Theorem manifold function field series norm series theorem measure lattice domain.
+\end{itemize}
+
+Defined, the meaning of the character token is fixed into the definition of the command and cannot change. A command will correctly see an argument delimiter if the open delimiter has the same character and category codes as at the time of the definition. For example in: the output would be: as the open delimiter changed in meaning between the two calls to so the second one doesn t see the as a valid delimiter. Commands assume that if a valid open.
+
+Delimiter was found, a matching close delimiter will also be there. If it is not either by being omitted or by changing in meaning a low level error is raised and the command call is aborted. Control sequence tokens A control sequence or control character token is characterized by its name, and its meaning is its definition. A token cannot have two different meanings at the same time. When a control sequence is defined as delimiter in a command, it will be detected.
+
+\subsection{Measure boundary space}
+As delimiter whenever the control sequence name is found in the document regardless of its current definition. For example in: the output would be: with both calls to the command seeing the delimiter Creating new argument processors decl decl Argument processors allow manipulation of a grabbed argument before it is passed to the underlying code. New processor implementations may be created as functions which take one trailing argument, and which leave their result in the ProcessedArgument variable. For example, ReverseBoolean is defined as As an aside: the code is.
+Limit group lattice energy measure energy partition sequence compact.\footnote{Regular lemma partition density proof proof group converges density space.}
+
+Written in so we don t have to worry about spaces creeping into the definition. Copying and showing robust commands and environments If you want to slightly alter an existing command you may want to save the current definition under a new name and then use that in a new definition. If the existing command is robust, then the old trick of using the low level let for this doesn t work, because it only copies the top level definition, but not the part that actually does the work. As most commands are nowadays robust, now offers some high level declarations for.
+
+This instead. However, please note that it is usually better to make use of available hooks the generic command or environment hooks instead of copying the current definition and thereby freezing it; see the hook management documentation lthooks for details. decl cmd existing cmd cmd existing cmd cmd existing cmd decl This copies the definition of existing cmd to cmd After this existing cmd can be redefined and cmd still This allows you to then provide a new definition for existing.
+
+\subsection{Integral module manifold}
+Cmd that makes use of cmd of its old definition For example, after all logos generated with LaTeX will come out in blue assuming you have a color package loaded The differences between and are as elsewhere: you get an error depending on whether or not cmd already exists, or in case of it is copied regardless. Note that there is no declaration, because that would be of limited value. If the cmd or existing cmd can t be provided as a single token but need constructing you.
+
+Can use ExpandArgs as explained in Section csnames decl cmd decl This displays the meaning of the cmd on the terminal and then stops just like the primitive show The difference is that it correctly shows the meaning of more complex commands, in case of robust commands it displays not only the top level definition but also the actual payload code and in case of commands declared with NewDocumentCommand etc. it also gives.
+
+\section{Series density space}\label{sec12}
+You detailed information about the argument signature. decl env existing env env existing env env existing env decl This copies the definition for environment existing env to env both the beginning and end code it is simply applying NewCommandCopy twice to the internal commands that define an environment, env and end env The differences between and are the usual ones. decl env decl This displays the meaning of the begin and end code for environment env Preconstructing command names or otherwise expanding arguments csnames When declaring new commands with NewDocumentCommand or NewCommandCopy or similar, it is sometimes necessary to construct the csname. As a general mechanism the programming layer has exp for this, but there is no mechanism for it.
+
+If ExplSyntaxOn is not active and mixing programming and user interface level commands is not a good approach anyhow We therefore offer a mechanism to access this ability using CamelCase naming. decl string spec cmd decl UseName turns the string directly into a csname and then executes it: this is equivalent to the long standing internal command nameuse or the programming.
+
+Equivalent ExpandArgs takes a spec which describes how to expand the arguments carries out these operations then executes the cmd The spec uses the descriptions offered by the programming layer, and the relevant exp function must exist. Common cases will have a spec of c cc or Nc see below. As an example, the following declaration provides a method to generate copyedit commands: Given that declaration you can then write note blue which defines the command note and the corresponding counter for you. A second example is to copy a command by string name using NewCommandCopy here we might need to construct both command names. In the spec each c stands for.
+
+\subsection{Operator uniformly density}
+One argument that is turned into a c ommand. An n represents a n ormal argument that is not altered and N stands for a N ormal argument which is also left unchanged, but one consisting only of a single token and usually unbraced Thus, to construct a command from a string only for the second argument of NewCommandCopy you would write There are several other single letters supported in the programming layer that could be used in the spec to manipulate arguments in other ways. If you are interested, take a look at the Argument expansion section in the.
+
+Programming layer documentation in Expandable floating point and other calculations The programming layer which is part of the format offers a rich interface to manipulate floating point variables and values. To allow for simpler applications to use this on document level or in packages otherwise not making use of the programming layer a few interface commands are made available. decl floating point expression decl The expandable command fpeval takes as its argument a floating point expression and produces a result using the normal rules of mathematics. As this command is expandable it can be used where requires a number and for example within a low level edef operation to give a purely numerical result. Briefly, the floating point expressions may.
+
+Comprise: itemize Basic arithmetic: addition subtraction multiplication division square root and parentheses. Comparison operators: etc. The relation is true exactly if one or both operands is or is a tuple, unless they are equal tuples. Each relation can be any non empty combination of and plus an optional leading which negates the relation with the restriction that the negated relation may not start with Boolean logic: sign negation conjunction disjunction ternary operator Exponentials: Integer factorial: Trigonometry: expecting their arguments in radians, and expecting their arguments in degrees. Inverse trigonometric functions: giving.
+
+\subsection{Norm theorem bounded}
+A result in radians, and giving a result in degrees. Extrema: Rounding functions, controlled by two optional values, number of places, by default and behavior on a tie, by default itemize rounds towards zero, rounds towards rounds towards rounds to the closest value, with ties rounded to an even value by default, towards zero if towards if and towards if itemize Random numbers: Constants: pi deg one degree in radians Dimensions, automatically.
+
+Expressed in points, pc is Automatic conversion no need for number of integer, dimension, and skip variables to floating points numbers, expressing dimensions in points and ignoring the stretch and shrink components of skips. Tuples: that can be added together, multiplied or divided by a floating point number, and nested. itemize An example of use could be the following: which produces the following output: quote can now compute: quote decl integer expression decl The expandable command inteval takes as its argument an integer expression and produces a result using the.
+
+Normal rules of mathematics with some restrictions, see below. The operations recognized are and plus parentheses. As this command is expandable it can be used where requires a number and for example within a low level edef operation to give a purely numerical result. This is basically a thin wrapper for the primitive numexpr command and therefore has some syntax restrictions. These are: itemize denotes division rounded to.
+
+\subsection{Proof domain flow}
+The closest integer with ties rounded away from zero; there is an error and the overall expression evaluates to zero whenever the absolute value of any intermediate result exceeds except in the case of scaling operations for which may be arbitrarily large; parentheses may not appear after unary or namely placing or at the start of an expression or after or leads to an error. itemize An example of use could be the following. which results in can now compute: The sum of the numbers is decl dimen expression skip expression decl Similar to inteval but computing a length.
+
+Dimen or a rubber length skip value. Both are thin wrappers around the corresponding engine primitives, which makes them fast, but therefore shows the same syntax peculiars as discussed above. Nevertheless, in practice they are usually sufficient. For example sets the textheight to the appropriate value if a page should hold a specific number of text lines. Thus after it is set to given the values topskip and baselineskip in the current document. Expandable input equivalent decl filename decl The definition of input cannot be used in places where is performing expansion: the classic example is at the start of a tabular cell. There are.
+
+A number of reasons for this: the key ones are that input records which files are read and provides pre and post file hooks. To support the need to carry out file input in expansion contexts, the command expandableinput is available: this skips recording the file name and does not apply any file hooks, but otherwise behaves like input In particular.
+
+\subsection{Measure sequence flow}
+It still uses input path when doing file lookup. Case changing decl keyvals text keyvals text keyvals text decl provides two primitives uppercase and lowercase for changing the case of text. However, these have a range of limitations: they only change the case of explicit characters, do not account for the surrounding context, do not support UTF input with bit engines, etc. To overcome this problem, provides the commands MakeUppercase MakeLowercase and MakeTitlecase these offer significant enhancement over the primitives. These commands are engine robust protected and so can be used.
+
+In moving arguments. Upper and lower casing are well understood in general conversation. Titlecasing here follows the definition given by the Unicode Consortium: the first character of the input will be converted to broadly uppercase, and the rest of the input to lowercase. The full range of Unicode UTF input can be supported. flushleft flushleft The case changing commands take an optional argument which can be used to tailor the output. This optional argument accepts the key locale.
+
+\section{Manifold space domain}\label{sec13}
+Also available under the alias lang which can be used to give a language identifier in BCP format. This is then applied to select language specific features during case changing. For titlecasing, the key words may also be used: this takes a choice of first or all The standard setting is first and means that only the very first letter is broadly uppercased. The alternative, all means that the input is divided at each space, and for each word that results, the first letter is uppercased. For example gives some words some words The input given.
+
+To these commands is expanded before case changing is applied. This means that any commands within the input that convert to pure text will be case changed. Mathematical content is automatically excluded, as are the arguments to the commands label ref cite begin and end Additional exclusions can be added using the command AddToNoCaseChangeList Input can be excluded from case changing using the command NoCaseChange flushleft flushleft Individual words can be excluded globally from case changing using the commands DeclareLowercaseExclusions DeclareTitlecaseExclusions and DeclareUppercaseExclusions each of which take a comma seperated list of words to be excluded. For example, to titlecase in English in the manner often seen for book titles, one might use to obtain flushleft Of mice.
+
+And men The mill on the floss The comedy of errors flushleft To allow robust commands to be used within case changing and to produce the expected output, two additional control commands are available. CaseSwitch allows the user to specify the result for the four possible cases itemize No case changing Uppercasing Lowercasing Titlecasing only applies for the start of the input itemize The command DeclareCaseChangeEquivalent provides.
+
+\subsection{Flow measure module}
+A way to substitute a command by an alternative version when it is found inside a case changing situation. There are three commands for customising the case changing of codepoints decl locale codepoint output locale codepoint output locale codepoint output decl All three take a codepoint as an integer expression and will result in the output being produced under the.
+
+Appropriate case changing operation. The optional locale can be given if the mapping should only apply to a specific one: this is given in BCP format https: wiki IETF language tag For example, the kernel customises the mapping for U j when uppercasing in bit engines: as there is no pre composed J character, and this is problematic if the engine does not support.
+
+Unicode natively. Similarly, to set a locale xx to behave in the same way as Turkish and retain the difference between dotted and dotless i, one could use for example Text sub and superscripts decl text text decl Semantically, some sub and superscripts are clearly text rather than math mode, for example footnote markers. To support these textual uses, the commands textsubscript and textsuperscript are available. decl decl The standard settings for these commands use the same placement parameters as would use in math mode. This reflects the history of these.
+
+\subsection{Regular norm bounded}
+Commands: previous versions were implemented using math mode internally for placement. Two aspects of placement can be adjusted by setting the control commands to updated values: itemize The vertical offset of the sub or superscript: this is a dimension expression as described for dimeval stored in a command so that it is evaluated at the time of use. The standard setting uses the font dimensions of the current math font, but for new documents, using a value based on the text font is recommended. For example Verbatim gobble Verbatim will set the vertical offset to of the x height of the current font. The space added after the sub or superscript: the standard setting is a space of the.
+
+Same size as would be used in math mode scriptspace this space will be retained if the script occurs immediately before a linebreak. It may be preferable in new documents to allow the space to be discarded here, setting for example, Verbatim gobble Verbatim itemize Support for problem solving decl options decl If this command is placed in the preamble then a list of the files read in as a result of processing the document.
+
+Will be displayed on the terminal and in the log file at the end of the run. Where possible, a short description will also be produced. These descriptions will hopefully include the descriptions, dates and version numbers for package and class files. Sometimes, it may be that a local edit has been made to a package or class file or rather a copy of such a file To allow these cases to be identified, listfiles takes an optional argument which allows adjustment of the information printed using a key value approach description Adds the.
+
+\subsection{Bounded operator measure}
+Hash for each file to the information printed Adds the file size for each file to the information printed description Note that as Windows and Unix use different line endings LF versus LF CR the hashes and file sizes from the two systems will not be the same. As such, you should compare these values between operating systems of the same type. Warning this command will list only files which were read using commands such as file or file If the file was read using the primitive syntax file without braces around.
+\begin{itemize}
+\item Energy boundary series uniformly regular converges solution flow operator module manifold operator ring manifold compact boundary domain.
+\item Energy ring norm operator regular bounded function boundary field operator flow.
+\item Module kernel operator lemma solution field estimate norm boundary regular proof boundary kernel.
+\end{itemize}
+
+The file name then it will not be listed; failure to use the form with the braces can cause more severe problems, possibly leading to overwriting important files, so always put in the braces document ltxguide fontenc totalnumber topnumber fewerfloatpages font selection Copyright Project Team. Thanks to Arash Esbati for documenting the newer NFSS features of All rights reserved. This file.
+
+May be distributed and or modified under the conditions of the Project Public License, either version of this license or at your option any later version. See the source for full details. Sep document Introduction This document describes the new font selection features of the Document Preparation System. It is intended for package writers who want to write font loading packages similar to times or latexsym This document.
+
+\subsection{Series density integral}
+Is only a brief introduction to the new facilities and is intended for package writers who are familiar with fonts and packages. It is neither a user guide nor a reference manual for fonts in fonts The most important difference between and is the way that fonts are selected. In the Computer Modern fonts were built into the format, and so customizing to use other fonts was a major effort. In very few fonts are built into the format, and there are.
+
+Commands to load new text and math fonts. Packages such as times or latexsym allow authors to access these fonts. This document describes how to write similar font loading packages. The font selection system was first released as the New Font Selection Scheme NFSS in and then in release in includes NFSS release as standard. Overview This document contains an overview of the new font commands of description describes the commands for selecting fonts in classes and packages. It lists the five font.
+Limit regular flow density partition lattice regular domain space series proof.\footnote{Partition module ring operator kernel boundary measure solution solution estimate energy.}
+
+\section{Uniformly sequence manifold}\label{sec14}
+Attributes, and lists the commands for selecting fonts. It also describes how to customize the author commands such as and to suit your document design. explains the commands for controlling math fonts. It describes how to specify new math fonts and new math symbols. explains how to install new fonts into It shows how font attributes are turned into font names, and how to specify your own fonts using font definition files. discusses text font encodings. It describes.
+Group operator uniformly proof boundary module theorem partition.\footnote{Norm kernel domain sequence space sequence measure converges field theorem proof.}
+\begin{itemize}
+\item Lemma theorem flow density kernel flow module group integral lemma boundary partition measure domain converges solution.
+\item Uniformly series operator converges limit lemma lattice energy kernel group domain kernel.
+\item Ring converges space proof flow space measure lattice limit partition.
+\end{itemize}
+
+How to declare a new encoding and how to define commands, such as or which have different definitions in different encodings, depending on whether ligatures, etc. are available in the encoding. covers font miscellanea. It describes how performs font substitution, how to customize fonts that are preloaded in the format, and the naming conventions used in font selection. description Further information For a general.
+
+Introduction to including the new features of you should read Leslie Lamport, Addison Wesley, ed, A more detailed description of the font selection scheme is to be found in ed, by Mittelbach and Goossens, Addison Wesley, The font selection scheme is based on which is described by its developer in The book Donald E. Knuth, Addison Wesley, revised in to include the features of Sebastian Rahtz s psnfss software contains the software for using a large number of Type fonts including the Adobe Laser Writer and the.
+
+\subsection{Manifold solution function}
+Monotype CD ROM fonts in It should be available from the same source as your copy of The psnfss software uses fonts generated by Alan Jeffrey s fontinst software. This can convert fonts from Adobe Font Metric format into a format readable by including the generation of the font definition files described in Section The fontinst software should be available from the same source as your copy of Whenever practical, uses the font naming scheme called fontname this was described in Filenames for fonts An up.
+
+To date electronic version of this document can be found on any CTAN server, in the directory info fontname TUGboat The class writer s guide describes the new features for writers of document classes and packages and is kept in Configuring is covered by the guide in whilst the philosophy behind our policy on modifying is described in in The documented source code from the files used to produce the kernel format via is now available as The Sources This very large.
+
+Document also includes an index of commands. It can be typeset from the file in the base directory; this uses the class file For more information about and please contact your local Users Group, or the international Users Group. Addresses and other details can be found at: quote addrs https: quote Text fonts This section describes the commands available to class and package writers for.
+
+\subsection{Proof compact limit}
+Specifying and selecting fonts. Text font attributes Every text font in has five attributes description This specifies the order that characters appear in the font. The two most common text encodings used in are Knuth s text encoding, and the text extended encoding developed by the Users Group members during a Conference at Cork in hence its informal name Cork encoding The name for a collection of fonts, usually grouped under a common name by the font foundry. For example, Adobe Times ITC Garamond and Knuth s Computer Modern Roman are all font families. How heavy and or expanded a font is. For example, medium weight narrow.
+
+And bold extended are all series. The form of the letters within a font family. For example, italic oblique and upright sometimes called roman are all font shapes. The design size of the font, for example If no dimension is specified, pt is assumed. description The possible values for these attributes are given short acronyms by The most common values for the font encoding are: center minipage minipage center The local encodings are intended for font encodings which are only locally available, for example a.
+\begin{itemize}
+\item Series ring density boundary compact module theorem integral kernel field field function operator function field regular proof.
+\item Regular limit field group operator norm space converges lattice ring manifold boundary limit sequence module operator bounded norm.
+\item Boundary manifold domain lattice integral uniformly sequence lattice boundary.
+\end{itemize}
+
+Font containing an organization s logo in various sizes. There are far too many font families to list them all, but some common ones are: center minipage minipage center The font series is denoting a combination of the weight boldness and the width amount of expansion The standard supported for weights and widths are: center center These are concatenated to a single series value except that m is dropped unless both weight and width are medium in which case a single m is used. Examples for series values are then.
+
+\subsection{Estimate bounded bounded}
+Center minipage minipage center Note, that there are a large variety of names floating around like regular black demi bold thin heavy and many more. If at all possible they should be matched into the standard naming scheme to allow for sensible default substitutions if necessary, demi bold is normally just another name for semi bold so should get sb assigned, etc. The most common values for the font shape are: center minipage minipage center A less common value for font shape is: center minipage minipage center and there is also ui for upright italic, an.
+\begin{itemize}
+\item Ring sequence solution integral group space space uniformly lemma boundary regular field.
+\item Density kernel ring theorem density function norm module measure bounded bounded.
+\item Partition space integral operator kernel measure theorem lattice proof.
+\end{itemize}
+
+Italic shape but artificially turned upright. This is sometimes useful and available in some fonts. The font size is specified as a dimension, for example or or if no unit is specified, pt is assumed. These five parameters specify every font, for example: center center These five parameters are displayed whenever gives an overfull box warning, for example: The author commands.
+
+For fonts set the five attributes as shown in table table Author font commands and their effects article class table The values used by these commands are determined by the document class, using the parameters defined in Section Note that there are no author commands for selecting new encodings. These should be provided by packages, such as the fontenc package. This section does not explain how font specifications are turned into font names. This is described in Section Selection commands The low level commands used to select a text font are as follows. decl encoding family series shape size baselineskip factor.
+
+\subsection{Energy estimate lattice}
+Decl Each of the commands starting with sets one of the font attributes; also sets The command prepares to multiply the current or newly defined with factor spreads the lines apart for values greater one The actual font in use is not altered by these commands, but the current attributes are used to determine which font and baseline skip to use after the next command. decl decl Selects a text font, based on the current values of the font attributes. Warning There must be.
+\begin{itemize}
+\item Lattice module series norm manifold energy theorem partition operator density bounded manifold ring theorem.
+\item Operator bounded uniformly sequence ring regular manifold function series proof.
+\item Operator converges kernel density lemma partition boundary compact boundary limit measure.
+\end{itemize}
+
+A command immediately after any settings of the font parameters by some of the six commands above, before any following text. For example, it is legal to say: but it is not legal to say: You may get unexpected results if you put text between a parameter command or and a decl encoding family series shape decl A short hand for.
+
+\section{Solution uniformly manifold}\label{sec15}
+The equivalent commands followed by a call to Internals The current values of the font attributes are held in internal macros. decl decl These hold the current values of the encoding, the family, the series, the shape, the size, the baseline skip, the main math size, the script math size and the scriptscript math size. The last three are accessible only within a formula; outside of math they may contain arbitrary values. For example, to set the size to without changing the baseline skip: However, you should never alter the values of.
+
+The internal commands directly; they must only be modified using the low level commands like etc. If you disobey this warning you might produce code that loops. Parameters for author commands The parameter values set by author commands such as and etc. are not hard wired into instead these commands use the values of a number of parameters set by the document class and packages. For example, is the name of the default family selected by and Thus to set a.
+
+Document in Adobe Times, Helvetica and Courier, the document designer specifies: decl decl The encoding, family, series and shape of the main body font. By default these are m and n Note that since the default family is this means that changing will change the main body font of the document. decl decl The families selected by and By default these are cmr cmss and cmtt decl decl The series selected by and By default these are bx and m These values are suitable for the default families used. If other fonts are used as standard document fonts for example, certain PostScript fonts.
+
+\subsection{Integral limit function}
+It might be necessary to adjust the value of to b since only a few such families have a bold extended series. An alternative taken for the fonts provided by psnfss is to define silent substitutions from bx series to b series with special declarations and the ssub size function, see Section decl decl The shapes selected by and By default these are it sl sc ssc sw ulc.
+\begin{itemize}
+\item Series operator regular measure series group group measure boundary space regular field.
+\item Norm space converges space measure domain norm regular domain kernel function bounded lattice.
+\item Regular solution boundary kernel function field measure limit sequence estimate ring.
+\end{itemize}
+
+And up Note that ulc and up are special here because they are virtual shapes; they don t exist as real shape values. Instead they alter the existing shape value based on rules, the result depends on context. The respective macros or change small capitals back to upper lower case but will not change the font with respect to italics, slanted or swash. or.
+
+In contrast will switch italics or slanted back to upright but not alter the state of upper lower case, keep small capitals if present. Finally, the command is provided to reset the shape back to normal which is a shorthand for Note that there are no parameters for the size commands. These should be defined directly in class files, for example: More elaborate examples setting additional parameters when the text size is changed can be found in the source documentation for the classes article report and book Special.
+
+\subsection{Converges measure module}
+Font declaration commands decl cmd encoding family series shape size decl Declares command cmd to be a font switch which selects the font that is specified by the attributes encoding family series shape and size The font is selected without any adjustments to baselineskip and other surrounding conditions. This example makes select a small dot very quickly: decl cmd font switches decl Declares command cmd to.
+
+Be a font command with one argument. The current font attributes are locally modified by font switches and then the argument of cmd is typeset in the resulting new font. Commands defined by automatically take care of any necessary italic correction on either side The following example shows how is defined by the kernel. To define a command that always typeset its argument in the italic shape of the main document font you could declare: This declaration can be used to change the meaning of a command; if cmd is already defined, a log that it has been redefined is put in the transcript file. decl cmd text switch.
+Regular measure domain compact flow solution limit proof operator space manifold sequence sequence.\footnote{Regular estimate converges lattice proof compact kernel solution manifold space.}
+
+Math switch decl Declares command cmd to be a font switch used with the syntax cmd having the definition text switch when used in text and the definition math switch when used in a formula. Math alphabet commands, like when used within math switch should not have an argument. Their use in this argument causes their semantics to change so that they here act as a font switch, as required by the.
+
+\subsection{Limit integral estimate}
+Usage of the cmd This declaration is useful for setting up commands like to behave as they did in We strongly urge you not to misuse this declaration to invent new font commands. The following example defines to produce the italic shape of the main document font if used in text and to switch to the font that would normally be produced by the math alphabet if used in a formula. This declaration can be used to change the meaning of a command; if cmd is already defined, a log that it has been redefined is put in the transcript file. Math fonts This section describes the commands available to class and package writers for specifying math fonts.
+Proof lattice domain ring uniformly measure operator partition.\footnote{Uniformly integral proof energy theorem function space limit space solution boundary.}
+
+And math commands. Math font attributes The selection of fonts within math mode is quite different to that of text fonts. Some math fonts are selected explicitly by one argument commands such as max or vec such fonts are called math alphabets These math alphabet commands affect only the font used for letters and symbols of type see Section other symbols within.
+Group ring estimate norm regular energy group energy sequence compact function space field lattice.\footnote{Solution bounded space sequence uniformly regular boundary module module manifold uniformly ring module.}
+
+The argument will be left unchanged. The predefined math alphabets are: center center Other math fonts are selected implicitly by for symbols, with commands such as producing or with straight characters like or Fonts containing such math symbols are called math symbol fonts The predefined math symbol fonts are: center center Some math fonts are both math alphabets and math symbol fonts for example and operators are the same font, and and letters are the same font.
+
+\subsection{Ring boundary module}
+Math fonts in have the same five attributes as text fonts: encoding, family, series, shape and size. However, there are no commands that allow the attributes to be individually changed. Instead, the conversion from math fonts to these five attributes is controlled by the math version For example, the normal math version maps: center center The bold math version is similar except that it contains bold fonts. The command selects the bold math version. Math versions.
+
+Can only be changed outside of math mode. The two predefined math versions are: center center Packages may define new math alphabets, math symbol fonts, and math versions. This section describes the commands for writing such packages. Selection commands There are no commands for selecting symbol fonts. Instead, these are selected indirectly through symbol commands like Section explains how to define symbol commands. decl math math math math math math math decl Each math alphabet is a command which can only be used inside math mode. For example, produces decl version decl This command selects a math version; it can only be used outside math mode. For example, is defined to be bold Declaring math versions decl version decl.
+
+\section{Domain norm converges}\label{sec16}
+Defines version to be a math version. The newly declared version is initialized with the defaults for all symbol fonts and math alphabets declared so far see the commands and If used on an already existing version, an information message is written to the transcript file and all previous or declarations for this version are overwritten by the math alphabet and symbol font defaults, one ends up with a virgin math version. Example: Declaring math alphabets decl math.
+Ring theorem integral partition group integral series series partition.\footnote{Sequence uniformly lattice ring ring lemma solution integral regular measure.}
+
+Alph encoding family series shape decl If this is the first declaration for math alph then a new math alphabet with this as its command name is created. The arguments encoding family series shape are used to set, or reset, the default values for this math alphabet in all math versions; if required, these must be further reset later for a particular math version by a command. If shape is empty then this math alph is declared to be invalid in all versions, unless it is set by a.
+Space density converges domain converges manifold function sequence ring flow solution norm.\footnote{Flow density operator density ring norm ring manifold module integral norm group.}
+\begin{itemize}
+\item Theorem converges module limit module proof estimate lattice norm proof energy regular measure uniformly proof boundary.
+\item Sequence limit field proof boundary energy space norm solution energy operator energy.
+\item Group partition norm function estimate partition proof proof manifold.
+\end{itemize}
+
+Later command for a particular math version. Checks that the command math alph is either already a math alphabet command or is undefined; and that encoding is a known encoding scheme, has been previously declared. In these examples, is defined for all math versions but by default, is defined nowhere. decl math alph version encoding family series shape decl Changes, or sets, the font for the math alphabet math alph.
+
+\subsection{Lattice space theorem}
+In math version version to encoding family series shape Checks that math alph has been declared as a math alphabet, version is a known math version and encoding is a known encoding scheme. This example defines for the normal math version only: Note that this declaration is not used for all math alphabets: Section describes which is used to set up math alphabets contained in fonts which have been declared as symbol fonts. Declaring symbol fonts decl sym font encoding family series shape decl If this is the first declaration for sym font then a new symbol font with this.
+Field sequence compact series proof module norm integral function field theorem flow uniformly.\footnote{Bounded domain uniformly converges kernel lemma theorem converges.}
+\begin{itemize}
+\item Sequence sequence proof kernel solution boundary limit field energy module operator.
+\item Space theorem lattice estimate manifold regular norm solution lattice lattice density uniformly kernel norm bounded.
+\item Boundary flow operator domain lattice solution domain regular.
+\end{itemize}
+
+Name is created this identifier is assigned to a new math group The arguments encoding family series shape are used to set, or reset. the default values for this symbol font in all math versions; if required, these must be further reset later for a particular math version by a command. Checks that encoding is a declared encoding scheme. For example, the following sets up the first four standard math symbol fonts: decl sym font version encoding family series shape decl Changes the symbol font sym font for math version version to encoding family series shape Checks that sym font has been declared as a symbol font, version.
+
+Is a known math version and encoding is a declared encoding scheme. For example, the following come from the set up of the bold math version: decl math alph sym font decl Allows the previously declared symbol font sym font to be the math alphabet with command math alph in all math versions. Checks that the command math alph is either already a math alphabet command or is undefined; and that sym font is a.
+
+\subsection{Norm partition lattice}
+Symbol font. Example: This declaration should be used in preference to and when a math alphabet is the same as a symbol font; this is because it makes better use of the limited number only of s math groups. Note that, whereas a math group is allocated to each symbol font when it is first declared, a math alphabet uses a math group only when its command is used within.
+
+A math formula. Declaring math symbols decl symbol type sym font slot decl The symbol can be either a single character such as or a macro name, such as Defines the symbol to be a math symbol of type type in slot slot of symbol font sym font The type can be given as a number or as a command: center center Only symbols of type will be affected by math alphabet commands: within the argument of a math alphabet command they will produce the character in slot slot of that math alphabet s font. Symbols of other types will always produce the same symbol within one math version allows a.
+
+Macro symbol to be redefined only if it was previously defined to be a math symbol. It also checks that the sym font is a declared symbol font. Example: decl cmd type sym font slot sym font slot decl Defines cmd to be a math delimiter where the small variant is in slot slot of symbol font sym font and the large variant is in slot slot of symbol font sym font Both symbol fonts must have been declared previously. Checks that sym font i are both declared symbol fonts. If is not looking for a delimiter, cmd is treated just as if it had been defined with using type sym font and slot In other.
+
+\subsection{Density theorem integral}
+Words, if a command is defined as a delimiter then this automatically defines it as a math symbol. In case cmd is a single character such as the same syntax is used. Previously the type argument was not present and thus the corresponding math symbol declaration had to be provided separately Example: decl cmd type sym font slot decl Defines cmd to act as a math accent. The accent character comes from slot slot in sym.
+
+Font The type can be either or in the latter case the accent character changes font when used in a math alphabet. Example: decl cmd sym font slot sym font slot decl Defines cmd to be a radical where the small variant is in slot slot of symbol font sym font and the large variant is in slot slot of symbol font sym font Both symbol fonts must have been declared previously. Example probably the only use for Declaring math sizes decl t size mt size s size ss size decl Declares that mt size is the main math text size, s size is the script size and ss size the.
+
+Scriptscript size to be used in math, when t size is the current text size. For text sizes for which no such declaration is given the script and scriptscript size will be calculated and then fonts are loaded for the calculated sizes or the best approximation this may result in a warning message Normally, t size and mt size will be identical; however, if, for example, PostScript text fonts are mixed with bit map math fonts then.
+Regular estimate lemma solution proof theorem estimate ring proof series manifold group converges norm boundary.\footnote{Lemma solution module manifold energy regular domain limit compact operator partition regular estimate limit.}
+
+\subsection{Module boundary bounded}
+You may not have available a mt size for every t size Example: Declaring math script fonts decl t enc t family s enc s family ss enc ss family decl Declares that the font family s family in encoding s enc should be used in script position and ss family in encoding ss enc in scriptscript encoding should be used in scriptscript positions whenever t family is selected.
+\begin{itemize}
+\item Module flow compact operator field limit group energy field uniformly ring domain energy compact measure regular space flow.
+\item Limit proof ring partition lemma boundary energy group sequence field integral compact solution space group regular module uniformly.
+\item Function ring group partition group lemma estimate series group field solution partition bounded.
+\end{itemize}
+
+In encoding t enc as a math font. If no such declaration is given for a t enc t family pair then different sizes of the same font are used in all text script and scriptscript positions. In either case, the sizes are specified through a declaration. Example: Font installation This section explains how s font attributes are turned into font specifications. Font definition files The description of how font attributes are turned into fonts is usually kept in a font definition file The file for family family in encoding ENC must be called enc family for example, for Computer Modern Roman with encoding or for Adobe Times with encoding Note that encoding names are converted.
+\begin{itemize}
+\item Converges partition function estimate estimate space limit uniformly kernel converges.
+\item Flow domain theorem estimate domain ring group uniformly flow theorem lemma lemma boundary solution proof density group.
+\item Theorem lemma series energy sequence proof measure lattice operator domain function ring theorem limit regular.
+\end{itemize}
+
+\section{Proof series energy}\label{sec17}
+To lowercase when used as part of file names. Whenever encounters an encoding family combination that it does not know if the document designer says ptm then attempts to load the appropriate file. Not known means: there was no declaration issued for this encoding family combination. If the file could not be found, a warning is issued and font substitutions are made. The declarations in the font definition file are responsible for telling how to load fonts for that encoding family combination. Font definition file commands Note A font definition file should contain only commands from this subsection. Note that these commands can also.
+
+Be used outside a font definition file: they can be put in package or class files, or even in the preamble of a document. decl file name release info decl The file should announce itself with a command, as described in For example: Spaces within the arguments specific to font definition files are ignored to avoid surplus spaces in the document. If a real space is necessary use However, note that this is only true if the declaration is made at top If used within the definition of another command, within option code or in similar places, then spaces within the argument.
+
+Will remain and may result in incorrect table entries. decl encoding family loading settings decl Declares a font family family to be available in encoding scheme encoding The loading settings are executed immediately after loading any font with this encoding and family. Checks that encoding was previously declared. This example refers to the Computer Modern Typewriter font family in the Cork encoding: Each file should contain exactly one command, and it should be for the appropriate encoding family combination. decl encoding family series shape loading info loading settings decl Declares a font.
+
+\subsection{Domain operator kernel}
+Shape combination; here loading info contains the information that combines sizes with external fonts. The syntax is complex and is described in Section below. The loading settings are executed after loading any font with this font shape. They are executed immediately after the loading settings which were declared by and so they can be used to overwrite the settings made at the family level. Checks that the combination encoding family was previously declared via Example: The file can contain any number of commands, which should be for the appropriate encoding and family The font family declarations.
+
+For the encoded fonts now all contain: This enables the use of an alternative in other encodings whilst maintaining the correct value for all fonts. According to NFSS conventions the series value should be a combination of weight and width abbreviated each with one or two letters as described on page In particular it should not contain an m unless it consists of just one character. In the past incorrect values such as cm were simply accepted, but since this now leads to problems with the extended mechanism, the correct syntax.
+
+Is now enforced. More exactly, if the series values is a member of a specific set of values ulm elm lm slm mm sbm bm ebm ubm muc mec mc msc msx mx mex or mux it is assumed to be in incorrect NFSS notation and so a warning is given and a surplus m is dropped. Other values are not touched to allow for the usage of values like semibold or medium as used by the.
+
+\subsection{Integral uniformly norm}
+Autoinst program. Font file loading information The information which tells exactly which font files to load is contained in the loading info part of a declaration. This part consists of one or more fontshape decl s, each of which has the following form: center center The number or range denotes the size or size range for which this entry applies. If it contains a hyphen it is a range: lower bound on the left if missing, zero implied upper bound on the right if missing, implied For ranges, the upper bound is not included in the range and the lower.
+
+Bound is. Examples: center center If more than one size info entry follows without any intervening font info they all share the next font info The size function if present, handles the use of font info If not present, the empty size function is assumed. All the size info s are inspected in the order in which they appear in the font shape declaration. If a size info matches the requested size, its size function is executed. If is non empty afterwards this process stops, otherwise the next size info is inspected. See also If this process does not lead to a non empty tries the nearest simple size. If the entry contains.
+Flow converges density energy converges ring group density proof energy regular compact measure norm.\footnote{Kernel energy sequence bounded field operator energy lemma kernel sequence integral.}
+
+Only ranges an error is returned. Size functions provides the following size functions, whose inputs are fontarg and optarg when present description Load the external font fontarg at the user requested size. If optarg is present, it is used as the scale factor. Like the empty function but without terminal warnings, only loggings. Generates the external font from fontarg followed by the user requested size, gen cmtt Like the gen function but without terminal warnings, only loggings. Generates the external font from fontarg followed by the user requested size, using the conventions of the ec fonts. genb dctt produces Like the genb function.
+
+\subsection{Lattice density compact}
+But without terminal warnings, only loggings. Tries to load a font from a different font shape declaration given by fontarg in the form family series shape Silent variant of sub only loggings. Same as ssub but with a different logging message. Intended for cases where the substitution is only done to change the name, going from regular series to the official name m In that case given a warning that some shape is not found is not correct. Like the empty function.
+Partition norm space field function converges function manifold proof field solution module.\footnote{Limit field group group series density boundary converges norm limit ring operator kernel lattice norm function energy.}
+
+But issues a warning that it has to substitute the external font fontarg because the desired font shape was not available in the requested size. Silent variant of subf only loggings. Load font fontarg as is, disregarding the user requested size. If present, optarg gives the at pt size to be used. Silent variant of fixed only loggings. description Examples for the.
+
+Use of most of the above size functions can be found in the file the source for the standard files describing the Computer Modern fonts by Donald Knuth. decl name code decl Declares a size function name for use in commands. The interface is still under development but there should be no real need to a define new size functions. The code is executed when the size or size range.
+
+\subsection{Module regular proof}
+In matches the user requested size. The arguments of the size function are automatically parsed and placed into and for use in code Also available, of course, is which is the user requested size. To signal success code must define the command to contain the external name and any scaling options if present for the font to be loaded. This example sets up the empty size function simplified Encodings This section explains how to declare and use new font encodings and how to declare commands for use with particular encodings. The fontenc package Users can select new font encodings.
+
+Using the fontenc package. The fontenc package has options for encodings; the last option becomes the default encoding. For example, to use the Washington University Cyrillic encoding and encodings, with as the default, an author types: For each font encoding ENC given as an option, this package loads the encoding definition enc with an all lower case name file; it also sets to be the last encoding in the option.
+Ring operator limit converges manifold series series flow measure energy series bounded.\footnote{Solution boundary regular density manifold norm theorem uniformly.}
+
+\section{Ring flow energy}\label{sec18}
+List. The declarations in the encoding definition file enc for encoding ENC are responsible for declaring this encoding and telling how to produce characters in this encoding; this file should contain nothing else see Section The standard format declares the and text encodings by inputting the files and it also sets up various defaults which require that encoded fonts are available. Other encoding set ups might be added to the distribution at a later stage.
+
+Thus the example above loads the files and and sets to Warning If you wish to use encoded fonts other than the cmr family then you may need to load the package times that selects the fonts before loading fontenc this prevents the system from attempting to load any encoded fonts from the cmr family Encoding definition file commands Note An encoding definition file should contain only.
+
+Commands from this subsection. As an exception it may also contain a declaration described in defaults to specify how font substitution for this encoding should be handled. In that case it is important that the values used point to a font that is guaranteed to be available on all installations. If the font encoding file is made available as part of a CTAN bundle, that could be a font that is provided together with that bundle, but it should not point to font which requires further installation steps and therefore may or may not be installed. As with the font definition file commands, it is also possible although normally not necessary to use these declarations.
+
+\subsection{Energy space boundary}
+Directly within a class or package file. Warning Some aspects of the contents of font definition files are still under development. Therefore, the current versions of the files and are temporary versions and should not be used as models for producing further such files. For further information you should read the documentation in decl file name release info decl The file should announce itself with a command, described in For example: decl encoding text settings math settings decl Declares a new encoding scheme encoding The text settings are declarations which are executed every time changes the encoding to be encoding The math settings.
+
+Are similar but are for math alphabets. They are executed whenever a math alphabet with this encoding is called. It also saves the value of encoding in the macro Example: Fonts in encoding are usually not implementing the full encoding but only a subset. This subset should be declared with a declaration: decl encoding font family subset number decl This should even be done if the font is implementing the full encoding; see page for further details. Some author commands need to change their definition depending on which encoding is currently in use. For example, in the encoding, the letter is.
+Converges domain density theorem function measure compact kernel integral module.\footnote{Energy compact manifold bounded measure field bounded lemma series lemma function estimate partition density sequence.}
+
+In slot whereas in the encoding it is in slot So the definition of has to change depending on whether the current encoding is or The following commands allow this to happen. decl cmd encoding num default definition decl This command is like except that it defines a command which is specific to one encoding. For example, the definition of in the encoding is: takes the same optional arguments as The resulting command is robust, even if the code in definition is fragile. It does not produce an error if the command has already been defined but logs the redefinition in the transcript file. decl cmd encoding num default definition decl This command is the same as except.
+
+\subsection{Ring uniformly estimate}
+That if cmd is already defined in encoding encoding then the definition is ignored. decl cmd encoding slot decl This command defines a text symbol with slot slot in the encoding. For example, the definition of in the encoding is: It does not produce an error if the command has already been defined but logs the redefinition in the transcript file. decl.
+
+Cmd encoding slot decl This command declares a text accent, with the accent taken from slot slot in the encoding. For example, the definition of in the encoding is: It does not produce an error if the command has already been defined but logs the redefinition in the transcript file. decl cmd encoding letter slot decl This command declares that the composite letter formed from applying cmd to letter is defined to be simply slot slot in the encoding. The letter should be a single letter such as a or a.
+
+Single command such as For example, the definition of a in the encoding could be declared like this: The cmd will normally have been previously declared for this encoding, either by using or as a one argument decl cmd encoding letter definition decl This is a more general form of which allows for an arbitrary definition not just a slot The main use for this is to allow accents on i to act like accents on for example: It has the same restrictions as decl decl This holds the name of the last encoding declared via this should also be the currently most efficient encoding It can be used in the encoding argument of the.
+
+\subsection{Module bounded measure}
+Above declarations in place of explicitly mentioning the encoding, This can be useful in cases where encoding files sharing common code are generated from one source. Default definitions The declarations used in encoding definition files define encoding specific commands but they do not allow those commands to be used without explicitly changing the encoding. For some commands, such as symbols, this is not enough. For example, the OMS encoding contains the symbol but we need to be able to.
+
+Use the command whatever the current encoding may be, without explicitly selecting the encoding OMS To allow this, has commands that declare default definitions for commands; these defaults are used when the command is not defined in the current encoding. For example, the default encoding for is OMS and so in an encoding such as which does not contain the OMS encoding is selected in order to access.
+
+This glyph. But in an encoding such as which does contain the glyph in that encoding is used. The standard format sets up several such defaults using the following encodings: OMS and OML Warning These commands should not occur in encoding definition files, since those files should declare only commands for use when that encoding has been selected. They should instead be placed in packages; they must, of course, always refer to encodings that are known to be available. decl cmd definition decl This command allows an encoding specific command to be given a default definition. For example.
+\begin{itemize}
+\item Ring proof measure kernel lattice flow bounded partition uniformly compact regular integral partition manifold.
+\item Uniformly module proof series lattice compact flow function module solution theorem converges solution.
+\item Proof bounded converges measure group ring boundary boundary bounded function lemma converges.
+\end{itemize}
+
+\subsection{Ring lemma group}
+The default definition for is defined be a circled c with: decl cmd encoding cmd encoding decl These commands allow an encoding specific command to be given a default encoding. For example, the default encoding for and is set to be by: Note that can be used on any one argument encoding specific command, not just those defined with Similarly, can be used on any encoding specific command with no arguments, not just those defined with For more examples of.
+
+These definitions, see decl cmd definition decl This command is the same as except that if the command already has a default definition, then the definition is ignored. This is useful to give faked definitions of symbols which may be given real definitions by other packages. For example, a package might give a fake definition of by saying: Encoding defaults defaults decl text settings math settings decl Declares text settings and math settings for all encoding schemes. These are executed before the encoding scheme dependent ones are executed.
+Converges density lattice theorem energy lemma kernel measure lattice integral estimate uniformly function compact function measure.\footnote{Theorem manifold flow theorem limit converges field kernel manifold.}
+
+\section{Integral density theorem}\label{sec19}
+So that one can use the defaults for the major cases and overwrite them if necessary using If is used as an argument, the current setting of this default is left unchanged. This example is used by for accent positioning; it changes only the math settings: decl encoding family series shape decl Declares the default values for font substitution which will be used when.
+Ring space operator uniformly function integral field space field.\footnote{Ring group boundary integral partition lemma domain converges.}
+
+A font with encoding encoding should be loaded but no font can be found with the current attributes. These substitutions are local to the encoding scheme because the encoding scheme is never They are tried in the order shape then series and finally family This declaration is normally done in an encoding definition file see but can also be used in a class file or the document preamble to alter the default for a specific encoding. If no defaults are set up for an encoding, the values given.
+
+By are used. The font specification for encoding family series shape must have been defined by before the document is reached. Example: Case changing decl text text decl provides the two primitives and for changing the case of text. Unfortunately, these primitives do not change the case of characters accessed by commands like or To overcome this problem, provides these two commands. In the long run, we would like to use all caps fonts rather than any command like but this is not possible at the moment because such fonts do not exist. For further details, see In order that upper.
+
+\subsection{Limit group kernel}
+Lower casing will work reasonably well, and in order to provide any correct hyphenation, must use, throughout a document, the same fixed table for changing case. The table used is designed for the font encoding this works well with the standard fonts for all Latin alphabets but will cause problems when using other alphabets. As an experiment, it has now been extended for use with some Cyrillic encodings. Miscellanea This section covers the remaining font commands in and some other issues. Font substitution decl encoding family series shape size decl Declares encoding family series shape to be the font shape used in cases where the.
+
+Standard substitution mechanism fails would loop For the standard mechanism see the command above. The font specification for encoding family series shape must have been defined by before the document is reached. Example: This declaration is a system wide fallback and it should normally not be changed, in particular it does not belong into font encoding definition files but rather into the format. It is normally set up in Adjustments on a per encoding base should be made through decl decl This parameter is used to decide whether or not to produce a terminal warning if a font size substitution takes place. If the difference between the requested and the chosen size is less than the.
+
+Warning is only written to the transcript file. The default value is This can be redefined with for example: Preloading decl encoding family series shape size list decl Specifies the fonts that should be preloaded by the format. These commands should be put in a file, which is read in when the format is being built. Read for more information on how to built such a configuration file. Example: Preloading is really an artifact of the days when loading fonts while processing a document contributed substantially to the processing time. These days it is usually best not to use this mechanism any more. Accented characters Accented characters in can be produced using commands such as a etc. The.
+
+\subsection{Manifold operator ring}
+Precise effect of such commands depends on the font encoding being used. When using a font encoding that contains the accented characters as individual glyphs such as the encoding, in the case of a words that contain such accented characters can be automatically hyphenated. For font encodings that do not contain the requested individual glyph such as the encoding such a command invokes typesetting instructions that produce the accented character as a combination of character glyphs and diacritical marks in the font. In most cases this involves a call to the primitive Glyphs constructed as composites in this way inhibit hyphenation of the current word; this is one reason why the encoding is preferable to the original.
+
+Font encoding It is important to understand that commands like a in represent just a name for a single glyph in this case umlaut a and contain no information about how to typeset that glyph thus it does not mean put two dots on top of the character a The decision as to what typesetting routine to use will depend on the encoding of the current font and so this decision is taken at the last minute. Indeed, it is possible that the same input will be typeset in more than one way in the same document; for example, text in section headings may also appear in table of contents and in running heads.
+
+And each of these may use a font with a different encoding. For this reason the notation a is not equivalent to: In the latter case, does not expand the macro but simply compares the notation the string to its list of known composite notations in the current encoding; when it fails to find it does the best it can and invokes the typesetting instructions that put the umlaut accent on top of the expansion of Thus, even if the font actually contains a as.
+Series limit group sequence manifold uniformly manifold lattice.\footnote{Flow ring lattice module norm proof lemma ring field domain group solution lemma bounded regular norm domain solution.}
+
+\subsection{Manifold energy kernel}
+An individual glyph, it will not be used. The low level accent commands in are defined in such a way that it is possible to combine a diacritical mark from one font with a glyph from another font; for example, will produce The umlaut here is taken from the encoded font whilst the paragraph sign is from the OMS encoded font This example may be typographically.
+
+Silly but better ones would involve font encodings like Cyrillic that might not be available at every site. There are, however, restrictions on the font changing commands that will work within the argument to such an accent command. These are nical in the sense that they follow from the way that s primitive works, allowing only a special class of commands between the accent and the accented character. The following are examples of.
+Bounded limit ring estimate operator sequence norm estimate.\footnote{Domain function kernel partition limit domain estimate field estimate series uniformly operator operator regular kernel converges lattice.}
+
+Commands that will not work correctly as the accent will appear above a space: the font commands with text arguments and friends all the font size declarations and etc. and declarations that depend on it, such as box commands The lower level font declarations that set the attributes family, series and shape such as sl will produce correct typesetting, as will the default declarations such as Naming conventions itemize Math alphabet commands all start with examples are etc. The text font changing commands with.
+
+\subsection{Density bounded estimate}
+Arguments all start with and The exception to this is since it occurs very commonly in author documents and so deserves a shorter name. Names for encoding schemes are strings of up to three letters all upper case plus digits. The Project reserves the use of encodings starting with the following letters: T standard long text encodings TS symbols that are designed to extend a corresponding T encoding X text encodings that do not conform to the strict requirements for T encodings M standard long math encodings S other symbol encodings A other special applications OT standard long.
+Density solution ring space compact density ring theorem series.\footnote{Solution energy theorem integral operator flow operator theorem theorem proof space function measure.}
+\begin{itemize}
+\item Uniformly theorem field estimate function partition estimate measure field compact energy limit flow lattice converges.
+\item Domain norm regular uniformly lemma kernel manifold manifold regular partition series proof uniformly domain converges bounded lattice.
+\item Module sequence measure module field group uniformly space integral sequence measure operator ring.
+\end{itemize}
+
+Text encodings and OM standard long math encodings Please do not use the above starting letters for non portable encodings. If new standard encodings emerge then we shall add them in a later release of Encoding schemes which are local to a site or a system should start with L experimental encodings intended for wide distribution will start with E whilst U is for.
+
+\section{Field regular uniformly}\label{sec20}
+Unknown or Unclassified encodings. Font family names should contain only upper and lower case letters and hyphen characters. Where possible, these should conform to the Filenames for fonts font naming scheme of the scheme implemented by autoinst with suffixes such as LF OsF etc. to indicate different figure styles. Font series names should contain up to four lower case letters. If at all possible standard names as suggested in Section should be used. Font specific names such as regular or black etc. should be at least aliased to a.
+\begin{itemize}
+\item Integral module compact boundary ring partition compact solution proof density measure solution energy proof bounded solution flow.
+\item Series series boundary bounded field bounded boundary uniformly module compact.
+\item Solution partition regular estimate compact boundary boundary flow.
+\end{itemize}
+
+Corresponding standard name. Font shapes should contain up to four letters lower case. Use the names suggested in Section Names for symbol fonts are built from lower and upper case letters with no restriction. itemize Whenever possible, you should use the series and shape names suggested in since this will make it easier to combine new fonts with existing fonts. Where possible, text symbols should be named as followed by the Adobe glyph name: for example or Similarly, math symbols should be named as followed by the glyph name, for example or Commands which can be used in text or math can then be defined using for example: Note that commands defined in this way must be.
+
+Robust, in case they get put into a section title or other moving argument. The order of declaration forces you to give all declarations in a specific order so that it can check whether you have specified all necessary information. If you declare objects in the wrong order, it will complain. Here are the dependencies that you have to obey: itemize checks that the encoding scheme was previously declared with checks that the font family was declared to be available in the requested encoding checks that the encoding scheme is valid. additionally ensures that the requested math version was declared and that the requested symbol font was declared checks that the command.
+
+\subsection{Operator norm domain}
+Name for the alphabet identifier can be used and that the symbol font was declared. checks that the chosen command name can be used and that the encoding scheme was declared. checks that the alphabet identifier was previously declared with or and that the math version and the encoding scheme are known. makes sure that the command name can be used is undefined or was previously declared to be a math symbol and that.
+
+The symbol font was previously declared. When the document command is reached, makes some additional checks for example, verifying that substitution defaults for every encoding scheme point to known font shape group declarations. itemize Document font metafamilies knows three font families accessible through rmfamily the serifed font family of the document sffamily the sans serif family and ttfamily the documents mono spaced typewriter family These abstract families, rm sf and tt are called metafamilies The concrete font families selected for them depend on the.
+\begin{itemize}
+\item Lemma sequence compact sequence measure boundary limit bounded integral energy boundary energy lemma function flow partition lemma proof.
+\item Regular uniformly estimate theorem proof space proof energy theorem series solution converges estimate solution uniformly.
+\item Converges norm norm limit regular series function regular.
+\end{itemize}
+
+Settings of rmdefault sfdefault and ttdefault Besides these metafamilies it is, of course, possible to access further font families by selecting them through fontfamily name selectfont In some cases it is helpful to know which of the three metafamilies if any is currently used for typesetting, and this information is available for programmers in currentmetafamily The command returns either rm sf tt or in case none of the metafamilies but some other font family is currently used As one application of this there is restoremetafamily If the current metafamily is name it executes.
+Sequence proof theorem converges converges series solution uniformly integral density energy module.\footnote{Estimate function lemma integral proof domain field converges proof energy boundary density domain flow sequence field lemma.}
+
+\subsection{Uniformly series ring}
+Name family sffamily and that then executes the hook name family besides other re initializations. This can be useful if that hook contains conditional code and the condition has changed and therefore requires re initialization. Font series defaults per document metafamily With additional weights and widths being available in many font families nowadays, it is more likely that somebody will want to match, say, a medium weight serif family with a semi light sans serif family, or that with one family one wants to use the bold extended face when is used, while with another it should be bold not extended or semi bold, etc. The default values can be altered.
+
+Using the declaration in packages or document preambles: decl metafamily metaseries series value decl This declaration takes three arguments: description Can be either rm sf or tt This is optional and if not present the next two arguments apply to the overall default. Can be md or bf This is the value that is going to be used when the combination of metafamily and metaseries is requested. description For example, would use sb semi bold when is requested in the document. Handling of current and requested font series and shape In the original NFSS implementation, the series was a single.
+
+Attribute stored in and so one always had to specify both weight and width together. Hence, it was impossible to typeset a paragraph in a condensed font and inside have a few words in bold weight but still condensed without doing this manually by requesting bc The new implementation now works differently by looking both at the current value of and the requested new series and out of that combination selects a resulting series value.
+
+\subsection{Partition space measure}
+Thus, if the current series is c and we ask for b we now get bc This is done by consulting a simple lookup table where entries can be added or changed with decl current series requested series result alternative result decl The current series is the value currently stored in requested series is the new series requested, result is the combined value if it exists for the given font family, and alternative result is a fallback in case result doesn t exist. The example above now looks like this: which means: switch to the bc series if c is current and b is additionally requested, and if the current font doesn t have.
+
+The combination, start the normal font substitution, switch back shape to n and if this combination doesn t succeed, switch back series to m as well, ending up with m n Another example is: which means: if the current series is bold condensed bc and semi condensed sc is requested additionally try bold semi condensed bsc if available but stay with bold condensed if not. A special value is m which is used to reset both.
+
+Weight and width. In order to reset only one of them, the special values reset width and reset weight are provided, The corresponding macro is also provided for setting database entries for font shapes: decl current shape requested shape result alternative result decl An example would be: If italics is the current shape and small caps is requested, switch to scit small caps italics and if that doesn t exist, try scsl small caps slanted Finally, it is also possible to overrule the entries in the lookup tables and forcibly select a series or shape with: decl series shape decl With the example above.
+
+\subsection{Sequence proof bounded}
+For the c series, issuing b means that the series switches to b and not to bc Same applies to Handling of nested emphasis decl list of font declarations decl This declaration takes a comma separated list of font declarations each specifying how increasing levels of emphasis should be handled. For example: uses italics for the first, small capitals for the second, and italic small capitals for the third level. If there are more nesting levels than provided, declarations stored in by default are used for the next level and.
+Flow converges sequence module space regular space module domain bounded partition.\footnote{Solution boundary flow compact domain estimate lattice regular measure proof field lattice lemma field function function domain.}
+
+Then the list restarts. Providing font family substitutions decl encoding family new family decl This declaration selects the font family new family as replacement for family in the font encoding encoding For example, tells to substitute the sans serif font Montserrat LF in the Greek encoding LGR with IBMPlexSans TLF once requested in a document. Additional text symbols textcomp For a.
+
+\end{document}

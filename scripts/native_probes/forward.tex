@@ -1,0 +1,29 @@
+\documentclass{article}
+\begin{document}
+\section{Forward}A first note.\footnote{First.}
+Section~\ref{sec:later} and its part~\ref{sub:later}, items~\ref{it:a},
+\ref{it:b}, \ref{it:ba}, \ref{it:baa} and \ref{it:baaa}, footnote~\ref{fn:one},
+this section~\ref{sec:here} and the text after a list, \ref{after}.
+\label{sec:here}
+\begin{enumerate}
+\item\label{it:a} One.
+\item Two
+  \begin{enumerate}
+  \item\label{it:b} nested,
+  \item\label{it:ba} again,
+    \begin{enumerate}
+    \item deeper
+      \begin{enumerate}
+      \item\label{it:baa} deepest
+      \item\label{it:baaa} and on.
+      \end{enumerate}
+    \end{enumerate}
+  \end{enumerate}
+\end{enumerate}
+Text after the list\label{after} and a note.\footnote{A note\label{fn:one} with a label.}
+\section*{Unnumbered}
+Back to Section~\ref{sec:here}.
+\section{Later}\label{sec:later}
+\subsection{Part}
+{\small Inside a group\label{sub:later}} the part.
+\end{document}

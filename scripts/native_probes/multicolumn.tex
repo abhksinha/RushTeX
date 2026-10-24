@@ -1,0 +1,22 @@
+\documentclass{article}
+\begin{document}
+\begin{tabular}{|l|c|r|}
+\hline
+\multicolumn{3}{|c|}{A heading over all three} \\
+\hline
+left & centre & right \\ \cline{2-3}
+\multicolumn{2}{l|}{two} & 3 \\ \cline{1-1}
+a & \multicolumn{1}{r}{b} & c \\
+\cline{1-2}\cline{3-3}
+x &  \multicolumn{2}{@{}c@{}|}{  spaced } \\
+\hline
+\end{tabular}
+
+\begin{center}
+\begin{tabular}{*{4}{c}}
+\multicolumn{4}{c}{Wide title spanning more than the columns are} \\
+1 & 2 & 3 & 4 \\ \cline{2-3}
+\multicolumn{2}{r}{}& \multicolumn{2}{l}{right half}
+\end{tabular}
+\end{center}
+\end{document}

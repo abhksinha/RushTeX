@@ -1,0 +1,573 @@
+\documentclass{article}
+\usepackage{amssymb}
+\renewcommand{\rmdefault}{ptm}
+\title{RushTeX: Guarded Direct Lowering and the Work a Page Needs}
+\author{RushTeX Project}
+\date{24 October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+RushTeX is a compiler from LaTeX to PDF written in safe Rust with no runtime
+dependencies. Its goal is output identical to pdfLaTeX's, glyph for glyph and pixel for
+pixel, produced with as little work as the result allows. This document explains the
+concepts a page is made of, the work pdfLaTeX does to make one, and how RushTeX's
+architecture, Guarded Direct Lowering, keeps the results of that work while removing
+the parts no reader of the page can observe. It also states what is finished and what
+is not. The document is the project's growing test: every section exercises one family
+of constructs, and the whole must compile on the native path and match pdfLaTeX
+exactly.
+\end{abstract}
+
+\tableofcontents
+
+\section{What RushTeX is}\label{sec:text}
+
+A typesetter turns a stream of characters into pages. The author writes paragraphs of
+prose, and the typesetter decides where lines break, how much space separates words,
+where a page ends and where each figure goes. \TeX, written by Donald Knuth, made these
+decisions so well that its rules became the standard of scientific publishing, and
+\LaTeX{} is the macro language most authors use on top of it. RushTeX keeps those rules
+and their results exactly, and changes how the work is organised.
+
+The invariant is identical output. The same glyphs stand at the same positions, measured
+in scaled points, the unit of $1/65536$ of a point in which \TeX{} does all of its
+arithmetic. Every rule that decides a position is taken from the published sources:
+\texttt{tex.web} for the engine, and \texttt{latex.ltx} and the package sources for
+\LaTeX. The code cites the section it implements, so that each step can be checked
+against its origin.
+
+RushTeX has two ways to compile a document. The native path, the subject of this
+document, runs \LaTeX's commands as Rust code over an exact port of the \TeX{} core. The
+engine path is a complete \TeX{} engine, also written in Rust, that runs the real
+\LaTeX{} format and packages from an installed \TeX{} Live; it takes every document the
+native path cannot prove it handles, and it produces the same pages. Today the native
+path takes the article class, with its size, paper, \texttt{twoside},
+\texttt{landscape} and \texttt{draft} options, a growing part of the kernel and two
+packages,
+amssymb and amsfonts\footnote{Of 169 papers in our arXiv sample, the native path
+compiles one today; the census ranks the commands that block the rest, and the work
+follows that ranking.}, so most real documents still run on the engine.
+
+The fonts are those pdfLaTeX would use. This document is set in Times, chosen with one
+line of the preamble, while its sans serif \textsf{labels} and its \texttt{file names}
+keep the Computer Modern families. Emphasis is shown with \emph{italic} words, strong
+statements with \textbf{bold}, names with \textsc{small capitals}, and an
+\textit{explicit italic} phrase where a term needs one. Declarations act to the end of
+their group, so {\bfseries this phrase is bold by declaration} and {\itshape this one
+italic by declaration}, while the older forms {\bf bold} and {\it italic} work the same
+way inside braces.
+
+Accents are part of ordinary text: caf\'e, G\"odel and na\"\i ve each carry their marks.
+Quotations are typed as ``double quotes'', the apostrophe in don't is a plain character,
+and the dashes -- en and --- em -- each have their use. Sentences that trail away end
+with \ldots{} set as a unit, and ties such as Section~2 keep a label with its number.
+
+Explicit line breaks suit addresses and verse:\\
+the first line ends at the double backslash,\\
+and the second line starts afresh.
+
+\noindent This paragraph was started with \texttt{noindent}, so it has no indentation,
+and the gap of \hspace{1em} in this sentence was inserted by hand. The next paragraph
+follows after \vspace{6pt} of extra room.
+
+The paragraphs that follow are indented as usual. The next section defines the objects a
+page is made of; the one after it lists the work pdfLaTeX does to make a page, and what
+RushTeX does instead at each step.
+
+\section{The concepts}\label{sec:fonts}
+
+\subsection{Boxes, glue and penalties}
+
+Everything on a page is a box. A character is a box with a width, a height and a
+depth, taken from the metric file of its font. A line is a horizontal box holding the
+boxes of its characters, and a page is a vertical box holding the boxes of its lines.
+Between the boxes lies glue: a space with a natural width that may stretch or shrink,
+so that a line of words can be made exactly as wide as the measure.
+
+A penalty is a number that says how bad it would be to break at a point. A large
+positive penalty forbids a break, a large negative one forces it, and the values in
+between let the author and the class steer the algorithms. A tie is a space with a
+penalty of ten thousand, which is why a tied name such as Ludwig~van Beethoven never
+splits across lines.
+
+{\bfseries A group limits a declaration: inside these braces the text is bold, and a
+word such as \emph{this} still becomes italic within it.} Outside the group the text
+returns to the roman of the paragraph, and the same holds for {\itshape the italic
+shape} and {\sffamily the sans serif family}, each of which ends at its brace.
+
+\subsection{Kerns, ligatures and the space factor}\label{sec:spacing}
+
+A kern is a fixed space between two boxes that never stretches or shrinks. Fonts carry
+kerns for pairs of letters whose shapes would otherwise look badly spaced: in AVAWAY the
+font pulls each A and V or W together, and the typesetter inserts the kern from the
+font's table each time the pair meets. A font's italic correction, added after a slanted
+letter, is also a kern.
+
+A ligature is a single glyph that replaces a sequence of letters. In first and flight
+the letters f and i, and f and l, become one glyph each, so the dot and the ascender do
+not collide with the hook of the f. Which pairs form ligatures depends on the font:
+Times has fi and fl, Computer Modern also ff, ffi and ffl. The font's ligature and kern
+program is applied as the characters arrive, before any line is broken.
+
+Word spacing in a justified line is not constant. The stretch a line receives is shared
+among its interword glue, and the space after a full stop is wider than the space
+between words, because each character carries a space factor that the following glue
+reads. A full stop after a capital letter, as in J.~R.\ Smith, does not end a sentence,
+so the author writes a backslash space where a sentence does continue after one.
+
+\subsection{Hyphenation, badness and demerits}
+
+Long words that do not fit at the end of a line are hyphenated at points found by
+Liang's patterns, a compact table built from a word list that says where a word may be
+divided: typesetting, hyphenation, algorithm and reproducibility break at reasonable
+places. Each candidate line has a badness, from zero to ten thousand, that measures how
+far its glue is stretched or shrunk, and a line's demerits combine its badness with the
+penalty of its break. The paragraph builder of Knuth and Plass chooses the breaks with
+the least total demerits over the whole paragraph, first without hyphenation and, when
+that fails, again with it.
+
+\section{The work behind a page}\label{sec:lists}
+
+Between the bytes of the source and the bytes of the PDF, pdfLaTeX does about sixteen
+kinds of work, most of them once or more for every character. The list below follows a
+character through them, and the description after each step says what RushTeX's native
+path does there. Four answers recur: a step is \emph{removed} when nothing on the page
+depends on it; it is done \emph{once} when its result is the same every time; it is
+done at \emph{build time} when it depends only on fixed data; and it is \emph{kept}
+when it decides a position, because those rules are the output.
+
+\begin{enumerate}
+  \item\label{item:first} Read the byte from the file into the input buffer.
+        Kept: RushTeX reads the source once, from memory.
+  \item Give the byte a category code and make a token.
+        Once per word: a run of letters in one font is read straight from the source as
+        one word; other characters still become tokens one at a time.
+  \item Look a command's name up in the hash table.
+        Build time: every name the native path knows is in a generated perfect hash,
+        and is known by a number after its first lookup.
+  \item Expand \LaTeX's macros into primitives.
+        Removed for native commands, which are Rust functions. Some still build short
+        strings of primitives that are read back as tokens, about nine in a hundred of
+        all tokens; removing those is ongoing work.
+  \item Load the format, the class, the size file and the font definitions.
+        Build time: the class's lengths, the kernel's values, the font definitions and
+        the font metrics are generated into tables carried in the program.
+  \item Run the font's ligature and kern program on each character.
+        Once per distinct word: the result is stored in a word table, and a repeated
+        word, most of the words of a long text, is copied from it.
+  \item Append one node per character to the paragraph.
+        Once per word: a word is a single node holding its summed width, height and
+        depth, and it is opened into characters only where something must look inside.
+  \item Add up widths in the first line-breaking pass.
+        One width per word instead of one per character; the algorithm is kept.
+  \item Hyphenate every word of a paragraph whose first pass fails.
+        Once per word: a word's hyphenation points are remembered, and only the words
+        whose hyphenation could depend on their neighbours are opened.
+  \item Run the second, hyphenating pass, and an emergency pass if needed.
+        Kept exactly, since it decides the lines.
+  \item Pack each line into a box, measuring its contents again.
+        Per word, from the stored sums.
+  \item Build pages, place insertions and run the output routine, whose float
+        handling is written as macros over lists of box names.
+        The page builder is kept; the output routine and the float queue are Rust code
+        over a small array of box numbers.
+  \item Write the auxiliary file, and run the whole document again until labels,
+        citations and the contents settle.
+        Removed: references are resolved in memory in the same pass.
+  \item Walk each page to write its text, selecting a font for each character.
+        Per word, with the font made current once per word.
+  \item Read, decrypt, subset and encrypt the font programs.
+        Build time for reading: the programs and their glyph names are carried in the
+        program. Not yet done: subsetting, so whole fonts are embedded.
+  \item Compress each page's content stream.
+        Kept, with a simpler compressor that makes larger files.
+\end{enumerate}
+
+So item~\ref{item:first} and the core steps are kept, and the rest are removed, done
+once, or moved to build time, each only where the result cannot change. How these
+choices are made and checked is the subject of Section~\ref{sec:displays}.
+
+\subsection{Guarded Direct Lowering}
+
+The architecture that organises these choices is Guarded Direct Lowering. Its name
+states its method: a guard decides once whether the native path can take a document,
+and each command is then lowered directly to the typesetting lists. The pipeline has
+five stages.
+
+\begin{itemize}
+  \item The pre-scan reads the whole source once and proves that every command it uses
+        is one the native path implements unchanged.
+  \item The direct compiler turns each command into calls of typed node builders.
+  \item The node builders append boxes, glue, kerns and penalties to the current list,
+        as the corresponding primitives of \TeX{} would.
+  \item The exact core breaks paragraphs, builds pages and lays out mathematics:
+    \begin{itemize}
+      \item its arithmetic is \TeX's own, integer for integer,
+      \item and its results are never adjusted afterwards.
+    \end{itemize}
+  \item The shipping stage turns each finished page into PDF operators.
+\end{itemize}
+
+A document the guard cannot prove, for example one that loads its own package file,
+goes whole to the engine path. Nine rules keep the native path honest.
+
+\begin{description}
+  \item[No \TeX{} text] A native command builds nodes, not strings of primitives to be
+        read again; the author's own text and typed closing steps are the exceptions.
+  \item[Numbers, not names] A name known in advance is a number at run time.
+  \item[Build time first] Whatever depends only on fixed data is computed when the
+        program is built.
+  \item[One guard] A document is accepted or refused once, before it runs.
+  \item[Fixed results] The core's results are final; nothing corrects them later.
+  \item[General rules] A behaviour comes from the rule that defines it, never from a
+        case written for one document.
+  \item[Data and mechanisms] Tables hold the data, code holds the mechanisms.
+  \item[Least movement] Data is moved as little as possible.
+  \item[Only the unobservable] A step is dropped only if nothing can observe that it
+        is missing; a document that could observe it goes to the engine.
+\end{description}
+
+The last rule is what makes the shortcuts safe. A word is kept as one node because a
+native document cannot look inside a box with \TeX's box-reading primitives: the guard
+refuses those, and a document using them runs on the engine.
+
+\section{Exactness and the testing framework}\label{sec:displays}
+
+Identical output is checked, not assumed. The testing framework, a separate Rust
+program called parity-testing, compiles each document of a corpus with RushTeX and with
+pdfLaTeX and compares the two files object by object.
+
+\begin{quote}
+Every glyph is compared by its font, its character and its position; every rule and
+path by its coordinates; every link, outline entry and colour by its value. Then both
+files are rendered at 300 dots per inch and compared pixel for pixel.
+\end{quote}
+
+\begin{quotation}
+A document passes only at zero shift: no glyph moved by any amount, no pixel different.
+A difference of a single scaled point in one line's glue counts as a failure, because
+it would move every glyph that follows.
+
+When a page drifts, the framework shows pdfTeX's own record of the boxes and glue above
+the drifting line, so that the first node that differs can be traced back to the rule
+that produced it. New native features are also compared at 600 dots per inch, and box
+by box against the engine path.
+\end{quotation}
+
+\begin{center}
+Zero shift, every page,\\
+for every document of the corpus.
+\end{center}
+
+\begin{flushleft}
+The corpus holds 85 documents from CTAN: articles, reports, tables, lists, mathematics
+and package documentation, each screened with pdfLaTeX first.
+\end{flushleft}
+
+\begin{flushright}
+The gate passes when all 85 are identical.
+\end{flushright}
+
+Verbatim text is set exactly as typed, with its spaces and special characters kept, as
+in the command that runs the gate:
+
+\begin{verbatim}
+  parity-testing zero --engine --pixels --all
+  # every glyph, path, colour, link, outline and pixel
+\end{verbatim}
+
+{\centering A block centred by a declaration, which ends at its closing brace and
+leaves the surrounding text alone.\par}
+
+{\raggedright A block whose lines are not stretched to the full measure, so that its
+right margin is ragged. The declaration ends with the group, and the next paragraph
+returns to the justified setting of the text.\par}
+
+Speed is judged on documents of ten pages or more, against one run of pdfLaTeX, by
+counting the instructions each program retires, a count that does not change with the
+load of the machine. The benchmark also repeats a document's body one, four and ten
+times and fits a straight line through the counts, which separates the fixed cost of a
+run from the cost of each further page.
+
+\section{Measurements}\label{sec:tables}
+
+The tables below were measured on an Apple M5 with \TeX{} Live 2026, running pdfLaTeX
+with \texttt{-interaction=batchmode} and no latexmk; Section~\ref{sec:displays}
+explains how the output was checked.
+
+\subsection{A ten-page document}\label{sec:tables-basic}
+
+This document, in its previous version of ten pages, compiled in one run by RushTeX and
+in one or three runs by pdfLaTeX:
+
+\begin{center}
+\begin{tabular}{l c r}
+Quantity & RushTeX & Factor \\
+Instructions, one pdfLaTeX run & 76.6M & 42.6 \\
+Instructions, three pdfLaTeX runs & 76.6M & 136.5 \\
+Peak memory & 10.0 MB & 2.9 \\
+\end{tabular}
+\end{center}
+
+\begin{center}
+\begin{tabular}{|l|c|r|}
+Stage & Kind & Share \\
+Native commands & build & 16\% \\
+Shipping & write & 14\% \\
+Line breaking & core & 10\% \\
+Compression & write & 9\% \\
+\end{tabular}
+\end{center}
+
+\subsection{Fixed cost and cost per page}\label{sec:tables-advanced}
+
+The fit repeats the body of that ten-page version; the column specification below removes the padding at both
+ends with an empty at-sign argument and repeats one column pattern with a star.
+
+\begin{center}
+\begin{tabular}{@{}*{3}{c}@{}}
+Repeats & Pages & RushTeX \\
+1 & 10 & 76.6M \\
+4 & 39 & 168.5M \\
+10 & 95 & 350.3M \\
+\end{tabular}
+\end{center}
+
+pdfLaTeX needs several runs only when the document refers forward, and each column below
+keeps its alignment whatever the width of its labels.
+
+\begin{center}
+\begin{tabular}{l c r}
+Document & Pages & Runs of pdfLaTeX \\
+Plain text & 1 & 1 \\
+One forward reference & 1 & 2 \\
+Table of contents & 10 & 3 \\
+\end{tabular}
+\end{center}
+
+The records the native path moves most are small. Extra space after a row break, as in
+\texttt{[2pt]}, separates the groups of the table below.
+
+\begin{center}
+\begin{tabular}{l r}
+Record & Bytes \\[2pt]
+Token & 4 \\
+Node & 12 \\[2pt]
+Cache line & 64 \\
+\end{tabular}
+\end{center}
+
+A processor reads memory in lines of 64 bytes, so five nodes or sixteen tokens share a
+line, and a word stored as one node instead of five character nodes moves a fifth of the
+data through every later step.
+
+\subsection{Rules and spanning cells}\label{sec:tables-rules}
+Table rules come in three kinds: a full rule across every column, a partial rule across
+some of them, and a doubled rule made of two full rules in a row. A heading may span all
+the columns, and a cell may span two of them.
+
+\begin{center}
+\begin{tabular}{|l|c|r|}
+\hline
+\multicolumn{3}{|c|}{\bfseries Instructions, from the fit} \\
+\hline\hline
+Program & Per page & Fixed \\
+\cline{2-3}
+RushTeX  & 3.2M & 43.7M \\
+pdfLaTeX & 19.4M & 3082.1M \\
+\multicolumn{2}{|l|}{Ratio per page} & 6.0 \\
+\hline
+\end{tabular}
+\end{center}
+
+The fixed cost is seventy times smaller, which is why a ten-page document is over forty
+times cheaper; the cost per page is six times smaller, so the factor falls as documents
+grow. The project's floor is forty times on long documents too, which the per-page cost
+does not yet meet.
+
+\section{Floats}\label{sec:floats}
+
+A float is a table or figure that the page builder may move away from the place where
+it appears in the source, so that it never splits across a page break or leaves a large
+gap at the foot of a page. The placement specifier says where it may go: \texttt{h} for
+here, \texttt{t} for the top of a page, \texttt{b} for the bottom and \texttt{p} for a
+page of floats, tried in that order.
+
+Table~\ref{tab:results} appears before the text that discusses it, so the reader meets
+the reference first and the float later.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{l c r}
+Benchmark & Pages & Identical \\
+Mathematics & 20 & yes \\
+Tables & 29 & yes \\
+Prose & 61 & yes \\
+\end{tabular}
+\caption{Benchmark documents of the native path.}\label{tab:results}
+\end{table}
+
+The documents of Table~\ref{tab:results} compile natively and match pdfLaTeX. The next
+float is a figure with a caption long enough to wrap onto a second line, placed at the
+top of a page by its specifier.
+
+\begin{figure}[t]
+\centering
+\mbox{\textsf{Source}\quad$\rightarrow$\quad\texttt{Pre-scan}\quad$\rightarrow$\quad\textsf{Builders}\quad$\rightarrow$\quad\textsf{Core}\quad$\rightarrow$\quad\textsf{PDF}}
+\caption{The stages of Guarded Direct Lowering, from the characters of the source file to
+the bytes of the output, in the order in which the data flows through them in a single
+pass.}\label{fig:pipeline}
+\end{figure}
+
+Figure~\ref{fig:pipeline} shows the stages described in Section~\ref{sec:lists}. Its
+caption is set as a paragraph because it runs over two lines. A table placed at the
+bottom of a page is specified with \texttt{[b]}.
+
+\begin{table}[b]
+\centering
+\begin{tabular}{c c}
+Feature & Native \\
+Lists & yes \\
+Tables & yes \\
+Floats & yes \\
+Graphics & not yet \\
+\end{tabular}
+\caption{Feature status at the time of writing.}
+\end{table}
+
+A float that may go anywhere is written \texttt{[htbp]}, as the next figure is.
+
+\begin{figure}[htbp]
+\centering
+\mbox{\texttt{figure}} \quad \mbox{Text placed in a box}
+\caption{A short caption.}\label{fig:box}
+\end{figure}
+
+Figure~\ref{fig:box} is referred to after the float itself. In pdfLaTeX the numbers of
+forward references come from the auxiliary file of an earlier run; RushTeX knows them
+in the same pass.
+
+\LaTeX's output routine places floats with a queue of eighteen slots and a set of
+fractions: at most seven tenths of a page may hold top floats, three tenths bottom
+floats, and at least one fifth must remain text. In \LaTeX{} the queue is a macro
+holding a list of box names, rebuilt whenever a float moves; RushTeX keeps it as an
+array of box numbers and makes the routine's tests in the same order, so every float
+lands where pdfLaTeX puts it.
+
+\section{Mathematics}\label{sec:math}
+
+Mathematics is set by the rules of Appendix~G of \textit{The \TeX book}, which give
+every symbol of a formula a size, a style and a position from parameters stored in the
+math fonts. Inline formulae are written between dollar signs: $\frac{a+b}{c-d}$ is a
+fraction, $\sqrt{x^2+1}$ a square root, and $x^{2}$, $a_{i}$ and $x_{i}^{2}$ show
+superscripts and subscripts alone and together.
+
+Greek letters are typed by name, so $\alpha$, $\beta$, $\gamma$ and the capital $\Gamma$
+are available. The sum $\sum_{k=1}^{n} k$ and the integral $\int_0^1 x\,dx$ set their
+limits beside them in running text, as does $\lim_{n\to\infty} \frac{1}{n} = 0$.
+
+The set of real numbers is $\mathbb{R}$, and a bound is written $f(n) \in
+\mathcal{O}(n^2)$. A vector is bold, as $\mathbf{v}$, with length $\|\mathbf{v}\|$, and
+the parentheses in $\left( \frac{x}{y} \right)$ grow with the fraction they enclose.
+The letters of a formula stay in Computer Modern while the text is in Times, because
+\LaTeX{} chooses the math fonts separately from the text family.
+
+Displayed formulae are centred on their own line in a larger style. The sum of the first
+$n$ integers is
+\[
+  \sum_{k=1}^{n} k = \frac{n(n+1)}{2}
+\]
+
+Numbered equations carry labels that the text refers to. The Gaussian integral and the
+quadratic formula are the two equations of this section.
+
+\begin{equation}\label{eq:gauss}
+  \int_{-\infty}^{\infty} e^{-x^{2}}\,dx = \sqrt{\pi}
+\end{equation}
+
+\begin{equation}\label{eq:quadratic}
+  x = \frac{-b \pm \sqrt{b^{2}-4ac}}{2a}
+\end{equation}
+
+Equation~\ref{eq:gauss} gives the Gaussian integral, and Equation~\ref{eq:quadratic} the
+roots of a quadratic with real coefficients $a$, $b$ and $c$, where $a \neq 0$.
+
+A display may hold a product with a sized delimiter:
+\[
+  \prod_{i=1}^{m} \left( 1 + \frac{1}{i^{2}} \right) \leq e^{\pi^{2}/6}
+\]
+
+Inline formulae use the text style, which keeps the lines of a paragraph at an even
+height, and displays the display style, with larger operators and fractions; the sums
+above show the difference in where their limits sit. Each choice is a rule of
+Appendix~G applied to the font's parameters. RushTeX ports those rules as they are and
+never adjusts a formula by hand; what changes is only that the math commands of the
+kernel are Rust functions instead of macros.
+
+\subsection{Displayed derivations}\label{sec:derivations}
+
+A derivation is a chain of displays, with the text between them giving the reason for
+each step. The square of a binomial expands as
+\[
+  (a+b)^{2} = a^{2} + 2ab + b^{2}
+\]
+
+Applying such expansions to the terms of a sum gives a closed form for the sum of the
+squares of the first $n$ integers:
+\[
+  \sum_{k=1}^{n} k^{2} = \frac{n(n+1)(2n+1)}{6}
+\]
+
+The formula holds for every positive integer $n$ and can be proved by induction, since
+the sum for $n+1$ is the sum for $n$ with one more term. The constant $e$ is the limit
+\[
+  e = \lim_{n\to\infty} \left( 1 + \frac{1}{n} \right)^{n}
+\]
+which the reader may compare with the bound in the product above.
+
+\section{Current limits}\label{sec:limits}
+
+The native path is young, and its limits are part of an honest description. It takes
+the article class without the \texttt{twocolumn}, \texttt{titlepage}, \texttt{leqno}
+and \texttt{fleqn} options, and two packages; graphics, amsmath's
+environments, hyperref, package options and bibliographies from BibTeX are not yet
+native, so most papers still run on the engine path, which needs an installed \TeX{}
+Live. Fonts are embedded whole, not subset, and pages are compressed with fixed codes,
+so RushTeX's files are about a quarter larger than pdfLaTeX's. The cost per page is six
+times below pdfLaTeX's, short of the forty times the project aims for. Each of these is
+on the work list, in the order of the papers it would unblock.
+
+\section{References}\label{sec:refs}
+
+The algorithms of the native path are those of the standard references. The paragraph
+builder is the method of Knuth and Plass~\cite{knuth81}; the page builder, the output
+routine and the mathematics follow the reference manual of \TeX~\cite{knuth86}; the
+hyphenation patterns follow Liang's thesis~\cite{liang83}. The chain of stages in
+Figure~\ref{fig:pipeline} is a common design for compilers in general, as Aho and
+colleagues describe~\cite{aho06}.
+
+\begin{thebibliography}{9}
+\bibitem{knuth81}
+  Donald E.~Knuth and Michael F.~Plass.
+  \emph{Breaking paragraphs into lines}.
+  Software: Practice and Experience, 11(11), 1981.
+
+\bibitem{knuth86}
+  Donald E.~Knuth.
+  \emph{The \TeX book}.
+  Addison-Wesley, 1986.
+
+\bibitem{liang83}
+  Franklin M.~Liang.
+  \emph{Word Hy-phen-a-tion by Com-put-er}.
+  PhD thesis, Stanford University, 1983.
+
+\bibitem{aho06}
+  Alfred V.~Aho, Monica S.~Lam, Ravi Sethi and Jeffrey D.~Ullman.
+  \emph{Compilers: Principles, Techniques, and Tools}.
+  Addison-Wesley, second edition, 2006.
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,23 @@
+\documentclass{article}
+\pagestyle{empty}
+\setcounter{page}{6}
+\setlength\textwidth{207.0pt}
+\addtolength{\textheight}{-2\baselineskip}
+\setlength{\parindent}{1.5em}
+\setlength\abovedisplayskip{30pt}
+\setlength{\bigskipamount}{20pt plus 4pt}
+\setcounter{page}{3}
+\begin{document}
+\section{Preamble}
+Text set in a narrow measure, long enough to wrap across several lines so the new width shows in the line breaks, with a display after it:
+\[ x^2 + y^2 = z^2 \]
+and more text after the display, which ends the paragraph.
+
+\setlength{\parindent}{0pt}
+A second paragraph with no indent.\footnote{A footnote at the new width, long enough to wrap onto a second line in the narrow measure.}
+\setcounter{section}{4}
+\section{Five}
+\setcounter{footnote}{7}
+Note.\footnote{Eight.}
+\begin{itemize}\item One \item Two\end{itemize}
+\end{document}

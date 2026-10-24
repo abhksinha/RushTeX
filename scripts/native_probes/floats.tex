@@ -1,0 +1,30 @@
+\documentclass{article}
+\begin{document}
+\section{Results}\label{sec}
+Text before the table. As Table~\ref{tab} and Figure~\ref{fig} show, the method works.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcr}
+\hline
+a & b & c \\
+1 & 2 & 3 \\
+\hline
+\end{tabular}
+\caption{A small table.}\label{tab}
+\end{table}
+
+Some more text after the table, long enough to fill a line or two of the page so that
+the paragraph has a shape of its own and wraps at the right margin of the text block.
+
+\begin{figure}[t]
+\centering
+\mbox{A box}
+\caption{A caption that is long enough to need more than one line when it is set in the
+column, so \texttt{makecaption} sets it as a paragraph instead of centring it.}\label{fig}
+\end{figure}
+
+Final text with a float in the paragraph
+\begin{table}[b]\caption{Bottom.}\end{table}
+continuing the same paragraph.
+\end{document}

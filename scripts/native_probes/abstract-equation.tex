@@ -1,0 +1,29 @@
+\documentclass{article}
+\title{On Things}\author{A. Author}\date{1 January 2026}
+\begin{document}
+\maketitle
+\begin{abstract}
+We study things. The result, in Theorem~\ref{eq:main}, holds
+for every $n$ again.
+
+A second abstract paragraph.
+\end{abstract}
+\section{Introduction}
+Text before the display
+\begin{equation}
+  \int_0^1 \left( \frac{x^2}{1+x} \right) dx = \left\| f \right\|_{2} \label{eq:main}
+\end{equation}
+and after it, referring to (\ref{eq:main}) and (\ref{eq:two}).
+\begin{equation}
+  \sum_{k=1}^{n} \left[ a_k \middle| b_k \right] = \left. \frac{d}{dt} \right|_{t=0} \label{eq:two}
+\end{equation}
+
+\begin{equation}
+  E = mc^2
+\end{equation}
+Spacing \vspace{3pt} inside a line and between paragraphs:
+\vspace{1ex plus 2pt}
+
+\vspace*{12pt}
+New paragraph \hskip 1em with a primitive skip and \kern2pt kern.
+\end{document}

@@ -242,6 +242,10 @@ impl Machine<'_, '_> {
             self.pattern = pattern;
             self.input.trim();
             self.input.begin_macro(body, 0, u32::MAX);
+            #[cfg(feature = "mprof")]
+            if let Some(id) = name.cs_id() {
+                self.mprof_body(id, body.end);
+            }
             return;
         }
         pattern.extend_from_slice(&text[..=e]);
@@ -259,6 +263,10 @@ impl Machine<'_, '_> {
                 self.input.push_param(Span { start: mark + a, end: mark + b });
             }
             self.input.begin_macro(body, n as u32, mark);
+            #[cfg(feature = "mprof")]
+            if let Some(id) = name.cs_id() {
+                self.mprof_body(id, body.end);
+            }
         }
         self.pattern = pattern;
         self.collect = args;

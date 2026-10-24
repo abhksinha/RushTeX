@@ -89,6 +89,13 @@ impl Machine<'_, '_> {
                         d = d.max(dp);
                     }
                 }
+                // A word: its entry's size, summed once.
+                Kind::Word => {
+                    let r = nodes.words.rec(n.a as u32);
+                    x += r.width;
+                    h = h.max(r.height);
+                    d = d.max(r.depth);
+                }
                 Kind::Box => {
                     let b = &nodes.boxes[n.a as usize];
                     x += b.width;
@@ -220,7 +227,7 @@ impl Machine<'_, '_> {
                     d = id;
                     w = w.max(iw);
                 }
-                Kind::Char | Kind::Lig | Kind::Disc | Kind::Penalty | Kind::Ins | Kind::Mark | Kind::Adjust | Kind::Whatsit | Kind::Math | Kind::Noad => {}
+                Kind::Char | Kind::Lig | Kind::Word | Kind::Disc | Kind::Penalty | Kind::Ins | Kind::Mark | Kind::Adjust | Kind::Whatsit | Kind::Math | Kind::Noad => {}
             }
         }
         // §669: a depth beyond `max_depth` moves into the height.

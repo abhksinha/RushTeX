@@ -33,6 +33,11 @@ pub struct Font {
     /// loaded): its widths, italic corrections and kerns are the base's times
     /// `1000 + expand` over 1000 (`auto_expand_font`).
     pub expand: i16,
+    /// Bit `c` for a code the font has; its width, height, depth and italic correction
+    /// (§554) are resolved once at load into four words of the arena (`FontAt::dims`), so a
+    /// list, a pass, packing or shipping reads one record, not the `char_info` word and four
+    /// arrays.
+    present: [u64; 4],
 }
 
 /// A font's bases in `Fonts::info` and its parameter count.
@@ -45,6 +50,8 @@ struct FontAt {
     kern: u32,
     param: u32,
     params: u32,
+    /// [`Font::dims`]' 256 records of four words.
+    dims: u32,
 }
 
 impl Font {
@@ -53,6 +60,15 @@ impl Font {
     /// values scaled at load (§571). `info` is `Fonts::info`.
     #[inline]
     pub fn dims(&self, c: u8, info: &[i32]) -> Option<[i32; 4]> {
+        if self.present[c as usize >> 6] >> (c & 63) & 1 == 0 {
+            return None;
+        }
+        let at = self.at.dims as usize + 4 * c as usize;
+        info.get(at..at + 4).map(|d| [d[0], d[1], d[2], d[3]])
+    }
+
+    /// [`Font::dims`] worked out from the `char_info` word (§554), for the table at load.
+    fn resolve_dims(&self, c: u8, info: &[i32]) -> Option<[i32; 4]> {
         let ci = self.metrics.info(c);
         if ci >> 24 == 0 {
             return None;
@@ -83,6 +99,19 @@ impl Font {
 
     /// A width or kern of this font's base, scaled to this expanded copy.
     #[inline]
+    /// [`Font::dims`]' records, appended to the arena from its scaled arrays.
+    fn resolve_all(&mut self, info: &mut Vec<i32>) {
+        self.at.dims = info.len() as u32;
+        info.reserve(4 * 256);
+        for c in 0..=255u8 {
+            let d = self.resolve_dims(c, info);
+            if d.is_some() {
+                self.present[c as usize >> 6] |= 1 << (c & 63);
+            }
+            info.extend(d.unwrap_or_default());
+        }
+    }
+
     pub fn expanded(&self, v: i32) -> i32 {
         if self.expand == 0 {
             v
@@ -345,14 +374,17 @@ impl Fonts {
             b
         };
         let (width, height, depth, italic, kern) = (base(&mut self.info, v.widths), base(&mut self.info, v.heights), base(&mut self.info, v.depths), base(&mut self.info, v.italics), base(&mut self.info, v.kerns));
+        // The resolved records come before the parameters, which end the arena (§579).
+        let mut font = Font { name, size, design, at: FontAt { width, height, depth, italic, kern, ..FontAt::default() }, hyphen_char, skew_char, metrics, ident: u32::MAX, expand: 0, present: [0; 4] };
+        font.resolve_all(&mut self.info);
         let param = self.info.len() as u32;
         self.info.extend(params.enumerate().map(|(k, p)| if !scale_params { p } else if k == 0 { p >> 4 } else { s.scale(p) }));
         let params = (self.info.len() as u32 - param).max(7);
         self.info.resize((param + params) as usize, 0);
         let f = self.list.len() as u16;
-        self.by_key.entry((name_key(&name), size)).or_insert(f);
-        let at = FontAt { width, height, depth, italic, kern, param, params };
-        self.list.push(Font { name, size, design, at, hyphen_char, skew_char, metrics, ident: u32::MAX, expand: 0 });
+        (font.at.param, font.at.params) = (param, params);
+        self.by_key.entry((name_key(&font.name), size)).or_insert(f);
+        self.list.push(font);
         f
     }
 
@@ -391,13 +423,15 @@ impl Fonts {
     /// arrays shared, its own parameters, `expand` thousandths.
     pub fn push_expanded(&mut self, base: u16, name: Cow<'static, str>, expand: i16) -> u16 {
         let b = &self.list[base as usize];
-        let (size, design, hyphen_char, skew_char, metrics, ident, mut at) = (b.size, b.design, b.hyphen_char, b.skew_char, b.metrics.clone(), b.ident, b.at);
+        let (size, design, hyphen_char, skew_char, metrics, ident, at) = (b.size, b.design, b.hyphen_char, b.skew_char, b.metrics.clone(), b.ident, b.at);
         let (from, n) = (at.param as usize, at.params as usize);
-        at.param = self.info.len() as u32;
+        let mut font = Font { name, size, design, at, hyphen_char, skew_char, metrics, ident, expand, present: [0; 4] };
+        font.resolve_all(&mut self.info);
+        font.at.param = self.info.len() as u32;
         self.info.extend_from_within(from..from + n);
         let f = self.list.len() as u16;
-        self.by_key.entry((name_key(&name), size)).or_insert(f);
-        self.list.push(Font { name, size, design, at, hyphen_char, skew_char, metrics, ident, expand });
+        self.by_key.entry((name_key(&font.name), size)).or_insert(f);
+        self.list.push(font);
         f
     }
 }

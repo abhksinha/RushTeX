@@ -59,21 +59,33 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// A character, or a ligature made from `from`.
+    fn show_char(&self, n: &Node, from: &[u8], depth: usize, out: &mut String) {
+        Self::line(depth, out);
+        self.font_ident(n.font, out);
+        out.push(' ');
+        print_ascii(n.a as u8, out);
+        if n.kind == Kind::Lig {
+            out.push_str(" (ligature ");
+            for &c in from {
+                print_ascii(c, out);
+            }
+            out.push(')');
+        }
+    }
+
     fn show_node(&self, n: &Node, depth: usize, out: &mut String) {
         let nodes = &self.e.nodes;
         match n.kind {
             Kind::Box => self.show_box_rec(&nodes.boxes[n.a as usize], depth, out),
-            Kind::Char | Kind::Lig => {
-                Self::line(depth, out);
-                self.font_ident(n.font, out);
-                out.push(' ');
-                print_ascii(n.a as u8, out);
-                if n.kind == Kind::Lig {
-                    out.push_str(" (ligature ");
-                    for &c in nodes.lig_from(n) {
-                        print_ascii(c, out);
+            Kind::Char | Kind::Lig => self.show_char(n, nodes.lig_from(n), depth, out),
+            // A word shows as the nodes it stands for.
+            Kind::Word => {
+                for m in nodes.word_items(n) {
+                    match m.kind {
+                        Kind::Char | Kind::Lig => self.show_char(m, nodes.words.lig_from(m), depth, out),
+                        _ => self.show_node(m, depth, out),
                     }
-                    out.push(')');
                 }
             }
             Kind::Rule => {

@@ -307,6 +307,9 @@ impl Codec for Meaning {
                 w.u8(11);
                 w.u16(i);
             }
+            // The native document job never dumps a format; were it to, its commands are
+            // not part of one.
+            Meaning::Doc(_) => w.u8(1),
         }
     }
     fn take(r: &mut Reader) -> Option<Self> {

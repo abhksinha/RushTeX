@@ -24,6 +24,7 @@ pub mod backend_tfm_data;
 pub mod backend_shape;
 pub mod backend_ship;
 pub mod backend_ts1;
+pub mod backend_type1;
 
 // Backward-compatible module aliases:
 pub use backend_cm_fonts as cm_fonts;

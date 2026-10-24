@@ -69,6 +69,30 @@ impl<'a> Lexer<'a> {
         true
     }
 
+    /// The text up to `end`, read past the tokenizer (`\@xverbatim`): the rest of the current
+    /// line, then whole lines, each ending in `\n` (trailing spaces removed, as §362 reads
+    /// lines). The lexer resumes after `end`; `None` at the file's end.
+    pub fn raw_until(&mut self, end: &str, end_line_char: i32) -> Option<String> {
+        let mut text = String::new();
+        loop {
+            let mut line: String = self.buf[self.loc.min(self.buf.len())..].iter().collect();
+            if let Some(k) = line.find(end) {
+                text.push_str(&line[..k]);
+                self.loc += line[..k].chars().count() + end.chars().count();
+                self.state = State::MidLine;
+                return Some(text);
+            }
+            if (0..=255).contains(&end_line_char) && line.ends_with(char::from(end_line_char as u8)) {
+                line.pop();
+            }
+            text.push_str(&line);
+            text.push('\n');
+            if !self.next_line(end_line_char) {
+                return None;
+            }
+        }
+    }
+
     /// §352: `c` (of catcode 7) has just been read and `j` is the index after it. If `c`
     /// starts an expanded code, the character it stands for and how many more buffer
     /// characters it uses: `c` again and two lowercase hex digits, or `c` again and one
@@ -144,6 +168,45 @@ impl<'a> Lexer<'a> {
             let name = self.buf[start].encode_utf8(&mut one);
             self.loc = start + 1;
             return Token::cs(names.intern(name));
+        }
+    }
+
+    /// GDL's word table: where the run of characters from `loc` ends, if what follows it
+    /// ends a word in the main loop (§1038) as a token that is not a character and expands
+    /// to nothing. The run is the characters of catcode letter or other below 256; after
+    /// it must come a space, the line's end, a brace, a math shift, an alignment tab, a
+    /// parameter or a subscript character. Anything else (an escape, an active, comment,
+    /// ignored or superscript character, a line without `\endlinechar`) could continue the
+    /// word or change its tokens, and gives `None`.
+    pub fn word_run(&self, cats: &CatTable) -> Option<usize> {
+        let mut k = self.loc;
+        while let Some(&c) = self.buf.get(k) {
+            if (c as u32) < 256 && matches!(cats.get(c), Cat::Letter | Cat::Other) {
+                k += 1;
+            } else {
+                break;
+            }
+        }
+        let &t = self.buf.get(k)?;
+        // With no characters before it, a space or the line's end is skipped unless the
+        // state is `mid_line` (after a control word, §354), and the word goes on past it.
+        if k == self.loc && self.state != State::MidLine {
+            return None;
+        }
+        matches!(cats.get(t), Cat::Space | Cat::EndLine | Cat::BeginGroup | Cat::EndGroup | Cat::MathShift | Cat::AlignTab | Cat::Param | Cat::Subscript).then_some(k)
+    }
+
+    /// The characters from `loc` to `end` (a [`Lexer::word_run`]), as bytes.
+    pub fn run_bytes(&self, end: usize) -> impl Iterator<Item = u8> + '_ {
+        self.buf[self.loc..end].iter().map(|&c| c as u8)
+    }
+
+    /// Past `n` characters of a run, as if each had been read as a token (§347: state
+    /// `mid_line` after one).
+    pub fn skip_run(&mut self, n: usize) {
+        if n > 0 {
+            self.loc += n;
+            self.state = State::MidLine;
         }
     }
 

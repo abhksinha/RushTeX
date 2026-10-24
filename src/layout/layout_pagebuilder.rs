@@ -20,7 +20,7 @@ fn trace_pages() -> bool {
 
 /// `RUSHTEX_TRACE_VLIST` set: every box (baseline) placed on the vertical list is written to
 /// stderr with the distance from the previous one and the glue between them, like the
-/// recipe `parity.py boxes` prints from pdfTeX's `\showbox`. `gap` minus the listed items is
+/// recipe `parity-testing boxes` prints from pdfTeX's `\showbox`. `gap` minus the listed items is
 /// what the layout moved directly (interline glue and fixed skips).
 pub(crate) fn trace_vlist() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

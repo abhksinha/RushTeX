@@ -171,6 +171,27 @@ impl Machine<'_, '_> {
         self.align_peek();
     }
 
+    /// `\ialign` (`\everycr{}\tabskip\z@skip\halign{`) with a preamble of `n` columns
+    /// built by a native instead of scanned: every column's templates are `u` and `v`
+    /// (which find their column by [`Self::align_column`]), all tabskip glue zero. In the
+    /// internal vertical list the native has opened; `\everycr` is empty there (the
+    /// pre-scan refuses it).
+    pub(super) fn init_align_with(&mut self, n: usize, u: Span, v: Span) {
+        let saved_state = self.input.align_state;
+        let prev_depth = self.aux;
+        self.push_nest(Mode::Vertical, true, prev_depth);
+        self.begin_group(ALIGN_GROUP);
+        let cols = vec![Column { u, v, width: NULL_FLAG, omit: false, ended_by: 0, spans: Vec::new() }; n];
+        self.aligns.push(Align { cols, tabskips: vec![Glue::default(); n + 1], cur: 0, span_start: 0, cur_loop: None, unsets: Vec::new(), exact: false, size: 0, saved_state, adjusts: Vec::new() });
+        self.begin_group(ALIGN_GROUP);
+        self.align_peek();
+    }
+
+    /// The column of the entry being read (§770 `cur_align`).
+    pub(super) fn align_column(&self) -> usize {
+        self.aligns.last().map_or(0, |a| a.cur)
+    }
+
     /// §777: the preamble, to its `\cr`: each column's ⟨u_j⟩ and ⟨v_j⟩ templates, with
     /// the tabskip glue in force before each.
     fn scan_preamble(&mut self) {
@@ -311,6 +332,15 @@ impl Machine<'_, '_> {
                 }
                 Meaning::Char(c) if c.cat() == Some(Cat::EndGroup) => self.fin_align(),
                 Meaning::Prim(Prim::Crcr) => continue,
+                // A native's expansion here (`\end{tabular}`, `\hline`, a blank line).
+                _ if self.doc.is_some() => match self.align_peek_native(x) {
+                    Some(true) => continue,
+                    Some(false) => {}
+                    None => {
+                        self.init_row();
+                        self.init_col(x.t, x.m);
+                    }
+                },
                 _ => {
                     self.init_row();
                     self.init_col(x.t, x.m);
@@ -341,9 +371,15 @@ impl Machine<'_, '_> {
     /// §788 `init_col`: the column's ⟨u_j⟩ template comes before the token `t` just peeked,
     /// unless that is `\omit`.
     fn init_col(&mut self, t: Token, m: Meaning) {
+        // `\multicolumn` is `\multispan`'s `\omit`, then a native's spans and material.
+        let multi = self.doc.is_some() && self.is_multicolumn(m);
         let a = self.aligns.last_mut().expect("in an alignment");
         let col = &mut a.cols[a.cur];
-        col.omit = m == Meaning::Prim(Prim::Omit);
+        col.omit = multi || m == Meaning::Prim(Prim::Omit);
+        if multi {
+            self.input.align_state = 0;
+            return self.multicolumn();
+        }
         if col.omit {
             self.input.align_state = 0;
         } else {
@@ -452,7 +488,7 @@ impl Machine<'_, '_> {
 
     /// §800 `fin_align`: the column widths are settled, the tabskip glue is set by packing
     /// a prototype row, and every row and entry is set to match.
-    fn fin_align(&mut self) {
+    pub(super) fn fin_align(&mut self) {
         self.end_group(ALIGN_GROUP);
         self.end_group(ALIGN_GROUP);
         let Some(mut a) = self.aligns.pop() else { return };

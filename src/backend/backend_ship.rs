@@ -61,6 +61,8 @@ pub struct DocFont {
     pub name: String,
     pub size: i64,
     pub widths: [i32; 256],
+    /// The characters the pages used (pdfTeX's `pdf_char_marked`), as a 256-bit set.
+    pub used: [u64; 4],
     /// A font without a map entry: drawn from its PK bitmaps as a Type 3 font.
     pub pk: Option<PkFont>,
 }
@@ -329,25 +331,7 @@ fn font_name(clear: &[u8]) -> Option<String> {
     Some(rest[start..start + len].iter().map(|&c| char::from(c)).collect())
 }
 
-/// A Type 1 program's built-in encoding (`dup 65 /A put` in its cleartext), by code.
-/// The cleartext is Latin-1 (a copyright notice may hold `©`), so it is read bytewise.
-fn builtin_encoding_names(clear: &[u8]) -> Vec<String> {
-    let mut names = vec![String::from(".notdef"); 256];
-    let text: String = clear.iter().map(|&c| char::from(c)).collect();
-    let mut t = text.split_whitespace();
-    while let Some(w) = t.next() {
-        if w != "dup" {
-            continue;
-        }
-        let (Some(code), Some(name)) = (t.next(), t.next()) else { break };
-        if let (Ok(c), Some(n)) = (code.parse::<usize>(), name.strip_prefix('/')) {
-            if c < 256 {
-                names[c] = n.to_string();
-            }
-        }
-    }
-    names
-}
+use crate::data::data_embed::builtin_encoding_names;
 
 /// Token text as PDF bytes: pdfTeX's strings are 8-bit.
 fn latin1(s: &str) -> Vec<u8> {
@@ -698,8 +682,23 @@ impl Doc {
         // With `\pdfgentounicode`, every font's ToUnicode comes from its glyph names (the
         // `.enc` file's, else the program's built-in encoding), as pdfTeX makes it.
         let enc = entry.as_ref().and_then(|e| e.enc).and_then(files).map(|b| b.iter().map(|&c| char::from(c)).collect::<String>());
-        let wants_pfb = program.is_none() || (to_unicode.is_some() && enc.is_none());
-        let mut pfb = if wants_pfb { entry.as_ref().and_then(|e| e.file).and_then(files).and_then(|b| pfb_segments(&b)) } else { None };
+        // A built-in program's glyph names, stored as text where the file layer has them
+        // (`X.pfb#names`): the `.pfb` itself is not read then.
+        let stored_names = if program.is_some() && to_unicode.is_some() && enc.is_none() { entry.as_ref().and_then(|e| e.file).and_then(|f| files(&format!("{f}#names"))) } else { None };
+        let wants_pfb = program.is_none() || (to_unicode.is_some() && enc.is_none() && stored_names.is_none());
+        // With a program of its own, only the file's clear text is used (its encoding):
+        // `#head` asks for that alone, where the file layer can give it (`data_embed`).
+        // Embedded, the program is subset (`backend_type1`) from its decrypted form: `#clear`
+        // asks for that where the file layer has it, else the file is decrypted here.
+        let read_pfb = |file: &str| match program {
+            Some(_) => files(&format!("{file}#head")).or_else(|| files(file)).and_then(|b| pfb_segments(&b)),
+            None => files(&format!("{file}#clear")).and_then(|b| pfb_segments(&b)).or_else(|| {
+                let (mut data, lens) = pfb_segments(&files(file)?)?;
+                crate::data::data_embed::decrypt_binary(&mut data[lens[0]..lens[0] + lens[1]]);
+                Some((data, lens))
+            }),
+        };
+        let mut pfb = if wants_pfb { entry.as_ref().and_then(|e| e.file).and_then(read_pfb) } else { None };
         // A map entry's `SlantFont`/`ExtendFont` change the embedded program (writet1.c).
         let mut italic = 0;
         if let (Some(e), Some((data, lens))) = (&entry, &mut pfb) {
@@ -754,6 +753,9 @@ impl Doc {
                 }
                 self.buf.extend_from_slice(b" ] >>");
             }
+        } else if let (Some(u), Some(text)) = (to_unicode, &stored_names) {
+            let names: Vec<&str> = text.split(|&c| c == b'\n').map(|l| if l.is_empty() { ".notdef" } else { std::str::from_utf8(l).unwrap_or(".notdef") }).collect();
+            cmap = Some(tounicode_cmap(&f.name, &names, u));
         } else if let (Some(u), Some((data, lens))) = (to_unicode, &pfb) {
             let names = builtin_encoding_names(&data[..lens[0]]);
             let names: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -777,7 +779,19 @@ impl Doc {
         if let Some(cmap) = &cmap {
             self.stream(id + 3, b"", cmap, false);
         }
-        if let Some((data, lens)) = pfb {
+        if let Some((mut data, mut lens)) = pfb {
+            // pdfTeX's subset (`writet1.c`): the glyphs the pages used, by the encoding's
+            // names (the `.enc` file's, else the program's own).
+            let names: Vec<String> = match &enc {
+                Some(enc) => encoding_names(enc).iter().map(|n| n.to_string()).collect(),
+                None => builtin_encoding_names(&data[..lens[0]]),
+            };
+            let used: Vec<&str> = (0..256).filter(|&c| f.used[c / 64] >> (c % 64) & 1 != 0).filter_map(|c| names.get(c).map(String::as_str)).collect();
+            let binary = lens[0]..lens[0] + lens[1];
+            let mut text = crate::backend::backend_type1::subset(&data[binary.clone()], &used).unwrap_or_else(|| data[binary.clone()].to_vec());
+            crate::data::data_embed::encrypt_binary(&mut text);
+            lens[1] = text.len();
+            data.splice(binary, text);
             let bbox = font_bbox(&data[..lens[0]]);
             self.begin(id + 1);
             self.buf.extend_from_slice(b"<< /Type /FontDescriptor /FontName /");

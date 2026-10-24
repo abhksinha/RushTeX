@@ -266,6 +266,39 @@ impl Walk<'_> {
 
     /// A character of a real font, written to the page.
     fn real_char(&mut self, f: u16, c: u8, w: i32, h: i32, v: i32) {
+        let ea = self.real_font(f);
+        let base = self.base[f as usize];
+        self.used[base as usize][c as usize / 64] |= 1 << (c % 64);
+        self.text.char_ex(&mut self.out, c, w as i64, h as i64, self.page_height - v as i64, ea);
+    }
+
+    /// A word node's characters and font kerns from `h` on the baseline `v`, all of real
+    /// font `f`: the font is made current once. Returns the width written.
+    fn real_word(&mut self, f: u16, items: &[Node], h: i32, v: i32) -> i32 {
+        let ea = self.real_font(f);
+        let base = self.base[f as usize] as usize;
+        let font = &self.fonts[f as usize];
+        let y = self.page_height - v as i64;
+        let mut x = h;
+        for m in items {
+            match m.kind {
+                Kind::Char | Kind::Lig => {
+                    let c = m.a as u8;
+                    let Some([w, _, _, _]) = font.dims(c, self.info) else { continue };
+                    self.used[base][c as usize / 64] |= 1 << (c % 64);
+                    self.text.char_ex(&mut self.out, c, w as i64, x as i64, y, ea);
+                    x += w;
+                }
+                Kind::Kern => x += m.a,
+                _ => {}
+            }
+        }
+        x - h
+    }
+
+    /// pdfTeX's `pdf_set_font` for real font `f`, and its automatic expansion (thousandths)
+    /// for the text matrix.
+    fn real_font(&mut self, f: u16) -> i64 {
         let font = &self.fonts[f as usize];
         if self.names.len() <= f as usize {
             self.names.resize(f as usize + 1, String::new());
@@ -274,7 +307,6 @@ impl Walk<'_> {
         if self.used.len() <= base as usize {
             self.used.resize(base as usize + 1, [0; 4]);
         }
-        self.used[base as usize][c as usize / 64] |= 1 << (c % 64);
         if self.names[f as usize].is_empty() {
             self.names[f as usize] = format!("/F{base}");
         }
@@ -283,8 +315,7 @@ impl Walk<'_> {
         // An expanded copy is scalable as its base is (the copy's own name has no map entry).
         self.text.pk_scale = self.pk.get(base as usize).copied().unwrap_or(0);
         // An automatically expanded copy is its base drawn through a scaled text matrix.
-        let ea = if font.expand != 0 && self.micro.expand(f).auto { font.expand as i64 } else { 0 };
-        self.text.char_ex(&mut self.out, c, w as i64, h as i64, self.page_height - v as i64, ea);
+        if font.expand != 0 && self.micro.expand(f).auto { font.expand as i64 } else { 0 }
     }
 
     /// A rule with its lower left corner at (h, v).
@@ -348,6 +379,18 @@ impl Walk<'_> {
             match n.kind {
                 Kind::Char => cur_h += self.char(n.font, n.a as u8, cur_h, base_line),
                 Kind::Lig => cur_h += self.char(n.font, n.a as u8, cur_h, base_line),
+                // A word: its characters and font kerns.
+                Kind::Word if self.vf.get(n.font).is_none() => cur_h += self.real_word(n.font, self.nodes.word_items(n), cur_h, base_line),
+                Kind::Word => {
+                    let nodes = self.nodes;
+                    for m in nodes.word_items(n) {
+                        match m.kind {
+                            Kind::Char | Kind::Lig => cur_h += self.char(m.font, m.a as u8, cur_h, base_line),
+                            Kind::Kern => cur_h += m.a,
+                            _ => {}
+                        }
+                    }
+                }
                 // §623
                 Kind::Box => {
                     let inner = self.nodes.boxes[n.a as usize];
@@ -793,6 +836,7 @@ impl Machine<'_, '_> {
                     name: f.name.to_string(),
                     size: f.size as i64,
                     widths: std::array::from_fn(|c| f.dims(c as u8, &self.e.fonts.info).map_or(0, |d| d[0])),
+                    used: self.page.font_used.get(i).copied().unwrap_or_default(),
                     pk: self.page.font_pk.get(i).filter(|&&s| s != 0).map(|&scale| crate::backend::backend_ship::PkFont {
                         dpi: crate::backend::backend_pk::pk_dpi(f.size as i64, f.design as i64, self.pk_resolution()),
                         scale,

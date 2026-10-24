@@ -49,13 +49,16 @@ pub struct Input<'a> {
     /// §309 `align_state`: the brace balance since the current alignment entry began
     /// (§789); an alignment character or `\cr` at zero ends the entry.
     pub align_state: i32,
+    /// `engine_mprof`: by file level, whether it is the document's own text.
+    #[cfg(feature = "mprof")]
+    doc_files: Vec<bool>,
 }
 
 const NONE: u32 = u32::MAX;
 
 impl<'a> Input<'a> {
     pub fn new(src: &'a str) -> Self {
-        Input { files: vec![Lexer::new(src)], frames: Vec::new(), scratch: Vec::new(), params: Vec::new(), align_state: super::engine_align::ALIGN_IDLE }
+        Input { files: vec![Lexer::new(src)], frames: Vec::new(), scratch: Vec::new(), params: Vec::new(), align_state: super::engine_align::ALIGN_IDLE, #[cfg(feature = "mprof")] doc_files: Vec::new() }
     }
 
     /// §324 `end_token_list`: drops the top frame and what it alone used.
@@ -167,6 +170,26 @@ impl<'a> Input<'a> {
         }
     }
 
+    /// The file read next, when no token list is pending, not even an exhausted one.
+    pub fn file_next(&mut self) -> Option<&mut Lexer<'a>> {
+        match self.frames.last() {
+            None => self.files.first_mut(),
+            Some(f) if f.arena == Arena::File => self.files.get_mut(f.pos as usize),
+            Some(_) => None,
+        }
+    }
+
+    /// [`Lexer::raw_until`] on the file being read, when no token list is pending.
+    pub fn raw_until(&mut self, end: &str, end_line_char: i32) -> Option<String> {
+        self.trim();
+        let i = match self.frames.last() {
+            None => 0,
+            Some(f) if f.arena == Arena::File => f.pos as usize,
+            Some(_) => return None,
+        };
+        self.files[i].raw_until(end, end_line_char)
+    }
+
     /// §325 `back_input`: `t` is read again next; a brace is uncounted until then.
     pub fn back(&mut self, t: Token) {
         self.trim();
@@ -228,6 +251,39 @@ impl<'a> Input<'a> {
 
     pub fn push_param(&mut self, span: Span) {
         self.params.push(span);
+    }
+
+    /// Marks the file just pushed as the document's own text or not (`engine_mprof`).
+    #[cfg(feature = "mprof")]
+    pub fn mark_document(&mut self, doc: bool) {
+        self.doc_files.resize(self.files.len(), true);
+        if let Some(d) = self.doc_files.last_mut() {
+            *d = doc;
+        }
+    }
+
+    /// The innermost frame, if a token list from the arena: its index and end
+    /// (`engine_mprof`).
+    #[cfg(feature = "mprof")]
+    pub fn top_frame(&self) -> Option<(usize, u32)> {
+        let f = self.frames.last()?;
+        (f.arena == Arena::Defs).then_some((self.frames.len() - 1, f.end))
+    }
+
+    /// Whether the innermost level is a file (`engine_mprof`).
+    #[cfg(feature = "mprof")]
+    pub fn reading_file_any(&self) -> bool {
+        self.frames.last().is_none_or(|f| f.arena == Arena::File)
+    }
+
+    /// Whether the token just read came from the document's own text (`engine_mprof`).
+    #[cfg(feature = "mprof")]
+    pub fn reading_document(&self) -> bool {
+        match self.frames.last() {
+            None => true,
+            Some(f) if f.arena == Arena::File => self.doc_files.get(f.pos as usize).copied().unwrap_or(true),
+            _ => false,
+        }
     }
 
     /// The depth of the token-list stack, for runaway guards.

@@ -18,3 +18,5 @@ perf.data
 perf.data.old
 flamegraph.svg
 latex-source/
+ctan-examples/
+arxiv-corpus/

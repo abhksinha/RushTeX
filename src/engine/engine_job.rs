@@ -38,6 +38,7 @@ pub fn run(fmt: &dyn Fn() -> Option<Vec<u8>>, src: &str, o: &Opts, read: &dyn Fn
     for runs in 1..=o.max_runs.max(1) {
         let mut e = Engine::undump(&fmt()?)?;
         let mut m = Machine::new(&mut e, src);
+        m.run_index = runs;
         m.read_file = Some(Box::new(read));
         m.job_name = o.job_name.to_string();
         m.typeset = true;

@@ -43,6 +43,7 @@ fn main() -> ExitCode {
     let mut dump_ast = false;
     let mut dump_expanded = false;
     let mut dump_gaps = false;
+    let mut native_gaps = false;
     let mut enable_compression = true;
     let mut threads = false;
     let mut watch = false;
@@ -74,6 +75,7 @@ fn main() -> ExitCode {
             "--ast" => dump_ast = true,
             "--expand" => dump_expanded = true,
             "--gaps" => dump_gaps = true,
+            "--native-gaps" => native_gaps = true,
             "-h" | "--help" => {
                 print_help();
                 return ExitCode::SUCCESS;
@@ -131,6 +133,21 @@ fn main() -> ExitCode {
         );
         return ExitCode::SUCCESS;
     };
+
+    if native_gaps {
+        return match std::fs::read_to_string(&input_path) {
+            Ok(source_content) => {
+                for what in rushtex::engine::engine_doc::native_blockers(&source_content) {
+                    println!("{what}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("{}", rushtex::Error::Io(err));
+                ExitCode::from(1)
+            }
+        };
+    }
 
     if dump_gaps {
         return match std::fs::read_to_string(&input_path) {
@@ -290,8 +307,17 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
     let start_time = std::time::Instant::now();
     let cache = cache_dir();
     let doc_dir = input.parent().filter(|d| !d.as_os_str().is_empty()).map(std::path::Path::to_path_buf);
-    let kpse = engine_host::Kpse::new("pdflatex", cache.as_ref().map(|c| c.join("kpse-paths")).as_deref(), doc_dir)?;
-    let read = |name: &str| kpse.read(name);
+    // The file search is set up on first use: the native job reads no TeX file unless its
+    // font files are not the ones the binary carries.
+    let kpse_cell = std::cell::OnceCell::new();
+    let kpse = || kpse_cell.get_or_init(|| engine_host::Kpse::new("pdflatex", cache.as_ref().map(|c| c.join("kpse-paths")).as_deref(), doc_dir.clone())).as_ref();
+    // `RT_READS=1`: each file the job asks for, on standard error.
+    let read = |name: &str| {
+        if std::env::var_os("RT_READS").is_some() {
+            eprintln!("read {name}");
+        }
+        kpse()?.read(name)
+    };
     let fmt_path = format_path.or_else(|| cache.as_ref().map(|c| c.join("pdflatex.rfmt")))?;
     let source: String = match std::fs::read(input) {
         // pdfTeX reads each byte as one character code.
@@ -303,13 +329,49 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
     };
     let job_name = input.file_stem().and_then(|s| s.to_str()).unwrap_or("texput");
     let now = engine_host::run_date();
+    // The native document job first (`engine_doc`): no format, no TeX files, one pass.
+    // `RT_ENGINE=1` runs the engine on the format instead, as the oracle.
+    if std::env::var_os("RT_ENGINE").is_none() {
+        // `RT_TIME=1`: the job's phases (`engine_doc::run`).
+        if std::env::var_os("RT_TIME").is_some() {
+            eprintln!("{:8.3} ms  before the job (paths, source)", start_time.elapsed().as_secs_f64() * 1e3);
+        }
+        let job = rushtex::engine::engine_doc::run(&source, now, Some(&read));
+        // `RT_NATIVE_WHY=1`: why the document runs on the engine.
+        if let (Err(why), Some(_)) = (&job, std::env::var_os("RT_NATIVE_WHY")) {
+            eprintln!("native job declined: {why}");
+        }
+        if let Ok(job) = job {
+            if let Err(err) = std::fs::write(output, &job.pdf) {
+                eprintln!("{}", rushtex::Error::Io(err));
+                return Some(ExitCode::from(1));
+            }
+            for err in &job.errors {
+                eprintln!("! {err}");
+            }
+            eprintln!("[DONE] Compilation of {} completed natively and RUSHTEX wrote {} {} in {:.3} second (1 run)", input.display(), job.pages, if job.pages == 1 { "page" } else { "pages" }, start_time.elapsed().as_secs_f64());
+            return Some(if job.errors.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) });
+        }
+    }
+    // Without a TeX installation the engine cannot run: the native pipeline compiles the
+    // document.
+    kpse()?;
     // The format is read again for each run (from the OS cache) and dropped once undumped;
     // only a format that could not be written to the cache is kept in memory.
     let mut unsaved: Option<Vec<u8>> = None;
     // A missing format, or one an older build dumped, is made again (once).
     for attempt in 0..2 {
         let load = || unsaved.clone().or_else(|| std::fs::read(&fmt_path).ok());
-        if let Some(job) = engine_job::run(&load, &source, &engine_job::Opts { job_name, now, max_runs: engine_job::MAX_RUNS }, &read, &mut |_| {}, &mut |_| {}) {
+        if let Some(job) = engine_job::run(&load, &source, &engine_job::Opts { job_name, now, max_runs: engine_job::MAX_RUNS }, &read, &mut |_| {}, &mut |m| {
+            // `RT_WRITTEN=<dir>`: the files the last run wrote (`.aux`, `.toc`, …), for the
+            // P2b inventory of what LaTeX carries between runs.
+            if let Ok(dir) = std::env::var("RT_WRITTEN") {
+                for w in &m.closed {
+                    let name = std::path::Path::new(&w.name).file_name().map_or(w.name.as_str(), |n| n.to_str().unwrap_or(""));
+                    let _ = std::fs::write(std::path::Path::new(&dir).join(name), &w.text);
+                }
+            }
+        }) {
             if let Err(err) = std::fs::write(output, &job.pdf) {
                 eprintln!("{}", rushtex::Error::Io(err));
                 return Some(ExitCode::from(1));
@@ -331,10 +393,10 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
         if attempt == 1 {
             break;
         }
-        let ini: String = kpse.read("pdflatex.ini")?.iter().map(|&b| char::from(b)).collect();
+        let ini: String = kpse()?.read("pdflatex.ini")?.iter().map(|&b| char::from(b)).collect();
         // Exactness is proven against one pinned kernel; another one is used, but said so.
         let (pin_date, pin_pl) = engine_host::PINNED_LATEX;
-        if let Some((date, pl)) = kpse.read("latex.ltx").as_deref().and_then(engine_host::latex_version) {
+        if let Some((date, pl)) = kpse()?.read("latex.ltx").as_deref().and_then(engine_host::latex_version) {
             if (date.as_str(), pl) != (pin_date, pin_pl) {
                 eprintln!("[WARN] LaTeX {date} patch level {pl} is installed; RushTeX's output is proven identical to pdfLaTeX for LaTeX {pin_date} patch level {pin_pl} (TeX Live {})", engine_host::PINNED_TEXLIVE);
             }
@@ -391,6 +453,7 @@ OPTIONS:
   --ast                  Dump internal AST representation to stdout
   --expand               Print the source after macro expansion to stdout
   --gaps                 List unsupported commands, environments and errors (no PDF)
+  --native-gaps          List everything the native job's pre-scan does not take yet
   -h, --help             Display this help message
 
 DOCUMENT STRUCTURE:

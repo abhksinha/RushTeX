@@ -17,6 +17,9 @@ use super::engine_token::{Span, Token};
 /// The `sub` of a whatsit node.
 pub(super) const OPEN: u8 = 0;
 pub(super) const WRITE: u8 = 1;
+/// The stream of a `\write` the native job keeps for its place in the list only: LaTeX's
+/// writes to the `.aux` file, whose text the native job has no use for.
+pub(super) const NULL_STREAM: u16 = u16::MAX;
 pub(super) const CLOSE: u8 = 2;
 pub(super) const SPECIAL: u8 = 3;
 /// §1341 `language_node`: `a` the language, `b` its `\lefthyphenmin`·64 + `\righthyphenmin`.
@@ -252,6 +255,11 @@ impl Machine<'_, '_> {
                         let span = Span { start: n.a as u32, end: n.b as u32 };
                         let name = self.print_list(span);
                         self.writes[k] = Some(WriteStream { name, text: String::new() });
+                    }
+                }
+                (Kind::Whatsit, WRITE) if n.font == NULL_STREAM => {
+                    if n.a != 0 {
+                        self.shipped_entry(n.a);
                     }
                 }
                 (Kind::Whatsit, WRITE) => self.write_out(n.font, Span { start: n.a as u32, end: n.b as u32 }),

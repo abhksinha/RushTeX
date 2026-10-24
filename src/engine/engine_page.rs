@@ -42,7 +42,7 @@ const FLOATING_PENALTY: u32 = 42;
 const HOLDING_INSERTS: u32 = 53;
 const HSIZE: u32 = 3;
 const VSIZE: u32 = 4;
-const MAX_DEPTH: u32 = 5;
+pub(super) const MAX_DEPTH: u32 = 5;
 const SPLIT_MAX_DEPTH: u32 = 6;
 const TOP_SKIP: u32 = 9;
 const SPLIT_TOP_SKIP: u32 = 10;
@@ -847,6 +847,7 @@ impl Machine<'_, '_> {
         if self.kernel.is_some() {
             self.kernel_state(&format!("shipout {}", self.page.pages + 1));
         }
+        page_hash(self, b);
         self.out_whats(b, true, &mut [].iter());
         let positions = self.ship_page(b);
         self.out_whats(b, false, &mut positions.iter());
@@ -1021,6 +1022,26 @@ fn x_over_n(x: i32, n: i32) -> i32 {
         0
     } else {
         x / n
+    }
+}
+
+/// `RT_PAGEHASH=<file>`: one line per shipped page, `run page hash`, the hash of the page box
+/// as `\showbox` prints it. Comparing runs shows which pages a rerun changes, the measure for
+/// single-pass references (P2b): the first changed page is where a single pass must resume.
+fn page_hash(m: &Machine, b: u32) {
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let Some(path) = PATH.get_or_init(|| std::env::var("RT_PAGEHASH").ok()) else { return };
+    use std::hash::{Hash, Hasher};
+    let mut s = String::new();
+    m.show_box(b, &mut s);
+    if let Ok(dir) = std::env::var("RT_PAGEDUMP") {
+        let _ = std::fs::write(format!("{dir}/{}.{}.box", m.run_index, m.page.pages + 1), &s);
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{} {} {:016x}", m.run_index, m.page.pages + 1, h.finish());
     }
 }
 

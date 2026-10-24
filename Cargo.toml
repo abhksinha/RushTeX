@@ -34,6 +34,9 @@ fonts-core = []
 gen = []
 # Model M's checker: freed node blocks are poisoned, and reading or freeing one twice panics.
 ownership-check = []
+# The macro profiler (`engine_mprof`, `RT_MPROF`): interpreter work by the LaTeX command
+# that caused it. Development only; it adds a check per token read.
+mprof = []
 
 [profile.release]
 lto = true

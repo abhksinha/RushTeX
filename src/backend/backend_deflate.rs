@@ -332,199 +332,22 @@ impl<'a> BitWriter<'a> {
     }
 }
 
-/// zlib/DEFLATE compressor (RFC 1951): LZ77 over hash chains with deferred ("lazy")
-/// matching, then each block coded with its own Huffman tables (dynamic), or the fixed
-/// ones where those are smaller.
+/// High-performance zlib/DEFLATE compressor.
 ///
-/// The chains are two arrays of 32-bit positions (SoA, 128 KB each, L2-resident): `head`
-/// by the hash of three bytes, `prev` by position in the 32 KB window. Positions are
-/// stored offset by `base`, which moves past each input, so a new input needs no clearing:
-/// anything at or below `base` is from an earlier one.
+/// Uses a Structure-of-Arrays (SoA) match table:
+/// Single-pass streaming DEFLATE compressor.
+///
+/// Uses an AoS (Array-of-Structures) packed match table:
+/// - `table`: 4096 x u64 (32 KB) table storing packed `(prefix3 << 32) | pos`.
+/// - Fits 100% inside 32 KB CPU L1 data cache. Exactly 8 slots fit per 64-byte L1 cache line.
+/// - Single 64-bit load/store per probe eliminates dual-array cache set conflicts and cuts
+///   L1 cache line accesses in half.
 pub struct DeflateCompressor {
-    head: Vec<u32>,
-    prev: Vec<u32>,
-    base: u32,
-    /// LZ77 output of the current input: a literal byte, or `MATCH | len << 16 | dist`.
-    tokens: Vec<u32>,
+    table: [u64; 4096],
+    epoch: u32,
     /// Whether the block written is the stream's last (BFINAL); false only inside
     /// `compress_zlib_parts`.
     last: bool,
-}
-
-const WSIZE: usize = 1 << 15;
-const WMASK: usize = WSIZE - 1;
-const HASH_BITS: u32 = 15;
-/// Chain links followed per position, the length that ends a search early, and the length
-/// below which the next position is tried before a match is taken (zlib level 6: 128,
-/// 128, 16). Measured on the 61-page benchmark: chain 48/lazy 16 gives 291 KB for 366M
-/// instructions, 8/8 with `MAX_INSERT` 8 gives 295 KB for 335M, 1/0 309 KB for 322M.
-const MAX_CHAIN: usize = 8;
-const NICE: usize = 128;
-const LAZY: usize = 8;
-const MATCH: u32 = 1 << 31;
-/// Tokens per block: each block gets its own tables.
-const BLOCK_TOKENS: usize = 1 << 14;
-/// The order the code-length code's lengths are written in (RFC 1951 §3.2.7).
-const CL_ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
-
-/// Inside a match longer than this, positions are not added to the chains (zlib's
-/// `max_insert_length` for its faster levels): long repeats are found from their start.
-const MAX_INSERT: usize = 8;
-
-/// Length 3..=258 to its symbol's index above 257, and each symbol's extra bits and base
-/// (RFC 1951 §3.2.5), as tables instead of a comparison chain per token.
-static LEN_SYM: [u8; 259] = {
-    let mut t = [0u8; 259];
-    let mut l = 3;
-    while l <= 258 {
-        t[l] = (const_get_length_code(l).0 - 257) as u8;
-        l += 1;
-    }
-    t
-};
-static LEN_EXTRA: [u8; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
-static LEN_BASE: [u16; 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
-static DIST_EXTRA: [u8; 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
-static DIST_BASE: [u16; 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
-/// Distance symbols as zlib's `_dist_code`: by `d - 1` below 256, else by `(d - 1) >> 7`.
-static DIST_LO: [u8; 256] = {
-    let mut t = [0u8; 256];
-    let mut d = 1;
-    while d <= 256 {
-        t[d - 1] = const_get_dist_code(d).0;
-        d += 1;
-    }
-    t
-};
-static DIST_HI: [u8; 256] = {
-    let mut t = [0u8; 256];
-    let mut k = 2;
-    while k < 256 {
-        t[k] = const_get_dist_code((k << 7) + 1).0;
-        k += 1;
-    }
-    t
-};
-
-#[inline(always)]
-fn dist_sym(d: usize) -> usize {
-    if d <= 256 { DIST_LO[d - 1] as usize } else { DIST_HI[(d - 1) >> 7] as usize }
-}
-
-#[inline(always)]
-fn hash3(d: &[u8], i: usize) -> usize {
-    let v = d[i] as u32 | (d[i + 1] as u32) << 8 | (d[i + 2] as u32) << 16;
-    (v.wrapping_mul(0x1e35_a7bd) >> (32 - HASH_BITS)) as usize
-}
-
-/// Bytes `a` and `b` have in common from the start, at most `max`.
-#[inline(always)]
-fn common(d: &[u8], a: usize, b: usize, max: usize) -> usize {
-    let mut n = 0;
-    while n + 8 <= max {
-        let x = u64::from_le_bytes(d[a + n..a + n + 8].try_into().unwrap());
-        let y = u64::from_le_bytes(d[b + n..b + n + 8].try_into().unwrap());
-        let diff = x ^ y;
-        if diff != 0 {
-            return n + (diff.trailing_zeros() / 8) as usize;
-        }
-        n += 8;
-    }
-    while n < max && d[a + n] == d[b + n] {
-        n += 1;
-    }
-    n
-}
-
-/// Huffman code lengths for `freq`, none longer than `limit`, into `out` (0 for unused
-/// symbols). At least two symbols get a code, so every code set is complete. Lengths
-/// over the limit are cut as zlib's `gen_bitlen` cuts them, then given out again by
-/// frequency, the rarest symbols longest.
-fn code_lengths(freq: &[u32], limit: usize, out: &mut [u8]) {
-    out.iter_mut().for_each(|l| *l = 0);
-    let mut leaves: Vec<(u32, u16)> = freq.iter().enumerate().filter(|(_, &f)| f > 0).map(|(s, &f)| (f, s as u16)).collect();
-    for (s, _) in freq.iter().enumerate().filter(|(_, &f)| f == 0) {
-        if leaves.len() >= 2 {
-            break;
-        }
-        leaves.push((1, s as u16));
-    }
-    leaves.sort_unstable();
-    let n = leaves.len();
-    // Two queues: the sorted leaves, and the internal nodes in the order made (their
-    // weights never decrease).
-    let mut weight: Vec<u64> = leaves.iter().map(|l| l.0 as u64).collect();
-    weight.reserve(n);
-    let mut parent = vec![0usize; 2 * n - 1];
-    let (mut li, mut qi) = (0, n);
-    for k in n..2 * n - 1 {
-        let mut pick = || {
-            if li < n && (qi >= k || weight[li] <= weight[qi]) {
-                li += 1;
-                li - 1
-            } else {
-                qi += 1;
-                qi - 1
-            }
-        };
-        let (a, b) = (pick(), pick());
-        weight.push(weight[a] + weight[b]);
-        parent[a] = k;
-        parent[b] = k;
-    }
-    let mut depth = vec![0usize; 2 * n - 1];
-    for k in (0..2 * n - 2).rev() {
-        depth[k] = depth[parent[k]] + 1;
-    }
-    let mut count = [0usize; 64];
-    let mut overflow = 0usize;
-    for &d in &depth[..n] {
-        if d > limit {
-            overflow += 1;
-            count[limit] += 1;
-        } else {
-            count[d] += 1;
-        }
-    }
-    while overflow > 0 {
-        let mut bits = limit - 1;
-        while count[bits] == 0 {
-            bits -= 1;
-        }
-        count[bits] -= 1;
-        count[bits + 1] += 2;
-        count[limit] -= 1;
-        overflow = overflow.saturating_sub(2);
-    }
-    // The rarest leaves (first in `leaves`) take the longest codes.
-    let mut i = 0;
-    for len in (1..=limit).rev() {
-        for _ in 0..count[len] {
-            out[leaves[i].1 as usize] = len as u8;
-            i += 1;
-        }
-    }
-}
-
-/// Canonical codes for `lens` (RFC 1951 §3.2.2), bit-reversed for LSB-first writing.
-fn canonical(lens: &[u8], codes: &mut [u16]) {
-    let mut count = [0u16; 16];
-    for &l in lens {
-        count[l as usize] += 1;
-    }
-    count[0] = 0;
-    let mut next = [0u16; 16];
-    let mut code = 0u16;
-    for bits in 1..16 {
-        code = (code + count[bits - 1]) << 1;
-        next[bits] = code;
-    }
-    for (s, &l) in lens.iter().enumerate() {
-        if l > 0 {
-            codes[s] = bit_reverse_16(next[l as usize], l);
-            next[l as usize] += 1;
-        }
-    }
 }
 
 impl Default for DeflateCompressor {
@@ -535,7 +358,11 @@ impl Default for DeflateCompressor {
 
 impl DeflateCompressor {
     pub fn new() -> Self {
-        Self { head: Vec::new(), prev: Vec::new(), base: 0, tokens: Vec::new(), last: true }
+        Self {
+            table: [0u64; 4096],
+            epoch: 0,
+            last: true,
+        }
     }
 
     /// Compresses `input_data` into zlib-wrapped DEFLATE format (RFC 1950) appending to `destination_buffer`.
@@ -580,272 +407,186 @@ impl DeflateCompressor {
         out.extend_from_slice(&adler32_from(adler32(packed), stored).to_be_bytes());
     }
 
-    /// Raw DEFLATE of `input_data`: LZ77, then one block per `BLOCK_TOKENS` tokens, each
-    /// with dynamic or fixed codes, whichever is shorter. The last block has BFINAL set
-    /// unless the stream continues (`compress_zlib_parts`).
+    /// Compresses raw DEFLATE stream with Fixed Huffman codes (BFINAL=1, BTYPE=01).
     pub fn compress_raw(&mut self, input_data: &[u8], destination_buffer: &mut Vec<u8>) {
         if input_data.is_empty() {
             let mut bit_writer = BitWriter::new(destination_buffer);
-            bit_writer.write_bits(if self.last { 0b011 } else { 0b010 }, 3);
-            bit_writer.write_bits(LIT_LEN_CODES[256] as u64, LIT_LEN_BITS[256]);
-            if !self.last {
-                bit_writer.write_bits(0, 3);
-            }
+            bit_writer.write_bits(0b011, 3); // BFINAL=1, BTYPE=01
+            bit_writer.write_bits(LIT_LEN_CODES[256] as u64, LIT_LEN_BITS[256]); // EOB
             bit_writer.finish();
             return;
         }
-        destination_buffer.reserve(input_data.len() / 2 + 64);
-        self.lz77(input_data);
-        let tokens = std::mem::take(&mut self.tokens);
-        let mut bit_writer = BitWriter::new(destination_buffer);
-        let blocks = tokens.len().div_ceil(BLOCK_TOKENS);
-        for (k, block) in tokens.chunks(BLOCK_TOKENS).enumerate() {
-            write_block(&mut bit_writer, block, self.last && k + 1 == blocks);
+
+        destination_buffer.reserve(input_data.len() + 64);
+
+        let total_input_length = input_data.len();
+        if total_input_length <= 65535 {
+            self.epoch = (self.epoch + 1) & 0x00FF_FFFF;
+            if self.epoch == 0 {
+                self.table.fill(0);
+                self.epoch = 1;
+            }
+            self.compress_raw_inner::<true>(input_data, destination_buffer);
+        } else {
+            self.table.fill(0);
+            self.compress_raw_inner::<false>(input_data, destination_buffer);
         }
+    }
+
+    #[inline(always)]
+    fn compress_raw_inner<const USE_EPOCH: bool>(
+        &mut self,
+        input_data: &[u8],
+        destination_buffer: &mut Vec<u8>,
+    ) {
+        let total_input_length = input_data.len();
+        let curr_epoch = self.epoch;
+        let epoch_high = (curr_epoch as u64) << 40;
+
+        let mut bit_writer = BitWriter::new(destination_buffer);
+        bit_writer.write_bits(if self.last { 0b011 } else { 0b010 }, 3); // BFINAL, BTYPE=01 (Fixed Huffman)
+
+        let mut current_position = 0;
+        let mut misses = 0u32;
+
+        while current_position + 4 <= total_input_length {
+            let word = u32::from_le_bytes(
+                input_data[current_position..current_position + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            let prefix3 = word & 0x00FF_FFFF;
+            let hash_index = (prefix3.wrapping_mul(0x1e35a7bd) >> 20) as usize & 4095;
+
+            let entry = self.table[hash_index];
+
+            let (is_valid, previous_index) = if USE_EPOCH {
+                let expected = epoch_high | ((prefix3 as u64) << 16);
+                let valid = ((entry ^ expected) & 0xFFFF_FFFF_FFFF_0000) == 0;
+                let prev_idx = (entry as u16).wrapping_sub(1) as usize;
+                self.table[hash_index] = expected | ((current_position as u32 + 1) as u64);
+                (valid, prev_idx)
+            } else {
+                let expected = (prefix3 as u64) << 32;
+                let valid = (entry >> 32) == (prefix3 as u64) && (entry as u32) > 0;
+                let prev_idx = (entry as u32).wrapping_sub(1) as usize;
+                self.table[hash_index] = expected | ((current_position as u32 + 1) as u64);
+                (valid, prev_idx)
+            };
+
+            let mut match_length = 0;
+            let mut match_distance = 0;
+
+            // Verified match: if prefix matches in L1 cache, first 3 bytes are guaranteed!
+            if is_valid {
+                match_distance = current_position - previous_index;
+                if match_distance > 0 && match_distance <= 32768 {
+                    match_length = 3;
+                    let max_match = (total_input_length - current_position).min(258);
+                    while match_length + 8 <= max_match {
+                        let p1 = u64::from_le_bytes(
+                            input_data
+                                [previous_index + match_length..previous_index + match_length + 8]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let p2 = u64::from_le_bytes(
+                            input_data[current_position + match_length
+                                ..current_position + match_length + 8]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let diff = p1 ^ p2;
+                        if diff != 0 {
+                            match_length += (diff.trailing_zeros() / 8) as usize;
+                            break;
+                        }
+                        match_length += 8;
+                    }
+                    while match_length < max_match
+                        && input_data[previous_index + match_length]
+                            == input_data[current_position + match_length]
+                    {
+                        match_length += 1;
+                    }
+                }
+            }
+
+            if match_length >= 3 {
+                let len_entry = LENGTH_TABLE[match_length - 3];
+                let len_bits = (len_entry & 0xFFFF) as u64;
+                let len_count = (len_entry >> 16) as u8;
+
+                let (dist_bits, dist_count) = if match_distance <= 2048 {
+                    let dist_entry = DIST_TABLE_2048[match_distance];
+                    ((dist_entry & 0xFFFF) as u64, (dist_entry >> 16) as u8)
+                } else {
+                    let (code, extra_bits, extra_val) = const_get_dist_code(match_distance);
+                    let bits = ((DIST_CODES[code as usize] as u32) | ((extra_val as u32) << 5)) as u64;
+                    (bits, 5 + extra_bits)
+                };
+
+                let combined = len_bits | (dist_bits << len_count);
+                bit_writer.write_bits(combined, len_count + dist_count);
+
+                current_position += match_length;
+                misses = 0;
+            } else {
+                let literal_byte = input_data[current_position] as usize;
+                let entry = LIT_TABLE[literal_byte];
+                bit_writer.write_bits((entry & 0xFFFF) as u64, (entry >> 16) as u8);
+                current_position += 1;
+                misses += 1;
+                if misses > 32 {
+                    let step = (misses >> 5).min(4) as usize;
+                    let fast_literals =
+                        (step - 1).min(total_input_length.saturating_sub(current_position + 4));
+                    let mut k = 0;
+                    while k + 1 < fast_literals {
+                        let e0 = LIT_TABLE[input_data[current_position] as usize];
+                        let e1 = LIT_TABLE[input_data[current_position + 1] as usize];
+                        let c0 = (e0 & 0xFFFF) as u64;
+                        let b0 = (e0 >> 16) as u8;
+                        let c1 = (e1 & 0xFFFF) as u64;
+                        let b1 = (e1 >> 16) as u8;
+                        bit_writer.write_bits(c0 | (c1 << b0), b0 + b1);
+                        current_position += 2;
+                        k += 2;
+                    }
+                    if k < fast_literals {
+                        let entry = LIT_TABLE[input_data[current_position] as usize];
+                        bit_writer.write_bits((entry & 0xFFFF) as u64, (entry >> 16) as u8);
+                        current_position += 1;
+                    }
+                }
+            }
+        }
+
+        // Emit remaining trailing literal bytes (batched 2 at a time)
+        while current_position + 1 < total_input_length {
+            let e0 = LIT_TABLE[input_data[current_position] as usize];
+            let e1 = LIT_TABLE[input_data[current_position + 1] as usize];
+            let c0 = (e0 & 0xFFFF) as u64;
+            let b0 = (e0 >> 16) as u8;
+            let c1 = (e1 & 0xFFFF) as u64;
+            let b1 = (e1 >> 16) as u8;
+            bit_writer.write_bits(c0 | (c1 << b0), b0 + b1);
+            current_position += 2;
+        }
+        if current_position < total_input_length {
+            let entry = LIT_TABLE[input_data[current_position] as usize];
+            bit_writer.write_bits((entry & 0xFFFF) as u64, (entry >> 16) as u8);
+        }
+
+        // Emit End of Block (EOB = 256)
+        bit_writer.write_bits(LIT_LEN_CODES[256] as u64, LIT_LEN_BITS[256]);
         if !self.last {
             // A non-final stored block's header (BFINAL=0, BTYPE=00); the padding to the
             // byte boundary follows, then the caller's LEN and NLEN.
             bit_writer.write_bits(0, 3);
         }
         bit_writer.finish();
-        self.tokens = tokens;
     }
-
-    /// Adds position `i` to the chains; the previous position with the same hash.
-    #[inline(always)]
-    fn insert(&mut self, d: &[u8], i: usize) -> u32 {
-        let h = hash3(d, i);
-        let old = self.head[h];
-        self.head[h] = self.base + i as u32 + 1;
-        self.prev[i & WMASK] = old;
-        old
-    }
-
-    /// The longest match for position `i` longer than `shorter`, from chain entry `cand`:
-    /// (length, distance), or (0, 0).
-    #[inline(always)]
-    fn longest(&self, d: &[u8], i: usize, mut cand: u32, shorter: usize) -> (usize, usize) {
-        let max = (d.len() - i).min(258);
-        let mut best = shorter.max(2);
-        if best >= max {
-            return (0, 0);
-        }
-        let mut dist_best = 0;
-        let mut chain = if shorter >= 32 { MAX_CHAIN / 4 } else { MAX_CHAIN };
-        while cand > self.base && chain > 0 {
-            let p = (cand - self.base - 1) as usize;
-            let dist = i - p;
-            if dist >= WSIZE {
-                break;
-            }
-            if d[p + best] == d[i + best] && d[p] == d[i] && d[p + 1] == d[i + 1] {
-                let len = common(d, p, i, max);
-                if len > best {
-                    best = len;
-                    dist_best = dist;
-                    if len >= NICE.min(max) {
-                        break;
-                    }
-                }
-            }
-            cand = self.prev[p & WMASK];
-            chain -= 1;
-        }
-        if dist_best == 0 {
-            (0, 0)
-        } else {
-            (best, dist_best)
-        }
-    }
-
-    /// `d` as LZ77 tokens in `self.tokens`, with one position of deferred matching: a
-    /// match shorter than `LAZY` is kept only if the next position has none longer.
-    fn lz77(&mut self, d: &[u8]) {
-        if self.head.is_empty() {
-            self.head = vec![0; 1 << HASH_BITS];
-            self.prev = vec![0; WSIZE];
-        }
-        // Positions of this input are stored above `base`; move it past the last input's.
-        if self.base > u32::MAX - (d.len() as u32).saturating_add(2 * WSIZE as u32) - (1 << 20) {
-            self.head.fill(0);
-            self.prev.fill(0);
-            self.base = 0;
-        }
-        self.tokens.clear();
-        let n = d.len();
-        let mut i = 0;
-        let mut pending: Option<(usize, usize)> = None;
-        while i < n {
-            let found = if i + 3 <= n {
-                let cand = self.insert(d, i);
-                self.longest(d, i, cand, pending.map_or(0, |p| p.0))
-            } else {
-                (0, 0)
-            };
-            if let Some((len, dist)) = pending {
-                if found.0 > len {
-                    // A longer match one later: the deferred position becomes a literal.
-                    self.tokens.push(d[i - 1] as u32);
-                    pending = Some(found);
-                    i += 1;
-                    continue;
-                }
-                self.tokens.push(MATCH | (len as u32) << 16 | dist as u32);
-                let end = i - 1 + len;
-                if len <= MAX_INSERT {
-                    for j in i + 1..end.min(n.saturating_sub(2)) {
-                        self.insert(d, j);
-                    }
-                }
-                pending = None;
-                i = end;
-                continue;
-            }
-            if found.0 >= 3 {
-                if found.0 < LAZY && i + 1 < n {
-                    pending = Some(found);
-                    i += 1;
-                    continue;
-                }
-                self.tokens.push(MATCH | (found.0 as u32) << 16 | found.1 as u32);
-                if found.0 <= MAX_INSERT {
-                    for j in i + 1..(i + found.0).min(n.saturating_sub(2)) {
-                        self.insert(d, j);
-                    }
-                }
-                i += found.0;
-                continue;
-            }
-            self.tokens.push(d[i] as u32);
-            i += 1;
-        }
-        if let Some((len, dist)) = pending {
-            self.tokens.push(MATCH | (len as u32) << 16 | dist as u32);
-        }
-        self.base = self.base.wrapping_add(n as u32 + WSIZE as u32 + 1);
-    }
-}
-
-/// One block of `tokens`: dynamic codes, or fixed ones where the block comes out shorter
-/// with them (small blocks, where the tables cost more than they save).
-fn write_block(w: &mut BitWriter, tokens: &[u32], last: bool) {
-    let mut lf = [0u32; 286];
-    let mut df = [0u32; 30];
-    let mut extra = 0u64;
-    for &t in tokens {
-        if t & MATCH == 0 {
-            lf[t as usize] += 1;
-        } else {
-            let ls = LEN_SYM[((t >> 16) & 0x1FF) as usize] as usize;
-            let ds = dist_sym((t & 0xFFFF) as usize);
-            lf[257 + ls] += 1;
-            df[ds] += 1;
-            extra += (LEN_EXTRA[ls] + DIST_EXTRA[ds]) as u64;
-        }
-    }
-    lf[256] = 1;
-    let mut ll = [0u8; 286];
-    let mut dl = [0u8; 30];
-    code_lengths(&lf, 15, &mut ll);
-    code_lengths(&df, 15, &mut dl);
-    let hlit = (257..=286).rev().find(|&n| ll[n - 1] != 0).unwrap_or(257).max(257);
-    let hdist = (1..=30).rev().find(|&n| dl[n - 1] != 0).unwrap_or(1).max(1);
-    // The code lengths run-length coded (16: repeat the last 3-6 times, 17: 3-10 zeros,
-    // 18: 11-138 zeros), as (symbol, extra value).
-    let mut seq = Vec::with_capacity(hlit + hdist);
-    seq.extend_from_slice(&ll[..hlit]);
-    seq.extend_from_slice(&dl[..hdist]);
-    let mut rle: Vec<(u8, u8)> = Vec::with_capacity(seq.len());
-    let mut i = 0;
-    while i < seq.len() {
-        let v = seq[i];
-        let mut run = seq[i..].iter().take_while(|&&x| x == v).count();
-        if v == 0 {
-            while run >= 11 {
-                let r = run.min(138);
-                rle.push((18, (r - 11) as u8));
-                run -= r;
-                i += r;
-            }
-            if run >= 3 {
-                rle.push((17, (run - 3) as u8));
-                i += run;
-                run = 0;
-            }
-        } else {
-            rle.push((v, 0));
-            i += 1;
-            run -= 1;
-            while run >= 3 {
-                let r = run.min(6);
-                rle.push((16, (r - 3) as u8));
-                run -= r;
-                i += r;
-            }
-        }
-        for _ in 0..run {
-            rle.push((v, 0));
-            i += 1;
-        }
-    }
-    let mut cf = [0u32; 19];
-    for &(s, _) in &rle {
-        cf[s as usize] += 1;
-    }
-    let mut cl = [0u8; 19];
-    code_lengths(&cf, 7, &mut cl);
-    let hclen = (4..=19).rev().find(|&n| cl[CL_ORDER[n - 1]] != 0).unwrap_or(4).max(4);
-    let header_bits: u64 = 14 + 3 * hclen as u64 + rle.iter().map(|&(s, _)| cl[s as usize] as u64 + [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 7][s as usize]).sum::<u64>();
-    let dyn_bits = header_bits + lf.iter().zip(&ll).map(|(&f, &l)| f as u64 * l as u64).sum::<u64>() + df.iter().zip(&dl).map(|(&f, &l)| f as u64 * l as u64).sum::<u64>() + extra;
-    let fixed_bits = lf.iter().enumerate().map(|(s, &f)| f as u64 * LIT_LEN_BITS[s] as u64).sum::<u64>() + df.iter().map(|&f| f as u64 * 5).sum::<u64>() + extra;
-    let mut lc = [0u16; 286];
-    let mut dc = [0u16; 30];
-    let fin = last as u64;
-    if fixed_bits <= dyn_bits {
-        w.write_bits(fin | 0b010, 3);
-        lc.copy_from_slice(&LIT_LEN_CODES[..286]);
-        ll.copy_from_slice(&LIT_LEN_BITS[..286]);
-        for s in 0..30 {
-            dc[s] = DIST_CODES[s] as u16;
-            dl[s] = 5;
-        }
-    } else {
-        w.write_bits(fin | 0b100, 3);
-        w.write_bits((hlit - 257) as u64, 5);
-        w.write_bits((hdist - 1) as u64, 5);
-        w.write_bits((hclen - 4) as u64, 4);
-        for &s in &CL_ORDER[..hclen] {
-            w.write_bits(cl[s] as u64, 3);
-        }
-        let mut cc = [0u16; 19];
-        canonical(&cl, &mut cc);
-        for &(s, x) in &rle {
-            w.write_bits(cc[s as usize] as u64, cl[s as usize]);
-            match s {
-                16 => w.write_bits(x as u64, 2),
-                17 => w.write_bits(x as u64, 3),
-                18 => w.write_bits(x as u64, 7),
-                _ => {}
-            }
-        }
-        canonical(&ll, &mut lc);
-        canonical(&dl, &mut dc);
-    }
-    for &t in tokens {
-        if t & MATCH == 0 {
-            w.write_bits(lc[t as usize] as u64, ll[t as usize]);
-        } else {
-            let len = ((t >> 16) & 0x1FF) as usize;
-            let dist = (t & 0xFFFF) as usize;
-            let ls = LEN_SYM[len] as usize;
-            let ds = dist_sym(dist);
-            let (lx, dx) = ((len - LEN_BASE[ls] as usize) as u64, (dist - DIST_BASE[ds] as usize) as u64);
-            let s = 257 + ls;
-            w.write_bits(lc[s] as u64 | lx << ll[s], ll[s] + LEN_EXTRA[ls]);
-            w.write_bits(dc[ds] as u64 | dx << dl[ds], dl[ds] + DIST_EXTRA[ds]);
-        }
-    }
-    w.write_bits(lc[256] as u64, ll[256]);
 }
 
 /// `input` as byte-aligned stored blocks, the last final; one empty final block if empty.

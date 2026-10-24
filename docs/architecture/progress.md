@@ -49,7 +49,7 @@ Dated notes in `memorycastle/journal/` hold why each decision was made; `CLAUDE.
 - [ ] D2c. One blob per domain with a combined fingerprint; generated `const`s.
 - [x] D4b. Hyphenation memo per word (`2026-10-24-hyphenation-memo.md`).
 - [ ] D3, D4. Pre-scan fused into the lexer; demand loading of patterns, metrics and font programs.
-- [ ] D5. Start-up, RSS and PDF size against pdfLaTeX. Dynamic-Huffman deflate done: every benchmark PDF smaller than pdfLaTeX's (`2026-10-24-deflate-dynamic-huffman.md`). Left: start-up and RSS.
+- [ ] D5. Start-up, RSS and PDF size against pdfLaTeX. Dynamic-Huffman deflate tried and reverted by the user's choice: smaller than pdfLaTeX's PDFs, but about 0.6M instructions per page (`2026-10-24-deflate-dynamic-huffman.md`). Left: start-up and RSS.
 - [ ] F1. Engine fallback in releases, reporting its trigger.
 - [ ] F2. Fallback triggers ranked over the arXiv sample: started (`2026-10-23-arxiv-corpus.md`, `2026-10-23-native-gaps-census.md`, `2026-10-24-native-coverage-census.md`); 1 of 169 papers native today.
 - [ ] I1. Session-stable interner for incremental compile.

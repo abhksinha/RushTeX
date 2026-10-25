@@ -568,6 +568,18 @@ impl Machine<'_, '_> {
     /// What the next entry's first token (`x`, §785) expands to in LaTeX when it is a native:
     /// `Some(true)` to look again, `Some(false)` when done, `None` for a row's first token.
     pub(in crate::engine) fn align_peek_native(&mut self, x: X) -> Option<bool> {
+        // amsmath's `align`: its `\everycr` and its end.
+        match x.m {
+            Meaning::Doc(i) if i as usize == super::AL_ALIGN_CR => {
+                self.align_every_cr();
+                return Some(false);
+            }
+            Meaning::Doc(i) if i as usize == super::AL_END => {
+                self.align_finish();
+                return Some(false);
+            }
+            _ => {}
+        }
         let doc = self.doc.as_ref()?;
         doc.tabs.last()?;
         if x.t == Token::cs(doc.par_id) {

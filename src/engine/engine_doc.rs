@@ -23,6 +23,8 @@ use crate::data::data_nfss;
 
 #[path = "engine_tabular.rs"]
 mod tabular;
+#[path = "engine_ams_align.rs"]
+mod ams_align;
 #[path = "engine_float.rs"]
 mod float;
 
@@ -76,7 +78,11 @@ enum Change {
 
 /// Commands a native package table redefines that the native job runs as Rust natives
 /// (package, name, `DOC` name): the package's definition is not data, but a mechanism.
-pub const PACKAGE_NATIVES: [(&str, &str, &str); 3] = [("amsfonts", "widehat", "rt@widehat"), ("amsfonts", "widetilde", "rt@widetilde"), ("graphicx", "includegraphics", "rt@includegraphics")];
+pub const PACKAGE_NATIVES: [(&str, &str, &str); 32] = [("amsmath", "bigl", "rt@big1l"), ("amsmath", "bigr", "rt@big1r"), ("amsmath", "bigm", "rt@big1m"), ("amsmath", "Bigl", "rt@big15l"), ("amsmath", "Bigr", "rt@big15r"), ("amsmath", "Bigm", "rt@big15m"), ("amsmath", "biggl", "rt@big2l"), ("amsmath", "biggr", "rt@big2r"), ("amsmath", "biggm", "rt@big2m"), ("amsmath", "Biggl", "rt@big25l"), ("amsmath", "Biggr", "rt@big25r"), ("amsmath", "Biggm", "rt@big25m"), ("amsmath", "cdots", "rt@cdots"), ("amsmath", "dotsb", "rt@cdots"), ("amsmath", "dotsm", "rt@cdots"), ("amsmath", "dotsc", "rt@dotsc"), ("amsmath", "dotsi", "rt@dotsi"), ("amsmath", "dotso", "rt@dotso"), ("amsmath", "colon", "rt@colon"), ("amsmath", "big", "rt@big1"), ("amsmath", "Big", "rt@big15"), ("amsmath", "bigg", "rt@big2"), ("amsmath", "Bigg", "rt@big25"), ("amstext", "text", "rt@text"), ("amsopn", "operatorname", "rt@operatorname"), ("amsopn", "DeclareMathOperator", "rt@declmathop"), ("amsfonts", "widehat", "rt@widehat"), ("amsfonts", "widetilde", "rt@widetilde"), ("graphicx", "includegraphics", "rt@includegraphics"), ("amsmath", "eqref", "rt@eqref"), ("amsmath", "nonumber", "rt@nonumber"), ("amsmath", "notag", "rt@nonumber")];
+
+/// Names a package changes that the native job follows in its own natives once the package
+/// is loaded (`Machine::ams`): `rushtex-gen natpkg` neither blocks nor holds them.
+pub const PACKAGE_FOLLOWS: [(&str, &str); 8] = [("amsmath", "dots"), ("amsmath", "ldots"), ("amsmath", "equation"), ("amsmath", "endequation"), ("amsmath", "["), ("amsmath", "]"), ("amsmath", ","), ("amsmath", "thinspace")];
 
 /// `\paperwidth` and `\paperheight` of each of `data_class::PAPERS`, as article's
 /// options set them (`8.5in`, `210mm`, …), in sp.
@@ -89,10 +95,63 @@ const PDF_PAGE_WIDTH: u32 = 23;
 /// are [`PACKAGE_NATIVES`]. graphicx (with keyval, graphics, trig and pdftex.def).
 const DRIVER_PACKAGES: [&str; 1] = ["graphicx"];
 
+/// Packages that change nothing the native job reads in a document it accepts: inputenc
+/// defines only `\inputencoding`, `\DeclareInputText` and `\DeclareInputMath`, and
+/// with `utf8` (LaTeX's default input encoding) leaves the state as it was
+/// (`rushtex-gen natpkg inputenc` and `inputenc[utf8]`).
+const NO_EFFECT_PACKAGES: [&str; 1] = ["inputenc"];
+
+/// Package options with the same effect as none, as `rushtex-gen natpkg name[option]`
+/// finds (the state after it is the package's own): amsmath's defaults, `psamsfonts`
+/// (the same fonts in TeX Live), inputenc's `utf8`; graphicx's `pdftex` and `final` are
+/// what `graphics.cfg` and `\ExecuteOptions` choose under pdfTeX.
+const SAME_OPTIONS: [(&str, &str); 9] = [
+    ("amsfonts", "psamsfonts"),
+    ("amsmath", "centertags"),
+    ("amsmath", "namelimits"),
+    ("amsmath", "nointlimits"),
+    ("amsmath", "sumlimits"),
+    ("amssymb", "psamsfonts"),
+    ("graphicx", "final"),
+    ("graphicx", "pdftex"),
+    ("inputenc", "utf8"),
+];
+
+/// `\DeclareFontSubstitution` of the encodings the native path sets (`fontdef.dtx`,
+/// `t1enc.def`, `ot1enc.def`): the default family, series and shape.
+const FONT_SUBSTITUTIONS: [(&str, [&str; 3]); 6] = [("OT1", ["cmr", "m", "n"]), ("T1", ["cmr", "m", "n"]), ("OML", ["cmm", "m", "it"]), ("OMS", ["cmsy", "m", "n"]), ("OMX", ["cmex", "m", "n"]), ("U", ["cmr", "m", "n"])];
+
+/// `\wrong@fontshape` for `key` (`enc/family/series/shape`): the default shape, then the
+/// default series too, then the default family too; the first that `known` takes. The
+/// encoding never changes.
+fn wrong_font_shape(key: &str, known: impl Fn(&str) -> bool) -> Option<String> {
+    let mut p = key.split('/');
+    let (enc, fam, ser) = (p.next()?, p.next()?, p.next()?);
+    let [dfam, dser, dshape] = FONT_SUBSTITUTIONS.iter().find(|s| s.0 == enc)?.1;
+    [format!("{enc}/{fam}/{ser}/{dshape}"), format!("{enc}/{fam}/{dser}/{dshape}"), format!("{enc}/{dfam}/{dser}/{dshape}")].into_iter().find(|k| known(k))
+}
+
+/// Whether every option of `opts` (a comma list) has the same effect as none for `pkg`.
+fn same_options(pkg: &str, opts: &str) -> bool {
+    opts.split(',').map(str::trim).filter(|o| !o.is_empty()).all(|o| SAME_OPTIONS.contains(&(pkg, o)))
+}
+
 /// Whether the native job writes `name` itself, so a table's macro of that name is not
 /// installed (`install`): a `DOC` native or an OT1 text symbol.
 pub fn native_name(name: &str) -> bool {
     DOC.iter().any(|d| d.0 == name) || TEXT_SYMBOLS.iter().any(|s| s.0 == name)
+}
+
+/// amsmath's dots: `\cdots` (`\extrap@\@cdots`), `\dotsb@`, `\dotsc`, `\dotsi`, `\dotso@`, or `\dots`
+/// choosing by its next token.
+#[derive(Clone, Copy, PartialEq)]
+enum Dots {
+    Cdots,
+    B,
+    C,
+    I,
+    O,
+    Auto,
 }
 
 /// A math alphabet's family: a symbol font's, or one given on first use.
@@ -104,7 +163,7 @@ enum Alphabet {
 
 /// The native commands, by `Meaning::Doc` index. Names starting `rt@` are the steps of a
 /// command that typesets material in between (read back from the input).
-static DOC: [(&str, Native); 173] = [
+static DOC: [(&str, Native); 211] = [
     ("rt@output", |m| m.output()),
     ("rt@outputfoot", |m| m.output_page()),
     ("section", |m| m.section(0)),
@@ -136,7 +195,7 @@ static DOC: [(&str, Native); 173] = [
     ("LaTeX", |m| m.logo(true)),
     ("TeX", |m| m.logo(false)),
     ("ldots", |m| m.ellipsis()),
-    ("dots", |m| m.ellipsis()),
+    ("dots", |m| m.dots()),
     ("textellipsis", |m| m.ellipsis()),
     (",", |m| m.thin_space()),
     ("thinspace", |m| m.thin_space()),
@@ -320,6 +379,44 @@ static DOC: [(&str, Native); 173] = [
     ("rt@captionend", |m| m.caption_end()),
     ("rt@floatflush", |m| m.float_flush()),
     ("rt@includegraphics", |m| m.include_graphics()),
+    ("rt@eqref", |m| m.eqref()),
+    ("rt@nonumber", |m| m.nonumber()),
+    ("rt@ltxlabel", |m| m.label_now()),
+    ("rt@operatorname", |m| m.operator_name()),
+    ("rt@declmathop", |m| m.declare_math_operator()),
+    ("rt@text", |m| m.ams_text()),
+    ("rt@textsize", |m| m.text_size()),
+    ("rt@checkmathfonts", |m| m.check_math_fonts()),
+    ("rt@amsaccent", |m| m.ams_accent()),
+    ("rt@cdots", |m| m.ams_dots(Dots::Cdots)),
+    ("rt@dotsc", |m| m.ams_dots(Dots::C)),
+    ("rt@dotsi", |m| m.ams_dots(Dots::I)),
+    ("rt@dotso", |m| m.ams_dots(Dots::O)),
+    ("rt@colon", |m| m.ams_colon()),
+    ("rt@big1", |m| m.ams_big("1")),
+    ("rt@big15", |m| m.ams_big("1.5")),
+    ("rt@big2", |m| m.ams_big("2")),
+    ("rt@big25", |m| m.ams_big("2.5")),
+    ("rt@big1l", |m| m.ams_big_class("1", "mathopen")),
+    ("rt@big1r", |m| m.ams_big_class("1", "mathclose")),
+    ("rt@big1m", |m| m.ams_big_class("1", "mathrel")),
+    ("rt@big15l", |m| m.ams_big_class("1.5", "mathopen")),
+    ("rt@big15r", |m| m.ams_big_class("1.5", "mathclose")),
+    ("rt@big15m", |m| m.ams_big_class("1.5", "mathrel")),
+    ("rt@big2l", |m| m.ams_big_class("2", "mathopen")),
+    ("rt@big2r", |m| m.ams_big_class("2", "mathclose")),
+    ("rt@big2m", |m| m.ams_big_class("2", "mathrel")),
+    ("rt@big25l", |m| m.ams_big_class("2.5", "mathopen")),
+    ("rt@big25r", |m| m.ams_big_class("2.5", "mathclose")),
+    ("rt@big25m", |m| m.ams_big_class("2.5", "mathrel")),
+    ("rt@alstart", |m| m.align_start()),
+    ("rt@alhalign", |m| m.align_halign()),
+    ("rt@alfield", |m| m.align_field()),
+    ("rt@altag", |m| m.align_tag()),
+    ("rt@altagnum", |m| m.align_tag_num()),
+    ("rt@altagkeep", |m| m.align_tag_keep()),
+    ("rt@alcr", |m| m.not_native("amsmath's \\everycr outside its alignment")),
+    ("rt@alend", |m| m.not_native("amsmath's align end outside its alignment")),
 ];
 const OUTPUT: usize = 0;
 const OUTPUT_FOOT: usize = 1;
@@ -356,6 +453,16 @@ const TAB_U: usize = 133;
 const TAB_V: usize = 134;
 const TAB_END: usize = 135;
 const HLINE: usize = 136;
+/// amsmath's `align`: the display's start, the `\halign`, a field's end, the tag entry, its
+/// number, the row's end, `\everycr`, the alignment's end.
+const AL_START: usize = 203;
+const AL_HALIGN: usize = 204;
+const AL_FIELD: usize = 205;
+const AL_TAG: usize = 206;
+const AL_TAG_NUM: usize = 207;
+const AL_TAG_KEEP: usize = 208;
+const AL_ALIGN_CR: usize = 209;
+const AL_END: usize = 210;
 const TAB_SKIP: usize = 137;
 const MULTICOLUMN: usize = 139;
 const MC_BODY: usize = 140;
@@ -494,7 +601,7 @@ const TEXT_SYMBOLS: [(&str, u32); 9] = [("i", 16), ("j", 17), ("ss", 25), ("ae",
 /// Commands of preamble code (`\makeatletter`, `\ifx`, `\let`, …); `\let` and
 /// `\providecommand` define their first name, as `\newcommand` does.
 const PREAMBLE: [&str; 13] = ["makeatletter", "makeatother", "ifx", "else", "fi", "bgroup", "egroup", "relax", "document", "enddocument", "@preamblecmds", "@notprerr", "endinput"];
-const ENVS: [&str; 20] = ["figure", "table", "figure*", "table*", "tabular", "document", "em", "quote", "quotation", "verse", "itemize", "enumerate", "center", "description", "verbatim", "flushleft", "flushright", "abstract", "equation", "thebibliography"];
+const ENVS: [&str; 23] = ["align", "align*", "equation*", "figure", "table", "figure*", "table*", "tabular", "document", "em", "quote", "quotation", "verse", "itemize", "enumerate", "center", "description", "verbatim", "flushleft", "flushright", "abstract", "equation", "thebibliography"];
 
 /// `\normalsize` among `data_class::SIZE_COMMANDS`.
 const NORMALSIZE: usize = 4;
@@ -607,6 +714,16 @@ pub struct Doc {
     alphabets: Vec<(&'static str, bool, Alphabet)>,
     /// The packages loaded from native tables (`data_kernel::package`).
     packages: Vec<&'static str>,
+    /// amsmath's display in progress: 1 for `equation` (`\@eqnswtrue`), 2 for `equation*`
+    /// and `\[`, 0 outside; and `\df@label`, the key a `\label` there leaves for the end.
+    ams_display: u8,
+    df_label: Option<Vec<Token>>,
+    /// amsmath's `\big@size`, set with the math fonts.
+    big_size: i32,
+    /// The `align` being read.
+    align: Option<Box<ams_align::AmsAlign>>,
+    /// Shapes `\wrong@fontshape` has made aliases of their substitutes (`\global\let`).
+    wrong_shapes: Vec<(String, String)>,
     /// amsfonts' `\symAMSb`, and each pending wide accent: its argument and its accent.
     wide_fam: u32,
     wide: Vec<(Vec<Token>, u32)>,
@@ -754,13 +871,13 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                 // `@` is a letter only after `\makeatletter`: an unknown name with `@` is read
                 // as its letters before the `@` (or the control symbol `\@`).
                 let have = loaded.iter().fold(KERNEL_BIT, |m, &p| m | package_bit(p));
-                let known = |name: &str| table_names(name) & have != 0 || PACKAGE_NATIVES.iter().any(|p| p.1 == name && DRIVER_PACKAGES.contains(&p.0) && loaded.contains(&p.0)) || WORDS.contains(&name) || PREAMBLE.contains(&name) || defined.contains(&name);
+                let known = |name: &str| blocked_names(name) & have == 0 && (table_names(name) & have != 0 || PACKAGE_NATIVES.iter().any(|p| p.1 == name && DRIVER_PACKAGES.contains(&p.0) && loaded.contains(&p.0)) || WORDS.contains(&name) || PREAMBLE.contains(&name)) || defined.contains(&name);
                 if rest[..n].contains('@') && !known(&rest[..n]) {
                     n = rest[..n].find('@').unwrap_or(n);
                 }
                 if n == 0 {
                     let symbol = rest.get(..rest.chars().next().map_or(0, char::len_utf8)).unwrap_or("");
-                    if !rest.bytes().next().is_some_and(|c| b" $&#%_{},@\r\n\t()[]\\\"'.=^`~".contains(&c)) && !known(symbol) {
+                    if !(rest.bytes().next().is_some_and(|c| b" $&#%_{},@\r\n\t()[]\\\"'.=^`~".contains(&c)) && blocked_names(symbol) & have == 0) && !known(symbol) {
                         stop(rest.get(..rest.chars().next().map_or(0, char::len_utf8)).unwrap_or(""), &mut blocked)?;
                         i += 1 + rest.chars().next().map_or(0, char::len_utf8);
                         continue;
@@ -783,7 +900,7 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                 if define_next {
                     defined.push(name);
                     define_next = false;
-                } else if matches!(name, "newcommand" | "renewcommand" | "providecommand" | "let") {
+                } else if matches!(name, "newcommand" | "renewcommand" | "providecommand" | "let" | "DeclareMathOperator") {
                     define_next = true;
                 } else if name == "usepackage" {
                     // `\usepackage[options]{a,b}`: each a package with a native table, no options.
@@ -792,11 +909,11 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                         Some(r) => r.split_once(']').map_or(("x", ""), |(o, a)| (o, a.trim_start())),
                         None => ("", after),
                     };
-                    if !opts.trim().is_empty() {
-                        stop("package options", &mut blocked)?;
-                    }
                     let Some(list) = after.strip_prefix('{').and_then(|r| r.split_once('}')).map(|r| r.0) else { return Err(name) };
                     for p in list.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                        if !same_options(p, opts) {
+                            stop("package options", &mut blocked)?;
+                        }
                         if !require(p, &mut loaded) {
                             stop(p, &mut blocked)?;
                         }
@@ -830,7 +947,7 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                 }
                 if name == "begin" || name == "end" {
                     let env = rest[n..].strip_prefix('{').and_then(|r| r.split_once('}')).map(|r| r.0).ok_or(name)?;
-                    if !ENVS.contains(&env) && !defined.contains(&env) {
+                    if !(ENVS.contains(&env) && blocked_names(env) & have == 0 && (!matches!(env, "equation*" | "align" | "align*") || loaded.contains(&"amsmath"))) && !defined.contains(&env) {
                         stop(env, &mut blocked)?;
                     }
                     if matches!(env, "figure" | "table" | "figure*" | "table*") {
@@ -843,8 +960,11 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                             floats += 1;
                         }
                     }
-                    if env == "tabular" && name == "end" {
+                    // `align`'s `&` is taken as a tabular's is.
+                    if matches!(env, "tabular" | "align" | "align*") && name == "end" {
                         tabs = tabs.saturating_sub(1);
+                    } else if matches!(env, "align" | "align*") {
+                        tabs += 1;
                     } else if env == "tabular" && !defined.contains(&env) {
                         // `[pos]{spec}`: a preamble `tabular::mkpream` takes.
                         tabs += 1;
@@ -870,6 +990,29 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
         }
     }
     Err("no \\end{document}")
+}
+
+/// An `align` body's rows: split at each `\\` outside braces; the text after the last is
+/// a row too, empty after a trailing `\\`.
+fn split_rows(body: &str) -> Vec<&str> {
+    let (b, mut rows, mut depth, mut start, mut i) = (body.as_bytes(), Vec::new(), 0i32, 0, 0);
+    while i < b.len() {
+        match b[i] {
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
+            b'\\' if b.get(i + 1) == Some(&b'\\') && depth == 0 => {
+                rows.push(&body[start..i]);
+                i += 2;
+                start = i;
+                continue;
+            }
+            b'\\' => i += 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    rows.push(&body[start..]);
+    rows
 }
 
 /// The length of a braced group's contents after its `{`, to its matching `}`.
@@ -949,6 +1092,13 @@ fn label_tokens(text: &str) -> Vec<Token> {
 fn predict(src: &str) -> Predicted {
     let mut out = Predicted::default();
     let Some(start) = src.find("\\begin{document}") else { return out };
+    // Operators the preamble declares (`\DeclareMathOperator{\tr}{tr}`) number nothing.
+    let operators: Vec<&str> = src[..start]
+        .split("\\DeclareMathOperator")
+        .skip(1)
+        .filter_map(|r| r.trim_start_matches('*').trim_start().strip_prefix("{\\")?.split('}').next())
+        .collect();
+    let (quiet, loud) = quiet_macros(&src[..start], &operators);
     struct Group {
         label: String,
         depth: usize,
@@ -958,6 +1108,8 @@ fn predict(src: &str) -> Predicted {
     let (mut sec, mut enums, mut footnote, mut equation) = ([0u32; SECNUMDEPTH], [0u32; 4], 0u32, 0u32);
     let mut pending: Option<String> = None;
     let (mut floats, mut figtab) = (Vec::new(), [0u32; 2]);
+    // Inside an `equation` whose number stands.
+    let mut numbered = false;
     let b = src.as_bytes();
     let next = |i: usize| src[i..].trim_start_matches([' ', '\t', '\r', '\n']).as_bytes().first().copied();
     let push = |groups: &mut Vec<Group>, pending: &mut Option<String>| {
@@ -992,6 +1144,11 @@ fn predict(src: &str) -> Predicted {
                     return out;
                 }
                 let arg = || rest[n..].strip_prefix('{').and_then(|r| r.split_once('}')).map(|r| r.0);
+                // A name the preamble defines with a text that might count, even one the
+                // kernel also knows (`\renewcommand{\sec}{\section{S}}`).
+                if loud.contains(&name) {
+                    return out;
+                }
                 match name {
                     "begin" | "end" => {
                         let Some(env) = arg() else { return out };
@@ -999,6 +1156,7 @@ fn predict(src: &str) -> Predicted {
                             if groups.len() > 1 {
                                 groups.pop();
                             }
+                            numbered &= env != "equation";
                             if matches!(env, "figure" | "table" | "figure*" | "table*") {
                                 floats.pop();
                             }
@@ -1022,6 +1180,39 @@ fn predict(src: &str) -> Predicted {
                                 "equation" => {
                                     equation += 1;
                                     g.label = equation.to_string();
+                                    numbered = true;
+                                }
+                                "equation*" => {}
+                                // `align`: a number per row (each `\\`, and the last) not
+                                // `\nonumber`ed; a row's `\label` takes its number. The body
+                                // is read here and passed over.
+                                "align" | "align*" => {
+                                    let after = &src[i + 2 + env.len()..];
+                                    let close = format!("\\end{{{env}}}");
+                                    let Some(k) = after.find(&close) else { return out };
+                                    let body = &after[..k];
+                                    if body.contains("\\begin") || body.contains('@') {
+                                        return out;
+                                    }
+                                    for row in split_rows(body) {
+                                        let numbered = env == "align" && !row.contains("\\nonumber") && !row.contains("\\notag");
+                                        if numbered {
+                                            equation += 1;
+                                        }
+                                        let mut rest = row;
+                                        while let Some(p) = rest.find("\\label{") {
+                                            let r = &rest[p + 7..];
+                                            let Some(e) = r.find('}') else { return out };
+                                            if !numbered {
+                                                return out;
+                                            }
+                                            out.labels.insert(r[..e].to_string(), equation.to_string());
+                                            rest = &r[e..];
+                                        }
+                                    }
+                                    groups.pop();
+                                    i += 2 + env.len() + k + close.len();
+                                    continue;
                                 }
                                 // An entry is a group; `\label` there takes the label around.
                                 "em" | "document" | "tabular" => {}
@@ -1112,15 +1303,24 @@ fn predict(src: &str) -> Predicted {
                         out.labels.insert(key.to_string(), groups.last().expect("a group").label.clone());
                         i += 2 + key.len();
                     }
-                    "ref" => {
+                    "ref" | "eqref" => {
                         let Some(key) = arg() else { return out };
                         i += 2 + key.len();
+                    }
+                    // amsmath's `\nonumber` in `equation` steps the number back.
+                    "nonumber" | "notag" => {
+                        if std::mem::take(&mut numbered) {
+                            equation -= 1;
+                        }
                     }
                     _ if WORDS.contains(&name) && !matches!(name, "newcommand" | "renewcommand" | "providecommand") => {}
                     // Kernel values, operators and math macros number nothing.
                     _ if table_names(name) != 0 => {}
-                    // A driver package's command (`\includegraphics`) numbers nothing.
-                    _ if PACKAGE_NATIVES.iter().any(|p| p.1 == name && DRIVER_PACKAGES.contains(&p.0)) => {}
+                    // A package's native command (`\includegraphics`, `\operatorname`) numbers
+                    // nothing.
+                    _ if PACKAGE_NATIVES.iter().any(|p| p.1 == name) || operators.contains(&name) => {}
+                    // A macro of the preamble whose text numbers nothing.
+                    _ if quiet.contains(&name) => {}
                     _ => return out,
                 }
             }
@@ -1129,6 +1329,74 @@ fn predict(src: &str) -> Predicted {
     }
     out.complete = true;
     out
+}
+
+/// Whether [`predict`] passes `name` by without a counter changing: a native command,
+/// table name, package native or declared operator that none of its own cases handles.
+fn numbers_nothing(name: &str, operators: &[&str], quiet: &[&str]) -> bool {
+    const COUNTING: [&str; 16] = ["begin", "end", "section", "subsection", "subsubsection", "paragraph", "item", "caption", "footnote", "maketitle", "setcounter", "setlength", "addtolength", "label", "ref", "eqref"];
+    if COUNTING.contains(&name) || matches!(name, "nonumber" | "notag" | "newcommand" | "renewcommand" | "providecommand") {
+        return false;
+    }
+    WORDS.contains(&name) || table_names(name) != 0 || PACKAGE_NATIVES.iter().any(|p| p.1 == name) || operators.contains(&name) || quiet.contains(&name)
+}
+
+/// The macros the preamble defines with `\newcommand`, `\renewcommand` or
+/// `\providecommand` whose text numbers nothing ([`numbers_nothing`], an earlier such macro
+/// included), so that their use in the body does not stop [`predict`]. A text with an `@`
+/// name, or one [`predict`] would have to read, leaves the macro out. The labels check every
+/// predicted value, so a macro wrongly let through can only send the document to the engine.
+/// The second list holds the other macros the preamble defines.
+fn quiet_macros<'a>(preamble: &'a str, operators: &[&str]) -> (Vec<&'a str>, Vec<&'a str>) {
+    let (mut quiet, mut loud): (Vec<&'a str>, Vec<&'a str>) = (Vec::new(), Vec::new());
+    let mut rest = preamble;
+    while let Some(k) = ["\\newcommand", "\\renewcommand", "\\providecommand"].iter().filter_map(|c| rest.find(c).map(|k| (k, c.len()))).min() {
+        let r = rest[k.0 + k.1..].trim_start_matches('*').trim_start();
+        rest = r;
+        let (name, mut r) = match r.strip_prefix("{\\").and_then(|r| r.split_once('}')) {
+            Some((n, r)) => (n, r),
+            None => match r.strip_prefix('\\') {
+                Some(r) => {
+                    let n = r.bytes().take_while(u8::is_ascii_alphabetic).count();
+                    (&r[..n], &r[n..])
+                }
+                None => continue,
+            },
+        };
+        // `[n]` and `[default]`.
+        for _ in 0..2 {
+            r = r.trim_start();
+            if let Some(o) = r.strip_prefix('[') {
+                let Some((_, a)) = o.split_once(']') else { break };
+                r = a;
+            }
+        }
+        let Some(body) = r.trim_start().strip_prefix('{') else {
+            loud.push(name);
+            continue;
+        };
+        let mut depth = 1usize;
+        let Some(end) = body.bytes().position(|c| {
+            match c {
+                b'{' => depth += 1,
+                b'}' => depth -= 1,
+                _ => {}
+            }
+            depth == 0
+        }) else {
+            loud.push(name);
+            continue;
+        };
+        let text = &body[..end];
+        let names = text.split('\\').skip(1).map(|t| (t.bytes().take_while(u8::is_ascii_alphabetic).count(), t));
+        let ok = names.clone().all(|(n, t)| n == 0 || (!t[n..].starts_with('@') && numbers_nothing(&t[..n], operators, &quiet)));
+        if ok && !name.is_empty() && !name.contains('@') {
+            quiet.push(name);
+        } else if !name.is_empty() {
+            loud.push(name);
+        }
+    }
+    (quiet, loud)
 }
 
 /// Each `\bibitem`'s value, for a `\cite` ahead of it: in each `thebibliography`
@@ -1494,7 +1762,7 @@ impl Machine<'_, '_> {
                 self.e.eqtb.set_meaning(id, Meaning::Reg(r), true);
             }
         }
-        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, ids, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, trivlist_then: |_| {}, dated: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special_plain: false, empty_foot: false, regs }));
+        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, ids, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), ams_display: 0, df_label: None, big_size: 0, align: None, wrong_shapes: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, trivlist_then: |_| {}, dated: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special_plain: false, empty_foot: false, regs }));
         self.strut_update();
         let fixed = FONT_FIXED.iter().map(|name| {
             let id = self.e.cs.intern(name);
@@ -2408,8 +2676,36 @@ impl Machine<'_, '_> {
             return self.select_font(f, false);
         }
         // A shape a loaded package declares, else the `.fd` files' (`data_nfss`).
-        let packages = self.doc.as_ref().map_or(&[][..], |d| &d.packages[..]);
-        let Some(t) = packages.iter().rev().filter_map(|p| crate::data::data_kernel::package_shapes(p)).find(|t| t.shape(key).is_some()).or_else(data_nfss::nfss) else { return };
+        let packages = self.doc.as_ref().map(|d| d.packages.clone()).unwrap_or_default();
+        let table = |k: &str| packages.iter().rev().filter_map(|p| crate::data::data_kernel::package_shapes(p)).find(|t| t.shape(k).is_some()).or_else(data_nfss::nfss).filter(|t| t.shape(k).is_some());
+        // `\wrong@fontshape`: an undefined shape takes the encoding's default shape, then
+        // its default series, then its default family (`\DeclareFontSubstitution`). The
+        // first time, the font is the substitute's (`\font@name` is its name) and the shape
+        // becomes an alias of it, so the asked-for name stays undefined; a later selection
+        // finds the alias and loads the font under the asked-for name (`\extract@font`).
+        let aliased = self.doc.as_ref().and_then(|d| d.wrong_shapes.iter().find(|w| w.0 == key)).map(|w| w.1.clone());
+        let (key, first) = match (table(key), aliased) {
+            (Some(_), _) => (key.to_string(), false),
+            (None, Some(k)) => (k, false),
+            (None, None) => match wrong_font_shape(key, |k| table(k).is_some()) {
+                Some(k) => {
+                    if let Some(d) = self.doc.as_mut() {
+                        d.wrong_shapes.push((key.to_string(), k.clone()));
+                    }
+                    (k, true)
+                }
+                None => return self.error(format!("Font shape `{key}' undefined")),
+            },
+        };
+        let named = if first { format!("{key}/{size}") } else { name.clone() };
+        let cs = self.e.cs.intern(&named);
+        if first {
+            if let Meaning::Font(f) = self.e.eqtb.meaning(cs) {
+                return self.select_font(f, false);
+            }
+        }
+        let key = key.as_str();
+        let Some(t) = table(key) else { return };
         let Some(ext) = t.shape(key).and_then(|s| t.external(s, size)) else {
             return self.error(format!("Font shape `{key}' undefined"));
         };
@@ -2422,7 +2718,12 @@ impl Machine<'_, '_> {
         let real = t.shape_name(ext.shape);
         let real_cs = if real == key { cs } else { self.e.cs.intern(&format!("{real}/{size}")) };
         let f = match self.e.eqtb.meaning(real_cs) {
-            Meaning::Font(f) => f,
+            // `\do@subst@correction` loads a substitute again under its own name, which
+            // names the font after it (§1260), even when it was loaded before.
+            Meaning::Font(f) => {
+                self.e.fonts.list[f as usize].ident = real_cs;
+                f
+            }
             _ => {
                 let f = self.find_font(&ext.name(), at, Some(real_cs));
                 let mut parts = real.split('/');
@@ -2780,6 +3081,11 @@ impl Machine<'_, '_> {
 
     /// OT1's `\textellipsis`: `.\kern\fontdimen3\font` three times.
     fn ellipsis(&mut self) {
+        // amsmath: `\ldots` in math is `\mathellipsis`, `\dots` the dots its next token
+        // calls for (`\mdots@`).
+        if self.mode == Mode::Math && self.ams() {
+            return self.math_dots(false, false);
+        }
         if self.leave_vmode() {
             return;
         }
@@ -2791,6 +3097,14 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// `\dots`: `\ldots`; after amsmath in math, the dots its next token calls for.
+    fn dots(&mut self) {
+        if self.mode == Mode::Math && self.ams() {
+            return self.ams_dots(Dots::Auto);
+        }
+        self.ellipsis()
+    }
+
     /// `\,` outside math: `\leavevmode@ifvmode\kern+.16667em`.
     fn thin_space(&mut self) {
         if self.mode == Mode::Math {
@@ -2800,7 +3114,8 @@ impl Machine<'_, '_> {
         if self.leave_vmode() {
             return;
         }
-        let k = self.dimen_of(".16667em");
+        // amsmath's `\,` is `\tmspace+\thinmuskip{.1667em}`.
+        let k = self.dimen_of(if self.ams() { ".1667em" } else { ".16667em" });
         self.hkern(k);
     }
 
@@ -2872,6 +3187,268 @@ impl Machine<'_, '_> {
         self.back_list(&list);
     }
 
+    /// amsopn's `\operatorname{word}`: `\qopname\newmcodes@ o{word}`, i.e. `\mathop{` with
+    /// `'`, `*`, `.`, `-`, `/` and `:` given their text mathcodes, `\kern\z@\operator@font
+    /// word}\nolimits@`; starred, with `\nmlimits@` (`\displaylimits`, the default).
+    fn operator_name(&mut self) {
+        let star = self.next_is('*');
+        let mut word = Vec::new();
+        self.read_arg(&mut word);
+        let mut t = Vec::new();
+        self.tex("\\mathop{\\mathcode`\\'39\\mathcode`\\*42\\mathcode`\\.\"613A\\mathcode`\\-45\\mathcode`\\/47\\mathcode`\\:\"603A\\relax\\kern0pt\\fam0 ", &mut t);
+        t.extend(word);
+        t.push(Token::char(Cat::EndGroup, '}'));
+        if !star {
+            self.tex("\\nolimits ", &mut t);
+        }
+        self.back_list(&t);
+    }
+
+    /// amstext's `\text{…}`: `\mbox` outside math; in math `\text@`, a `\mathchoice` of
+    /// four `\hbox{{\everymath{style}\let\f@size<size>\selectfont …}}`, the text at the
+    /// current size in display and text style, at `\sf@size` and `\ssf@size` in the script
+    /// styles, then `\check@mathfonts`. `\everymath` is LaTeX's user register, after the
+    /// frozen one's `\check@mathfonts`. The script copies' `\firstchoice@false` only stops
+    /// counter steps, which a counter in the text would need.
+    fn ams_text(&mut self) {
+        if self.mode != Mode::Math {
+            let t = self.doc_id_named("mbox");
+            return self.input.back(t);
+        }
+        let mut arg = Vec::new();
+        self.read_arg(&mut arg);
+        let counters = ["stepcounter", "refstepcounter", "addtocounter", "label", "footnote"].map(|n| self.e.cs.intern(n));
+        if arg.iter().any(|t| t.cs_id().is_some_and(|c| counters.contains(&c))) {
+            return self.not_native("a counter in \\text");
+        }
+        let mut t = Vec::new();
+        t.push(Token::char(Cat::BeginGroup, '{'));
+        self.tex("\\mathchoice", &mut t);
+        for (style, k) in [("display", 0), ("text", 0), ("text", 1), ("text", 2)] {
+            self.tex(&format!("{{\\hbox{{{{\\everymath{{\\rt@everymath\\{style}style}}\\rt@textsize{k}"), &mut t);
+            t.extend_from_slice(&arg);
+            self.tex("}}}", &mut t);
+        }
+        self.tex("\\rt@checkmathfonts}", &mut t);
+        self.back_list(&t);
+    }
+
+    /// amsmath's `\mathaccentV`: with no accent in the argument (`\macc@depth` 1), the
+    /// plain `\mathaccent"7XYZ{arg}`; the argument is first set in a box that is dropped,
+    /// which leaves nothing. An accent anywhere in the argument, through macros too, takes
+    /// the nested path (`\macc@nested`), not native.
+    fn ams_accent(&mut self) {
+        let mut code = Vec::new();
+        self.read_arg(&mut code);
+        let code: u32 = code.iter().map(|t| t.chr()).collect::<String>().parse().unwrap_or(0);
+        if self.mode != Mode::Math {
+            return self.error("Please use \\mathaccent for accents in math mode");
+        }
+        let mut arg = Vec::new();
+        self.read_arg(&mut arg);
+        if self.has_accent(&arg, 8) {
+            return self.not_native("a math accent over an accent (amsmath's \\macc@nested)");
+        }
+        // `\accentclass@`: 0 inside an OML or OMS alphabet (amsmath's `\noaccents@`), so
+        // the accent keeps its own family; 7 elsewhere.
+        let fam = self.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot: super::engine_noad::CUR_FAM });
+        let plain = usize::try_from(fam).ok().and_then(|f| self.doc.as_ref()?.fams.get(f).copied()).is_some_and(|k| k.starts_with("OML/") || k.starts_with("OMS/"));
+        let code = if plain { code & 0xfff } else { code };
+        let mut t = Vec::new();
+        self.tex(&format!("\\mathaccent{code} {{"), &mut t);
+        t.extend(arg);
+        t.push(Token::char(Cat::EndGroup, '}'));
+        self.back_list(&t);
+    }
+
+    /// Whether `toks`, or the bodies of the macros it names (to `depth` levels), name
+    /// `\rt@amsaccent` or `\mathaccent`; a macro too deep counts as one.
+    fn has_accent(&self, toks: &[Token], depth: u8) -> bool {
+        let names = [self.e.cs.get("rt@amsaccent"), self.e.cs.get("mathaccent"), self.e.cs.get("rt@widehat"), self.e.cs.get("rt@widetilde")];
+        toks.iter().filter_map(|t| t.cs_id()).any(|c| {
+            names.contains(&Some(c))
+                || match self.e.eqtb.meaning(c) {
+                    Meaning::Macro(m) => depth == 0 || self.has_accent(self.e.toks.get(m.text), depth - 1),
+                    Meaning::Doc(i) => DOC.get(i as usize).is_some_and(|d| matches!(d.0, "rt@amsaccent" | "rt@widehat" | "rt@widetilde")),
+                    _ => false,
+                }
+        })
+    }
+
+    /// amsmath's dots in math (`\cdots`, `\dotsc`, `\dotsi`, `\dotso`, and `\dots` by
+    /// the next token, `\mdots@@`). The next token is looked at as `\futurelet` sees it.
+    fn ams_dots(&mut self, kind: Dots) {
+        if self.mode != Mode::Math {
+            return self.not_native("amsmath's dots outside math");
+        }
+        let next = self.get_token();
+        if let Some(t) = next {
+            self.input.back(t);
+        }
+        let is = |m: &Self, name: &str| next.is_some_and(|t| t.cs_id().is_some_and(|c| m.e.cs.name(c) == name));
+        let ch = |c: char| next.is_some_and(|t| t.cs_id().is_none() && t.chr() == c && t.cat() == Some(Cat::Other));
+        let kind = match kind {
+            Dots::Auto => {
+                if is(self, "boldsymbol") || next.is_some_and(|t| matches!(t.cs_id().map(|c| self.e.eqtb.meaning(c)), Some(Meaning::Doc(_)))) && !self.extra_known(next) {
+                    return self.not_native("\\dots before a command the native job does not classify");
+                }
+                if ch(',') {
+                    Dots::C
+                } else if is(self, "not") || "+=<>-*:".chars().any(ch) {
+                    Dots::B
+                } else {
+                    match next.and_then(|t| t.cs_id()).map(|c| self.e.eqtb.meaning(c)) {
+                        Some(Meaning::MathCharDef(v)) if matches!(v >> 12, 2 | 3) => Dots::B,
+                        Some(Meaning::Macro(m)) if m.flags & super::engine_prim::PROTECTED == 0 => {
+                            let body = self.e.toks.get(m.text);
+                            let first = body.iter().skip_while(|t| t.cs_id().is_none() && body[0] == Token::END_MATCH && **t == Token::END_MATCH).find(|t| t.cs_id().is_some() || **t != Token::END_MATCH);
+                            match first.and_then(|t| t.cs_id()).map(|c| self.e.cs.name(c)) {
+                                Some("not" | "DOTSB" | "mathbin" | "mathrel") => Dots::B,
+                                Some("DOTSI") => Dots::I,
+                                _ => Dots::O,
+                            }
+                        }
+                        _ => Dots::O,
+                    }
+                }
+            }
+            k => k,
+        };
+        let extra = self.dots_extra(next);
+        match kind {
+            // `\@cdots` (`\dotsb@`); `\cdots` itself adds `\,` before `,;.` or what `\extra@`
+            // takes (`\extrap@`).
+            Dots::Cdots => self.math_dots(true, ch(',') || ch(';') || ch('.') || extra),
+            Dots::B => self.math_dots(true, false),
+            Dots::I => {
+                let mut t = Vec::new();
+                self.tex("\\mskip-\\thinmuskip\\mathinner{\\cdotp\\cdotp\\cdotp}", &mut t);
+                self.back_list(&t);
+            }
+            Dots::C => self.math_dots(false, ch(';') || ch('.') || extra),
+            _ => self.math_dots(false, extra),
+        }
+    }
+
+    /// `\mathinner{\cdotp\cdotp\cdotp}` or `\mathellipsis`, then `\,` (`\mskip\thinmuskip`).
+    fn math_dots(&mut self, centred: bool, thin: bool) {
+        let mut t = Vec::new();
+        let p = if centred { "\\cdotp" } else { "\\ldotp" };
+        self.tex(&format!("\\mathinner{{{p}{p}{p}}}"), &mut t);
+        if thin {
+            self.tex("\\mskip\\thinmuskip ", &mut t);
+        }
+        self.back_list(&t);
+    }
+
+    /// amsmath's `\extra@`: the next token a right delimiter (`\rightdelim@`), `$`, or a
+    /// macro starting `\DOTSX`.
+    fn dots_extra(&self, next: Option<Token>) -> bool {
+        let Some(t) = next else { return false };
+        match t.cs_id() {
+            None => matches!(t.chr(), ')' | ']') && t.cat() == Some(Cat::Other) || t.cat() == Some(Cat::MathShift),
+            Some(c) => {
+                let name = self.e.cs.name(c);
+                matches!(name, "rbrack" | "}" | "rbrace" | "rangle" | "rceil" | "rfloor" | "rgroup" | "rmoustache" | "right" | "bigr" | "biggr" | "Bigr" | "Biggr")
+                    || matches!(self.e.eqtb.meaning(c), Meaning::Macro(m) if m.flags & super::engine_prim::PROTECTED == 0 && self.e.toks.get(m.text).iter().find(|x| x.cs_id().is_some()).and_then(|x| x.cs_id()).is_some_and(|x| self.e.cs.name(x) == "DOTSX"))
+            }
+        }
+    }
+
+    /// Whether a native the dots test may meet is one it knows (`\right`, `\}`).
+    fn extra_known(&self, next: Option<Token>) -> bool {
+        next.and_then(|t| t.cs_id()).is_some_and(|c| matches!(self.e.cs.name(c), "}" | "right" | "{" | "left" | "," | ";" | "quad" | "qquad" | "text" | "\\" | "end" | "]" | ")" | "label" | "nonumber" | "notag"))
+    }
+
+    /// amsmath's `\colon`: `\nobreak\mskip2mu\mathpunct{}\nonscript\mkern-\thinmuskip{:}
+    /// \mskip6muplus1mu\relax`.
+    fn ams_colon(&mut self) {
+        let mut t = Vec::new();
+        self.tex("\\penalty10000 \\mskip2mu\\mathpunct{}\\nonscript\\mkern-\\thinmuskip{:}\\mskip6muplus1mu\\relax", &mut t);
+        self.back_list(&t);
+    }
+
+    /// amsmath's `\big` family, `\bBigg@{factor}{delim}`: `{\@mathmeasure\z@{\nulldelimiterspace
+    /// \z@}{\left delim\vcenter to factor\big@size{}\right.}\box\z@}`, the measuring math
+    /// with `\mathsurround` 0 and no `\everymath`.
+    fn ams_big(&mut self, factor: &str) {
+        if self.mode != Mode::Math {
+            return self.not_native("amsmath's \\big outside math");
+        }
+        let mut t = Vec::new();
+        self.big_tokens(factor, &mut t);
+        self.back_list(&t);
+    }
+
+    /// The delimiter argument read, `\bBigg@`'s expansion appended to `t`.
+    fn big_tokens(&mut self, factor: &str, t: &mut Vec<Token>) {
+        let mut delim = Vec::new();
+        self.read_arg(&mut delim);
+        // `\{` and `\}` in math are `\lbrace` and `\rbrace`, which `\left` reads.
+        for d in delim.iter_mut() {
+            let name = d.cs_id().map(|c| self.e.cs.name(c));
+            if let Some(n) = name.and_then(|n| match n {
+                "{" => Some("lbrace"),
+                "}" => Some("rbrace"),
+                _ => None,
+            }) {
+                *d = Token::cs(self.e.cs.intern(n));
+            }
+        }
+        let size = self.doc.as_ref().map_or(0, |d| super::engine_graphics::times(factor, d.big_size).unwrap_or(0));
+        self.tex("{\\setbox0\\hbox{\\everymath{}\\mathsurround0pt$\\nulldelimiterspace0pt\\left", t);
+        t.extend(delim);
+        self.tex(&format!("\\vcenter to{size}sp{{}}\\right.$}}\\box0}}"), t);
+    }
+
+    /// `\bigl` and kin: `\mathopen\big` (`\mathclose`, `\mathrel` for `r`, `m`).
+    fn ams_big_class(&mut self, factor: &str, class: &str) {
+        if self.mode != Mode::Math {
+            return self.not_native("amsmath's \\big outside math");
+        }
+        let mut t = vec![Token::cs(self.e.cs.intern(class))];
+        self.big_tokens(factor, &mut t);
+        self.back_list(&t);
+    }
+
+    /// `\let\f@size\f@size` (`0`), `\sf@size` (`1`) or `\ssf@size` (`2`), then
+    /// `\selectfont`: the current font's shape at that size of the current size.
+    fn text_size(&mut self) {
+        let k = self.get_token().map_or(0, |t| t.chr() as u8 - b'0');
+        let (key, size) = self.font_key();
+        let sizes = self.math_sizes(size);
+        let size = [sizes.0, sizes.1, sizes.2][k.min(2) as usize];
+        self.select_nfss(&key, size);
+    }
+
+    /// amsopn's `\DeclareMathOperator{\name}{word}` (starred: with limits):
+    /// `\DeclareRobustCommand{\name}{\qopname\newmcodes@ o{word}}`, here a protected
+    /// macro of `\operatorname{word}`. A name already defined is LaTeX's error.
+    fn declare_math_operator(&mut self) {
+        let star = self.next_is('*');
+        let mut name = Vec::new();
+        self.read_arg(&mut name);
+        let mut word = Vec::new();
+        self.read_arg(&mut word);
+        let Some(&cs) = name.first().filter(|_| name.len() == 1) else { return self.not_native("\\DeclareMathOperator's name") };
+        if self.meaning(cs) != Meaning::Undefined {
+            return self.not_native("\\DeclareMathOperator of a defined name");
+        }
+        let mut t = Vec::new();
+        self.tex("\\protected\\def", &mut t);
+        t.push(cs);
+        t.push(Token::char(Cat::BeginGroup, '{'));
+        t.push(self.doc_id_named("rt@operatorname"));
+        if star {
+            t.push(Token::char(Cat::Other, '*'));
+        }
+        t.push(Token::char(Cat::BeginGroup, '{'));
+        t.extend(word);
+        t.push(Token::char(Cat::EndGroup, '}'));
+        t.push(Token::char(Cat::EndGroup, '}'));
+        self.back_list(&t);
+    }
+
     /// `\providecommand`: `\newcommand` when the name is undefined, else the definition is
     /// read and dropped (`\@reserveda`).
     fn provide_command(&mut self) {
@@ -2897,6 +3474,22 @@ impl Machine<'_, '_> {
     /// `\label{key}`: `\@bsphack`, the key's value (`\@currentlabel`) kept in memory, the
     /// `.aux` write's whatsit, `\@esphack`.
     fn label(&mut self) {
+        // amsmath's `\label@in@display`: `\gdef\df@label{key}`, written after the tag.
+        if self.doc.as_ref().is_some_and(|d| d.ams_display == 3 || d.ams_display != 0 && self.mode == Mode::Math && !self.inner) {
+            let mut key = Vec::new();
+            self.read_arg(&mut key);
+            let Some(doc) = self.doc.as_mut() else { return };
+            if doc.df_label.is_some() || doc.ams_display == 2 {
+                return self.not_native("a second \\label, or one in equation*");
+            }
+            doc.df_label = Some(key);
+            return;
+        }
+        self.label_now();
+    }
+
+    /// `\ltx@label`: LaTeX's `\label`, also where amsmath's display stores the key.
+    fn label_now(&mut self) {
         let saved = (self.mode == Mode::Horizontal).then(|| (self.last_skip(), self.aux));
         let mut key = Vec::new();
         self.read_arg(&mut key);
@@ -3466,9 +4059,25 @@ impl Machine<'_, '_> {
                 if let Some(doc) = self.doc.as_mut() {
                     doc.endpe = false;
                 }
+                let ams = self.ams();
                 let mut t = Vec::new();
-                self.tex("$$\\rt@eqstep ", &mut t);
+                if ams {
+                    self.ams_display(1);
+                }
+                // amsmath: `\mathdisplay` (`$$`), then `\incr@eqnum\mathopen{}`.
+                self.tex(if ams { "$$\\rt@eqstep\\mathopen{}" } else { "$$\\rt@eqstep " }, &mut t);
                 self.back_list(&t);
+            }
+            "align" | "align*" if self.ams() => self.align_begin(name == "align*"),
+            // amsmath's `equation*`: `\mathdisplay` with `\@eqnswfalse`.
+            "equation*" if self.ams() => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                self.ams_display(2);
+                let d = Token::char(Cat::MathShift, '$');
+                self.back_list(&[d, d]);
             }
             // `\begingroup \csname name\endcsname`.
             _ => {
@@ -3635,6 +4244,8 @@ impl Machine<'_, '_> {
             "quote" | "quotation" | "verse" | "itemize" | "enumerate" | "description" | "abstract" | "thebibliography" => self.end_list(),
             // `\endequation`: `\eqno \hbox{\@eqnnum}\dollardollar@end\@ignoretrue`, with
             // `\@eqnnum` `{\normalfont \normalcolor (\theequation)}`.
+            "equation" | "equation*" if self.ams() => self.end_ams_display(),
+            "align" | "align*" if self.in_align() => self.align_end(),
             "equation" => {
                 let n = self.doc.as_ref().map_or(0, |d| d.equation);
                 let mut t = Vec::new();
@@ -4512,6 +5123,9 @@ impl Machine<'_, '_> {
     /// `\@ifstar{\nobreak…}`, `\addvspace{-\parskip}`, `\@ifnextchar[\@icentercr
     /// \ignorespaces`); elsewhere not native yet.
     fn newline(&mut self) {
+        if self.in_align() {
+            return self.align_cr();
+        }
         if self.in_tabular() {
             return self.tabular_cr();
         }
@@ -4662,6 +5276,71 @@ impl Machine<'_, '_> {
             }
             self.ignore_spaces();
         }
+    }
+
+    /// Whether amsmath is loaded: natives it changes follow it (`PACKAGE_FOLLOWS`).
+    pub(super) fn ams(&self) -> bool {
+        self.doc.as_ref().is_some_and(|d| d.packages.contains(&"amsmath"))
+    }
+
+    /// amsmath's `\mathdisplay`: `\global\let\df@label\@empty`, the display's kind.
+    fn ams_display(&mut self, kind: u8) {
+        if let Some(doc) = self.doc.as_mut() {
+            if doc.ams_display != 0 {
+                return self.not_native("a display inside a display");
+            }
+            doc.ams_display = kind;
+            doc.df_label = None;
+        }
+    }
+
+    /// `\end{equation}` and `\end{equation*}` after amsmath: `\endmathdisplay` (with
+    /// `\@eqnswtrue` the tag `\veqno\tagform@\theequation`, i.e. `\eqno\hbox{\m@th
+    /// \normalfont(\ignorespaces n\unskip\/)}`, then `\ltx@label` of a stored key), `$$`,
+    /// `\ignorespacesafterend`.
+    fn end_ams_display(&mut self) {
+        let Some(doc) = self.doc.as_mut() else { return };
+        let (kind, label, n) = (std::mem::take(&mut doc.ams_display), doc.df_label.take(), doc.equation);
+        let mut t = Vec::new();
+        if kind == 1 {
+            self.tex(&format!("\\eqno\\hbox{{\\rt@normalfont({n}\\/)}}"), &mut t);
+        }
+        if let Some(key) = label {
+            self.tex("\\rt@ltxlabel", &mut t);
+            t.push(Token::char(Cat::BeginGroup, '{'));
+            t.extend(key);
+            t.push(Token::char(Cat::EndGroup, '}'));
+        }
+        self.tex("$$\\rt@endequation ", &mut t);
+        self.back_list(&t);
+    }
+
+    /// amsmath's `\nonumber` (`\notag`): in `equation`, the number stepped back
+    /// (`\addtocounter{equation}\m@ne`) and no tag (`\global\@eqnswfalse`).
+    fn nonumber(&mut self) {
+        // In `align`, the row's `\global\@eqnswfalse`.
+        if let Some(a) = self.doc.as_mut().and_then(|d| d.align.as_mut()) {
+            a.eqnsw = false;
+            return;
+        }
+        if let Some(doc) = self.doc.as_mut().filter(|d| d.ams_display == 1) {
+            doc.equation -= 1;
+            doc.ams_display = 2;
+        }
+    }
+
+    /// amsmath's `\eqref{key}`: `\textup{\tagform@{\ref{key}}}`.
+    fn eqref(&mut self) {
+        if self.mode == Mode::Math {
+            return self.not_native("\\eqref in math");
+        }
+        let mut key = Vec::new();
+        self.read_arg(&mut key);
+        let mut t = Vec::new();
+        self.tex("\\textup{\\hbox{\\rt@normalfont(\\ignorespaces\\ref{", &mut t);
+        t.extend(key);
+        self.tex("}\\unskip\\/)}}", &mut t);
+        self.back_list(&t);
     }
 
     /// `\refstepcounter{equation}`: `\c@equation` up one, `\@currentlabel` its `\arabic`.
@@ -4823,6 +5502,12 @@ impl Machine<'_, '_> {
         if self.mode == Mode::Math {
             return self.error("Bad math environment delimiter");
         }
+        // amsmath: `\[` is `\begin{equation*}`.
+        if display && self.ams() {
+            let mut t = Vec::new();
+            self.tex("\\begin{equation*}", &mut t);
+            return self.back_list(&t);
+        }
         if display && self.mode == Mode::Vertical {
             return self.not_native("\\[ in vertical mode");
         }
@@ -4833,6 +5518,11 @@ impl Machine<'_, '_> {
 
     /// `\)` and `\]` (`$$\ignorespaces`).
     fn math_close(&mut self, display: bool) {
+        if display && self.ams() {
+            let mut t = Vec::new();
+            self.tex("\\end{equation*}", &mut t);
+            return self.back_list(&t);
+        }
         if self.mode != Mode::Math || self.inner == display {
             return self.error("Bad math environment delimiter");
         }
@@ -4881,7 +5571,7 @@ impl Machine<'_, '_> {
             t.clear();
             t.push(Token::END_MATCH);
             let word = op.word.replace("\\,", "\\mskip\\thinmuskip ");
-            self.tex(&format!("\\mathop{{\\fam0 {word}}}{}", if op.nolimits { "\\nolimits" } else { "" }), &mut t);
+            self.tex(&format!("\\mathop{{{}\\fam0 {word}}}{}", if op.kern { "\\kern0pt " } else { "" }, if op.nolimits { "\\nolimits" } else { "" }), &mut t);
             let text = self.e.toks.store(&t);
             let id = self.e.cs.intern(op.name);
             self.e.eqtb.set_meaning(id, Meaning::Macro(super::engine_prim::Macro { text, flags: super::engine_prim::PROTECTED }), true);
@@ -4898,6 +5588,21 @@ impl Machine<'_, '_> {
             let text = self.e.toks.store(&t);
             let id = self.e.cs.intern(name);
             self.e.eqtb.set_meaning(id, Meaning::Macro(super::engine_prim::Macro { text, flags }), true);
+        }
+        // amsmath's accents: `\name` is `\rt@amsaccent{code}`.
+        for (name, v) in k.accents() {
+            t.clear();
+            t.push(Token::END_MATCH);
+            t.push(Token::cs(self.e.cs.intern("rt@amsaccent")));
+            self.tex(&format!("{{{v}}}"), &mut t);
+            let text = self.e.toks.store(&t);
+            let id = self.e.cs.intern(name);
+            self.e.eqtb.set_meaning(id, Meaning::Macro(super::engine_prim::Macro { text, flags: super::engine_prim::PROTECTED }), true);
+        }
+        for (name, p) in k.lets() {
+            let m = self.e.eqtb.meaning(self.e.cs.intern(p));
+            let id = self.e.cs.intern(name);
+            self.e.eqtb.set_meaning(id, m, true);
         }
         for (name, v) in k.delims() {
             t.clear();
@@ -4944,15 +5649,17 @@ impl Machine<'_, '_> {
             doc.font_switch.clear();
         }
         let mut t = Vec::new();
+        let mut opts = String::new();
         if let Some(open) = self.next_unblank() {
             if open == Token::char(Cat::Other, '[') {
                 while let Some(x) = self.get_token() {
                     if x == Token::char(Cat::Other, ']') {
                         break;
                     }
-                    if x.cat() != Some(Cat::Space) {
+                    if x.cs_id().is_some() {
                         return self.not_native("package options");
                     }
+                    opts.push(x.chr());
                 }
             } else {
                 self.back_list(&[open]);
@@ -4961,6 +5668,9 @@ impl Machine<'_, '_> {
         self.read_arg(&mut t);
         let names: String = t.iter().filter(|x| x.cs_id().is_none()).map(|x| x.chr()).collect();
         for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            if !same_options(name, &opts) {
+                return self.not_native("package options");
+            }
             self.load_package(name);
         }
     }
@@ -4969,6 +5679,9 @@ impl Machine<'_, '_> {
     /// nothing. Its families must follow the ones in use when it was evaluated (`fam0`): the
     /// table's codes and macros name them as digits.
     fn load_package(&mut self, name: &str) {
+        if NO_EFFECT_PACKAGES.contains(&name) {
+            return;
+        }
         if let Some(&p) = DRIVER_PACKAGES.iter().find(|&&p| p == name) {
             let Some(doc) = self.doc.as_mut() else { return };
             if !doc.packages.contains(&p) {
@@ -4993,7 +5706,16 @@ impl Machine<'_, '_> {
             self.load_package(d);
         }
         let Some(doc) = self.doc.as_mut() else { return };
-        if doc.fams.len() != fam0 as usize {
+        // A table's families are numbered from `fam0`; one that adds none and names only
+        // families below it (amsmath) loads after any other.
+        use crate::data::data_kernel::{Def, MathFont};
+        let own = k.math_fonts().any(|f| match f {
+            MathFont::Symbol { .. } => true,
+            MathFont::SymbolAlphabet { fam, .. } => fam >= fam0,
+            MathFont::Alphabet { .. } => false,
+        })
+            || k.chars().any(|(_, d)| matches!(d, Def::MathChar(v) if (v >> 8 & 15) >= fam0 as u32));
+        if own && doc.fams.len() != fam0 as usize {
             return self.not_native("a math package after other math fonts");
         }
         let pkg = crate::data::data_kernel::packages().find(|p| p.0 == name).map_or("", |p| p.0);
@@ -5054,6 +5776,20 @@ impl Machine<'_, '_> {
         }
         if let Some(doc) = self.doc.as_mut() {
             doc.math_size = size;
+        }
+        // amsmath's `\every@math@size`: `\Mathstrutbox@` is `(` of its text font, and
+        // `\big@size` is 1.2 times its height plus 1.2 times its depth.
+        if self.ams() {
+            let code = self.e.eqtb.code(super::engine_eqtb::Code::Math, b'(' as u32);
+            let font = match self.e.eqtb.meaning(super::FAM_BASE_ID + ((code >> 8) & 15) as u32) {
+                Meaning::Font(f) => f,
+                _ => 0,
+            };
+            let [_, h, d, _] = self.e.fonts.dims(font, (code & 255) as u8).unwrap_or([0; 4]);
+            let big = super::engine_graphics::times("1.2", h).unwrap_or(0) + super::engine_graphics::times("1.2", d).unwrap_or(0);
+            if let Some(doc) = self.doc.as_mut() {
+                doc.big_size = big;
+            }
         }
     }
 
@@ -5346,15 +6082,28 @@ impl Machine<'_, '_> {
 /// (`assets/tables/names.rtdb`, `rushtex-gen names`): the pre-scan and `predict` ask it once
 /// per command, and loading it builds nothing.
 fn table_names(name: &str) -> u32 {
+    names_entry(name).0
+}
+
+/// The bits of the packages that change `name` without the native job following them
+/// (`KernelTable::blocked`): after one of them, a document naming it goes to the engine.
+fn blocked_names(name: &str) -> u32 {
+    names_entry(name).1
+}
+
+/// `name`'s row of the generated names table: its [`table_names`] bits and its
+/// [`blocked_names`] bits.
+fn names_entry(name: &str) -> (u32, u32) {
     use crate::data::{data_blob::Blob, data_phf::Phf};
+    type Names = (Phf<'static>, crate::data::data_blob::U32s<'static>, crate::data::data_blob::U32s<'static>);
     static NAMES: &[u8] = include_bytes!("../../assets/tables/names.rtdb");
-    static TABLE: std::sync::OnceLock<Option<(Phf<'static>, crate::data::data_blob::U32s<'static>)>> = std::sync::OnceLock::new();
+    static TABLE: std::sync::OnceLock<Option<Names>> = std::sync::OnceLock::new();
     let t = TABLE.get_or_init(|| {
         let b = Blob::new(NAMES)?;
-        let (phf, bits) = (Phf::from_blob(&b, "nmf")?, b.u32s("nm.b")?);
-        (bits.len() == phf.len()).then_some((phf, bits))
+        let (phf, bits, blocked) = (Phf::from_blob(&b, "nmf")?, b.u32s("nm.b")?, b.u32s("nm.x")?);
+        (bits.len() == phf.len() && blocked.len() == phf.len()).then_some((phf, bits, blocked))
     });
-    t.as_ref().and_then(|(phf, bits)| phf.get(name.as_bytes()).map(|i| bits.get(i as usize))).unwrap_or(0)
+    t.as_ref().and_then(|(phf, bits, blocked)| phf.get(name.as_bytes()).map(|i| (bits.get(i as usize), blocked.get(i as usize)))).unwrap_or((0, 0))
 }
 
 /// [`table_names`]' contents, from the tables themselves: what `rushtex-gen names` writes.
@@ -5367,7 +6116,7 @@ pub fn names_table() -> Vec<u8> {
             MathFont::SymbolAlphabet { name, .. } | MathFont::Alphabet { name, .. } => Some(name),
             MathFont::Symbol { .. } => None,
         });
-        for n in k.chars().map(|c| c.0).chain(k.ops().map(|o| o.name)).chain(k.delims().map(|d| d.0)).chain(k.macro_names()).chain(alphabets) {
+        for n in k.chars().map(|c| c.0).chain(k.ops().map(|o| o.name)).chain(k.delims().map(|d| d.0)).chain(k.macro_names()).chain(k.lets().map(|l| l.0)).chain(k.accents().map(|a| a.0)).chain(alphabets) {
             *m.entry(n).or_default() |= bit;
         }
     };
@@ -5383,6 +6132,14 @@ pub fn names_table() -> Vec<u8> {
     for (p, n, _) in PACKAGE_NATIVES.iter().filter(|q| package_bit(q.0) != 0) {
         *m.entry(n).or_default() |= package_bit(p);
     }
+    // The names each package blocks (`KernelTable::blocked`), by its bit.
+    let mut x = std::collections::BTreeMap::<&'static str, u32>::new();
+    for (p, k) in crate::data::data_kernel::packages() {
+        for n in k.blocked() {
+            m.entry(n).or_default();
+            *x.entry(n).or_default() |= package_bit(p);
+        }
+    }
     let mut w = crate::data::data_blob::BlobWriter::default();
     let names: Vec<&[u8]> = m.keys().map(|n| n.as_bytes()).collect();
     crate::data::data_phf::write(&mut w, "nmf", &names).expect("a perfect hash");
@@ -5390,13 +6147,16 @@ pub fn names_table() -> Vec<u8> {
     // The hash numbers the names its own way: the bits follow its IDs.
     let b = crate::data::data_blob::Blob::new(&probe).expect("a blob");
     let phf = crate::data::data_phf::Phf::from_blob(&b, "nmf").expect("the hash");
-    let mut bits = vec![0u32; m.len()];
+    let (mut bits, mut blocked) = (vec![0u32; m.len()], vec![0u32; m.len()]);
     for (n, v) in &m {
-        bits[phf.get(n.as_bytes()).expect("a name") as usize] = *v;
+        let i = phf.get(n.as_bytes()).expect("a name") as usize;
+        bits[i] = *v;
+        blocked[i] = x.get(n).copied().unwrap_or(0);
     }
     let mut w = crate::data::data_blob::BlobWriter::default();
     crate::data::data_phf::write(&mut w, "nmf", &names).expect("a perfect hash");
     w.u32s("nm.b", &bits);
+    w.u32s("nm.x", &blocked);
     w.finish()
 }
 
@@ -5411,6 +6171,9 @@ fn package_bit(name: &str) -> u32 {
 /// Package `name` and the packages it loads, into `loaded` (each once, after its own loads);
 /// `false` if one of them has no native table.
 fn require(name: &str, loaded: &mut Vec<&'static str>) -> bool {
+    if NO_EFFECT_PACKAGES.contains(&name) {
+        return true;
+    }
     if let Some(&p) = DRIVER_PACKAGES.iter().find(|&&p| p == name) {
         if !loaded.contains(&p) {
             loaded.push(p);
@@ -5517,6 +6280,17 @@ mod tests {
     }
 
     #[test]
+    fn predict_passes_preamble_macros_that_number_nothing() {
+        // Text, font commands and an earlier quiet macro number nothing; a heading, an `@`
+        // name or an unknown command might.
+        let pre = "\\newcommand{\\gdl}{Guarded Direct Lowering}\\newcommand*\\rt[1][x]{\\textbf{#1}\\gdl}\\renewcommand{\\sec}{\\section{S}}\\providecommand{\\at}{\\foo@bar}\\newcommand{\\un}{\\mine}";
+        assert_eq!(quiet_macros(pre, &[]).0, ["gdl", "rt"]);
+        let p = predict(&format!("{pre}\\begin{{document}}\\gdl\\rt{{a}}\\section{{A}}\\label{{a}}"));
+        assert!(p.complete && p.labels.get("a").map(String::as_str) == Some("1"));
+        assert!(!predict(&format!("{pre}\\begin{{document}}\\sec\\label{{a}}")).complete);
+    }
+
+    #[test]
     fn forward_refs_are_native_and_checked() {
         let doc = |body: &str| format!("\\documentclass{{article}}\\begin{{document}}{body}\\end{{document}}");
         let now = 1792454400;
@@ -5556,7 +6330,7 @@ mod tests {
     #[test]
     fn step_indexes_name_their_natives() {
         use super::*;
-        for (i, name) in [(OUTPUT, "rt@output"), (OUTPUT_FOOT, "rt@outputfoot"), (SEC_BOX, "rt@secbox"), (SEC_TITLE, "rt@sectitle"), (SEC_END, "rt@secend"), (TEXT_END, "rt@textend"), (TEXT_END_N, "rt@textendn"), (MAYBE_IC, "rt@maybeic"), (EVERY_MATH, "rt@everymath"), (EVERY_DISPLAY, "rt@everydisplay"), (FN_MARK_FONT, "rt@fnmarkfont"), (FN_MARK_END, "rt@fnmarkend"), (FN_SETUP, "rt@fnsetup"), (FN_END, "rt@fnend"), (STEP, "rt@step"), (PARA_HOOK, "rt@parahook"), (LIST_PAR, "rt@listpar"), (ENDPE_PAR, "rt@endpepar"), (PROPAGATE, "rt@propagate"), (ITEM_LABELS, "rt@itemlabels"), (LABEL_MARK, "rt@labelmark"), (NEW_PAGE, "rt@newpage"), (TABULAR, "rt@tabular"), (NOTPRERR, "@notprerr"), (STOP, "rt@stop"), (RUN_IN_END, "rt@runinend"), (DESC_FONT, "rt@descfont"), (VERBATIM, "rt@verbatim"), (LEAVE, "rt@leavevmode"), (PRIM_PAR, "rt@@par"), (END, "end"), (TAB_U, "rt@tabu"), (TAB_V, "rt@tabv"), (TAB_END, "rt@tabend"), (HLINE, "hline"), (TAB_SKIP, "rt@tabskip"), (MULTICOLUMN, "multicolumn"), (MC_BODY, "rt@mcbody"), (MC_TAIL, "rt@mctail"), (CLINE_CMD, "cline"), (CLINE, "rt@cline"), (NEWLINE, "\\"), (CENTER_CR, "rt@centercr"), (TAB_PAR, "rt@tabpar"), (CAPTION_MID, "rt@captionmid"), (CAPTION_END, "rt@captionend"), (FLOAT_FLUSH, "rt@floatflush")] {
+        for (i, name) in [(OUTPUT, "rt@output"), (OUTPUT_FOOT, "rt@outputfoot"), (SEC_BOX, "rt@secbox"), (SEC_TITLE, "rt@sectitle"), (SEC_END, "rt@secend"), (TEXT_END, "rt@textend"), (TEXT_END_N, "rt@textendn"), (MAYBE_IC, "rt@maybeic"), (EVERY_MATH, "rt@everymath"), (EVERY_DISPLAY, "rt@everydisplay"), (FN_MARK_FONT, "rt@fnmarkfont"), (FN_MARK_END, "rt@fnmarkend"), (FN_SETUP, "rt@fnsetup"), (FN_END, "rt@fnend"), (STEP, "rt@step"), (PARA_HOOK, "rt@parahook"), (LIST_PAR, "rt@listpar"), (ENDPE_PAR, "rt@endpepar"), (PROPAGATE, "rt@propagate"), (ITEM_LABELS, "rt@itemlabels"), (LABEL_MARK, "rt@labelmark"), (NEW_PAGE, "rt@newpage"), (TABULAR, "rt@tabular"), (NOTPRERR, "@notprerr"), (STOP, "rt@stop"), (RUN_IN_END, "rt@runinend"), (DESC_FONT, "rt@descfont"), (VERBATIM, "rt@verbatim"), (LEAVE, "rt@leavevmode"), (PRIM_PAR, "rt@@par"), (END, "end"), (TAB_U, "rt@tabu"), (TAB_V, "rt@tabv"), (TAB_END, "rt@tabend"), (HLINE, "hline"), (TAB_SKIP, "rt@tabskip"), (MULTICOLUMN, "multicolumn"), (MC_BODY, "rt@mcbody"), (MC_TAIL, "rt@mctail"), (CLINE_CMD, "cline"), (CLINE, "rt@cline"), (NEWLINE, "\\"), (CENTER_CR, "rt@centercr"), (TAB_PAR, "rt@tabpar"), (CAPTION_MID, "rt@captionmid"), (CAPTION_END, "rt@captionend"), (FLOAT_FLUSH, "rt@floatflush"), (AL_START, "rt@alstart"), (AL_HALIGN, "rt@alhalign"), (AL_FIELD, "rt@alfield"), (AL_TAG, "rt@altag"), (AL_TAG_NUM, "rt@altagnum"), (AL_TAG_KEEP, "rt@altagkeep"), (AL_ALIGN_CR, "rt@alcr"), (AL_END, "rt@alend")] {
             assert_eq!(DOC[i].0, name);
         }
     }

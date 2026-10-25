@@ -707,8 +707,12 @@ fn math_fonts(e: &rushtex::engine::Engine) -> Result<Vec<rushtex::data::data_ker
         if !d.is_empty() && d != ["def", "accentclass@", "{", "7", "}"] {
             return Err(format!("\\default@M is {d:?}"));
         }
+        // amsmath's `\noaccents@` (`\def\accentclass@{0}`, for OML and OMS): accents inside
+        // such an alphabet take class 0, which the native accent reads from `\fam`.
+        let noaccents = |n: &str| n == "noaccents@" && body(n).is_ok_and(|x| x.iter().map(|t| cs(t).unwrap_or_else(|| t.chr().to_string())).eq(["def", "accentclass@", "{", "0", "}"]));
         Ok(b.iter().all(|t| match cs(t).as_deref() {
             Some("default@M") => true,
+            Some(n) if noaccents(n) => true,
             Some(n) => body(n).is_ok_and(|x| x.is_empty()),
             None => false,
         }))
@@ -805,7 +809,7 @@ impl Tok {
 #[cfg(feature = "oracle")]
 struct KernelValues {
     chars: Vec<(String, rushtex::data::data_kernel::Def)>,
-    ops: Vec<(String, String, bool)>,
+    ops: Vec<(String, String, u8)>,
     delims: Vec<(String, u32)>,
     macros: Vec<(String, u8, Vec<Tok>)>,
     fonts: Vec<rushtex::data::data_kernel::MathFont<String>>,
@@ -826,8 +830,11 @@ fn kernel_values(e: &rushtex::engine::Engine) -> Result<KernelValues, String> {
         .collect();
     chars.sort();
     // The log-like operators: a robust command whose inner `\name ` is
-    // `\mathop{\operator@font word}` with or without `\nolimits`.
-    let mut ops: Vec<(String, String, bool)> = Vec::new();
+    // `\mathop{\operator@font word}` with or without `\nolimits` (flag 1), or amsopn's
+    // `\protected\def\name{\qopname\relax o{word}}` (`m` for limits): `\mathop{\relax
+    // \kern\z@\operator@font word}` and `\nolimits@` or `\nmlimits@` (`\displaylimits`, the
+    // default), flag 2 for the kern.
+    let mut ops: Vec<(String, String, u8)> = Vec::new();
     let mut delims: Vec<(String, u32)> = Vec::new();
     for id in 0..e.cs.len() as u32 {
         let full = e.cs.name(id);
@@ -841,8 +848,9 @@ fn kernel_values(e: &rushtex::engine::Engine) -> Result<KernelValues, String> {
                 }
             }
         }
-        let Some(name) = full.strip_suffix(' ').filter(|n| user(n)) else { continue };
         let Meaning::Macro(mac) = e.eqtb.meaning(id) else { continue };
+        let qop = !full.ends_with(' ') && user(full) && !full.is_empty() && mac.flags & rushtex::engine::engine_prim::PROTECTED != 0;
+        let Some(name) = full.strip_suffix(' ').filter(|n| user(n)).or(qop.then_some(full)) else { continue };
         let mut body = String::new();
         for t in e.toks.get(mac.text) {
             match t.cs_id() {
@@ -854,15 +862,23 @@ fn kernel_values(e: &rushtex::engine::Engine) -> Result<KernelValues, String> {
                 None => body.push(t.chr()),
             }
         }
-        let Some(rest) = body.strip_prefix("\u{0}\\mathop {\\operator@font ").or_else(|| body.strip_prefix("\\mathop {\\operator@font ")) else { continue };
-        let (word, nolimits) = match rest.split_once('}') {
-            Some((w, "")) => (w, false),
-            Some((w, "\\nolimits ")) => (w, true),
-            _ => continue,
+        let (word, flags) = if qop {
+            match body.strip_prefix("\u{0}\\qopname \\relax ").and_then(|r| r.split_at_checked(1)).and_then(|(k, r)| Some((k, r.strip_prefix('{')?.strip_suffix('}')?))) {
+                Some(("o", w)) => (w, 3),
+                Some(("m", w)) => (w, 2),
+                _ => continue,
+            }
+        } else {
+            let Some(rest) = body.strip_prefix("\u{0}\\mathop {\\operator@font ").or_else(|| body.strip_prefix("\\mathop {\\operator@font ")) else { continue };
+            match rest.split_once('}') {
+                Some((w, "")) => (w, 0),
+                Some((w, "\\nolimits ")) => (w, 1),
+                _ => continue,
+            }
         };
         let word = word.replace("\\, ", "\\,");
         if word.replace("\\,", "").bytes().all(|b| b.is_ascii_alphabetic()) && !word.is_empty() {
-            ops.push((name.to_string(), word, nolimits));
+            ops.push((name.to_string(), word, flags));
         }
     }
     ops.sort();
@@ -889,6 +905,18 @@ fn kernel_values(e: &rushtex::engine::Engine) -> Result<KernelValues, String> {
     Ok(KernelValues { chars, ops, delims, macros, fonts: math_fonts(e)? })
 }
 
+/// Names a package changes whose new meaning makes the same boxes as the native job's own,
+/// with the reason; `natpkg` neither blocks nor holds them.
+#[cfg(feature = "oracle")]
+const SAME_EFFECT: [(&str, &str, &str); 6] = [
+    ("amsgen", "frenchspacing", "the same six \\sfcode assignments, written with \\@m"),
+    ("amstext", "stepcounter", "differs only inside \\text's \\mathchoice (\\firstchoice@false)"),
+    ("amstext", "addtocounter", "differs only inside \\text's \\mathchoice (\\firstchoice@false)"),
+    ("amstext", "GenericError", "messages only"),
+    ("amstext", "GenericInfo", "messages only"),
+    ("amstext", "GenericWarning", "messages only"),
+];
+
 /// `rushtex-gen natpkg NAME… [--out-dir DIR]`: each package's table for the native job
 /// (`DIR/pkg-NAME.rtdb`, the `data_kernel` format plus `pkg`). The package is loaded by LaTeX
 /// on `article` after the packages it loads (the registry's load graph, `pkgs.rtdb`), and
@@ -911,10 +939,15 @@ fn natpkg(args: &[String]) -> Result<String, String> {
     let engine = Engine::new(arg("--format"))?;
     let read = |name: &str| engine.kpse.read(name);
     let reg = rushtex::data::data_pkgs::pkgs().ok_or("no package registry")?;
-    // A run's values, its parameters, codes and catcodes, and each letter name's meaning.
-    type Run = (KernelValues, Vec<i32>, HashMap<String, String>);
+    // A run's values, its parameters, codes and catcodes, each name's meaning, and the names
+    // each macro's body holds.
+    type Run = (KernelValues, Vec<i32>, HashMap<String, String>, HashMap<String, Vec<String>>, Vec<(String, String)>, Vec<(String, u32)>);
     let probe = |pkgs: &[String]| -> Result<Run, String> {
-        let src = format!("\\documentclass{{article}}{}\\begin{{document}}", pkgs.iter().map(|p| format!("\\usepackage{{{p}}}")).collect::<String>());
+        // `name[options]` loads with its options.
+        let src = format!("\\documentclass{{article}}{}\\begin{{document}}", pkgs.iter().map(|p| match p.split_once('[') {
+            Some((b, o)) => format!("\\usepackage[{}]{{{b}}}", o.trim_end_matches(']')),
+            None => format!("\\usepackage{{{p}}}"),
+        }).collect::<String>());
         let mut out = None;
         let job = rushtex::engine::engine_job::run(&|| Some(engine.fmt.clone()), &src, &rushtex::engine::engine_job::Opts { job_name: "rtgen", now: 0, max_runs: 1 }, &read, &mut |_| {}, &mut |m| {
             let e = &*m.e;
@@ -937,7 +970,38 @@ fn natpkg(args: &[String]) -> Result<String, String> {
                     (e.cs.name(id).to_string(), m)
                 })
                 .collect();
-            out = Some(kernel_values(e).map(|v| (v, words, meanings)));
+            let refs = (0..e.cs.len() as u32)
+                .filter_map(|id| match e.eqtb.meaning(id) {
+                    Meaning::Macro(mac) => Some((e.cs.name(id).to_string(), e.toks.get(mac.text).iter().filter_map(|t| t.cs_id()).map(|c| e.cs.name(c).to_string()).collect())),
+                    _ => None,
+                })
+                .collect();
+            // Names `\let` to a primitive the native job runs (`\DOTSI` is `\relax`).
+            let lets = (0..e.cs.len() as u32)
+                .filter_map(|id| match e.eqtb.meaning(id) {
+                    Meaning::Prim(p) if rushtex::data::data_kernel::MACRO_PRIMITIVES.contains(&p.name()) && e.cs.name(id) != p.name() && !e.cs.name(id).is_empty() => Some((e.cs.name(id).to_string(), p.name().to_string())),
+                    _ => None,
+                })
+                .collect();
+            // amsmath's accents: a robust command whose inner `\name ` is `\mathaccentV
+            // {name}XYZ` (family X, slot YZ in hexadecimal).
+            let accents = (0..e.cs.len() as u32)
+                .filter_map(|id| {
+                    let name = e.cs.name(id).strip_suffix(' ')?;
+                    let Meaning::Macro(mac) = e.eqtb.meaning(id) else { return None };
+                    let toks = e.toks.get(mac.text);
+                    let (head, rest) = toks.split_first()?;
+                    let rest = if *head == rushtex::engine::engine_token::Token::END_MATCH { rest } else { toks };
+                    let (cs, rest) = rest.split_first()?;
+                    if cs.cs_id().map(|c| e.cs.name(c)) != Some("mathaccentV") {
+                        return None;
+                    }
+                    let text: String = rest.iter().map(|t| if t.cs_id().is_some() { '\u{1}' } else { t.chr() }).collect();
+                    let hex = text.strip_prefix(&format!("{{{name}}}"))?;
+                    (hex.len() == 3).then(|| u32::from_str_radix(hex, 16).ok().map(|v| (name.to_string(), 0x7000 | v)))?
+                })
+                .collect();
+            out = Some(kernel_values(e).map(|v| (v, words, meanings, refs, lets, accents)));
         })
         .ok_or("the format is not one of this build")?;
         if !job.errors.is_empty() {
@@ -948,7 +1012,8 @@ fn natpkg(args: &[String]) -> Result<String, String> {
     let mut notes = Vec::new();
     for &name in &names {
         // The packages it loads, in load order, each after its own.
-        let id = reg.file(&format!("{name}.sty")).ok_or_else(|| format!("{name}.sty is not registered"))?;
+        let base = name.split_once('[').map_or(name.as_str(), |b| b.0);
+        let id = reg.file(&format!("{base}.sty")).ok_or_else(|| format!("{base}.sty is not registered"))?;
         let (mut deps, mut direct) = (Vec::new(), Vec::new());
         fn visit(reg: &rushtex::data::data_pkgs::PkgTable, id: u32, deps: &mut Vec<String>) {
             for d in reg.loads(id).iter() {
@@ -966,10 +1031,33 @@ fn natpkg(args: &[String]) -> Result<String, String> {
                 direct.push(n.to_string());
             }
         }
-        let (before, before_words, before_m) = probe(&deps)?;
+        let (before, before_words, before_m, _, before_lets, before_accents) = probe(&deps)?;
         let mut with = deps.clone();
         with.push(name.clone());
-        let (after, after_words, after_m) = probe(&with)?;
+        let (after, after_words, after_m, refs, after_lets, after_accents) = probe(&with)?;
+        // `name[options]`: an option has the same effect when the state after it is the
+        // package's own, every parameter, code and meaning; no table is written for it.
+        if base != name.as_str() {
+            // Each loaded alone, so that no package the option passes on loads before it
+            // (an option clash); the option bookkeeping (`\opt@pkg.sty`, `\ds@option`) aside.
+            let (_, base_words, base_m, ..) = probe(&[base.to_string()])?;
+            let (_, after_words, after_m, ..) = probe(std::slice::from_ref(name))?;
+            let words = base_words.iter().zip(&after_words).filter(|(a, b)| a != b).count();
+            let bookkeeping = |n: &str| n == "@curroptions" || n.starts_with("ds@") || n.starts_with("opt@") || n.starts_with("@raw@opt@");
+            let mut names: Vec<&String> = after_m.iter().filter(|(n, m)| base_m.get(*n) != Some(m)).map(|(n, _)| n).chain(base_m.keys().filter(|n| !after_m.contains_key(*n))).filter(|n| !bookkeeping(n)).collect();
+            names.sort();
+            if std::env::var_os("RT_NATPKG_WHY").is_some() {
+                for n in names.iter().take(3) {
+                    eprintln!("{n}:\n  {base}: {:?}\n  {name}: {:?}", base_m.get(*n), after_m.get(*n));
+                }
+            }
+            notes.push(if words == 0 && names.is_empty() { format!("{name}: the same as {base}") } else { format!("{name}: {words} parameters or codes and {} names differ from {base}: {}", names.len(), names.iter().take(12).map(|n| n.as_str()).collect::<Vec<_>>().join(" ")) });
+            continue;
+        }
+        let mut accents: Vec<(String, u32)> = after_accents.into_iter().filter(|a| !before_accents.contains(a)).collect();
+        accents.sort();
+        let mut lets: Vec<(String, String)> = after_lets.into_iter().filter(|l| !before_lets.contains(l) && !l.0.ends_with(' ')).collect();
+        lets.sort();
         if before_words != after_words {
             let n = before_words.iter().zip(&after_words).filter(|(a, b)| a != b).count();
             return Err(format!("{name} changes {n} parameters, codes or catcodes"));
@@ -984,12 +1072,12 @@ fn natpkg(args: &[String]) -> Result<String, String> {
         // What changed that the table does not hold.
         let held = |n: &str| {
             let n = n.trim_end();
-            chars.iter().any(|c| c.0 == n) || ops.iter().any(|o| o.0 == n) || delims.iter().any(|d| d.0 == n) || macros.iter().any(|m| m.0 == n) || fonts.iter().any(|f| matches!(f, MathFont::SymbolAlphabet { name, .. } | MathFont::Alphabet { name, .. } if name == n))
+            chars.iter().any(|c| c.0 == n) || ops.iter().any(|o| o.0 == n) || delims.iter().any(|d| d.0 == n) || macros.iter().any(|m| m.0 == n) || lets.iter().any(|l| l.0 == n) || accents.iter().any(|a| a.0 == n) || fonts.iter().any(|f| matches!(f, MathFont::SymbolAlphabet { name, .. } | MathFont::Alphabet { name, .. } if name == n))
         };
         // What the native job holds before the package: letter names, and every name of the
         // earlier tables (internal macros the harvest reached, `\dabar@`).
         let letters = |n: &str| n.trim_end().bytes().all(|b| b.is_ascii_alphabetic());
-        let had = |n: &str| letters(n) || before.chars.iter().any(|c| c.0 == n) || before.macros.iter().any(|m| m.0 == n) || before.delims.iter().any(|d| d.0 == n) || before.ops.iter().any(|o| o.0 == n);
+        let had = |n: &str| letters(n) || rushtex::engine::engine_doc::native_name(n.trim_end()) || before.chars.iter().any(|c| c.0 == n) || before.macros.iter().any(|m| m.0 == n) || before.delims.iter().any(|d| d.0 == n) || before.ops.iter().any(|o| o.0 == n);
         let mut lost = Vec::new();
         let mut unknown = Vec::new();
         for (n, m) in &after_m {
@@ -1007,17 +1095,32 @@ fn natpkg(args: &[String]) -> Result<String, String> {
         lost.sort();
         lost.dedup();
         unknown.sort();
-        lost.retain(|n| !rushtex::engine::engine_doc::PACKAGE_NATIVES.iter().any(|p| p.0 == name.as_str() && p.1 == n));
-        if !lost.is_empty() {
-            return Err(format!("{name} changes names the native job would keep: {}", lost.join(" ")));
+        lost.retain(|n| !rushtex::engine::engine_doc::PACKAGE_NATIVES.iter().any(|p| p.0 == name.as_str() && p.1 == n) && !SAME_EFFECT.iter().any(|s| s.0 == name.as_str() && s.1 == n) && !rushtex::engine::engine_doc::PACKAGE_FOLLOWS.iter().any(|p| p.0 == name.as_str() && p.1 == n));
+        // A name it changes that the table does not hold keeps its old meaning in the native
+        // job, so a document naming it after the package goes to the engine (`blocked`), and so
+        // does one naming a held name whose body reaches it, to a fixed point.
+        let mut blocked: std::collections::BTreeSet<String> = lost.iter().cloned().collect();
+        loop {
+            let more: Vec<String> = refs.iter().filter(|(n, body)| had(n) && !blocked.contains(n.trim_end()) && body.iter().any(|b| blocked.contains(b.trim_end()))).map(|(n, _)| n.trim_end().to_string()).collect();
+            if more.is_empty() {
+                break;
+            }
+            blocked.extend(more);
+        }
+        let blocked: Vec<String> = blocked.into_iter().filter(|n| !n.is_empty()).collect();
+        if std::env::var_os("RT_NATPKG_WHY").is_some() {
+            for b in &blocked {
+                let why = if lost.contains(b) { "changed".to_string() } else { format!("reaches {}", refs.iter().find(|(n, _)| n.trim_end() == b).map(|(_, body)| body.iter().filter(|x| blocked.iter().any(|b| b == x.trim_end())).cloned().collect::<Vec<_>>().join(" ")).unwrap_or_default()) };
+                eprintln!("blocked {b}: {why}");
+            }
         }
         // The font shapes it declares (`\DeclareFontShape`), as an NFSS table of its own,
         // checked against LaTeX's `\get@external@font` after the package loads.
-        let (decls, errors) = engine.run(&data_nfss::declare_package_source(&deps, name), data_nfss::DECLARE_FILE)?;
+        let (decls, errors) = engine.run(&data_nfss::declare_package_source(&deps, base), data_nfss::DECLARE_FILE)?;
         if !errors.is_empty() {
             return Err(format!("{name}: declaring: {}", errors[0].lines().next().unwrap_or("")));
         }
-        let own = decls.split_once(&format!("D {name}\n")).map_or("", |r| r.1);
+        let own = decls.split_once(&format!("D {base}\n")).map_or("", |r| r.1);
         let (nfams, nshapes) = data_nfss::parse_declarations(own)?;
         let mut w = BlobWriter::default();
         if !nshapes.is_empty() || !nfams.is_empty() {
@@ -1026,6 +1129,9 @@ fn natpkg(args: &[String]) -> Result<String, String> {
         let macros_b: Vec<(String, u8, Vec<rushtex::data::data_kernel::MacroToken>)> = macros.iter().map(|(n, f, t)| (n.clone(), *f, t.iter().map(Tok::borrow).collect())).collect();
         rushtex::data::data_kernel::write(&mut w, &chars, &ops, &delims, &macros_b, &fonts);
         rushtex::data::data_kernel::write_package(&mut w, fam0, &direct);
+        rushtex::data::data_kernel::write_blocked(&mut w, &blocked);
+        rushtex::data::data_kernel::write_lets(&mut w, &lets);
+        rushtex::data::data_kernel::write_accents(&mut w, &accents);
         let bytes = w.finish();
         let t = Blob::new(&bytes).and_then(|b| rushtex::data::data_kernel::KernelTable::from_blob(&b)).ok_or("the table does not read back")?;
         if !(t.chars().map(|(n, d)| (n.to_string(), d)).eq(chars.iter().cloned()) && t.math_fonts().map(|f| owned_math_font(&f)).eq(fonts.iter().cloned()) && t.macros().count() == macros.len() && t.package().is_some_and(|(f, d)| f == fam0 && d.eq(direct.iter().map(String::as_str)))) {
@@ -1042,7 +1148,7 @@ fn natpkg(args: &[String]) -> Result<String, String> {
         }
         let out = format!("{dir}/pkg-{name}.rtdb");
         std::fs::write(&out, &bytes).map_err(|e| format!("{out}: {e}"))?;
-        notes.push(format!("{out}: after {deps:?}, {} characters, {} operators, {} delimiters, {} macros, {} math fonts and alphabets, {} font shapes; {} names left to the engine{}", chars.len(), ops.len(), delims.len(), macros.len(), fonts.len(), nshapes.len(), unknown.len(), if args.iter().any(|a| a == "--list") { format!(": {}", unknown.join(" ")) } else { String::new() }));
+        notes.push(format!("{out}: after {deps:?}, {} characters, {} operators, {} delimiters, {} macros, {} math fonts and alphabets, {} font shapes; {} names left to the engine{}; {} names it changes blocked{}", chars.len(), ops.len(), delims.len(), macros.len(), fonts.len(), nshapes.len(), unknown.len(), if args.iter().any(|a| a == "--list") { format!(": {}", unknown.join(" ")) } else { String::new() }, blocked.len(), if args.iter().any(|a| a == "--list") { format!(": {}", blocked.join(" ")) } else { String::new() }));
     }
     Ok(notes.join("\n"))
 }
@@ -1231,7 +1337,7 @@ fn class(args: &[String]) -> Result<String, String> {
                     let bytes = w.finish();
                     let back = Blob::new(&bytes).and_then(|b| rushtex::data::data_kernel::KernelTable::from_blob(&b));
                     match back {
-                        Some(t) if t.chars().map(|(n, d)| (n.to_string(), d)).eq(chars.iter().cloned()) && t.ops().map(|o| (o.name.to_string(), o.word.to_string(), o.nolimits)).eq(ops.iter().cloned()) && t.delims().map(|(n, v)| (n.to_string(), v)).eq(delims.iter().cloned()) && t.macros().map(|(n, f, k)| (n.to_string(), f, k)).eq(macros.iter().map(|(n, f, k)| (n.clone(), *f, k.clone()))) && t.math_fonts().map(|f| owned_math_font(&f)).eq(fonts.iter().cloned()) => {
+                        Some(t) if t.chars().map(|(n, d)| (n.to_string(), d)).eq(chars.iter().cloned()) && t.ops().map(|o| (o.name.to_string(), o.word.to_string(), o.nolimits as u8 | (o.kern as u8) << 1)).eq(ops.iter().cloned()) && t.delims().map(|(n, v)| (n.to_string(), v)).eq(delims.iter().cloned()) && t.macros().map(|(n, f, k)| (n.to_string(), f, k)).eq(macros.iter().map(|(n, f, k)| (n.clone(), *f, k.clone()))) && t.math_fonts().map(|f| owned_math_font(&f)).eq(fonts.iter().cloned()) => {
                             if let Err(x) = std::fs::write(&kernel_out, &bytes) {
                                 err = Some(format!("{kernel_out}: {x}"));
                                 return;

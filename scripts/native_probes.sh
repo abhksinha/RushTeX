@@ -28,8 +28,8 @@ for f in $files; do
   rm -rf $tmp/o $tmp/n; mkdir -p $tmp/o $tmp/n
   export SOURCE_DATE_EPOCH=1792454400 FORCE_SOURCE_DATE=1
   RT_ENGINE=1 RT_PAGEHASH=$tmp/o/hash RT_PAGEDUMP=$tmp/o RUSHTEX_CACHE=target/parity ./target/release/rushtex --fmt target/parity/pdflatex.rfmt $f -o $tmp/o.pdf >/dev/null 2>&1
-  out=$(RT_PAGEHASH=$tmp/n/hash RT_PAGEDUMP=$tmp/n ./target/release/rushtex $f -o $tmp/n.pdf 2>&1)
-  if [[ $out != *natively* ]]; then echo "${f:t}: not accepted by the native job"; fail=1; continue; fi
+  out=$(RT_NATIVE_WHY=1 RT_PAGEHASH=$tmp/n/hash RT_PAGEDUMP=$tmp/n ./target/release/rushtex $f -o $tmp/n.pdf 2>&1)
+  if [[ $out != *"native job accepted"* ]]; then echo "${f:t}: not accepted by the native job"; fail=1; continue; fi
   [[ $out == *'! '* ]] && print -r -- "${f:t}: ${out%%$'\n'*}"
   last=$(ls $tmp/o/*.box | sed 's/.*\/\([0-9]*\)\.[0-9]*\.box/\1/' | sort -n | tail -1)
   pages=0; bad=0

@@ -1,0 +1,33 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+Two columns, no numbers:
+\begin{align*}
+a &= b + c \\
+x + y &= z
+\end{align*}
+Numbered rows, one without a number, labels before and after:
+\begin{align}
+f(x) &= x^2 + 2x + 1 \label{eq:f} \\
+     &= (x+1)^2 \nonumber \\
+g(x) &= \frac{1}{x} \label{eq:g}
+\end{align}
+See \eqref{eq:f}, \eqref{eq:g} and \eqref{eq:h}; also \ref{eq:f}.
+Four columns:
+\begin{align}
+a &= 1, & b &= 2, \\
+c &= 3, & d &= 4 \label{eq:h}
+\end{align}
+Spacing and a starred break:
+\begin{align}
+u &= v \\[2pt]
+w &= \text{something long for } y \\*
+p &= q \\
+\end{align}
+One field rows and an odd row:
+\begin{align}
+\sum_{k=1}^{n} k &= \frac{n(n+1)}{2} & \text{(Gauss)} \\
+\int_0^1 x\,dx &= \frac12
+\end{align}
+Text after.
+\end{document}

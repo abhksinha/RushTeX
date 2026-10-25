@@ -122,15 +122,11 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
         drop(pdf_bytes);
-        let page_unit = if page_count == 1 { "page" } else { "pages" };
         #[cfg(not(target_arch = "wasm32"))]
         let elapsed_secs = start_time.elapsed().as_secs_f64();
         #[cfg(target_arch = "wasm32")]
         let elapsed_secs = 0.0;
-        eprintln!(
-            "[DONE] Compilation of <stdin> completed and RUSHTEX wrote {} {} in {:.3} second",
-            page_count, page_unit, elapsed_secs
-        );
+        eprintln!("[COMPILED] Output written to standard output, {}", pages_in(page_count, elapsed_secs));
         return ExitCode::SUCCESS;
     };
 
@@ -229,18 +225,8 @@ fn main() -> ExitCode {
 
     match rushtex::compile_file_with(&input_path, output_file_path.as_deref(), options) {
         Ok(report) => {
-            let page_unit = if report.page_count == 1 {
-                "page"
-            } else {
-                "pages"
-            };
-            eprintln!(
-                "[DONE] Compilation of {} completed and RUSHTEX wrote {} {} in {:.3} second",
-                input_path.display(),
-                report.page_count,
-                page_unit,
-                report.elapsed.as_secs_f64()
-            );
+            let output = output_file_path.clone().unwrap_or_else(|| input_path.with_extension("pdf"));
+            compiled(&output, report.page_count, report.elapsed.as_secs_f64());
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -273,7 +259,7 @@ fn watch_and_compile(input: &std::path::Path, output: &std::path::Path, options:
         if now.is_some() && now != seen {
             seen = now;
             let start = std::time::Instant::now();
-            let compiled = std::fs::read_to_string(input)
+            let result = std::fs::read_to_string(input)
                 .map_err(rushtex::Error::Io)
                 .and_then(|source| session.compile_into(&source, &mut pdf, options))
                 .and_then(|pages| {
@@ -281,13 +267,8 @@ fn watch_and_compile(input: &std::path::Path, output: &std::path::Path, options:
                     std::fs::rename(&partial, output)?;
                     Ok(pages)
                 });
-            match compiled {
-                Ok(pages) => eprintln!(
-                    "[DONE] {} {} in {:.1} ms",
-                    pages,
-                    if pages == 1 { "page" } else { "pages" },
-                    start.elapsed().as_secs_f64() * 1e3
-                ),
+            match result {
+                Ok(pages) => compiled(output, pages, start.elapsed().as_secs_f64()),
                 Err(err) => eprintln!("{err}"),
             }
         }
@@ -353,7 +334,11 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
             for err in &job.errors {
                 eprintln!("! {err}");
             }
-            eprintln!("[DONE] Compilation of {} completed natively and RUSHTEX wrote {} {} in {:.3} second (1 run)", input.display(), job.pages, if job.pages == 1 { "page" } else { "pages" }, start_time.elapsed().as_secs_f64());
+            // `RT_NATIVE_WHY=1`: which path ran, for the testing scripts.
+            if std::env::var_os("RT_NATIVE_WHY").is_some() {
+                eprintln!("native job accepted");
+            }
+            compiled(output, job.pages, start_time.elapsed().as_secs_f64());
             return Some(if job.errors.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) });
         }
     }
@@ -383,15 +368,10 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
             for err in &job.errors {
                 eprintln!("! {err}");
             }
-            eprintln!(
-                "[DONE] Compilation of {} completed and RUSHTEX wrote {} {} in {:.3} second ({} {})",
-                input.display(),
-                job.pages,
-                if job.pages == 1 { "page" } else { "pages" },
-                start_time.elapsed().as_secs_f64(),
-                job.runs,
-                if job.runs == 1 { "run" } else { "runs" }
-            );
+            if std::env::var_os("RT_NATIVE_WHY").is_some() {
+                eprintln!("engine job: {} runs", job.runs);
+            }
+            compiled(output, job.pages, start_time.elapsed().as_secs_f64());
             return Some(if job.errors.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) });
         }
         if attempt == 1 {
@@ -528,4 +508,16 @@ fn check_paths(input: &std::path::Path, output: &std::path::Path) -> Result<(), 
 #[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
 fn write_pdf(output: &std::path::Path, pdf: &[u8]) -> Result<(), String> {
     std::fs::write(output, pdf).map_err(|e| explain(&format!("RushTeX could not write the PDF to '{}': {e}. Check that the folder exists and that you may write to it.", output.display())))
+}
+
+/// The line a finished compilation prints: where the PDF is (an absolute path), its pages
+/// and the time taken.
+fn compiled(output: &std::path::Path, pages: usize, secs: f64) {
+    let path = std::fs::canonicalize(output).unwrap_or_else(|_| output.to_path_buf());
+    eprintln!("[COMPILED] Output file is in {}, {}", path.display(), pages_in(pages, secs));
+}
+
+/// `12 pages in 0.012 seconds`.
+fn pages_in(pages: usize, secs: f64) -> String {
+    format!("{pages} {} in {secs:.3} seconds", if pages == 1 { "page" } else { "pages" })
 }

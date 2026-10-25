@@ -29,7 +29,7 @@ const MAX_DIMEN: i32 = 0o7777777777;
 const INF_PENALTY: i32 = 10_000;
 
 // §236, §247, §224, §230 parameter slots.
-const CUR_FAM: u32 = 44;
+pub(super) const CUR_FAM: u32 = 44;
 const PRE_DISPLAY_PENALTY: u32 = 11;
 const POST_DISPLAY_PENALTY: u32 = 12;
 const HANG_AFTER: u32 = 41;
@@ -37,7 +37,7 @@ const PRE_DISPLAY_DIRECTION: u32 = 98;
 const MATH_SURROUND: u32 = 1;
 const HSIZE: u32 = 3;
 const PRE_DISPLAY_SIZE: u32 = 13;
-const DISPLAY_WIDTH: u32 = 14;
+pub(super) const DISPLAY_WIDTH: u32 = 14;
 pub(super) const DISPLAY_INDENT: u32 = 15;
 const HANG_INDENT: u32 = 17;
 const ABOVE_DISPLAY_SKIP: u32 = 3;

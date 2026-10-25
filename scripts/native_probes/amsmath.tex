@@ -1,0 +1,35 @@
+\documentclass{article}
+\usepackage{amsmath}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator{\Tr}{Tr}
+\begin{document}
+Forward reference to \eqref{eq:second} and to equation~\ref{eq:first}.
+\begin{equation}\label{eq:first}
+\int_0^1 f(x)\,dx = \sum_{k=1}^{n} a_k x^k
+\end{equation}
+Text between, with a thin\,space and a display:
+\[ a^2 + b^2 = c^2 \]
+and after it.
+\begin{equation*}
+E = mc^2
+\end{equation*}
+An unnumbered one with nonumber:
+\begin{equation}
+x + y = z \nonumber
+\end{equation}
+\begin{equation}
+\frac{1}{2} \log x + \sin y = \lim_{n} \max_k z_k \label{eq:second}
+\end{equation}
+Back to \eqref{eq:first} and \eqref{eq:second}.
+
+\[ \det A = \exp(\operatorname{tr} \log A) + \operatorname*{arg\,max}_x f(x) + \argmin_y g(y) \]
+Text in math: $a = b \text{ for all } x_{\text{max}} \text{if $y>0$}$ and \text{outside} too.
+\[ \sum_{i\in S} w_i \quad\text{where } S = \{\,i : w_i^{\text{new}} > 0\,\} \]
+Accents: $\hat{x} + \tilde{y}_k + \bar{z}^2 + \vec{v} \cdot \dot{q} + \ddot{q} + \check{a} + \breve{b} + \acute{c} + \grave{d} + \mathring{e} + \hat{\mathbf{A}}$ and
+\[ \bar{x} = \frac{1}{n}\sum_i x_i, \qquad \hat{\theta}_{\text{ML}} = \arg\max_\theta L(\theta) \]
+Dots: $1, 2, \dots, n$ and $a + \dots + z$ and $x_1 \cdots x_n$, $(a_1 \cdots a_k)$,
+$1,\dotsc,n$, $a\dotsb b$, $\int\dotsi\int$, $x \dotso y$, $f\colon A \to B$, $\sum_{i=1}^{n} \dots$ and \ldots{} in text.
+\[ \big( a \big) + \Big[ b \Big] + \bigg\{ c \bigg\} + \Bigg| d \Bigg| + \bigl( x \bigr) \cdots, \quad \dots = \dots \]
+Small: {\small $\big( a \big)$} and in a footnote.\footnote{Here $\Big( x \Big)$ and $x_1, \dots, x_n$.}
+Alphabets: $\mathcal{A} + \mathcal{\hat A} + \mathnormal{\bar x} + \mathrm{\tilde y} + \hat{\mathcal B}$.
+\end{document}

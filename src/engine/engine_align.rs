@@ -141,18 +141,7 @@ impl Machine<'_, '_> {
     pub(super) fn init_align(&mut self) {
         let saved_state = self.input.align_state;
         self.input.align_state = ALIGN_PREAMBLE;
-        // §774: in a display, only at its start; §775: the alignment's own list, internal
-        // vertical; `\prevdepth` carries in, from the list around a display.
-        let prev_depth = if self.mode == Mode::Math {
-            if self.cur.len() > self.start as usize || self.aux >= 0 {
-                self.error("Improper \\halign inside $$'s");
-                self.cur.truncate(self.start as usize);
-                self.aux = -1;
-            }
-            self.nest.last().map_or(0, |l| l.aux)
-        } else {
-            self.aux
-        };
+        let prev_depth = self.align_prev_depth();
         self.push_nest(Mode::Vertical, true, prev_depth);
         // §645 `scan_spec`, then the preamble inside the group it opens.
         let (exact, size) = if self.scan_keyword("to") {
@@ -169,6 +158,105 @@ impl Machine<'_, '_> {
         self.begin_group(ALIGN_GROUP);
         self.insert_toks_param("everycr");
         self.align_peek();
+    }
+
+    /// §774: in a display, only at its start; §775: the alignment's own list, internal
+    /// vertical; `\prevdepth` carries in, from the list around a display.
+    fn align_prev_depth(&mut self) -> i32 {
+        if self.mode != Mode::Math {
+            return self.aux;
+        }
+        if self.cur.len() > self.start as usize || self.aux >= 0 {
+            self.error("Improper \\halign inside $$'s");
+            self.cur.truncate(self.start as usize);
+            self.aux = -1;
+        }
+        self.nest.last().map_or(0, |l| l.aux)
+    }
+
+    /// amsmath's `\halign{&...&...\cr` in a display (`\align@`), its two templates built
+    /// by a native: a periodic preamble of columns `u[0]`/`v[0]` and `u[1]`/`v[1]`, all
+    /// tabskip glue zero until [`Self::align_retab`] sets it.
+    pub(super) fn init_align_periodic(&mut self, u: [Span; 2], v: [Span; 2]) {
+        let saved_state = self.input.align_state;
+        let prev_depth = self.align_prev_depth();
+        self.push_nest(Mode::Vertical, true, prev_depth);
+        self.begin_group(ALIGN_GROUP);
+        let cols = (0..2).map(|k| Column { u: u[k], v: v[k], width: NULL_FLAG, omit: false, ended_by: 0, spans: Vec::new() }).collect();
+        self.aligns.push(Align { cols, tabskips: vec![Glue::default(); 3], cur: 0, span_start: 0, cur_loop: Some(0), unsets: Vec::new(), exact: false, size: 0, saved_state, adjusts: Vec::new() });
+        self.begin_group(ALIGN_GROUP);
+        self.align_peek();
+    }
+
+    /// The natural widths of the innermost alignment's first `n` columns (0 for one no
+    /// entry reached).
+    pub(super) fn align_widths(&self, n: usize) -> Vec<i32> {
+        let a = self.aligns.last();
+        (0..n).map(|k| a.and_then(|a| a.cols.get(k)).map_or(0, |c| if c.width == NULL_FLAG { 0 } else { c.width })).collect()
+    }
+
+    /// The tabskip glue of the innermost alignment, and of every row built so far, set to
+    /// `skip(k)` for the glue before column `k`; then each row's entry in column `col`
+    /// rebuilt by `entry(row, old list)` and the column's width taken again. For an
+    /// alignment whose glue and last entries depend on all its rows (amsmath's `align`,
+    /// whose measuring pass this replaces).
+    pub(super) fn align_retab<F>(&mut self, skip: &dyn Fn(usize) -> Glue, col: usize, mut entry: F)
+    where
+        F: FnMut(&mut Self, usize, Vec<Node>) -> Vec<Node>,
+    {
+        let Some(a) = self.aligns.last_mut() else { return };
+        for (k, g) in a.tabskips.iter_mut().enumerate() {
+            *g = skip(k);
+        }
+        let mut width = NULL_FLAG;
+        let mut r = 0;
+        for i in self.start as usize..self.cur.len() {
+            let n = self.cur[i];
+            if !(n.kind == Kind::Box && n.sub == UNSET_ROW) {
+                continue;
+            }
+            let row = self.e.nodes.boxes[n.a as usize];
+            let list = self.e.nodes.get(row.list).to_vec();
+            let (mut k, mut c) = (0, 0);
+            for m in &list {
+                match m.kind {
+                    Kind::Glue if m.sub == TAB_SKIP_SUB => {
+                        self.e.nodes.glues[m.a as usize] = skip(k);
+                        k += 1;
+                    }
+                    Kind::Box if m.sub == UNSET_ENTRY => {
+                        if c == col {
+                            let b = self.e.nodes.boxes[m.a as usize];
+                            let old = self.e.nodes.get(b.list).to_vec();
+                            self.e.nodes.free_block(b.list);
+                            let new = entry(self, r, old);
+                            let (mut w, mut h, mut d) = (0, 0, 0);
+                            for x in &new {
+                                match x.kind {
+                                    Kind::Kern => w += x.a,
+                                    Kind::Box => {
+                                        let y = self.e.nodes.boxes[x.a as usize];
+                                        (w, h, d) = (w + y.width, h.max(y.height - y.shift), d.max(y.depth + y.shift));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            let list = self.e.nodes.store(&new);
+                            self.e.nodes.boxes[m.a as usize] = BoxRec { width: w, height: h, depth: d, list, ..b };
+                            width = width.max(w);
+                            let rb = &mut self.e.nodes.boxes[n.a as usize];
+                            (rb.height, rb.depth) = (rb.height.max(h), rb.depth.max(d));
+                        }
+                        c += 1;
+                    }
+                    _ => {}
+                }
+            }
+            r += 1;
+        }
+        if let Some(c) = self.aligns.last_mut().and_then(|a| a.cols.get_mut(col)) {
+            c.width = width;
+        }
     }
 
     /// `\ialign` (`\everycr{}\tabskip\z@skip\halign{`) with a preamble of `n` columns

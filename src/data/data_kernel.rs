@@ -11,7 +11,7 @@
 //!   for `\mathchardef`.
 //! - `ops`: the log-like operators (`\lim`, `\sin`; latex.ltx `\DeclareRobustCommand\log
 //!   {\mathop{\operator@font log}\nolimits}`), one line per name, `name<TAB>word<TAB>n`
-//!   with `n` 1 for `\nolimits`; the word is letters and `\,`.
+//!   with `n` 1 for `\nolimits`, plus 2 for amsopn's `\kern\z@`; the word is letters and `\,`.
 //! - `delims`: fontmath.ltx's `\DeclareMathDelimiter`s (`\lbrace`, `\langle`), each a macro
 //!   `\delimiter"XXXXXXX `: one line per name, `name<TAB>value`.
 //! - `macros`: kernel macros whose bodies use only characters, parameters, primitives the
@@ -48,6 +48,9 @@ pub struct KernelTable<'a> {
     macros: &'a str,
     mathfonts: &'a str,
     pkg: Option<&'a str>,
+    blocked: &'a str,
+    lets: &'a str,
+    accents: &'a str,
 }
 
 /// One entry of the math version `normal` (section `mathfont`).
@@ -82,6 +85,8 @@ pub struct Op<'a> {
     pub name: &'a str,
     pub word: &'a str,
     pub nolimits: bool,
+    /// amsopn's `\qopname`: `\kern\z@` before the word.
+    pub kern: bool,
 }
 
 /// What a name is.
@@ -96,6 +101,15 @@ impl<'a> KernelTable<'a> {
         let t = KernelTable { chars: std::str::from_utf8(b.section("chars")?).ok()?, ops: std::str::from_utf8(b.section("ops")?).ok()?, delims: std::str::from_utf8(b.section("delims")?).ok()?, macros: std::str::from_utf8(b.section("macros")?).ok()?, mathfonts: std::str::from_utf8(b.section("mathfont")?).ok()?, pkg: match b.section("pkg") {
             Some(p) => Some(std::str::from_utf8(p).ok()?),
             None => None,
+        }, blocked: match b.section("blocked") {
+            Some(p) => std::str::from_utf8(p).ok()?,
+            None => "",
+        }, lets: match b.section("lets") {
+            Some(p) => std::str::from_utf8(p).ok()?,
+            None => "",
+        }, accents: match b.section("accents") {
+            Some(p) => std::str::from_utf8(p).ok()?,
+            None => "",
         } };
         (t.chars.lines().all(|l| parse(l).is_some()) && t.ops.lines().all(|l| parse_op(l).is_some()) && t.delims.lines().all(|l| parse_delim(l).is_some()) && t.macros.lines().all(|l| parse_macro(l).is_some()) && t.mathfonts.lines().all(|l| parse_math_font(l).is_some())).then_some(t)
     }
@@ -105,6 +119,23 @@ impl<'a> KernelTable<'a> {
         let mut f = self.pkg?.trim_end().split('\t');
         let fam0 = f.next()?.parse().ok()?;
         Some((fam0, f.filter(|d| !d.is_empty())))
+    }
+
+    /// The names a package changes that the native job does not take after it.
+    pub fn blocked(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.blocked.lines()
+    }
+
+    /// Names a package `\let`s to a primitive of [`MACRO_PRIMITIVES`] (amsmath's `\DOTSI`
+    /// is `\relax`): the name and the primitive's.
+    pub fn lets(&self) -> impl Iterator<Item = (&'a str, &'a str)> + '_ {
+        self.lets.lines().filter_map(|l| l.split_once('\t'))
+    }
+
+    /// amsmath's math accents (`\mathaccentV{hat}05E`): the name and its `\mathaccent` code
+    /// with `\accentclass@` 7.
+    pub fn accents(&self) -> impl Iterator<Item = (&'a str, u32)> + '_ {
+        self.accents.lines().filter_map(|l| l.split_once('\t').and_then(|(n, v)| Some((n, v.parse().ok()?))))
     }
 
     /// The math version `normal`: symbol fonts in family order, and the math alphabets.
@@ -174,7 +205,8 @@ fn parse_op(line: &str) -> Option<Op<'_>> {
     let mut f = line.split('\t');
     let (name, word, n) = (f.next()?, f.next()?, f.next()?);
     let sound = !word.is_empty() && word.replace("\\,", "").bytes().all(|b| b.is_ascii_alphabetic());
-    sound.then_some(Op { name, word, nolimits: n == "1" })
+    let n: u8 = n.parse().ok()?;
+    sound.then_some(Op { name, word, nolimits: n & 1 != 0, kern: n & 2 != 0 })
 }
 
 static KERNEL_BLOB: &[u8] = include_bytes!("../../assets/tables/kernel.rtdb");
@@ -186,7 +218,7 @@ pub fn kernel() -> Option<&'static KernelTable<'static>> {
 }
 
 /// The packages with a native table (`rushtex-gen natpkg`), by name.
-static PACKAGES: [(&str, &[u8]); 2] = [("amsfonts", include_bytes!("../../assets/tables/pkg-amsfonts.rtdb")), ("amssymb", include_bytes!("../../assets/tables/pkg-amssymb.rtdb"))];
+static PACKAGES: [(&str, &[u8]); 7] = [("amsbsy", include_bytes!("../../assets/tables/pkg-amsbsy.rtdb")), ("amsfonts", include_bytes!("../../assets/tables/pkg-amsfonts.rtdb")), ("amsgen", include_bytes!("../../assets/tables/pkg-amsgen.rtdb")), ("amsmath", include_bytes!("../../assets/tables/pkg-amsmath.rtdb")), ("amsopn", include_bytes!("../../assets/tables/pkg-amsopn.rtdb")), ("amssymb", include_bytes!("../../assets/tables/pkg-amssymb.rtdb")), ("amstext", include_bytes!("../../assets/tables/pkg-amstext.rtdb"))];
 
 /// The native table of package `name`, checked on first use; `None` when it has none.
 pub fn package(name: &str) -> Option<&'static KernelTable<'static>> {
@@ -208,7 +240,7 @@ pub fn packages() -> impl Iterator<Item = (&'static str, &'static KernelTable<'s
 }
 
 #[cfg(any(test, feature = "gen"))]
-pub fn write(w: &mut super::data_blob::BlobWriter, chars: &[(String, Def)], ops: &[(String, String, bool)], delims: &[(String, u32)], macros: &[(String, u8, Vec<MacroToken<'_>>)], math_fonts: &[MathFont<String>]) {
+pub fn write(w: &mut super::data_blob::BlobWriter, chars: &[(String, Def)], ops: &[(String, String, u8)], delims: &[(String, u32)], macros: &[(String, u8, Vec<MacroToken<'_>>)], math_fonts: &[MathFont<String>]) {
     let mut s = String::new();
     for (name, d) in chars {
         let (k, v) = match d {
@@ -219,8 +251,8 @@ pub fn write(w: &mut super::data_blob::BlobWriter, chars: &[(String, Def)], ops:
     }
     w.bytes("chars", s.into_bytes());
     let mut s = String::new();
-    for (name, word, nolimits) in ops {
-        s.push_str(&format!("{name}\t{word}\t{}\n", *nolimits as u8));
+    for (name, word, flags) in ops {
+        s.push_str(&format!("{name}\t{word}\t{flags}\n"));
     }
     w.bytes("ops", s.into_bytes());
     let s: String = delims.iter().map(|(name, v)| format!("{name}\t{v}\n")).collect();
@@ -246,6 +278,25 @@ pub fn write(w: &mut super::data_blob::BlobWriter, chars: &[(String, Def)], ops:
         })
         .collect();
     w.bytes("mathfont", s.into_bytes());
+}
+
+/// A package's `blocked` section: the names it changes that the native job does not take
+/// after it, one per line.
+#[cfg(any(test, feature = "gen"))]
+pub fn write_blocked(w: &mut super::data_blob::BlobWriter, names: &[String]) {
+    w.bytes("blocked", names.iter().map(|n| format!("{n}\n")).collect::<String>().into_bytes());
+}
+
+/// A package's `accents` section: `name<TAB>code` per line.
+#[cfg(any(test, feature = "gen"))]
+pub fn write_accents(w: &mut super::data_blob::BlobWriter, accents: &[(String, u32)]) {
+    w.bytes("accents", accents.iter().map(|(n, v)| format!("{n}\t{v}\n")).collect::<String>().into_bytes());
+}
+
+/// A package's `lets` section: `name<TAB>primitive` per line.
+#[cfg(any(test, feature = "gen"))]
+pub fn write_lets(w: &mut super::data_blob::BlobWriter, lets: &[(String, String)]) {
+    w.bytes("lets", lets.iter().map(|(n, p)| format!("{n}\t{p}\n")).collect::<String>().into_bytes());
 }
 
 /// A package's `pkg` section: its first own family and the packages it loads.

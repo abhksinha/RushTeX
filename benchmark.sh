@@ -90,7 +90,7 @@ try:
             shutil.copytree(d.path, os.path.join(work, d.name))
     # RushTeX: one run, no .aux.
     rush_pdf = os.path.join(work, "rush.pdf")
-    native = "natively" in subprocess.run([rush, src, "-o", rush_pdf], cwd=work, capture_output=True, text=True).stderr
+    native = "native job accepted" in subprocess.run([rush, src, "-o", rush_pdf], cwd=work, capture_output=True, text=True, env=dict(os.environ, RT_NATIVE_WHY="1")).stderr
     r_ins, r_rss = median_of([rush, src, "-o", rush_pdf], work)
     # pdfLaTeX: the real cycle from clean, then one run with the .aux complete.
     def clean():
@@ -154,7 +154,7 @@ try:
         f = os.path.join(work, f"scale{n}.tex")
         open(f, "w", encoding="latin-1").write(pre + "\\begin{document}" + head + "".join(copy(i) for i in range(n)) + "\\end{document}\n")
         out = os.path.join(work, f"scale{n}-rush.pdf")
-        all_native &= "natively" in subprocess.run([rush, f, "-o", out], cwd=work, capture_output=True, text=True).stderr
+        all_native &= "native job accepted" in subprocess.run([rush, f, "-o", out], cwd=work, capture_output=True, text=True, env=dict(os.environ, RT_NATIVE_WHY="1")).stderr
         ri, _ = median_of([rush, f, "-o", out], work)
         for _ in range(2):
             subprocess.run(["pdflatex", "-interaction=batchmode", f], cwd=work, capture_output=True)

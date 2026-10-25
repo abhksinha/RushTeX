@@ -54,7 +54,7 @@ fn decimal(text: &str) -> Option<(i64, i32)> {
 }
 
 /// `<decimal><internal dimen>` (§455): the factor times `v`.
-fn times(text: &str, v: i32) -> Option<i32> {
+pub(super) fn times(text: &str, v: i32) -> Option<i32> {
     let (i, f) = decimal(text)?;
     let r = times_unit(i, f, v as i64);
     (r.abs() < 1 << 30).then_some(r as i32)

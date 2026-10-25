@@ -517,7 +517,8 @@ impl Machine<'_, '_> {
         self.e.nodes.free_box(b);
     }
 
-    fn int_named(&self, name: &str) -> i32 {
+    /// An integer parameter by name.
+    pub(super) fn int_named(&self, name: &str) -> i32 {
         super::super::engine_names::param(name).map_or(0, |r| self.e.eqtb.word(r))
     }
 

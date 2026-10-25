@@ -936,8 +936,19 @@ impl Doc {
             data.splice(..lens[0], clear.iter().copied());
             lens[0] = clear.len();
             let binary = lens[0]..lens[0] + lens[1];
-            let mut text = crate::backend::backend_type1::subset(&data[binary.clone()], &used).unwrap_or_else(|| data[binary.clone()].to_vec());
-            crate::data::data_embed::encrypt_binary(&mut text);
+            // A subset comes with its charstrings encrypted; a font kept whole is encrypted
+            // here, charstrings and eexec.
+            let text = match crate::backend::backend_type1::subset(&data[binary.clone()], &used) {
+                Some(mut text) => {
+                    crate::data::data_embed::encrypt_eexec(&mut text);
+                    text
+                }
+                None => {
+                    let mut text = data[binary.clone()].to_vec();
+                    crate::data::data_embed::encrypt_binary(&mut text);
+                    text
+                }
+            };
             lens[1] = text.len();
             data.splice(binary, text);
             let bbox = font_bbox(&data[..lens[0]]);

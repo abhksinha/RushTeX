@@ -3,8 +3,15 @@
 \usepackage[psamsfonts]{amssymb}
 \usepackage[pdftex,final]{graphicx}
 \usepackage[centertags,sumlimits,nointlimits,namelimits]{amsmath}
+\usepackage{amsthm}
 \DeclareMathOperator{\tr}{tr}
 \newcommand{\gdl}{Guarded Direct Lowering}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
 \renewcommand{\rmdefault}{ptm}
 \title{The RushTeX Book: Guarded Direct Lowering and the Work a Page Needs}
 \author{RushTeX Project}
@@ -59,8 +66,8 @@ macros are the author's and are not ported.
 
 Today the native path takes the article class with its size, paper, \texttt{twoside},
 \texttt{landscape} and \texttt{draft} options, most of the \LaTeX{} kernel a paper
-uses, and five packages: amssymb, amsfonts, graphicx, inputenc and a growing part of
-amsmath.\footnote{Of 169 papers in our arXiv sample, the native path compiles one
+uses, and six packages: amssymb, amsfonts, graphicx, inputenc, amsthm and a growing
+part of amsmath.\footnote{Of 169 papers in our arXiv sample, the native path compiles one
 today. A census ranks the commands that block the rest, and the work follows that
 ranking.} Most real documents therefore still run on the engine path.
 
@@ -883,6 +890,102 @@ number; the rows already built are then given those values. The second pass of a
 typesets every formula of the display again, the costliest work an alignment does, and
 RushTeX does not do it at all.
 
+\subsection{Cases, matrices and arrays}\label{sec:arrays}
+
+A definition by cases, a matrix and a determinant are all one construction: \LaTeX's
+\texttt{array}, a table whose every entry is a formula. amsmath writes \texttt{cases}
+as an array of two left-aligned columns with a quad between them inside a left brace,
+\begin{equation}
+  |x| = \begin{cases} x, & \text{if } x \ge 0,\\ -x, & \text{otherwise,} \end{cases}
+  \label{eq:abs}
+\end{equation}
+and each matrix environment as an array of ten centred columns between its own
+delimiters, with the space outside the first and last columns taken away:
+\[
+  \begin{pmatrix} \cos\theta & -\sin\theta \\ \sin\theta & \cos\theta \end{pmatrix}
+  \begin{bmatrix} x \\ y \end{bmatrix}, \qquad
+  \begin{vmatrix} a & b \\ c & d \end{vmatrix} = ad - bc, \qquad
+  \begin{Vmatrix} u \end{Vmatrix}, \quad
+  \begin{Bmatrix} 1 & \cdots & n \end{Bmatrix}, \quad
+  \begin{matrix} p & q \end{matrix}.
+\]
+A plain array takes any column pattern, rules and a space after a row, as in
+$\left(\begin{array}{c|lr} 1 & 2 & 3 \\[2pt] \hline x & y & z \end{array}\right)$, and
+an array may sit in an aligned row:
+\begin{align}
+  f(x) &= \begin{cases} 0 & \text{if } x < 0,\\[3pt] x^{2} & \text{if } 0 \le x \le 1,\\
+            1 & \text{otherwise}, \end{cases} \label{eq:piecewise}\\
+  A &= \begin{pmatrix} a_{11} & \cdots & a_{1n} \\ a_{m1} & \cdots & a_{mn} \end{pmatrix}.
+\end{align}
+So (\ref{eq:abs}) and \eqref{eq:piecewise} are numbered as any other display.
+
+In \LaTeX{} the array's column pattern becomes text, the \emph{preamble}, which is read
+back as tokens at every entry, and each entry opens and closes its own formula. RushTeX
+reads the pattern once into the same list of steps it uses for a \texttt{tabular}
+(Section~\ref{sec:tables}), with three more kinds of step: the formula's opening and
+closing dollar signs and amsmath's quad. One mechanism serves tables, arrays, the cases and the
+six matrices, and the details that decide the output are kept: the empty formula
+\LaTeX{} leaves at the end of each row, the formula that an empty at-sign argument makes, and
+the extra thin space amsmath's dots take before an ampersand, where its look-ahead meets the
+dollar sign of the next entry.
+
+\section{Theorems}\label{sec:theorems}
+
+\LaTeX's \texttt{newtheorem} makes a new environment and a counter for it. Written
+\texttt{newtheorem\{theorem\}\{Theorem\}[section]}, the counter is reset by each section
+and printed after the section's number; written with a bracket before the title, as this
+document's lemmas are, a new environment shares an existing counter. The amsthm package,
+which this document loads, adds three styles chosen by \texttt{theoremstyle}, a starred
+form without a number, and the \texttt{proof} environment.
+
+\begin{definition}[Lowering]\label{def:lowering}
+A \emph{lowering} of a command is a function that leaves the same boxes, glue and
+penalties as the command's macros, without expanding them.
+\end{definition}
+
+\begin{theorem}\label{thm:guard}
+If every command of a document has a lowering, and the guards accept the document, its
+native output is the output of the engine, box for box.
+\end{theorem}
+
+\begin{proof}
+Each lowering leaves what its command's macros leave, and the guards send every other
+document to the engine. So the two paths build the same lists, and the same lists make
+the same pages.
+\end{proof}
+
+\begin{lemma}[Counters]\label{lem:counters}
+A lowering of \texttt{newtheorem} needs only the environment's name, its title, its style
+and the counter it steps: \[ n_{\mathrm{thm}} = n_{\mathrm{thm}} + 1, \qquad
+\mathrm{label} = \mathrm{section}.n_{\mathrm{thm}}. \]
+\end{lemma}
+
+\begin{proof}[Proof of Lemma~\ref{lem:counters}]
+The label is the section's number and the counter's, and nothing else in the head
+depends on the document.
+\end{proof}
+
+\begin{remark}
+A remark has an italic head, an upright body and half the space around it.
+\end{remark}
+
+So Definition~\ref{def:lowering}, Theorem~\ref{thm:guard} and Lemma~\ref{lem:counters}
+are numbered as \LaTeX{} numbers them, in the single pass.
+
+In the kernel a theorem is a \texttt{trivlist} with one item: the bold title and number
+are the item's label, and the body is italic. amsthm instead sets the head in a box that
+waits for the first paragraph, puts it in that paragraph's first line, and adds the
+period and a stretchable space after it. A proof is a list item labelled
+\emph{Proof}, and it ends with an open box pushed to the right margin. Both go through
+many macros: \texttt{@thm}, \texttt{@begintheorem}, \texttt{deferred@thm@head},
+\texttt{thmhead}, \texttt{pushQED}, \texttt{popQED} and \texttt{qed}. RushTeX keeps each
+theorem's title, style and counter in a small table, steps the counter itself, and
+builds the finished head once. The vertical space above and below, the head's place in
+the line and the end mark come from the same list code as every other list. One detail
+matters for exactness. The number is set with \texttt{textup}, whose look-ahead meets
+the macro that gives the period rather than the period itself, so a zero italic
+correction stays before the period.
+
 \section{Packages and their options}\label{sec:packages}
 
 \subsection{How a package becomes native}
@@ -1071,13 +1174,13 @@ The native path is young, and its limits are part of an honest description.
 
 \begin{itemize}
   \item It takes the article class without the \texttt{twocolumn}, \texttt{titlepage},
-        \texttt{leqno} and \texttt{fleqn} options, and five packages.
+        \texttt{leqno} and \texttt{fleqn} options, and six packages.
   \item graphicx takes PDF and PNG pictures at a width, height or scale, but not
         rotated, clipped or in JPEG.
   \item amsmath's other multi-line environments (\texttt{gather}, \texttt{multline},
-        \texttt{split}, \texttt{cases} and the matrices), \texttt{tag} and
-        \texttt{binom} are not yet native.
-  \item hyperref, theorems, BibTeX bibliographies, package options that change what a
+        \texttt{split}, \texttt{smallmatrix}), \texttt{tag}, \texttt{binom} and the
+        vertical and diagonal dots are not yet native.
+  \item hyperref, \texttt{newtheoremstyle}, \texttt{qedhere}, BibTeX bibliographies, package options that change what a
         package does, input in characters outside ASCII and the T1 font encoding are not
         yet native.
   \item A page reference to a later page, a tabular column of fixed width, and a command
@@ -1138,7 +1241,13 @@ one shows which section to read.
         starred form, accents, the dots, \texttt{colon}, \texttt{widehat},
         \texttt{widetilde}, the \texttt{big} family, \texttt{equation*},
         \texttt{notag}, \texttt{eqref}, \texttt{align}, \texttt{align*},
-        \texttt{nonumber}.
+        \texttt{nonumber}, \texttt{cases}, \texttt{matrix}, \texttt{pmatrix},
+        \texttt{bmatrix}, \texttt{Bmatrix}, \texttt{vmatrix}, \texttt{Vmatrix},
+        \texttt{array} with rules and a row space, an array inside \texttt{align}.
+  \item[Section~\ref{sec:theorems}] amsthm: \texttt{newtheorem} with a reset level and
+        with a shared counter, \texttt{theoremstyle} definition and remark,
+        \texttt{newtheorem*}, a theorem with a note and a display, \texttt{proof} with and
+        without its own label, references to theorems.
   \item[Section~\ref{sec:packages}] package options with no effect; the preamble's
         \texttt{newcommand} used in the body, \texttt{renewcommand} and
         \texttt{DeclareMathOperator}.

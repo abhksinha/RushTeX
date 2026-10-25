@@ -89,6 +89,22 @@ pub fn encrypt_binary(text: &mut [u8]) {
     encrypt(text, EEXEC_KEY);
 }
 
+/// One charstring encrypted in place (key 4330).
+pub fn encrypt_charstring(cs: &mut [u8]) {
+    encrypt(cs, CHARSTRING_KEY);
+}
+
+/// The charstrings found in binary text `text` (decrypted) encrypted in place, by the same
+/// scan [`decrypt_binary`] uses to find them.
+pub fn encrypt_charstrings(text: &mut [u8]) {
+    charstrings(text, encrypt);
+}
+
+/// Binary text whose charstrings are already encrypted, given its eexec encryption.
+pub fn encrypt_eexec(text: &mut [u8]) {
+    encrypt(text, EEXEC_KEY);
+}
+
 /// The binary (type 2) segments of a `.pfb` as ranges; `None` if it is not one.
 fn pfb_binary_segments(pfb: &[u8]) -> Option<Vec<std::ops::Range<usize>>> {
     let (mut i, mut v) = (0, Vec::new());

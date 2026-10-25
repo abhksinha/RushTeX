@@ -20,7 +20,7 @@ use super::super::engine_prim::{Meaning, Prim};
 use super::super::engine_run::{Machine, Mode, X, SEMI_SIMPLE_GROUP, SIMPLE_GROUP};
 use super::super::engine_token::Token;
 use super::super::END_TEMPLATE_ID;
-use super::{ARSTRUT_BOX, CLINE, CLINE_CMD, HLINE, MC_BODY, MC_TAIL, MULTICOLUMN, R_ARRAYRULEWIDTH, R_DOUBLERULESEP, R_TABCOLSEP, TAB_END, TAB_PAR, TAB_SKIP, TAB_U, TAB_V};
+use super::{ARSTRUT_BOX, CLINE, CLINE_CMD, HLINE, MC_BODY, MC_TAIL, MULTICOLUMN, R_ARRAYCOLSEP, R_ARRAYRULEWIDTH, R_DOUBLERULESEP, R_TABCOLSEP, TAB_END, TAB_PAR, TAB_SKIP, TAB_U, TAB_V};
 
 /// One step of an entry's templates, as `\@mkpream` writes them for `tabular`.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -44,6 +44,24 @@ pub(super) enum Cell {
     OneSp,
     Ignore,
     Unskip,
+    /// `array`'s `$` opening an entry's formula (`$\relax#`), or an `@{...}`'s.
+    MathOn,
+    /// The `$` closing it.
+    MathOff,
+    /// `\@arrayacol`: `\hskip\arraycolsep`.
+    ArrayAcol,
+    /// `\quad` (`\hskip1em`) in an `@{\quad}`, inside its formula.
+    Quad,
+}
+
+/// `\quad` in an `array` column specification, as one byte.
+pub(super) const QUAD: u8 = 1;
+
+/// An `array` column specification as source text, `\quad` as [`QUAD`]; `None` for any
+/// other control sequence.
+pub(super) fn array_spec(s: &str) -> Option<Vec<u8>> {
+    let s = s.replace("\\quad", "\x01");
+    (!s.contains('\\')).then(|| s.into_bytes())
 }
 
 /// A preamble: the steps of all columns, and per column where its ⟨u⟩ starts, where `#`
@@ -63,6 +81,8 @@ pub(super) struct Tab {
     skip: Glue,
     /// The one-column preamble of the `\multicolumn` being read.
     mc: Option<Preamble>,
+    /// An `array` (math entries, `\@arraycr`), not a `tabular`.
+    pub(super) math: bool,
 }
 
 /// One item of a column specification as `\@tfor` reads it: a character, or a braced
@@ -182,6 +202,17 @@ fn skip_items(s: &[u8], n: usize) -> Option<usize> {
 /// columns of `spec`, or `None` for what the native path does not take: `p` columns, an
 /// `@{...}` that is not empty, an unknown character (`\@preamerr`), or no column.
 pub(super) fn mkpream(spec: &[u8]) -> Option<Preamble> {
+    mkpream_in(spec, false)
+}
+
+/// `\@mkpream` for `array` (`\@arrayclassz`, `\@arrayclassiv`, `\@arrayacol`): each entry
+/// `\hfil$\relax#$\hfil` (`l` without the first `\hfil`, `r` without the second), the
+/// column space `\arraycolsep`, and an `@{...}` set as a formula, `$$` or `$\quad$`.
+pub(super) fn mkpream_array(spec: &[u8]) -> Option<Preamble> {
+    mkpream_in(spec, true)
+}
+
+fn mkpream_in(spec: &[u8], math: bool) -> Option<Preamble> {
     const AMP: u8 = 0;
     const SHARP: u8 = 1;
     let spec = expast(spec)?;
@@ -190,6 +221,7 @@ pub(super) fn mkpream(spec: &[u8]) -> Option<Preamble> {
     let mut list: Vec<Result<Cell, u8>> = vec![Ok(Cell::Strut)];
     let mut first_amp = true;
     let mut last = 6u8;
+    let acol = if math { Cell::ArrayAcol } else { Cell::Acol };
     // `\@addamp`.
     fn add_amp(list: &mut Vec<Result<Cell, u8>>, first: &mut bool) {
         if !std::mem::replace(first, false) {
@@ -221,20 +253,31 @@ pub(super) fn mkpream(spec: &[u8]) -> Option<Preamble> {
             0 => {
                 match last {
                     0 | 5 => {
-                        list.push(Ok(Cell::Acol));
+                        list.push(Ok(acol));
                         add_amp(&mut list, &mut first_amp);
-                        list.push(Ok(Cell::Acol));
+                        list.push(Ok(acol));
                     }
                     1 => {
                         add_amp(&mut list, &mut first_amp);
-                        list.push(Ok(Cell::Acol));
+                        list.push(Ok(acol));
                     }
                     4 => add_amp(&mut list, &mut first_amp),
                     6 => {
                         first_amp = false;
-                        list.push(Ok(Cell::Acol));
+                        list.push(Ok(acol));
                     }
                     _ => {}
+                }
+                if math {
+                    if num != 1 {
+                        list.push(Ok(Cell::Hfil));
+                    }
+                    list.extend([Ok(Cell::MathOn), Err(SHARP), Ok(Cell::MathOff)]);
+                    if num != 2 {
+                        list.push(Ok(Cell::Hfil));
+                    }
+                    last = class;
+                    continue;
                 }
                 // `{\hfil\hskip1sp\ignorespaces\@sharp\unskip\hfil}` for `c`; `l` has no
                 // `\hfil` before, `r` none after.
@@ -249,7 +292,7 @@ pub(super) fn mkpream(spec: &[u8]) -> Option<Preamble> {
                 list.push(Ok(Cell::Close));
             }
             1 => match last {
-                0 | 5 => list.extend([Ok(Cell::Acol), Ok(Cell::Rule)]),
+                0 | 5 => list.extend([Ok(acol), Ok(Cell::Rule)]),
                 1 => list.extend([Ok(Cell::DoubleSep), Ok(Cell::Rule)]),
                 4 | 6 => list.push(Ok(Cell::Rule)),
                 _ => {}
@@ -259,14 +302,17 @@ pub(super) fn mkpream(spec: &[u8]) -> Option<Preamble> {
                     list.push(Ok(Cell::HalfRule));
                 }
             }
-            // `@{...}`: only an empty one adds nothing to the preamble.
-            4 if item == Item::Group(&[]) => {}
+            // `@{...}`: only an empty one adds nothing to a `tabular`'s preamble; an
+            // `array`'s is a formula, `$$` or `$\quad$`.
+            4 if item == Item::Group(&[]) && !math => {}
+            4 if item == Item::Group(&[]) => list.extend([Ok(Cell::MathOn), Ok(Cell::MathOff)]),
+            4 if math && item == Item::Group(&[QUAD]) => list.extend([Ok(Cell::MathOn), Ok(Cell::Quad), Ok(Cell::MathOff)]),
             _ => return None,
         }
         last = class;
     }
     match last {
-        0 | 5 => list.push(Ok(Cell::Acol)),
+        0 | 5 => list.push(Ok(acol)),
         1 | 4 => {}
         _ => return None,
     }
@@ -322,7 +368,7 @@ impl Machine<'_, '_> {
         let Some(pre) = spec_bytes(&spec).and_then(|s| mkpream(&s)) else { return self.not_native("tabular preamble") };
         let Some(doc) = self.doc.as_mut() else { return };
         let lists = doc.lists.len();
-        doc.tabs.push(Tab { pre, lists, skip: Glue::default(), mc: None });
+        doc.tabs.push(Tab { pre, lists, skip: Glue::default(), mc: None, math: false });
         let group = match pos {
             Some('t') => VTOP_GROUP,
             Some('b') => VBOX_GROUP,
@@ -337,6 +383,43 @@ impl Machine<'_, '_> {
         let step = self.doc_id(super::STEP);
         self.input.back(step);
         self.enter_text_math();
+    }
+
+    /// `\begin{array}`'s `\array` after `\begin`'s group, in a formula: `[pos]{spec}`, then
+    /// [`Self::tabular_array`]. amsmath's `cases` and matrices open it with their own
+    /// specification.
+    pub(super) fn array_open(&mut self) {
+        if self.mode != Mode::Math {
+            return self.not_native("array outside a formula");
+        }
+        let pos = if self.next_is('[') { self.bracket_arg().first().map(|t| t.chr()) } else { None };
+        let mut spec = Vec::new();
+        self.read_arg(&mut spec);
+        let quad = self.e.cs.intern("quad");
+        let bytes: Option<Vec<u8>> = spec
+            .iter()
+            .map(|t| match t.cs_id() {
+                Some(c) if c == quad => Some(QUAD),
+                Some(_) => None,
+                None => u8::try_from(t.chr() as u32).ok(),
+            })
+            .collect();
+        let Some(pre) = bytes.and_then(|s| mkpream_array(&s)) else { return self.not_native("array preamble") };
+        let Some(doc) = self.doc.as_mut() else { return };
+        let lists = doc.lists.len();
+        doc.tabs.push(Tab { pre, lists, skip: Glue::default(), mc: None, math: true });
+        doc.tab_group = match pos {
+            Some('t') => VTOP_GROUP,
+            Some('b') => VBOX_GROUP,
+            _ => VCENTER_GROUP,
+        };
+        self.tabular_array();
+    }
+
+    /// amsmath's `\hskip -\arraycolsep` on either side of a matrix.
+    pub(super) fn matrix_skip(&mut self) {
+        let w = self.rw(R_ARRAYCOLSEP);
+        self.build_glue(Glue { width: -w, ..Glue::default() }, true);
     }
 
     /// `\m@th`, then `\@array`: the `\vtop`, `\vbox` or `\vcenter`, `\@arstrutbox`, no
@@ -364,6 +447,11 @@ impl Machine<'_, '_> {
         if let Some((par, nl)) = self.doc.as_ref().map(|d| (d.par_id, d.newline_id)) {
             self.e.eqtb.set_meaning(par, Meaning::Doc(TAB_PAR as u16), false);
             self.e.eqtb.set_meaning(nl, Meaning::Doc(super::NEWLINE as u16), false);
+        }
+        // `\ialign`'s `\everycr{}`: an enclosing `align`'s does not reach the rows.
+        if let Some(reg) = super::super::engine_names::param("everycr") {
+            let empty = self.e.toks.store(&[]);
+            self.e.eqtb.set_toks(reg, empty, false);
         }
         let n = self.doc.as_ref().and_then(|d| d.tabs.last()).map_or(0, |t| t.pre.cols.len());
         let u = [self.doc_id(TAB_U)];
@@ -521,6 +609,14 @@ impl Machine<'_, '_> {
             Cell::OneSp => hskip(self, 1),
             Cell::Ignore => self.ignore_spaces(),
             Cell::Unskip => self.unskip(),
+            Cell::MathOn => self.enter_text_math(),
+            Cell::MathOff => self.after_math(),
+            Cell::ArrayAcol => hskip(self, self.rw(R_ARRAYCOLSEP)),
+            Cell::Quad => {
+                let font = self.cur_font() as usize;
+                let quad = self.e.fonts.list.get(font).and_then(|x| x.params(&self.e.fonts.info).get(5)).copied().unwrap_or(0);
+                hskip(self, quad);
+            }
         }
     }
 
@@ -534,6 +630,9 @@ impl Machine<'_, '_> {
     /// `\@xargarraycr`'s strut for a positive space, or before `\@yargarraycr`'s
     /// `\noalign{\@vspace@calcify{#1}}` for another.
     pub(super) fn tabular_cr(&mut self) {
+        if self.doc.as_ref().and_then(|d| d.tabs.last()).is_some_and(|t| t.math) {
+            return self.array_cr();
+        }
         self.input.align_state += 1;
         let _ = self.next_is('*');
         let arg = if self.next_is('[') { Some(self.bracket_arg()) } else { None };
@@ -562,6 +661,54 @@ impl Machine<'_, '_> {
             t.skip = g;
         }
         let list = [cr, self.doc_id(TAB_SKIP)];
+        self.back_list(&list);
+    }
+
+    /// `\@arraycr`: `$` ends the entry's formula, then `{\ifnum0=`}\fi\@ifstar\@xarraycr
+    /// \@xarraycr` as in a `tabular`, and `${}` before `\cr` (the last entry ends with an
+    /// empty formula holding an empty group); `\\[x]` adds `\@xargarraycr`'s strut inside
+    /// that formula for a positive space, `\@yargarraycr`'s `\noalign` after `\cr` for
+    /// another.
+    fn array_cr(&mut self) {
+        if self.mode != Mode::Math {
+            return self.not_native("\\\\ in an array outside its entry's formula");
+        }
+        self.after_math();
+        self.input.align_state += 1;
+        let _ = self.next_is('*');
+        let arg = if self.next_is('[') { Some(self.bracket_arg()) } else { None };
+        self.input.align_state -= 1;
+        let cr = Token::cs(self.doc.as_ref().map_or(0, |d| d.cr_id));
+        let mut tail = Vec::new();
+        if let Some(arg) = arg {
+            // `\ifdim #1>\z@`.
+            let relax = self.doc_id_named("relax");
+            let mut list = arg.clone();
+            list.push(relax);
+            self.back_list(&list);
+            let d = self.scan_dimen(false).0;
+            if self.get_token() != Some(relax) {
+                return self.not_native("\\\\[...] that is not a dimension");
+            }
+            if d > 0 {
+                // `\@tempdima #1 \advance\@tempdima \dp\@arstrutbox \vrule \@height\z@
+                // \@depth\@tempdima \@width\z@`.
+                let dp = self.e.eqtb.box_reg(ARSTRUT_BOX).map_or(0, |b| self.e.nodes.boxes[b as usize].depth);
+                self.tex(&format!("\\vrule height0sp depth{}sp width0sp", d + dp), &mut tail);
+                tail.push(cr);
+            } else {
+                let Some(g) = self.glue_arg(&arg) else { return self.not_native("\\\\[...] that is not glue") };
+                if let Some(t) = self.doc.as_mut().and_then(|d| d.tabs.last_mut()) {
+                    t.skip = g;
+                }
+                tail.extend([cr, self.doc_id(TAB_SKIP)]);
+            }
+        } else {
+            tail.push(cr);
+        }
+        let mut list = Vec::with_capacity(tail.len() + 3);
+        self.tex("${}", &mut list);
+        list.extend(tail);
         self.back_list(&list);
     }
 
@@ -643,14 +790,17 @@ impl Machine<'_, '_> {
 
     /// After the alignment's last row: its `}`, the box's, the formula's `$`, the `\hbox`'s,
     /// and `\end`'s `\endgroup`.
+    /// An `array`'s ends only its alignment and box: what follows `\endarray` (amsmath's
+    /// `\right.`, a matrix's `\hskip-\arraycolsep`) and `\end`'s `\endgroup` are the
+    /// tokens after it.
     fn tabular_close(&mut self) {
         self.fin_align();
         self.package();
-        self.after_math();
-        self.package();
-        self.end_group(SEMI_SIMPLE_GROUP);
-        if let Some(doc) = self.doc.as_mut() {
-            doc.tabs.pop();
+        let math = self.doc.as_mut().and_then(|d| d.tabs.pop()).is_some_and(|t| t.math);
+        if !math {
+            self.after_math();
+            self.package();
+            self.end_group(SEMI_SIMPLE_GROUP);
         }
     }
 }
@@ -690,5 +840,26 @@ mod tests {
         assert_eq!(cols("@{:}c"), None);
         assert_eq!(cols("x"), None);
         assert_eq!(cols("|"), None);
+    }
+
+    #[test]
+    fn mkpream_array_sets_math_entries() {
+        let cols = |spec: &[u8]| {
+            let p = mkpream_array(spec)?;
+            Some(p.cols.iter().map(|c| (p.ops[c[0] as usize..c[1] as usize].to_vec(), p.ops[c[1] as usize..c[2] as usize].to_vec())).collect::<Vec<_>>())
+        };
+        // `c`: `\@arstrut\hskip\arraycolsep\hfil$\relax#$\hfil\hskip\arraycolsep`.
+        assert_eq!(cols(b"c"), Some(vec![(vec![Strut, ArrayAcol, Hfil, MathOn], vec![MathOff, Hfil, ArrayAcol])]));
+        // amsmath's `cases`: `@{}l@{\quad}l@{}`, each `@{...}` a formula.
+        let quad = [b'@', b'{', b'}', b'l', b'@', b'{', QUAD, b'}', b'l', b'@', b'{', b'}'];
+        assert_eq!(
+            cols(&quad),
+            Some(vec![(vec![Strut, MathOn, MathOff, MathOn], vec![MathOff, Hfil, MathOn, Quad, MathOff]), (vec![MathOn], vec![MathOff, Hfil, MathOn, MathOff])])
+        );
+        assert_eq!(array_spec("@{}l@{\\quad}l@{}").as_deref(), Some(&quad[..]));
+        assert_eq!(array_spec("@{\\,}c"), None);
+        // A matrix's `*{10}{c}`; `r` has no `\hfil` after its formula.
+        assert_eq!(cols(b"*{10}{c}").map(|c| c.len()), Some(10));
+        assert_eq!(cols(b"r").unwrap()[0].1, vec![MathOff, ArrayAcol]);
     }
 }

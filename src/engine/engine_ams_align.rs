@@ -156,22 +156,38 @@ impl Machine<'_, '_> {
         let (begin, end, nl) = (self.e.cs.intern("begin"), self.e.cs.intern("end"), self.e.cs.intern("\\"));
         let mut body = Vec::new();
         let (mut depth, mut fields, mut maxfields) = (0i32, 1usize, 0usize);
+        // Open `array`s and amsmath's environments built on it: their `&` and `\\` are
+        // their own.
+        let mut inner = 0usize;
         loop {
             let Some(t) = self.get_token() else { return self.not_native("an align without its end") };
             if t == Token::cs(end) || t == Token::cs(begin) {
                 let mut arg = Vec::new();
                 self.read_arg(&mut arg);
                 let env: String = arg.iter().map(|t| t.chr()).collect();
-                if t == Token::cs(end) && env == name {
+                if t == Token::cs(end) && env == name && inner == 0 {
                     break;
                 }
-                return self.not_native("an environment inside align");
+                if !matches!(env.as_str(), "array" | "cases" | "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix") {
+                    return self.not_native("an environment inside align");
+                }
+                if t == Token::cs(end) {
+                    let Some(n) = inner.checked_sub(1) else { return self.not_native("an \\end inside align without its \\begin") };
+                    inner = n;
+                } else {
+                    inner += 1;
+                }
+                body.push(t);
+                body.push(Token::char(Cat::BeginGroup, '{'));
+                body.extend(arg);
+                body.push(Token::char(Cat::EndGroup, '}'));
+                continue;
             }
             match t.cs_id() {
                 None if t.cat() == Some(Cat::BeginGroup) => depth += 1,
                 None if t.cat() == Some(Cat::EndGroup) => depth -= 1,
-                None if t.cat() == Some(Cat::AlignTab) && depth == 0 => fields += 1,
-                Some(c) if c == nl && depth == 0 => {
+                None if t.cat() == Some(Cat::AlignTab) && depth == 0 && inner == 0 => fields += 1,
+                Some(c) if c == nl && depth == 0 && inner == 0 => {
                     maxfields = maxfields.max(fields);
                     fields = 1;
                 }

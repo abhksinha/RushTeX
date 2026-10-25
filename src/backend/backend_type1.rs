@@ -80,8 +80,8 @@ fn find(t: &[u8], from: usize, what: &[u8]) -> Option<usize> {
 
 /// The CharStrings dictionary of decrypted binary text `t`: where its count is, the
 /// entries (each from its `/` through its line's end), and where the last one ends.
-fn entries(t: &[u8]) -> Option<(std::ops::Range<usize>, Vec<Entry>, usize)> {
-    let at = find(t, 0, b"/CharStrings")? + b"/CharStrings".len();
+fn entries(t: &[u8], from: usize) -> Option<(std::ops::Range<usize>, Vec<Entry>, usize)> {
+    let at = find(t, from, b"/CharStrings")? + b"/CharStrings".len();
     let n = token(t, skip_space(t, at));
     std::str::from_utf8(&t[n.clone()]).ok()?.parse::<usize>().ok()?;
     let mut i = find(t, n.end, b"begin")? + 5;
@@ -112,8 +112,8 @@ fn entries(t: &[u8]) -> Option<(std::ops::Range<usize>, Vec<Entry>, usize)> {
 
 /// The Subrs array of decrypted binary text `t`: each entry's line (`dup i len RD <bytes>
 /// NP`) and where its charstring's bytes are, indexed by subroutine number.
-fn subrs(t: &[u8]) -> Option<Vec<(std::ops::Range<usize>, std::ops::Range<usize>)>> {
-    let at = find(t, 0, b"/Subrs")? + b"/Subrs".len();
+fn subrs(t: &[u8], at: usize) -> Option<Vec<(std::ops::Range<usize>, std::ops::Range<usize>)>> {
+    let at = at + b"/Subrs".len();
     let n = token(t, skip_space(t, at));
     let count: usize = std::str::from_utf8(&t[n.clone()]).ok()?.parse().ok()?;
     let mut i = token(t, skip_space(t, n.end)).end;
@@ -203,6 +203,10 @@ fn mark_subrs(cs: &[u8], len_iv: usize, list: &[(std::ops::Range<usize>, std::op
 /// `seac`'s two StandardEncoding codes (base, accent) in charstring `cs` (in clear, its
 /// first `len_iv` bytes random), if it ends that way.
 fn seac(cs: &[u8], len_iv: usize) -> Option<(u8, u8)> {
+    // `seac` ends its charstring, so a charstring that does not end in its two bytes has none.
+    if !cs.ends_with(&[12, 6]) {
+        return None;
+    }
     let mut stack: Vec<i32> = Vec::new();
     let mut i = len_iv;
     while i < cs.len() {
@@ -299,59 +303,98 @@ pub fn subset_clear(c: &[u8], used: &dyn Fn(usize) -> bool, tag: &str) -> Vec<u8
     out
 }
 
+fn push_encrypted(out: &mut Vec<u8>, cs: &[u8]) {
+    let at = out.len();
+    out.extend_from_slice(cs);
+    crate::data::data_embed::encrypt_charstring(&mut out[at..]);
+}
+
+/// Text copied as it is, with any charstring in it encrypted: a Subrs array the parse did
+/// not read whole is copied this way, so its entries are encrypted as before.
+fn push_scanned(out: &mut Vec<u8>, text: &[u8]) {
+    let at = out.len();
+    out.extend_from_slice(text);
+    crate::data::data_embed::encrypt_charstrings(&mut out[at..]);
+}
+
 /// The binary text `t` (decrypted) with its CharStrings cut to `.notdef`, the glyphs
-/// `used` names and their `seac` components; `None` if the dictionary cannot be read
-/// (the caller then keeps the font whole).
+/// `used` names and their `seac` components, every charstring written encrypted again
+/// (only the eexec layer is left to the caller); `None` if the dictionary cannot be read
+/// (the caller then keeps the font whole). Encrypting each charstring as it is copied
+/// replaces a second scan of the whole output for the charstrings.
 pub fn subset(t: &[u8], used: &[&str]) -> Option<Vec<u8>> {
-    let (count, list, end) = entries(t)?;
-    let len_iv = find(t, 0, b"/lenIV").map_or(Some(4), |p| std::str::from_utf8(&t[token(t, skip_space(t, p + 6))]).ok()?.parse::<usize>().ok())?;
+    // Each search covers only the part of the program its key lives in: the CharStrings
+    // after the Subrs, and `/lenIV` among the Private dictionary's lines before either,
+    // where writet1.c's `t1_scan_param` reads it. Searching the whole program for each was
+    // half the subsetting cost.
+    let subrs_at = find(t, 0, b"/Subrs");
+    let sub = subrs_at.and_then(|at| subrs(t, at));
+    let from = sub.as_ref().and_then(|s| s.iter().map(|e| e.0.end).max()).unwrap_or(0);
+    let (count, list, end) = entries(t, from).or_else(|| entries(t, 0))?;
+    let head = &t[..subrs_at.unwrap_or(count.start).min(count.start)];
+    let len_iv = find(head, 0, b"/lenIV").map_or(Some(4), |p| std::str::from_utf8(&t[token(t, skip_space(t, p + 6))]).ok()?.parse::<usize>().ok())?;
     let name = |e: &Entry| &t[e.name.clone()];
+    // Sorted, so each entry's name is a binary search: a linear `contains` per entry was
+    // most of the subsetting cost (entries times used names comparisons).
     let mut keep: Vec<&[u8]> = used.iter().map(|n| n.as_bytes()).collect();
     keep.push(b".notdef");
+    keep.sort_unstable();
+    let mut parts: Vec<&[u8]> = Vec::new();
     for e in &list {
-        if keep.contains(&name(e)) {
+        if keep.binary_search(&name(e)).is_ok() {
             if let Some((b, a)) = seac(&t[e.cs.clone()], len_iv) {
-                keep.push(STANDARD[b as usize].as_bytes());
-                keep.push(STANDARD[a as usize].as_bytes());
+                parts.push(STANDARD[b as usize].as_bytes());
+                parts.push(STANDARD[a as usize].as_bytes());
             }
         }
     }
-    let kept: Vec<&Entry> = list.iter().filter(|e| keep.contains(&name(e))).collect();
+    keep.extend(parts);
+    keep.sort_unstable();
+    let kept: Vec<&Entry> = list.iter().filter(|e| keep.binary_search(&name(e)).is_ok()).collect();
     let mut out = Vec::with_capacity(t.len());
     // Subrs 0 to 3 (flex and hint replacement) always stay, as writet1.c keeps them.
     let mut from = 0;
-    if let Some(sub) = subrs(t).filter(|s| s.iter().all(|e| e.1.start <= count.start)) {
+    if let Some(sub) = sub.filter(|s| s.iter().all(|e| e.1.start <= count.start)) {
         let mut marked: Vec<bool> = (0..sub.len()).map(|k| k < 4).collect();
         for e in &kept {
             mark_subrs(&t[e.cs.clone()], len_iv, &sub, t, &mut marked);
         }
         for (k, (line, cs)) in sub.iter().enumerate() {
-            if marked[k] || line.is_empty() || cs.len() <= len_iv {
+            if line.is_empty() {
                 continue;
             }
-            // `dup k n RD`, the random bytes, `return`, and the line's own ending.
-            out.extend_from_slice(&t[from..line.start]);
-            out.extend_from_slice(b"dup ");
-            out.extend_from_slice(k.to_string().as_bytes());
-            out.push(b' ');
-            out.extend_from_slice((len_iv + 1).to_string().as_bytes());
-            out.extend_from_slice(&t[cs.start - 4..cs.start]);
-            out.extend_from_slice(&t[cs.start..cs.start + len_iv]);
-            out.push(11);
+            push_scanned(&mut out, &t[from..line.start]);
+            if marked[k] || cs.len() <= len_iv {
+                out.extend_from_slice(&t[line.start..cs.start]);
+                push_encrypted(&mut out, &t[cs.clone()]);
+            } else {
+                // `dup k n RD`, the random bytes, `return`, and the line's own ending.
+                out.extend_from_slice(b"dup ");
+                out.extend_from_slice(k.to_string().as_bytes());
+                out.push(b' ');
+                out.extend_from_slice((len_iv + 1).to_string().as_bytes());
+                out.extend_from_slice(&t[cs.start - 4..cs.start]);
+                let at = out.len();
+                out.extend_from_slice(&t[cs.start..cs.start + len_iv]);
+                out.push(11);
+                crate::data::data_embed::encrypt_charstring(&mut out[at..]);
+            }
             out.extend_from_slice(&t[cs.end..line.end]);
             from = line.end;
         }
     }
-    out.extend_from_slice(&t[from..count.start]);
+    push_scanned(&mut out, &t[from..count.start]);
     out.extend_from_slice(kept.len().to_string().as_bytes());
     let first = list.first().map_or(end, |e| e.line.start);
-    out.extend_from_slice(&t[count.end..first]);
+    push_scanned(&mut out, &t[count.end..first]);
     for e in &kept {
-        out.extend_from_slice(&t[e.line.clone()]);
+        out.extend_from_slice(&t[e.line.start..e.cs.start]);
+        push_encrypted(&mut out, &t[e.cs.clone()]);
+        out.extend_from_slice(&t[e.cs.end..e.line.end]);
     }
     // The space before the dictionary's `end`.
     let last = list.last().map_or(end, |e| e.line.end);
-    out.extend_from_slice(&t[last..]);
+    push_scanned(&mut out, &t[last..]);
     Some(out)
 }
 
@@ -375,10 +418,10 @@ mod tests {
             v
         };
         let binary: Vec<u8> = segs(&pfb).into_iter().filter(|s| s.0 == 2).flat_map(|s| pfb[s.1].to_vec()).collect();
-        let (_, all, _) = entries(&binary).expect("a CharStrings dictionary");
+        let (_, all, _) = entries(&binary, 0).expect("a CharStrings dictionary");
         assert!(all.len() > 100);
         let out = subset(&binary, &["A", "B"]).expect("subset");
-        let (count, kept, _) = entries(&out).expect("the subset reads back");
+        let (count, kept, _) = entries(&out, 0).expect("the subset reads back");
         let names: Vec<&[u8]> = kept.iter().map(|e| &out[e.name.clone()]).collect();
         assert_eq!(names.len(), 3, "{:?}", names.iter().map(|n| String::from_utf8_lossy(n)).collect::<Vec<_>>());
         assert_eq!(&out[count], b"3");

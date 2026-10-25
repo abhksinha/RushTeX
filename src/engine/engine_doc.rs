@@ -78,7 +78,7 @@ enum Change {
 
 /// Commands a native package table redefines that the native job runs as Rust natives
 /// (package, name, `DOC` name): the package's definition is not data, but a mechanism.
-pub const PACKAGE_NATIVES: [(&str, &str, &str); 32] = [("amsmath", "bigl", "rt@big1l"), ("amsmath", "bigr", "rt@big1r"), ("amsmath", "bigm", "rt@big1m"), ("amsmath", "Bigl", "rt@big15l"), ("amsmath", "Bigr", "rt@big15r"), ("amsmath", "Bigm", "rt@big15m"), ("amsmath", "biggl", "rt@big2l"), ("amsmath", "biggr", "rt@big2r"), ("amsmath", "biggm", "rt@big2m"), ("amsmath", "Biggl", "rt@big25l"), ("amsmath", "Biggr", "rt@big25r"), ("amsmath", "Biggm", "rt@big25m"), ("amsmath", "cdots", "rt@cdots"), ("amsmath", "dotsb", "rt@cdots"), ("amsmath", "dotsm", "rt@cdots"), ("amsmath", "dotsc", "rt@dotsc"), ("amsmath", "dotsi", "rt@dotsi"), ("amsmath", "dotso", "rt@dotso"), ("amsmath", "colon", "rt@colon"), ("amsmath", "big", "rt@big1"), ("amsmath", "Big", "rt@big15"), ("amsmath", "bigg", "rt@big2"), ("amsmath", "Bigg", "rt@big25"), ("amstext", "text", "rt@text"), ("amsopn", "operatorname", "rt@operatorname"), ("amsopn", "DeclareMathOperator", "rt@declmathop"), ("amsfonts", "widehat", "rt@widehat"), ("amsfonts", "widetilde", "rt@widetilde"), ("graphicx", "includegraphics", "rt@includegraphics"), ("amsmath", "eqref", "rt@eqref"), ("amsmath", "nonumber", "rt@nonumber"), ("amsmath", "notag", "rt@nonumber")];
+pub const PACKAGE_NATIVES: [(&str, &str, &str); 37] = [("amsthm", "theoremstyle", "rt@thmstyle"), ("amsthm", "qed", "rt@qed"), ("amsthm", "qedsymbol", "rt@qedsymbol"), ("amsthm", "openbox", "rt@openbox"), ("amsthm", "proofname", "rt@proofname"), ("amsmath", "bigl", "rt@big1l"), ("amsmath", "bigr", "rt@big1r"), ("amsmath", "bigm", "rt@big1m"), ("amsmath", "Bigl", "rt@big15l"), ("amsmath", "Bigr", "rt@big15r"), ("amsmath", "Bigm", "rt@big15m"), ("amsmath", "biggl", "rt@big2l"), ("amsmath", "biggr", "rt@big2r"), ("amsmath", "biggm", "rt@big2m"), ("amsmath", "Biggl", "rt@big25l"), ("amsmath", "Biggr", "rt@big25r"), ("amsmath", "Biggm", "rt@big25m"), ("amsmath", "cdots", "rt@cdots"), ("amsmath", "dotsb", "rt@cdots"), ("amsmath", "dotsm", "rt@cdots"), ("amsmath", "dotsc", "rt@dotsc"), ("amsmath", "dotsi", "rt@dotsi"), ("amsmath", "dotso", "rt@dotso"), ("amsmath", "colon", "rt@colon"), ("amsmath", "big", "rt@big1"), ("amsmath", "Big", "rt@big15"), ("amsmath", "bigg", "rt@big2"), ("amsmath", "Bigg", "rt@big25"), ("amstext", "text", "rt@text"), ("amsopn", "operatorname", "rt@operatorname"), ("amsopn", "DeclareMathOperator", "rt@declmathop"), ("amsfonts", "widehat", "rt@widehat"), ("amsfonts", "widetilde", "rt@widetilde"), ("graphicx", "includegraphics", "rt@includegraphics"), ("amsmath", "eqref", "rt@eqref"), ("amsmath", "nonumber", "rt@nonumber"), ("amsmath", "notag", "rt@nonumber")];
 
 /// Names a package changes that the native job follows in its own natives once the package
 /// is loaded (`Machine::ams`): `rushtex-gen natpkg` neither blocks nor holds them.
@@ -93,7 +93,8 @@ const PDF_PAGE_WIDTH: u32 = 23;
 
 /// Packages the native job runs as Rust alone, with no evaluated table: their commands
 /// are [`PACKAGE_NATIVES`]. graphicx (with keyval, graphics, trig and pdftex.def).
-const DRIVER_PACKAGES: [&str; 1] = ["graphicx"];
+/// amsthm (`\theoremstyle`, `\newtheorem*`, `proof`, `\qed`) is lowered the same way.
+const DRIVER_PACKAGES: [&str; 2] = ["graphicx", "amsthm"];
 
 /// Packages that change nothing the native job reads in a document it accepts: inputenc
 /// defines only `\inputencoding`, `\DeclareInputText` and `\DeclareInputMath`, and
@@ -163,7 +164,7 @@ enum Alphabet {
 
 /// The native commands, by `Meaning::Doc` index. Names starting `rt@` are the steps of a
 /// command that typesets material in between (read back from the input).
-static DOC: [(&str, Native); 211] = [
+static DOC: [(&str, Native); 222] = [
     ("rt@output", |m| m.output()),
     ("rt@outputfoot", |m| m.output_page()),
     ("section", |m| m.section(0)),
@@ -417,6 +418,33 @@ static DOC: [(&str, Native); 211] = [
     ("rt@altagkeep", |m| m.align_tag_keep()),
     ("rt@alcr", |m| m.not_native("amsmath's \\everycr outside its alignment")),
     ("rt@alend", |m| m.not_native("amsmath's align end outside its alignment")),
+    ("rt@array", |m| m.array_open()),
+    ("newtheorem", |m| m.new_theorem()),
+    ("rt@thmstyle", |m| m.theorem_style()),
+    ("rt@qed", |m| m.qed()),
+    ("rt@qedsymbol", |m| {
+        let t = Token::cs(m.e.cs.intern("openbox"));
+        m.input.back(t);
+    }),
+    ("rt@openbox", |m| {
+        let mut t = Vec::new();
+        m.tex("\\rt@leavevmode\\hbox to.77778em{\\hfil\\vrule\\vbox to.675em{\\hrule width.6em\\vfil\\hrule}\\vrule\\hfil}", &mut t);
+        m.back_list(&t);
+    }),
+    ("rt@proofname", |m| {
+        let mut t = Vec::new();
+        m.tex("Proof", &mut t);
+        m.back_list(&t);
+    }),
+    ("rt@addpunct", |m| m.add_punct()),
+    ("rt@endproof", |m| m.end_trivlist()),
+    // `\leavevmode`: `\unhbox\voidb@x`, a paragraph in vertical mode.
+    ("rt@leavevmode", |m| {
+        if m.mode == Mode::Vertical {
+            m.new_graf(true);
+        }
+    }),
+    ("rt@mskip", |m| m.matrix_skip()),
 ];
 const OUTPUT: usize = 0;
 const OUTPUT_FOOT: usize = 1;
@@ -463,6 +491,7 @@ const AL_TAG_NUM: usize = 207;
 const AL_TAG_KEEP: usize = 208;
 const AL_ALIGN_CR: usize = 209;
 const AL_END: usize = 210;
+const ARRAY: usize = 211;
 const TAB_SKIP: usize = 137;
 const MULTICOLUMN: usize = 139;
 const MC_BODY: usize = 140;
@@ -489,6 +518,8 @@ const ENDPE: i32 = 3;
 const RUN_IN: i32 = 4;
 const VERB_ITEM: i32 = 5;
 const MINIPAGE: i32 = 6;
+/// amsthm's `\dth@everypar`, after a theorem's head.
+const THM_HEAD: i32 = 7;
 /// `\l@nohyphenation` (language.dat's third language).
 const NOHYPHENATION: i32 = 2;
 /// `\@labels`, `\@tempboxa` and `\@arstrutbox`, hidden box registers.
@@ -539,6 +570,7 @@ const R_TOPSEPADD: usize = 33;
 const R_OUTERPARSKIP: usize = 34;
 const R_TABCOLSEP: usize = 39;
 const R_ATRIGHTSKIP: usize = 40;
+const R_ARRAYCOLSEP: usize = 41;
 const R_ARRAYRULEWIDTH: usize = 42;
 const R_DOUBLERULESEP: usize = 43;
 const R_FLOATSEP: usize = 44;
@@ -565,6 +597,69 @@ struct List {
     centercr: bool,
     /// `\item\relax` right after the list's start (the displayed-text environments).
     auto_item: bool,
+    /// `\@endpefalse` after `\endtrivlist` (amsthm's theorems and `proof`).
+    endpe_false: bool,
+}
+
+/// A `\newtheorem` environment: its name, its title, the theorem whose counter it steps
+/// (itself, or the one named in `\newtheorem{env}[shared]{Title}`), and the heading level
+/// whose step resets the counter (`[section]`: `\@addtoreset`, numbered `\thesection.n`).
+struct Theorem {
+    env: String,
+    title: Vec<Token>,
+    counter: usize,
+    within: Option<usize>,
+    /// The kernel's theorem (0) or amsthm's, in the style current at `\newtheorem`:
+    /// `PLAIN`, `DEFINITION`, `REMARK`.
+    style: u8,
+    /// `\newtheorem*`: no number.
+    star: bool,
+}
+
+/// amsthm's `\theoremstyle`s.
+const PLAIN: u8 = 1;
+const DEFINITION: u8 = 2;
+const REMARK: u8 = 3;
+
+type NewTheorem<'a> = (&'a str, Option<&'a str>, &'a str, Option<usize>, usize);
+
+/// `\newtheorem`'s arguments in source text `s` (after the name): the environment, the
+/// shared counter's environment, the title, the reset level, and the length read; `None`
+/// for a form the native path does not take (a title with a command, an unknown level).
+fn newtheorem_args(s: &str) -> Option<NewTheorem<'_>> {
+    fn group(t: &str) -> Option<(&str, usize)> {
+        let lead = t.len() - t.trim_start().len();
+        let r = t[lead..].strip_prefix('{')?;
+        let k = balanced(r)?;
+        Some((&r[..k], lead + k + 2))
+    }
+    fn bracket(t: &str) -> Option<(&str, usize)> {
+        let lead = t.len() - t.trim_start().len();
+        let r = t[lead..].strip_prefix('[')?;
+        let k = r.find(']')?;
+        Some((r[..k].trim(), lead + k + 2))
+    }
+    let (env, mut at) = group(s)?;
+    let shared = bracket(&s[at..]).map(|(n, k)| {
+        at += k;
+        n
+    });
+    let (title, k) = group(&s[at..])?;
+    at += k;
+    let within = if shared.is_none() {
+        bracket(&s[at..]).map(|(n, k)| {
+            at += k;
+            n
+        })
+    } else {
+        None
+    };
+    let level = match within {
+        None => None,
+        Some(w) => Some(["section", "subsection", "subsubsection"].iter().position(|l| *l == w)?),
+    };
+    let plain = |t: &str| t.bytes().all(|c| c.is_ascii_alphanumeric() || b" -'".contains(&c));
+    (plain(env) && !env.is_empty() && plain(title) && shared.is_none_or(plain)).then_some((env.trim(), shared, title, level, at))
 }
 
 /// `\makelabel`: `\@mklab` (`\hfil #1`), `\hss\llap{#1}`, or `#1` (`\trivlist`).
@@ -601,7 +696,10 @@ const TEXT_SYMBOLS: [(&str, u32); 9] = [("i", 16), ("j", 17), ("ss", 25), ("ae",
 /// Commands of preamble code (`\makeatletter`, `\ifx`, `\let`, …); `\let` and
 /// `\providecommand` define their first name, as `\newcommand` does.
 const PREAMBLE: [&str; 13] = ["makeatletter", "makeatother", "ifx", "else", "fi", "bgroup", "egroup", "relax", "document", "enddocument", "@preamblecmds", "@notprerr", "endinput"];
-const ENVS: [&str; 23] = ["align", "align*", "equation*", "figure", "table", "figure*", "table*", "tabular", "document", "em", "quote", "quotation", "verse", "itemize", "enumerate", "center", "description", "verbatim", "flushleft", "flushright", "abstract", "equation", "thebibliography"];
+/// amsmath's environments built on `array`, native once amsmath is loaded (its definitions
+/// replace the kernel's `cases` and `matrix`, which the native path does not take).
+const AMS_ARRAYS: [&str; 7] = ["cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix"];
+const ENVS: [&str; 24] = ["array", "align", "align*", "equation*", "figure", "table", "figure*", "table*", "tabular", "document", "em", "quote", "quotation", "verse", "itemize", "enumerate", "center", "description", "verbatim", "flushleft", "flushright", "abstract", "equation", "thebibliography"];
 
 /// `\normalsize` among `data_class::SIZE_COMMANDS`.
 const NORMALSIZE: usize = 4;
@@ -747,6 +845,15 @@ pub struct Doc {
     current: usize,
     /// `\item`'s optional label, between its steps.
     item_label: Option<Vec<Token>>,
+    /// The `\newtheorem` environments, with each one's counter value (used for the ones
+    /// that own their counter), and the `\item[...]` the next theorem's `\trivlist` ends
+    /// with.
+    theorems: Vec<Theorem>,
+    thm_values: Vec<i32>,
+    thm_item: Vec<Token>,
+    /// amsthm's `\thm@style`, and the theorem whose head is being set.
+    thm_style: u8,
+    thm_current: usize,
     /// What follows `\@trivlist` (`\list`'s rest, `\trivlist`'s).
     trivlist_then: Native,
     /// Whether `\date` was given (else `\today`).
@@ -846,6 +953,8 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
     // Open `tabular`s: `&`, `\hline` and `\tabularnewline` are taken only inside one.
     let mut tabs = 0usize;
     let mut floats = 0usize;
+    // The `\newtheorem` environments.
+    let mut thms: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < b.len() {
         match b[i] {
@@ -920,6 +1029,24 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                     }
                     i = src.len() - after.len() + 1 + list.len() + 1;
                     continue;
+                } else if name == "newtheorem" {
+                    // `{env}[shared]{Title}` or `{env}{Title}[level]`, with plain text;
+                    // amsthm's `\newtheorem*{env}{Title}`.
+                    let star = loaded.contains(&"amsthm") && rest[n..].trim_start().starts_with('*');
+                    let at = if star { n + rest[n..].find('*').expect("a star") + 1 } else { n };
+                    let Some((env, shared, _, _, len)) = newtheorem_args(&rest[at..]).filter(|a| !star || a.1.is_none() && a.3.is_none()) else {
+                        stop("newtheorem", &mut blocked)?;
+                        i += 1 + n;
+                        continue;
+                    };
+                    if ENVS.contains(&env) || AMS_ARRAYS.contains(&env) || thms.contains(&env) || defined.contains(&env) || shared.is_some_and(|s| !thms.contains(&s)) {
+                        stop("newtheorem", &mut blocked)?;
+                    }
+                    thms.push(env);
+                    i += 1 + at + len;
+                    continue;
+                } else if name == "theoremstyle" && !matches!(rest[n..].strip_prefix('{').and_then(|r| r.split_once('}')).map(|r| r.0.trim()), Some("plain" | "definition" | "remark")) {
+                    stop("theoremstyle", &mut blocked)?;
                 } else if name == "documentclass" {
                     if class {
                         stop("documentclass", &mut blocked)?;
@@ -947,7 +1074,9 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                 }
                 if name == "begin" || name == "end" {
                     let env = rest[n..].strip_prefix('{').and_then(|r| r.split_once('}')).map(|r| r.0).ok_or(name)?;
-                    if !(ENVS.contains(&env) && blocked_names(env) & have == 0 && (!matches!(env, "equation*" | "align" | "align*") || loaded.contains(&"amsmath"))) && !defined.contains(&env) {
+                    let ams_array = AMS_ARRAYS.contains(&env) && loaded.contains(&"amsmath");
+                    let proof = env == "proof" && loaded.contains(&"amsthm");
+                    if !(ams_array || proof || thms.contains(&env) || ENVS.contains(&env) && blocked_names(env) & have == 0 && (!matches!(env, "equation*" | "align" | "align*") || loaded.contains(&"amsmath"))) && !defined.contains(&env) {
                         stop(env, &mut blocked)?;
                     }
                     if matches!(env, "figure" | "table" | "figure*" | "table*") {
@@ -961,10 +1090,22 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
                         }
                     }
                     // `align`'s `&` is taken as a tabular's is.
-                    if matches!(env, "tabular" | "align" | "align*") && name == "end" {
+                    if (matches!(env, "tabular" | "align" | "align*" | "array") || ams_array) && name == "end" {
                         tabs = tabs.saturating_sub(1);
-                    } else if matches!(env, "align" | "align*") {
+                    } else if matches!(env, "align" | "align*") || ams_array {
                         tabs += 1;
+                    } else if env == "array" && !defined.contains(&env) {
+                        // `[pos]{spec}`: a preamble `tabular::mkpream_array` takes.
+                        tabs += 1;
+                        let after = rest[n + env.len() + 2..].trim_start();
+                        let after = match after.strip_prefix('[') {
+                            Some(r) => r.split_once(']').map_or("", |(_, a)| a.trim_start()),
+                            None => after,
+                        };
+                        let spec = after.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
+                        if spec.and_then(tabular::array_spec).and_then(|s| tabular::mkpream_array(&s)).is_none() {
+                            stop("array preamble", &mut blocked)?;
+                        }
                     } else if env == "tabular" && !defined.contains(&env) {
                         // `[pos]{spec}`: a preamble `tabular::mkpream` takes.
                         tabs += 1;
@@ -992,15 +1133,31 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
     Err("no \\end{document}")
 }
 
+/// The delimiters amsmath puts around a matrix environment's `\env@matrix`.
+fn matrix_fences(name: &str) -> (&'static str, &'static str) {
+    match name {
+        "pmatrix" => ("\\left(", "\\right)"),
+        "bmatrix" => ("\\left[", "\\right]"),
+        "Bmatrix" => ("\\left\\lbrace", "\\right\\rbrace"),
+        "vmatrix" => ("\\left\\lvert", "\\right\\rvert"),
+        "Vmatrix" => ("\\left\\lVert", "\\right\\rVert"),
+        _ => ("", ""),
+    }
+}
+
 /// An `align` body's rows: split at each `\\` outside braces; the text after the last is
 /// a row too, empty after a trailing `\\`.
 fn split_rows(body: &str) -> Vec<&str> {
     let (b, mut rows, mut depth, mut start, mut i) = (body.as_bytes(), Vec::new(), 0i32, 0, 0);
+    // Open environments (an `array` or `cases` in a row): their `\\` are their own.
+    let mut inner = 0i32;
     while i < b.len() {
         match b[i] {
             b'{' => depth += 1,
             b'}' => depth -= 1,
-            b'\\' if b.get(i + 1) == Some(&b'\\') && depth == 0 => {
+            b'\\' if body[i..].starts_with("\\begin{") => inner += 1,
+            b'\\' if body[i..].starts_with("\\end{") => inner -= 1,
+            b'\\' if b.get(i + 1) == Some(&b'\\') && depth == 0 && inner == 0 => {
                 rows.push(&body[start..i]);
                 i += 2;
                 start = i;
@@ -1099,6 +1256,28 @@ fn predict(src: &str) -> Predicted {
         .filter_map(|r| r.trim_start_matches('*').trim_start().strip_prefix("{\\")?.split('}').next())
         .collect();
     let (quiet, loud) = quiet_macros(&src[..start], &operators);
+    // The preamble's theorems: environment, counter owner, reset level; and each counter.
+    let mut thms: Vec<(&str, usize, Option<usize>)> = Vec::new();
+    // amsthm's `\newtheorem*` numbers nothing.
+    let mut starred: Vec<&str> = Vec::new();
+    for (at, _) in src[..start].match_indices("\\newtheorem") {
+        let after = &src[at + "\\newtheorem".len()..];
+        if let Some(r) = after.trim_start().strip_prefix('*') {
+            let Some((env, ..)) = newtheorem_args(r) else { return out };
+            starred.push(env);
+            continue;
+        }
+        let Some((env, shared, _, within, _)) = newtheorem_args(after) else { return out };
+        let owner = match shared {
+            Some(s) => match thms.iter().find(|t| t.0 == s) {
+                Some(t) => t.1,
+                None => return out,
+            },
+            None => thms.len(),
+        };
+        thms.push((env, owner, within));
+    }
+    let mut thm_values = vec![0u32; thms.len()];
     struct Group {
         label: String,
         depth: usize,
@@ -1191,7 +1370,8 @@ fn predict(src: &str) -> Predicted {
                                     let close = format!("\\end{{{env}}}");
                                     let Some(k) = after.find(&close) else { return out };
                                     let body = &after[..k];
-                                    if body.contains("\\begin") || body.contains('@') {
+                                    let arrays = body.match_indices("\\begin{").all(|(p, _)| body[p + 7..].split('}').next().is_some_and(|e| e == "array" || AMS_ARRAYS.contains(&e)));
+                                    if !arrays || body.contains('@') {
                                         return out;
                                     }
                                     for row in split_rows(body) {
@@ -1215,7 +1395,24 @@ fn predict(src: &str) -> Predicted {
                                     continue;
                                 }
                                 // An entry is a group; `\label` there takes the label around.
-                                "em" | "document" | "tabular" => {}
+                                "em" | "document" | "tabular" | "array" | "proof" => {}
+                                e if starred.contains(&e) => {}
+                                e if AMS_ARRAYS.contains(&e) => {}
+                                // `\@thm`'s `\refstepcounter`, numbered `\thesection.n` when
+                                // reset by a level.
+                                e if thms.iter().any(|t| t.0 == e) => {
+                                    let &(_, owner, _) = thms.iter().find(|t| t.0 == e).expect("a theorem");
+                                    thm_values[owner] += 1;
+                                    let mut text = String::new();
+                                    if let Some(l) = thms[owner].2 {
+                                        for c in &sec[..=l] {
+                                            text.push_str(&c.to_string());
+                                            text.push('.');
+                                        }
+                                    }
+                                    text.push_str(&thm_values[owner].to_string());
+                                    g.label = text;
+                                }
                                 "figure" | "figure*" | "table" | "table*" => {
                                     g.enumerate = false;
                                     floats.push(env.starts_with("table") as usize);
@@ -1234,6 +1431,11 @@ fn predict(src: &str) -> Predicted {
                         if level < SECNUMDEPTH {
                             sec[level] += 1;
                             sec[level + 1..].fill(0);
+                            for (t, v) in thms.iter().zip(thm_values.iter_mut()) {
+                                if t.2.is_some_and(|w| w >= level) {
+                                    *v = 0;
+                                }
+                            }
                             number = sec[..=level].iter().map(u32::to_string).collect::<Vec<_>>().join(".");
                             groups.last_mut().expect("a group").label.clone_from(&number);
                         }
@@ -1762,7 +1964,7 @@ impl Machine<'_, '_> {
                 self.e.eqtb.set_meaning(id, Meaning::Reg(r), true);
             }
         }
-        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, ids, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), ams_display: 0, df_label: None, big_size: 0, align: None, wrong_shapes: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, trivlist_then: |_| {}, dated: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special_plain: false, empty_foot: false, regs }));
+        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, ids, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), ams_display: 0, df_label: None, big_size: 0, align: None, wrong_shapes: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, theorems: Vec::new(), thm_values: Vec::new(), thm_item: Vec::new(), thm_style: PLAIN, thm_current: 0, trivlist_then: |_| {}, dated: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special_plain: false, empty_foot: false, regs }));
         self.strut_update();
         let fixed = FONT_FIXED.iter().map(|name| {
             let id = self.e.cs.intern(name);
@@ -2169,6 +2371,7 @@ impl Machine<'_, '_> {
                 }
             }
             ITEM => self.item_everypar(),
+            THM_HEAD => self.theorem_everypar(),
             // `\@setminipage`'s `\everypar{\@minipagefalse\everypar{}}`.
             MINIPAGE => {
                 if let Some(doc) = self.doc.as_mut() {
@@ -2545,6 +2748,12 @@ impl Machine<'_, '_> {
         if doc.numbered {
             doc.counters[level] += 1;
             doc.counters[level + 1..].fill(0);
+            // `\@addtoreset`: theorems numbered within this level or a lower one.
+            for t in 0..doc.theorems.len() {
+                if doc.theorems[t].within.is_some_and(|w| w >= level) {
+                    doc.thm_values[t] = 0;
+                }
+            }
             for (k, c) in doc.counters[..=level].iter().enumerate() {
                 if k > 0 {
                     number.push('.');
@@ -3342,9 +3551,13 @@ impl Machine<'_, '_> {
     }
 
     /// amsmath's `\extra@`: the next token a right delimiter (`\rightdelim@`), `$`, or a
-    /// macro starting `\DOTSX`.
+    /// macro starting `\DOTSX`. Before `&` the look-ahead meets the next template: an
+    /// `array`'s begins with the `$` ending the entry's formula.
     fn dots_extra(&self, next: Option<Token>) -> bool {
         let Some(t) = next else { return false };
+        if t.cs_id().is_some_and(|c| self.e.eqtb.meaning(c) == Meaning::Doc(TAB_V as u16)) {
+            return self.doc.as_ref().and_then(|d| d.tabs.last()).is_some_and(|t| t.math);
+        }
         match t.cs_id() {
             None => matches!(t.chr(), ')' | ']') && t.cat() == Some(Cat::Other) || t.cat() == Some(Cat::MathShift),
             Some(c) => {
@@ -3680,7 +3893,7 @@ impl Machine<'_, '_> {
     fn bib_open(&mut self) {
         let w = self.e.eqtb.box_reg(TEMP_BOX).map_or(0, |b| self.e.nodes.boxes[b as usize].width);
         self.e.eqtb.replace_box(TEMP_BOX, None);
-        let list = List { label: Label::Bib, make: Make::Mklab, numbered: true, counter: R_ENUMI + 3, centercr: false, auto_item: false };
+        let list = List { label: Label::Bib, make: Make::Mklab, numbered: true, counter: R_ENUMI + 3, centercr: false, auto_item: false, endpe_false: false };
         if !self.list_open(list) {
             return;
         }
@@ -3982,6 +4195,12 @@ impl Machine<'_, '_> {
     /// `\begin{name}`: `\begingroup` and the environment's start.
     fn begin_env(&mut self) {
         let name = self.env_name();
+        if let Some(k) = self.theorem_index(&name) {
+            return if self.doc.as_ref().is_some_and(|d| d.theorems[k].style != 0) { self.ams_theorem_begin(k) } else { self.theorem_begin(k) };
+        }
+        if name == "proof" && self.amsthm() {
+            return self.proof_begin();
+        }
         match name.as_str() {
             "document" => {
                 self.begin_group(SEMI_SIMPLE_GROUP);
@@ -4069,6 +4288,31 @@ impl Machine<'_, '_> {
                 self.back_list(&t);
             }
             "align" | "align*" if self.ams() => self.align_begin(name == "align*"),
+            // `\array` in a formula, inside `\begin`'s group.
+            "array" => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                let t = self.doc_id(ARRAY);
+                self.input.back(t);
+            }
+            // amsmath's `\env@cases` and `\env@matrix`: `\array` with their own
+            // specification, a delimiter before (`\left\lbrace`, `\left(`, ...), and a
+            // matrix's `\hskip -\arraycolsep` (`*\c@MaxMatrixCols c` is ten columns).
+            "cases" | "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix" if self.ams() => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                let text = match name.as_str() {
+                    "cases" => "\\left\\lbrace\\def\\arraystretch{1.2}\\rt@array{@{}l@{\\quad}l@{}}".to_string(),
+                    _ => format!("{}\\rt@mskip\\rt@array{{*{{10}}{{c}}}}", matrix_fences(&name).0),
+                };
+                let mut t = Vec::new();
+                self.tex(&text, &mut t);
+                self.back_list(&t);
+            }
             // amsmath's `equation*`: `\mathdisplay` with `\@eqnswfalse`.
             "equation*" if self.ams() => {
                 self.begin_group(SEMI_SIMPLE_GROUP);
@@ -4238,6 +4482,17 @@ impl Machine<'_, '_> {
     /// `\end{name}`: the environment's end and `\endgroup`.
     fn end_env(&mut self) {
         let name = self.env_name();
+        // `\@endtheorem`: `\endtrivlist` (amsthm's then `\@endpefalse`).
+        if self.theorem_index(&name).is_some() {
+            return self.end_trivlist();
+        }
+        // amsthm's `\endproof`: `\popQED` (`\begingroup \qed \relax\endgroup`), `\endtrivlist
+        // \@endpefalse`.
+        if name == "proof" && self.amsthm() {
+            let mut t = Vec::new();
+            self.tex("\\begingroup\\qed\\relax\\endgroup\\rt@endproof", &mut t);
+            return self.back_list(&t);
+        }
         match name.as_str() {
             "document" => self.end_document(),
             "em" => self.end_group(SEMI_SIMPLE_GROUP),
@@ -4256,6 +4511,20 @@ impl Machine<'_, '_> {
             // in vertical mode, so `\leavevmode` is not needed.
             "center" | "flushleft" | "flushright" | "verbatim" => self.end_trivlist(),
             "tabular" => self.tabular_end(),
+            // `\endarray` (`\crcr\egroup\egroup`), what amsmath puts after it, and
+            // `\end`'s `\endgroup`.
+            "array" | "cases" | "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix" if self.in_tabular() => {
+                let crcr = Token::cs(self.doc.as_ref().map_or(0, |d| d.crcr_id));
+                let mut list = vec![crcr, self.doc_id(TAB_END)];
+                let after = match name.as_str() {
+                    "array" => String::new(),
+                    "cases" => "\\right.".to_string(),
+                    _ => format!("\\rt@mskip{}", matrix_fences(&name).1),
+                };
+                self.tex(&after, &mut list);
+                list.push(Token::cs(self.e.cs.intern("endgroup")));
+                self.back_list(&list);
+            }
             "figure" | "table" | "figure*" | "table*" => self.float_close(),
             // `\csname endname\endcsname \endgroup`.
             _ => {
@@ -4270,7 +4539,7 @@ impl Machine<'_, '_> {
     fn list_env(&mut self, name: &str) {
         let (em, _) = self.em_ex();
         let em = em as i32;
-        let mut list = List { label: Label::Empty, make: Make::Mklab, numbered: false, counter: 0, centercr: false, auto_item: true };
+        let mut list = List { label: Label::Empty, make: Make::Mklab, numbered: false, counter: 0, centercr: false, auto_item: true, endpe_false: false };
         match name {
             "itemize" | "enumerate" => {
                 // `\@itemdepth`/`\@enumdepth`, advanced locally.
@@ -4390,7 +4659,7 @@ impl Machine<'_, '_> {
         let parskip = self.glue_param(super::engine_pack::PAR_SKIP);
         self.set_rg(R_PARSEP, parskip);
         if let Some(doc) = self.doc.as_mut() {
-            doc.lists.push(List { label: Label::Empty, make: Make::Plain, numbered: false, counter: 0, centercr: false, auto_item: true });
+            doc.lists.push(List { label: Label::Empty, make: Make::Plain, numbered: false, counter: 0, centercr: false, auto_item: true, endpe_false: false });
         }
         self.trivlist(|m| {
             for r in [R_LABELWIDTH, R_LEFTMARGIN, R_ITEMINDENT] {
@@ -4473,13 +4742,330 @@ impl Machine<'_, '_> {
         self.back_list(&t);
     }
 
+    /// `\newtheorem{env}{Title}[within]` or `\newtheorem{env}[shared]{Title}` (`\@ynthm`,
+    /// `\@xnthm`, `\@othm`): the environment and its counter.
+    fn new_theorem(&mut self) {
+        let ams = self.amsthm();
+        let star = ams && self.next_is('*');
+        let text = |arg: &[Token]| -> String { arg.iter().map(|t| t.chr()).collect::<String>().trim().to_string() };
+        let mut env = Vec::new();
+        self.read_arg(&mut env);
+        let shared = if !star && self.next_is('[') { Some(self.bracket_arg()) } else { None };
+        let mut title = Vec::new();
+        self.read_arg(&mut title);
+        let within = if !star && shared.is_none() && self.next_is('[') { Some(self.bracket_arg()) } else { None };
+        let env = text(&env);
+        let shared = shared.map(|s| text(&s));
+        let within = within.map(|w| text(&w));
+        let Some(doc) = self.doc.as_mut() else { return };
+        let k = doc.theorems.len();
+        let counter = match &shared {
+            Some(s) => match doc.theorems.iter().position(|t| t.env == *s) {
+                Some(c) => doc.theorems[c].counter,
+                None => return self.not_native("\newtheorem sharing a counter that is not a theorem's"),
+            },
+            None => k,
+        };
+        let within = match within.as_deref() {
+            None => None,
+            Some(w) => match ["section", "subsection", "subsubsection"].iter().position(|l| *l == w) {
+                Some(l) => Some(l),
+                None => return self.not_native("\newtheorem numbered within that level"),
+            },
+        };
+        let style = if ams { doc.thm_style } else { 0 };
+        doc.theorems.push(Theorem { env, title, counter, within, style, star });
+        doc.thm_values.push(0);
+    }
+
+    fn amsthm(&self) -> bool {
+        self.doc.as_ref().is_some_and(|d| d.packages.contains(&"amsthm"))
+    }
+
+    /// amsthm's `\theoremstyle{plain}`, `{definition}` or `{remark}`.
+    fn theorem_style(&mut self) {
+        let mut arg = Vec::new();
+        self.read_arg(&mut arg);
+        let name: String = arg.iter().map(|t| t.chr()).collect();
+        let style = match name.trim() {
+            "plain" => PLAIN,
+            "definition" => DEFINITION,
+            "remark" => REMARK,
+            _ => return self.not_native("a \\theoremstyle other than plain, definition and remark"),
+        };
+        if let Some(doc) = self.doc.as_mut() {
+            doc.thm_style = style;
+        }
+    }
+
+    /// amsthm's `\@thm`: `\ifhmode\unskip\unskip\par\fi`, then the list.
+    fn ams_theorem_begin(&mut self, k: usize) {
+        self.begin_group(SEMI_SIMPLE_GROUP);
+        let Some(doc) = self.doc.as_mut() else { return };
+        doc.endpe = false;
+        doc.thm_current = k;
+        if self.mode == Mode::Horizontal {
+            self.unskip();
+            self.unskip();
+            let par = self.cur_par();
+            return self.run_ops(vec![par, Op::Call(|m| m.ams_theorem_list())]);
+        }
+        self.ams_theorem_list();
+    }
+
+    /// `\normalfont \trivlist`.
+    fn ams_theorem_list(&mut self) {
+        self.normal_font();
+        let parskip = self.glue_param(super::engine_pack::PAR_SKIP);
+        self.set_rg(R_PARSEP, parskip);
+        let Some(doc) = self.doc.as_mut() else { return };
+        doc.lists.push(List { label: Label::Empty, make: Make::Plain, numbered: false, counter: 0, centercr: false, auto_item: false, endpe_false: true });
+        self.trivlist(|m| m.ams_theorem_head());
+    }
+
+    /// The rest of `\trivlist` and `\@thm`: `\thm@space@setup` and the style (`\th@plain`
+    /// `\itshape`, `\th@definition` `\normalfont`, `\th@remark` half the space), `\@topsep`
+    /// and `\@topsepadd`, `\refstepcounter`, then `\@begintheorem`'s head in `\@labels`
+    /// (`\deferred@thm@head`): `\normalfont`, the head font, the title, `\textup{n}`, `{\mdseries
+    /// \upshape(note)}`, `.`, `\hskip\thm@headsep`.
+    fn ams_theorem_head(&mut self) {
+        for r in [R_LABELWIDTH, R_LEFTMARGIN, R_ITEMINDENT] {
+            self.set_rw(r, 0, false);
+        }
+        let Some(doc) = self.doc.as_mut() else { return };
+        let k = doc.thm_current;
+        let (style, star, owner) = (doc.theorems[k].style, doc.theorems[k].star, doc.theorems[k].counter);
+        let title = doc.theorems[k].title.clone();
+        let mut number = None;
+        if !star {
+            doc.thm_values[owner] += 1;
+            let mut n = String::new();
+            if let Some(l) = doc.theorems[owner].within {
+                for c in &doc.counters[..=l] {
+                    n.push_str(&c.to_string());
+                    n.push('.');
+                }
+            }
+            n.push_str(&doc.thm_values[owner].to_string());
+            number = Some(n);
+        }
+        // `\divide\thm@preskip\tw@` divides each part.
+        let mut pre = self.rg(R_TOPSEP);
+        if style == REMARK {
+            pre = Glue { width: pre.width / 2, stretch: pre.stretch / 2, shrink: pre.shrink / 2, ..pre };
+        }
+        self.set_rg(R_ATTOPSEP, pre);
+        self.set_rg(R_TOPSEPADD, pre);
+        if style == PLAIN {
+            self.font_declaration(Change::Shape("it"), false);
+        } else {
+            self.normal_font();
+        }
+        if let Some(n) = &number {
+            self.set_current_label(n);
+        }
+        let note = if self.next_is('[') { Some(self.bracket_arg()) } else { None };
+        let mut t = Vec::new();
+        self.tex(&format!("\\setbox{LABELS_BOX}=\\hbox{{\\normalfont{}", if style == REMARK { "\\itshape " } else { "\\bfseries " }), &mut t);
+        t.extend(title);
+        if let Some(n) = number {
+            t.push(Token::char(Cat::Space, ' '));
+            self.tex(&format!("\\textup{{{n}}}"), &mut t);
+        }
+        if let Some(note) = note {
+            t.push(Token::char(Cat::Space, ' '));
+            self.tex("{\\mdseries\\upshape(", &mut t);
+            t.extend(note);
+            self.tex(")}", &mut t);
+        }
+        // `\the\thm@headpunct`: the look-ahead of `\textup`'s `\maybe@ic` meets `\the`, not
+        // the period, so the italic correction stays.
+        self.tex("\\relax.\\hskip5pt plus1pt minus1pt}\\ignorespaces ", &mut t);
+        let Some(doc) = self.doc.as_mut() else { return };
+        doc.thm_item = t;
+        // `\if@inlabel \indent \par \fi`.
+        let mut ops = Vec::new();
+        if doc.inlabel {
+            ops.push(Op::Call(|m| {
+                if m.mode == Mode::Vertical {
+                    m.new_graf(true);
+                } else {
+                    let b = m.e.nodes.add_box(BoxRec { width: m.dimen_param(super::engine_pack::PAR_INDENT), ..BoxRec::default() });
+                    m.cur.push(Node::new(Kind::Box, b as i32));
+                }
+            }));
+            ops.push(self.cur_par());
+        }
+        ops.push(Op::Call(|m| m.ams_theorem_skips()));
+        self.run_ops(ops);
+    }
+
+    /// `\deferred@thm@head`'s space: `\@nbitem` after a heading, else `\addpenalty
+    /// \@beginparpenalty \addvspace\@topsep \addvspace{-\parskip}`; then `\@inlabeltrue`,
+    /// `\everypar\dth@everypar`, and the head's box.
+    fn ams_theorem_skips(&mut self) {
+        let mut ops = Vec::new();
+        if self.doc.as_ref().is_some_and(|d| d.nobreak) {
+            let parskip = self.glue_param(super::engine_pack::PAR_SKIP);
+            let a = glue_add(self.rg(R_OUTERPARSKIP), neg(parskip));
+            self.add_vspace(a);
+        } else {
+            let p = self.rw(R_BEGINPARPENALTY);
+            self.add_penalty(p, &mut ops);
+            ops.push(Op::Call(|m| {
+                let t = m.rg(R_ATTOPSEP);
+                m.add_vspace(t);
+                let parskip = m.glue_param(super::engine_pack::PAR_SKIP);
+                m.add_vspace(neg(parskip));
+            }));
+        }
+        ops.push(Op::Call(|m| {
+            m.set_everypar(THM_HEAD);
+            let Some(doc) = m.doc.as_mut() else { return };
+            doc.inlabel = true;
+            let t = std::mem::take(&mut doc.thm_item);
+            m.back_list(&t);
+        }));
+        self.run_ops(ops);
+    }
+
+    /// `\dth@everypar`: `\@minipagefalse \global\@newlistfalse \@noparitemfalse`; in a label,
+    /// `{\setbox\z@\lastbox \ifvoid\z@ \kern-\itemindent \fi}\unhbox\@labels`; then the club
+    /// penalty, as `\@item`'s.
+    fn theorem_everypar(&mut self) {
+        let f = self.nopar() & !NOPAR_ITEM;
+        self.set_nopar(f);
+        let Some(doc) = self.doc.as_mut() else { return };
+        doc.newlist = false;
+        doc.floats.minipage = false;
+        if doc.inlabel {
+            doc.inlabel = false;
+            if !self.drop_last_box() {
+                let k = -self.rw(R_ITEMINDENT);
+                self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, k) });
+            }
+            self.unhbox_labels();
+        }
+        let Some(doc) = self.doc.as_mut() else { return };
+        if doc.nobreak {
+            doc.nobreak = false;
+            self.set_int_named("clubpenalty", 10000);
+        } else {
+            let v = self.rw(R_CLUBPENALTY);
+            self.set_int_named("clubpenalty", v);
+            self.set_everypar(0);
+        }
+    }
+
+    /// amsthm's `proof`: `[#1]` (`\proofname`), `\par \pushQED{\qed} \normalfont
+    /// \topsep6\p@\@plus6\p@ \trivlist \item[\hskip\labelsep \itshape #1\@addpunct{.}]
+    /// \ignorespaces`.
+    fn proof_begin(&mut self) {
+        self.begin_group(SEMI_SIMPLE_GROUP);
+        if let Some(doc) = self.doc.as_mut() {
+            doc.endpe = false;
+        }
+        let label = if self.next_is('[') { self.bracket_arg() } else { vec![Token::cs(self.e.cs.intern("proofname"))] };
+        let mut t = Vec::new();
+        self.tex("\\item[\\hskip\\labelsep\\itshape ", &mut t);
+        t.extend(label);
+        self.tex("\\rt@addpunct]\\ignorespaces ", &mut t);
+        let Some(doc) = self.doc.as_mut() else { return };
+        doc.thm_item = t;
+        let par = self.cur_par();
+        self.run_ops(vec![
+            par,
+            Op::Call(|m| {
+                m.normal_font();
+                m.set_rg(R_TOPSEP, Glue { width: 6 << 16, stretch: 6 << 16, ..Glue::default() });
+                let parskip = m.glue_param(super::engine_pack::PAR_SKIP);
+                m.set_rg(R_PARSEP, parskip);
+                let Some(doc) = m.doc.as_mut() else { return };
+                doc.lists.push(List { label: Label::Empty, make: Make::Plain, numbered: false, counter: 0, centercr: false, auto_item: false, endpe_false: true });
+                m.trivlist(|m| m.theorem_item());
+            }),
+        ]);
+    }
+
+    /// amsthm's `\@addpunct{.}`: `\ifhmode \ifnum\spacefactor>\@m \else.\fi\fi`.
+    fn add_punct(&mut self) {
+        if self.mode == Mode::Horizontal && self.aux <= 1000 {
+            self.input.back(Token::char(Cat::Other, '.'));
+        }
+    }
+
+    /// amsthm's `\qed`: in a formula `\quad\hbox{\qedsymbol}`, else `\leavevmode\unskip
+    /// \penalty9999 \hbox{}\nobreak\hfill \quad\hbox{\qedsymbol}`.
+    fn qed(&mut self) {
+        let mut t = Vec::new();
+        if self.mode != Mode::Math {
+            self.tex("\\rt@leavevmode\\unskip\\penalty9999 \\hbox{}\\penalty10000 \\hfill", &mut t);
+        }
+        self.tex("\\quad\\hbox{\\qedsymbol}", &mut t);
+        self.back_list(&t);
+    }
+
+    fn theorem_index(&self, name: &str) -> Option<usize> {
+        self.doc.as_ref()?.theorems.iter().position(|t| t.env == name)
+    }
+
+    /// `\begin{env}` of a `\newtheorem`: `\@thm`'s `\refstepcounter`, then `\@begintheorem`
+    /// or `\@opargbegintheorem`: `\trivlist \item[\MakeLinkTarget{..}\hskip\labelsep
+    /// {\bfseries Title\ n\ (note)}]\itshape`, and `\ignorespaces`. Without hyperref,
+    /// `\MakeLinkTarget` in the label's box leaves `\smash{}`, an empty box.
+    fn theorem_begin(&mut self, k: usize) {
+        self.begin_group(SEMI_SIMPLE_GROUP);
+        let Some(doc) = self.doc.as_mut() else { return };
+        doc.endpe = false;
+        let owner = doc.theorems[k].counter;
+        doc.thm_values[owner] += 1;
+        let mut number = String::new();
+        if let Some(l) = doc.theorems[owner].within {
+            for c in &doc.counters[..=l] {
+                number.push_str(&c.to_string());
+                number.push('.');
+            }
+        }
+        number.push_str(&doc.thm_values[owner].to_string());
+        let title = doc.theorems[k].title.clone();
+        self.set_current_label(&number);
+        let note = if self.next_is('[') { Some(self.bracket_arg()) } else { None };
+        let mut t = Vec::new();
+        self.tex("\\item[\\hbox{}\\hskip\\labelsep{\\bfseries ", &mut t);
+        t.extend(title);
+        self.tex(&format!("\\ {number}"), &mut t);
+        if let Some(note) = note {
+            self.tex("\\ (", &mut t);
+            t.extend(note);
+            self.tex(")", &mut t);
+        }
+        self.tex("}]\\itshape\\ignorespaces ", &mut t);
+        // `\trivlist`: `\parsep\parskip`, then `\@trivlist`.
+        let parskip = self.glue_param(super::engine_pack::PAR_SKIP);
+        self.set_rg(R_PARSEP, parskip);
+        let Some(doc) = self.doc.as_mut() else { return };
+        doc.thm_item = t;
+        doc.lists.push(List { label: Label::Empty, make: Make::Plain, numbered: false, counter: 0, centercr: false, auto_item: false, endpe_false: false });
+        self.trivlist(|m| m.theorem_item());
+    }
+
+    /// After `\@trivlist`: `\labelwidth\z@ \leftmargin\z@ \itemindent\z@`, then the
+    /// theorem's `\item[...]`.
+    fn theorem_item(&mut self) {
+        for r in [R_LABELWIDTH, R_LEFTMARGIN, R_ITEMINDENT] {
+            self.set_rw(r, 0, false);
+        }
+        let t = self.doc.as_mut().map(|d| std::mem::take(&mut d.thm_item)).unwrap_or_default();
+        self.back_list(&t);
+    }
+
     /// `\begin{center}`, `\begin{flushleft}` and `\begin{flushright}` (`kind` 0, 1, 2):
     /// `\trivlist`, then `\centering`, `\raggedright` or `\raggedleft`, then `\item\relax`.
     fn center(&mut self, kind: usize) {
         let parskip = self.glue_param(super::engine_pack::PAR_SKIP);
         self.set_rg(R_PARSEP, parskip);
         if let Some(doc) = self.doc.as_mut() {
-            doc.lists.push(List { label: Label::Empty, make: Make::Plain, numbered: false, counter: 0, centercr: true, auto_item: true });
+            doc.lists.push(List { label: Label::Empty, make: Make::Plain, numbered: false, counter: 0, centercr: true, auto_item: true, endpe_false: false });
         }
         let then: Native = match kind {
             0 => |m| m.ragged(0),
@@ -4789,7 +5375,9 @@ impl Machine<'_, '_> {
         }
         ops.push(Op::Call(|m| {
             if let Some(doc) = m.doc.as_mut() {
-                doc.lists.pop();
+                if doc.lists.pop().is_some_and(|l| l.endpe_false) {
+                    doc.endpe = false;
+                }
             }
             m.end_group(SEMI_SIMPLE_GROUP);
         }));
@@ -6260,7 +6848,7 @@ mod tests {
         let t = data_class::article().unwrap();
         let i = data_class::CLASS_REGS.iter().position(|n| *n == "count footins").unwrap();
         assert_eq!(t.reg(i).1, super::super::engine_eqtb::INT_PARAMS + FOOTINS);
-        for (i, name) in [(R_LEFTMARGINI, "leftmargini"), (R_LABELSEP, "labelsep"), (R_LABELWIDTH, "labelwidth"), (R_LEFTMARGIN, "leftmargin"), (R_RIGHTMARGIN, "rightmargin"), (R_LISTPARINDENT, "listparindent"), (R_ITEMINDENT, "itemindent"), (R_TOTALLEFTMARGIN, "@totalleftmargin"), (R_LINEWIDTH, "linewidth"), (R_BEGINPARPENALTY, "@beginparpenalty"), (R_ENDPARPENALTY, "@endparpenalty"), (R_ITEMPENALTY, "@itempenalty"), (R_CLUBPENALTY, "@clubpenalty"), (R_LISTDEPTH, "@listdepth"), (R_ITEMDEPTH, "@itemdepth"), (R_ENUMDEPTH, "@enumdepth"), (R_ENUMI, "c@enumi"), (R_PARTOPSEP, "partopsep"), (R_TOPSEP, "topsep"), (R_PARSEP, "parsep"), (R_ITEMSEP, "itemsep"), (R_ATTOPSEP, "@topsep"), (R_TOPSEPADD, "@topsepadd"), (R_OUTERPARSKIP, "@outerparskip"), (R_TABCOLSEP, "tabcolsep")] {
+        for (i, name) in [(R_LEFTMARGINI, "leftmargini"), (R_LABELSEP, "labelsep"), (R_LABELWIDTH, "labelwidth"), (R_LEFTMARGIN, "leftmargin"), (R_RIGHTMARGIN, "rightmargin"), (R_LISTPARINDENT, "listparindent"), (R_ITEMINDENT, "itemindent"), (R_TOTALLEFTMARGIN, "@totalleftmargin"), (R_LINEWIDTH, "linewidth"), (R_BEGINPARPENALTY, "@beginparpenalty"), (R_ENDPARPENALTY, "@endparpenalty"), (R_ITEMPENALTY, "@itempenalty"), (R_CLUBPENALTY, "@clubpenalty"), (R_LISTDEPTH, "@listdepth"), (R_ITEMDEPTH, "@itemdepth"), (R_ENUMDEPTH, "@enumdepth"), (R_ENUMI, "c@enumi"), (R_PARTOPSEP, "partopsep"), (R_TOPSEP, "topsep"), (R_PARSEP, "parsep"), (R_ITEMSEP, "itemsep"), (R_ATTOPSEP, "@topsep"), (R_TOPSEPADD, "@topsepadd"), (R_OUTERPARSKIP, "@outerparskip"), (R_TABCOLSEP, "tabcolsep"), (R_ARRAYCOLSEP, "arraycolsep")] {
             assert_eq!(data_class::CLASS_REGS[i], name);
         }
     }
@@ -6288,6 +6876,33 @@ mod tests {
         let p = predict(&format!("{pre}\\begin{{document}}\\gdl\\rt{{a}}\\section{{A}}\\label{{a}}"));
         assert!(p.complete && p.labels.get("a").map(String::as_str) == Some("1"));
         assert!(!predict(&format!("{pre}\\begin{{document}}\\sec\\label{{a}}")).complete);
+    }
+
+    #[test]
+    fn predict_numbers_theorems() {
+        // `[section]` resets with the section; `[theorem]` shares its counter.
+        let p = predict("\\newtheorem{thm}{Theorem}[section]\\newtheorem{lem}[thm]{Lemma}\\newtheorem{conj}{Conjecture}\\begin{document}\\section{A}\\begin{thm}\\label{a}\\end{thm}\\begin{lem}[Note]\\label{b}\\end{lem}\\begin{conj}\\label{c}\\end{conj}\\section{B}\\begin{lem}\\label{d}\\end{lem}\\begin{conj}\\label{e}\\end{conj}");
+        assert!(p.complete);
+        assert_eq!([&p.labels["a"], &p.labels["b"], &p.labels["c"], &p.labels["d"], &p.labels["e"]], ["1.1", "1.2", "1", "2.1", "2"]);
+        assert_eq!(newtheorem_args("{lem}[thm]{Lemma}x").map(|a| (a.0, a.1, a.2, a.3, a.4)), Some(("lem", Some("thm"), "Lemma", None, 17)));
+        assert!(newtheorem_args("{thm}{\\bf T}").is_none());
+        assert!(newtheorem_args("{thm}{T}[chapter]").is_none());
+    }
+
+    #[test]
+    fn predict_skips_starred_theorems_and_proofs() {
+        let p = predict("\\newtheorem{thm}{Theorem}\\newtheorem*{rem}{Remark}\\begin{document}\\section{A}\\label{s}\\begin{rem}\\label{r}\\end{rem}\\begin{thm}\\label{t}\\end{thm}\\begin{proof}\\label{p}\\end{proof}");
+        assert!(p.complete);
+        assert_eq!([&p.labels["s"], &p.labels["r"], &p.labels["t"], &p.labels["p"]], ["1", "1", "1", "1"]);
+    }
+
+    #[test]
+    fn predict_reads_arrays_in_align_rows() {
+        // A `cases` row's own `\\` does not end the align's row: two numbers, not four.
+        let p = predict("\\begin{document}\\begin{align}f &= \\begin{cases} 0 & x\\\\ 1 & y \\end{cases} \\label{a}\\\\ g &= \\begin{pmatrix} 1\\\\ 2 \\end{pmatrix} \\label{b}\\end{align}\\section{S}\\label{c}");
+        assert!(p.complete);
+        assert_eq!([&p.labels["a"], &p.labels["b"], &p.labels["c"]], ["1", "2", "1"]);
+        assert_eq!(split_rows("a \\begin{cases} x\\\\y \\end{cases} \\\\ b").len(), 2);
     }
 
     #[test]
@@ -6330,7 +6945,7 @@ mod tests {
     #[test]
     fn step_indexes_name_their_natives() {
         use super::*;
-        for (i, name) in [(OUTPUT, "rt@output"), (OUTPUT_FOOT, "rt@outputfoot"), (SEC_BOX, "rt@secbox"), (SEC_TITLE, "rt@sectitle"), (SEC_END, "rt@secend"), (TEXT_END, "rt@textend"), (TEXT_END_N, "rt@textendn"), (MAYBE_IC, "rt@maybeic"), (EVERY_MATH, "rt@everymath"), (EVERY_DISPLAY, "rt@everydisplay"), (FN_MARK_FONT, "rt@fnmarkfont"), (FN_MARK_END, "rt@fnmarkend"), (FN_SETUP, "rt@fnsetup"), (FN_END, "rt@fnend"), (STEP, "rt@step"), (PARA_HOOK, "rt@parahook"), (LIST_PAR, "rt@listpar"), (ENDPE_PAR, "rt@endpepar"), (PROPAGATE, "rt@propagate"), (ITEM_LABELS, "rt@itemlabels"), (LABEL_MARK, "rt@labelmark"), (NEW_PAGE, "rt@newpage"), (TABULAR, "rt@tabular"), (NOTPRERR, "@notprerr"), (STOP, "rt@stop"), (RUN_IN_END, "rt@runinend"), (DESC_FONT, "rt@descfont"), (VERBATIM, "rt@verbatim"), (LEAVE, "rt@leavevmode"), (PRIM_PAR, "rt@@par"), (END, "end"), (TAB_U, "rt@tabu"), (TAB_V, "rt@tabv"), (TAB_END, "rt@tabend"), (HLINE, "hline"), (TAB_SKIP, "rt@tabskip"), (MULTICOLUMN, "multicolumn"), (MC_BODY, "rt@mcbody"), (MC_TAIL, "rt@mctail"), (CLINE_CMD, "cline"), (CLINE, "rt@cline"), (NEWLINE, "\\"), (CENTER_CR, "rt@centercr"), (TAB_PAR, "rt@tabpar"), (CAPTION_MID, "rt@captionmid"), (CAPTION_END, "rt@captionend"), (FLOAT_FLUSH, "rt@floatflush"), (AL_START, "rt@alstart"), (AL_HALIGN, "rt@alhalign"), (AL_FIELD, "rt@alfield"), (AL_TAG, "rt@altag"), (AL_TAG_NUM, "rt@altagnum"), (AL_TAG_KEEP, "rt@altagkeep"), (AL_ALIGN_CR, "rt@alcr"), (AL_END, "rt@alend")] {
+        for (i, name) in [(OUTPUT, "rt@output"), (OUTPUT_FOOT, "rt@outputfoot"), (SEC_BOX, "rt@secbox"), (SEC_TITLE, "rt@sectitle"), (SEC_END, "rt@secend"), (TEXT_END, "rt@textend"), (TEXT_END_N, "rt@textendn"), (MAYBE_IC, "rt@maybeic"), (EVERY_MATH, "rt@everymath"), (EVERY_DISPLAY, "rt@everydisplay"), (FN_MARK_FONT, "rt@fnmarkfont"), (FN_MARK_END, "rt@fnmarkend"), (FN_SETUP, "rt@fnsetup"), (FN_END, "rt@fnend"), (STEP, "rt@step"), (PARA_HOOK, "rt@parahook"), (LIST_PAR, "rt@listpar"), (ENDPE_PAR, "rt@endpepar"), (PROPAGATE, "rt@propagate"), (ITEM_LABELS, "rt@itemlabels"), (LABEL_MARK, "rt@labelmark"), (NEW_PAGE, "rt@newpage"), (TABULAR, "rt@tabular"), (NOTPRERR, "@notprerr"), (STOP, "rt@stop"), (RUN_IN_END, "rt@runinend"), (DESC_FONT, "rt@descfont"), (VERBATIM, "rt@verbatim"), (LEAVE, "rt@leavevmode"), (PRIM_PAR, "rt@@par"), (END, "end"), (TAB_U, "rt@tabu"), (TAB_V, "rt@tabv"), (TAB_END, "rt@tabend"), (HLINE, "hline"), (TAB_SKIP, "rt@tabskip"), (MULTICOLUMN, "multicolumn"), (MC_BODY, "rt@mcbody"), (MC_TAIL, "rt@mctail"), (CLINE_CMD, "cline"), (CLINE, "rt@cline"), (NEWLINE, "\\"), (CENTER_CR, "rt@centercr"), (TAB_PAR, "rt@tabpar"), (CAPTION_MID, "rt@captionmid"), (CAPTION_END, "rt@captionend"), (FLOAT_FLUSH, "rt@floatflush"), (AL_START, "rt@alstart"), (AL_HALIGN, "rt@alhalign"), (AL_FIELD, "rt@alfield"), (AL_TAG, "rt@altag"), (AL_TAG_NUM, "rt@altagnum"), (AL_TAG_KEEP, "rt@altagkeep"), (AL_ALIGN_CR, "rt@alcr"), (AL_END, "rt@alend"), (ARRAY, "rt@array")] {
             assert_eq!(DOC[i].0, name);
         }
     }

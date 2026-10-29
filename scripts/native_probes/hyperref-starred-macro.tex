@@ -1,0 +1,15 @@
+\documentclass{article}
+\usepackage{hyperref}
+\newcommand{\question}[2]{\subsection*{#1\hfill[#2 points]}}
+\begin{document}
+\section{Numbered}\label{s}
+\question{First question}{10}
+Text of the first answer, see Section~\ref{s}.
+\begin{enumerate}
+\item One\label{one}
+\item[(b)] A labelled item
+\item Two, after item~\ref{one}
+\end{enumerate}
+\question{Second question}{5}\label{q2}
+Answer, with a link to~\ref{q2}.
+\end{document}

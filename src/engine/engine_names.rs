@@ -23,6 +23,27 @@ pub fn param(name: &str) -> Option<Reg> {
     Some(Reg { region, slot: index as u32 })
 }
 
+/// [`param`] when the code is compiled (`param!`); a name that is not a parameter does
+/// not compile.
+pub const fn param_const(name: &str) -> Reg {
+    let mut i = 0;
+    while i < PARAMS.len() {
+        let (n, region, index) = PARAMS[i];
+        let (a, b) = (n.as_bytes(), name.as_bytes());
+        if a.len() == b.len() {
+            let mut k = 0;
+            while k < a.len() && a[k] == b[k] {
+                k += 1;
+            }
+            if k == a.len() {
+                return Reg { region, slot: index as u32 };
+            }
+        }
+        i += 1;
+    }
+    panic!("no such parameter")
+}
+
 /// The registers a document has named, and the next free register of each kind.
 #[derive(Debug)]
 pub struct Names {

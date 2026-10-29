@@ -10,18 +10,19 @@
 //!   `k` letters, the `k+1` digits two to a byte);
 //! - `except`: the exceptions, each the letters' count, the letters, the positions' count
 //!   and the positions;
-//! - `tfirst`, `tcount`, `tops`, `tchars`, `tto`, `tpool`: the patterns' trie, built here
-//!   (`engine_hyph::Hyph::trie_parts`) so the job does not sort and build it per document.
+//! - `tlo`, `thi`, `tpool`: the patterns' packed trie, its slots' low and high halves and
+//!   its op pool, built here (`engine_hyph::Hyph::trie_parts`) so the job does not sort,
+//!   build and pack it per document.
 
 use super::data_blob::{Blob, U32s};
 
 /// The trie's sections, in `Hyph::trie_parts`'s order.
-const TRIE: [&str; 6] = ["tfirst", "tcount", "tops", "tchars", "tto", "tpool"];
+const TRIE: [&str; 3] = ["tlo", "thi", "tpool"];
 
 pub struct HyphTable<'a> {
     pub patterns: &'a [u8],
     except: &'a [u8],
-    pub trie: Option<[U32s<'a>; 6]>,
+    pub trie: Option<[U32s<'a>; 3]>,
 }
 
 impl<'a> HyphTable<'a> {
@@ -60,7 +61,7 @@ pub fn english() -> Option<&'static HyphTable<'static>> {
 }
 
 #[cfg(any(test, feature = "gen"))]
-pub fn write<'e>(w: &mut super::data_blob::BlobWriter, patterns: &[u8], exceptions: impl Iterator<Item = (&'e [u8], &'e [u8])>, trie: &[Vec<u32>; 6]) {
+pub fn write<'e>(w: &mut super::data_blob::BlobWriter, patterns: &[u8], exceptions: impl Iterator<Item = (&'e [u8], &'e [u8])>, trie: &[Vec<u32>; 3]) {
     w.bytes("patterns", patterns.to_vec());
     for (name, v) in TRIE.iter().zip(trie) {
         w.u32s(name, v);

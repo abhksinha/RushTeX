@@ -15,7 +15,7 @@ use super::engine_run::Machine;
 use super::engine_color::{ColorStacks, SET_ORIGIN};
 use super::engine_node::Node;
 use super::engine_pdfdoc::{self as doc, PdfDoc};
-use super::engine_vf::{PacketOut, VfTable};
+use super::engine_vf::{PacketOut, Vf, VfTable};
 use super::engine_whatsit as what;
 use crate::backend::backend_pdftex::TextState;
 pub use crate::backend::backend_ship::{ShippedForm, ShippedPage};
@@ -99,6 +99,7 @@ struct Walk<'a> {
     base: &'a mut Vec<u16>,
     used: &'a mut Vec<[u64; 4]>,
     pk: &'a [i64],
+    word_ship: &'a mut WordShip,
     /// Resource names (`/F<base>`), made when a font is first used on the page.
     names: Vec<String>,
     colors: &'a mut ColorStacks,
@@ -131,6 +132,119 @@ struct Walk<'a> {
     matrices: Vec<[f64; 6]>,
     saves: Vec<usize>,
     last_rect: [i32; 4],
+}
+
+/// Each word entry the ship has written, as its runs of characters: a run is the shift
+/// (font kerns) before its first character, that character, and the characters after it
+/// up to the next kern. A run's first character goes through `TextState::char_ex`, which
+/// moves the viewer after a space; the rest are bytes ready to copy when
+/// `TextState::run` finds they would all take `char_ex`'s fast path. Made the first time
+/// an entry is shipped in a font at a size; entries never change, so it holds.
+#[derive(Debug, Default)]
+pub struct WordShip {
+    /// Per entry id: its record, or none yet.
+    recs: Vec<ShipRec>,
+    runs: Vec<Run>,
+    /// The runs' characters, raw (for a run `TextState::run` refuses) and as written.
+    chars: Vec<u8>,
+    bytes: Vec<u8>,
+    /// Per entry id: the virtual font it was asked for and [`Walk::direct_font`]'s answer
+    /// (0 not asked yet, 1 none, else the real font plus 2).
+    direct: Vec<(u16, u16)>,
+}
+
+/// An entry's runs, `runs[start..end]`, made for font `font` at `pdf_font_size` `size`,
+/// and the characters it uses (`pdf_char_marked`).
+#[derive(Debug, Clone, Copy, Default)]
+struct ShipRec {
+    font: u16,
+    made: bool,
+    start: u32,
+    end: u32,
+    size: i64,
+    used: [u64; 4],
+}
+
+/// One run, read whole.
+#[derive(Debug, Clone, Copy)]
+struct Run {
+    shift: i32,
+    first: u8,
+    first_w: i32,
+    /// The characters after the first: TeX's width, the viewer's advance, the drift range,
+    /// and their ranges in `chars` and `bytes`.
+    width: i32,
+    adv: i64,
+    drift: [i64; 2],
+    chars: (u32, u32),
+    bytes: (u32, u32),
+}
+
+impl WordShip {
+    /// Entry `id`'s record for font `f` at `size`, made from `items` (their codes through
+    /// virtual font `map`'s packets, when it has one) if it has none.
+    /// `None` when it was made for another font or size (the ship then writes the word
+    /// character by character).
+    #[allow(clippy::too_many_arguments)]
+    fn get(&mut self, id: u32, f: u16, size: i64, items: &[Node], font: &Font, info: &[i32], map: Option<&Vf>) -> Option<ShipRec> {
+        let id = id as usize;
+        if self.recs.len() <= id {
+            self.recs.resize(id + 1, ShipRec::default());
+        }
+        let r = self.recs[id];
+        if r.made {
+            return (r.font == f && r.size == size).then_some(r);
+        }
+        let start = self.runs.len() as u32;
+        let mut used = [0u64; 4];
+        let mut shift = 0;
+        let mut open = false;
+        for m in items {
+            match m.kind {
+                Kind::Char | Kind::Lig => {
+                    let c = remap(map, m.a as u8);
+                    let Some([w, _, _, _]) = font.dims(c, info) else { continue };
+                    used[c as usize / 64] |= 1 << (c % 64);
+                    if !open {
+                        let (cs, bs) = (self.chars.len() as u32, self.bytes.len() as u32);
+                        self.runs.push(Run { shift, first: c, first_w: w, width: 0, adv: 0, drift: [0, 0], chars: (cs, cs), bytes: (bs, bs) });
+                        shift = 0;
+                        open = true;
+                        continue;
+                    }
+                    let run = self.runs.last_mut().expect("an open run");
+                    // The drift before this character, then its own width less its advance.
+                    let d = run.width as i64 - run.adv;
+                    run.drift = [run.drift[0].min(d), run.drift[1].max(d)];
+                    run.width += w;
+                    run.adv += crate::backend::backend_pdftex::divide_scaled(w as i64, size, 4).1;
+                    self.chars.push(c);
+                    crate::backend::backend_pdftex::print_char(&mut self.bytes, c);
+                    run.chars.1 = self.chars.len() as u32;
+                    run.bytes.1 = self.bytes.len() as u32;
+                }
+                Kind::Kern => {
+                    shift += m.a;
+                    open = false;
+                }
+                _ => {}
+            }
+        }
+        // A trailing shift has no character to carry it: a run without one (`first_w` is
+        // `i32::MIN`) keeps it.
+        if shift != 0 {
+            let (cs, bs) = (self.chars.len() as u32, self.bytes.len() as u32);
+            self.runs.push(Run { shift, first: 0, first_w: i32::MIN, width: 0, adv: 0, drift: [0, 0], chars: (cs, cs), bytes: (bs, bs) });
+        }
+        let r = ShipRec { font: f, made: true, start, end: self.runs.len() as u32, size, used };
+        self.recs[id] = r;
+        Some(r)
+    }
+}
+
+/// Character `c` of a word, through virtual font `map`'s packets when it has one.
+fn remap(map: Option<&Vf>, c: u8) -> u8 {
+    map.and_then(|vf| vf.direct(c)).map_or(c, |d| d.1)
 }
 
 /// What a walk of a page or form box leaves: its content, link annotations, transparency
@@ -274,17 +388,49 @@ impl Walk<'_> {
     }
 
     /// A word node's characters and font kerns from `h` on the baseline `v`, all of real
-    /// font `f`: the font is made current once. Returns the width written.
-    fn real_word(&mut self, f: u16, items: &[Node], h: i32, v: i32) -> i32 {
+    /// font `f`: the font is made current once. Returns the width written. A word of a
+    /// virtual font whose packets each set one character of `f` as wide (`direct_font`)
+    /// comes with `map`, its codes then taken through the packets.
+    fn real_word(&mut self, f: u16, id: u32, h: i32, v: i32, map: Option<&Vf>) -> i32 {
         let ea = self.real_font(f);
         let base = self.base[f as usize] as usize;
         let font = &self.fonts[f as usize];
+        let items = self.nodes.words.items(id);
         let y = self.page_height - v as i64;
         let mut x = h;
+        // Runs of an entry already written: each run's first character as `char_ex`
+        // writes it, the rest copied when they all take its fast path.
+        if ea == 0 && self.text.pk_scale == 0 {
+            if let Some(r) = self.word_ship.get(id, f, self.text.font_size(), items, font, self.info, map) {
+                for (u, m) in self.used[base].iter_mut().zip(r.used) {
+                    *u |= m;
+                }
+                let ws = &*self.word_ship;
+                for run in &ws.runs[r.start as usize..r.end as usize] {
+                    x += run.shift;
+                    if run.first_w == i32::MIN {
+                        continue;
+                    }
+                    self.text.char_ex(&mut self.out, run.first, run.first_w as i64, x as i64, y, 0);
+                    x += run.first_w;
+                    let bytes = &ws.bytes[run.bytes.0 as usize..run.bytes.1 as usize];
+                    if bytes.is_empty() || self.text.run(&mut self.out, bytes, x as i64, y, run.drift, run.adv) {
+                        x += run.width;
+                        continue;
+                    }
+                    for &c in &ws.chars[run.chars.0 as usize..run.chars.1 as usize] {
+                        let w = font.dims(c, self.info).map_or(0, |d| d[0]);
+                        self.text.char_ex(&mut self.out, c, w as i64, x as i64, y, 0);
+                        x += w;
+                    }
+                }
+                return x - h;
+            }
+        }
         for m in items {
             match m.kind {
                 Kind::Char | Kind::Lig => {
-                    let c = m.a as u8;
+                    let c = remap(map, m.a as u8);
                     let Some([w, _, _, _]) = font.dims(c, self.info) else { continue };
                     self.used[base][c as usize / 64] |= 1 << (c % 64);
                     self.text.char_ex(&mut self.out, c, w as i64, x as i64, y, ea);
@@ -295,6 +441,33 @@ impl Walk<'_> {
             }
         }
         x - h
+    }
+
+    /// The real font every character of word `items` (of virtual font `f`) is, when each
+    /// packet only sets one character of that font (`Vf::direct`) as wide as the virtual
+    /// character: `typeset` then writes exactly that character at the reference point and
+    /// the advance is the same width, so the word ships as a word of the real font.
+    fn direct_font(&self, f: u16, items: &[Node]) -> Option<u16> {
+        let vf = self.vf.get(f)?;
+        let font = &self.fonts[f as usize];
+        if font.expand != 0 {
+            return None;
+        }
+        let mut real = None;
+        for m in items {
+            if !matches!(m.kind, Kind::Char | Kind::Lig) {
+                continue;
+            }
+            let c = m.a as u8;
+            let (g, d) = vf.direct(c)?;
+            if m.font != f || g == 0 || *real.get_or_insert(g) != g || self.vf.get(g).is_some() {
+                return None;
+            }
+            if self.fonts[g as usize].dims(d, self.info)?[0] != font.dims(c, self.info)?[0] {
+                return None;
+            }
+        }
+        real
     }
 
     /// pdfTeX's `pdf_set_font` for real font `f`, and its automatic expansion (thousandths)
@@ -381,14 +554,33 @@ impl Walk<'_> {
                 Kind::Char => cur_h += self.char(n.font, n.a as u8, cur_h, base_line),
                 Kind::Lig => cur_h += self.char(n.font, n.a as u8, cur_h, base_line),
                 // A word: its characters and font kerns.
-                Kind::Word if self.vf.get(n.font).is_none() => cur_h += self.real_word(n.font, self.nodes.word_items(n), cur_h, base_line),
+                Kind::Word if self.vf.get(n.font).is_none() => cur_h += self.real_word(n.font, n.a as u32, cur_h, base_line, None),
                 Kind::Word => {
                     let nodes = self.nodes;
-                    for m in nodes.word_items(n) {
-                        match m.kind {
-                            Kind::Char | Kind::Lig => cur_h += self.char(m.font, m.a as u8, cur_h, base_line),
-                            Kind::Kern => cur_h += m.a,
-                            _ => {}
+                    // Entries never change, so the answer for an entry is kept.
+                    let id = n.a as usize;
+                    if self.word_ship.direct.len() <= id {
+                        self.word_ship.direct.resize(id + 1, (0, 0));
+                    }
+                    let direct = match self.word_ship.direct[id] {
+                        (f, 1) if f == n.font => None,
+                        (f, k) if f == n.font && k >= 2 => Some(k - 2),
+                        _ => {
+                            let g = self.direct_font(n.font, nodes.word_items(n));
+                            self.word_ship.direct[id] = (n.font, g.map_or(1, |g| g + 2));
+                            g
+                        }
+                    };
+                    if let Some(g) = direct {
+                        let vf = self.vf;
+                        cur_h += self.real_word(g, n.a as u32, cur_h, base_line, vf.get(n.font));
+                    } else {
+                        for m in nodes.word_items(n) {
+                            match m.kind {
+                                Kind::Char | Kind::Lig => cur_h += self.char(m.font, m.a as u8, cur_h, base_line),
+                                Kind::Kern => cur_h += m.a,
+                                _ => {}
+                            }
                         }
                     }
                 }
@@ -755,16 +947,19 @@ impl Machine<'_, '_> {
         let mut base = std::mem::take(&mut self.page.font_base);
         let mut used = std::mem::take(&mut self.page.font_used);
         let pk = std::mem::take(&mut self.page.font_pk);
+        let mut word_ship = std::mem::take(&mut self.page.word_ship);
         let mut colors = std::mem::take(&mut self.colors);
         let mut pdf_doc = std::mem::take(&mut self.pdf_doc);
         let (link_margin, dest_margin) = (dimen(self, PDF_LINK_MARGIN), dimen(self, PDF_DEST_MARGIN));
+        // The content buffer starts at the last page's size, not empty and doubling.
+        let out = Vec::with_capacity(self.page.pdf.last().map_or(4096, |p| p.content.len() + p.content.len() / 4));
         let me = &*self;
         let text_of = move |a: i32, b: i32| {
             let mut s = String::new();
             me.show(me.e.toks.get(super::engine_token::Span { start: a as u32, end: b as u32 }), &mut s);
             s
         };
-        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, info: &self.e.fonts.info, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out: Vec::new(), page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new(), positions: Vec::new(), matrices: Vec::new(), saves: Vec::new(), last_rect: [0; 4] };
+        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, info: &self.e.fonts.info, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out, page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, word_ship: &mut word_ship, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new(), positions: Vec::new(), matrices: Vec::new(), saves: Vec::new(), last_rect: [0; 4] };
         // `pdf_out_colorstack_startpage`, at the page's origin.
         if page.is_some() {
             for (mode, s) in walk.colors.page_start() {
@@ -777,6 +972,7 @@ impl Machine<'_, '_> {
         self.page.font_base = base;
         self.page.font_used = used;
         self.page.font_pk = pk;
+        self.page.word_ship = word_ship;
         self.colors = colors;
         self.pdf_doc = pdf_doc;
         walked
@@ -802,13 +998,15 @@ impl Machine<'_, '_> {
         let dd = int(self, PDF_DECIMAL_DIGITS).clamp(0, 4) as u32;
         let names = self.page.map_names.as_deref().unwrap_or(&[]);
         for (i, f) in self.e.fonts.list.iter().enumerate().skip(self.page.font_pk.len()) {
-            // An expanded copy (`name+e`) is drawn from its base font's program or bitmaps.
+            // An expanded copy (`name+e`) is drawn from its base font's program or bitmaps. A
+            // copy found again for a later base of the same name (`tfm_lookup`) links to it.
             let blink = self.e.fonts.micro.expand(i as u16).blink;
-            if f.expand != 0 && blink != 0 {
+            if f.expand != 0 && blink != 0 && (blink as usize) < i {
                 let base = self.page.font_pk[blink as usize];
                 self.page.font_pk.push(base);
                 continue;
             }
+            let f = if f.expand != 0 && blink != 0 { &self.e.fonts.list[blink as usize] } else { f };
             let mapped = names.binary_search(&crate::backend::backend_ship::fnv(f.name.as_bytes())).is_ok() || crate::backend::backend_optical::program_by_name(&f.name).is_some();
             let size = crate::backend::backend_pdftex::pdf_font_size(f.size as i64);
             self.page.font_pk.push(if mapped || f.name.is_empty() { 0 } else { crate::backend::backend_pk::pk_font_scale(size, res, dd) });
@@ -853,8 +1051,8 @@ impl Machine<'_, '_> {
         };
         // `\pdfgentounicode`: ToUnicode maps from glyph names, through `\pdfglyphtounicode`.
         let gen = self.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot: PDF_GEN_TO_UNICODE }) > 0;
-        let lookup = |n: &str| self.e.glyph_unicode.unicode_of(n);
-        let to_unicode: crate::backend::backend_ship::ToUnicode = if gen { Some(&lookup) } else { None };
+        // tounicode.c: with no entry defined, no ToUnicode map is written.
+        let to_unicode: crate::backend::backend_ship::ToUnicode = if gen && !self.e.glyph_unicode.is_empty() { Some(&self.e.glyph_unicode) } else { None };
         let minor = self.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot: PDF_MINOR_VERSION });
         let first_page = self.page.pdf.first().map_or(0, |p| p.id);
         let (objects, catalog, base) = self.pdf_doc.finish(first_page, files, self.image_hicolor());

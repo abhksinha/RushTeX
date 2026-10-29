@@ -59,6 +59,11 @@ impl Machine<'_, '_> {
             self.error(format!("You can't use `{}' after \\{}", self.name_of(x.t), p.name()));
             return;
         };
+        self.register_apply(p, reg, global);
+    }
+
+    /// §1236 after the register: `by`, the value, and the arithmetic.
+    pub(super) fn register_apply(&mut self, p: Prim, reg: Reg, global: bool) {
         let _ = self.scan_keyword("by");
         let old = self.e.eqtb.glue(reg);
         let result = match p {

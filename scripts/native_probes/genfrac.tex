@@ -1,0 +1,15 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+Inline fractions in text style and display style: $\frac{1}{2}$, $\dfrac{1}{2}$, $\tfrac{a+b}{c}$,
+and binomials $\binom{n}{k}$, $\dbinom{n}{k}$, $\tbinom{n}{2}$.
+\[
+\dfrac{x}{y} + \tfrac{1}{3} + \binom{n+1}{k} = \sum_{k} \binom{n}{k} \tfrac{1}{2^k}
+\]
+General fractions: $\genfrac{[}{]}{0pt}{}{a}{b}$, $\genfrac{}{}{1pt}{0}{x}{y}$,
+$\genfrac{\{}{\}}{}{2}{p}{q}$ and $\genfrac{}{}{}{3}{u}{v}$, in a script
+$x^{\binom{a}{b}}$, and a single-token argument $\dfrac12$.
+\begin{equation}
+\binom{2n}{n} \approx \dfrac{4^n}{\sqrt{\pi n}}
+\end{equation}
+\end{document}

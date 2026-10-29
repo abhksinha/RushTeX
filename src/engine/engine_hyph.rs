@@ -6,8 +6,9 @@
 //! is hyphenated. Here each language keeps its patterns as compact records (the letters
 //! after `\lccode` mapping, then the digits), which is what a format stores; a language's
 //! trie is built the first time a word of it is hyphenated, so a document pays only for
-//! the languages it uses. The trie keeps each node's children contiguous and sorted, and
-//! patterns with the same digits share one op list. Exceptions are a hash map from the
+//! the languages it uses. The trie is TeX's packed one (§920): a node's child for a
+//! character is found by one indexed load and one comparison, and patterns with the same
+//! digits share one op list. Exceptions are a hash map from the
 //! letters and the language to the hyphen positions; a later `\hyphenation` of the same
 //! word replaces the earlier one, as in TeX Live's TeX.
 
@@ -52,6 +53,17 @@ pub struct Hyph {
     memo: HashMap<Box<[u8]>, u64, WordHash>,
     /// The key being looked up, reused.
     memo_key: Vec<u8>,
+    /// §892–§918's state, lent to each word in turn.
+    spare: Word,
+}
+
+impl Hyph {
+    /// A word's replacement list, once read, back to make the next one in.
+    pub(super) fn give_back(&mut self, out: Vec<Node>) {
+        if out.capacity() > self.spare.out.capacity() {
+            self.spare.out = out;
+        }
+    }
 }
 
 /// FNV-1a over a word's bytes: the memo's keys are short, and SipHash's set-up per lookup
@@ -82,11 +94,11 @@ impl std::hash::Hasher for Fnv {
 /// A pattern while a trie is built: its letters and its op list.
 type Pat<'a> = (&'a [u8], Vec<u16>);
 
-/// A language's patterns as a trie: node `i`'s children are `edges[first[i]..][..count[i]]`,
-/// sorted by character; `ops[i]` is 0 or one past the start of its op list in `pool`
-/// (entries `distance << 8 | digit`, ended by 0).
-#[derive(Debug, Default, PartialEq)]
-struct Trie {
+/// A language's patterns as a tree while the trie is built: node `i`'s children are
+/// `chars`/`to[first[i]..][..count[i]]`, sorted by character; `ops[i]` is 0 or one past the
+/// start of its op list in `pool` (entries `distance << 8 | digit`, ended by 0).
+#[derive(Default)]
+struct Tree {
     first: Vec<u32>,
     count: Vec<u16>,
     ops: Vec<u32>,
@@ -95,8 +107,79 @@ struct Trie {
     pool: Vec<u16>,
 }
 
+/// A language's patterns as TeX's packed trie (§920–§921, §944–§958): node `z` is a slot,
+/// and its child for character `c` is slot `base(z) + c` when that slot holds `c`. Each
+/// slot is one word, read whole: its base (bits 0–31), its op (one past the start of its
+/// op list in `pool`, or 0; bits 32–47) and its character plus one (bits 48–56; 0 for a
+/// free slot). The root is slot 0. Every base is used by one node only, so a slot holding
+/// `c` at `base(z) + c` is `z`'s child: another node's child there would have the same
+/// base. A node without children has base 0, whose slots `c` hold other characters.
+#[derive(Debug, Default, PartialEq)]
+struct Trie {
+    slots: Vec<u64>,
+    pool: Vec<u16>,
+}
+
+const CHAR_SHIFT: u32 = 48;
+
 impl Trie {
     fn build(records: &[u8]) -> Trie {
+        Tree::build(records).pack()
+    }
+
+    /// Node `z`'s child for character `c`.
+    #[inline(always)]
+    fn child(&self, z: usize, c: u16) -> Option<usize> {
+        let s = (self.slots[z] as u32 as usize).checked_add(c as usize).filter(|_| c < 256)?;
+        (self.slots.get(s).is_some_and(|&e| (e >> CHAR_SHIFT) as u16 == c + 1)).then_some(s)
+    }
+
+    /// §923: the largest digit of every pattern found in `hc[0..=hn+1]`, into `hyf`.
+    fn find(&self, hc: &[u16; 66], hn: usize, r_hyf: usize, hyf: &mut [u8; 66]) {
+        for j in 0..=(hn + 1).saturating_sub(r_hyf) {
+            let (mut z, mut l) = (0usize, j);
+            while l <= hn + 1 {
+                let Some(n) = self.child(z, hc[l]) else { break };
+                z = n;
+                let op = (self.slots[z] >> 32) as u16;
+                if op != 0 {
+                    // §924
+                    for &e in self.pool[op as usize - 1..].iter().take_while(|&&e| e != 0) {
+                        if let Some(i) = l.checked_sub((e >> 8) as usize) {
+                            hyf[i] = hyf[i].max(e as u8);
+                        }
+                    }
+                }
+                l += 1;
+            }
+        }
+    }
+
+    /// The slots as `data_hyph` stores them: their low and high halves, and the op pool.
+    fn parts(&self) -> [Vec<u32>; 3] {
+        [self.slots.iter().map(|&e| e as u32).collect(), self.slots.iter().map(|&e| (e >> 32) as u32).collect(), self.pool.iter().map(|&x| x as u32).collect()]
+    }
+
+    /// The trie from [`Trie::parts`]; `None` unless every base, op and pool entry is in
+    /// bounds, so `find` never panics on a table.
+    fn from_parts(p: [Vec<u32>; 3]) -> Option<Trie> {
+        let [lo, hi, pool] = p;
+        if lo.len() != hi.len() || lo.is_empty() {
+            return None;
+        }
+        let pool = pool.into_iter().map(|x| u16::try_from(x).ok()).collect::<Option<Vec<u16>>>()?;
+        let slots: Vec<u64> = lo.iter().zip(&hi).map(|(&l, &h)| l as u64 | (h as u64) << 32).collect();
+        let n = slots.len();
+        let ok = slots.iter().all(|&e| {
+            let op = (e >> 32) as u16 as usize;
+            (e as u32 as usize + 256 <= n) && (e >> CHAR_SHIFT) <= 256 && (op == 0 || op <= pool.len() && pool[op - 1..].contains(&0))
+        });
+        ok.then_some(Trie { slots, pool })
+    }
+}
+
+impl Tree {
+    fn build(records: &[u8]) -> Tree {
         // Later patterns replace earlier ones, as §963's `trie_o[q]:=v` does.
         let mut pats: BTreeMap<&[u8], Vec<u16>> = BTreeMap::new();
         let mut at = 0;
@@ -110,7 +193,7 @@ impl Trie {
             at += 1 + k + k / 2 + 1;
         }
         let keys: Vec<Pat> = pats.into_iter().collect();
-        let mut t = Trie::default();
+        let mut t = Tree::default();
         let mut shared: HashMap<Vec<u16>, u32> = HashMap::new();
         t.node(&keys, 0, &mut shared);
         t
@@ -159,55 +242,48 @@ impl Trie {
         me as u32
     }
 
-    /// The arrays, as `data_hyph` stores them: `first`, `count`, `ops`, `chars`, `to`, `pool`.
-    fn parts(&self) -> [Vec<u32>; 6] {
-        let wide = |v: &[u16]| v.iter().map(|&x| x as u32).collect();
-        [self.first.clone(), wide(&self.count), self.ops.clone(), self.chars.iter().map(|&c| c as u32).collect(), self.to.clone(), wide(&self.pool)]
-    }
-
-    /// The trie from [`Trie::parts`]; `None` unless every index is in bounds, so `find`
-    /// never panics on a table.
-    fn from_parts(p: [Vec<u32>; 6]) -> Option<Trie> {
-        let [first, count, ops, chars, to, pool] = p;
-        let narrow16 = |v: Vec<u32>| v.into_iter().map(|x| u16::try_from(x).ok()).collect::<Option<Vec<u16>>>();
-        let t = Trie { first, count: narrow16(count)?, ops, chars: chars.into_iter().map(|x| u8::try_from(x).ok()).collect::<Option<_>>()?, to, pool: narrow16(pool)? };
-        let nodes = t.first.len();
-        let ok = nodes > 0
-            && t.count.len() == nodes
-            && t.ops.len() == nodes
-            && t.chars.len() == t.to.len()
-            && (0..nodes).all(|i| t.first[i] as usize + t.count[i] as usize <= t.chars.len())
-            && t.to.iter().all(|&n| (n as usize) < nodes)
-            && t.ops.iter().all(|&o| o == 0 || (o as usize) <= t.pool.len() && t.pool[o as usize - 1..].contains(&0));
-        ok.then_some(t)
-    }
-
-    fn child(&self, n: u32, c: u16) -> Option<u32> {
-        let c = u8::try_from(c).ok()?;
-        let at = self.first[n as usize] as usize;
-        let kids = &self.chars[at..at + self.count[n as usize] as usize];
-        kids.binary_search(&c).ok().map(|i| self.to[at + i])
-    }
-
-    /// §923: the largest digit of every pattern found in `hc[0..=hn+1]`, into `hyf`.
-    fn find(&self, hc: &[u16; 66], hn: usize, r_hyf: usize, hyf: &mut [u8; 66]) {
-        for j in 0..=(hn + 1).saturating_sub(r_hyf) {
-            let (mut z, mut l) = (0u32, j);
-            while l <= hn + 1 {
-                let Some(n) = self.child(z, hc[l]) else { break };
-                z = n;
-                let op = self.ops[z as usize];
-                if op != 0 {
-                    // §924
-                    for &e in self.pool[op as usize - 1..].iter().take_while(|&&e| e != 0) {
-                        if let Some(i) = l.checked_sub((e >> 8) as usize) {
-                            hyf[i] = hyf[i].max(e as u8);
-                        }
-                    }
+    /// The tree packed (§952–§958): nodes in breadth-first order, each node's children
+    /// at the first base, from the lowest free slot on, whose slots for all its children
+    /// are free and which no other node has.
+    fn pack(&self) -> Trie {
+        let mut slots: Vec<u64> = vec![0; 256];
+        let mut taken: Vec<bool> = vec![false; 256];
+        let mut free = 1;
+        let mut queue = std::collections::VecDeque::from([(0u32, 0usize)]);
+        while let Some((node, slot)) = queue.pop_front() {
+            let (at, k) = (self.first[node as usize] as usize, self.count[node as usize] as usize);
+            if k == 0 {
+                continue;
+            }
+            let kids = &self.chars[at..at + k];
+            while free < slots.len() && slots[free] >> CHAR_SHIFT != 0 {
+                free += 1;
+            }
+            let mut base = free.saturating_sub(kids[0] as usize).max(1);
+            loop {
+                if slots.len() < base + 256 {
+                    slots.resize(base + 256, 0);
+                    taken.resize(base + 256, false);
                 }
-                l += 1;
+                if !taken[base] && kids.iter().all(|&c| slots[base + c as usize] >> CHAR_SHIFT == 0) {
+                    break;
+                }
+                base += 1;
+            }
+            taken[base] = true;
+            slots[slot] = slots[slot] & !0xFFFF_FFFF | base as u64;
+            for (i, &c) in kids.iter().enumerate() {
+                let child = self.to[at + i];
+                let s = base + c as usize;
+                slots[s] = (c as u64 + 1) << CHAR_SHIFT | (self.ops[child as usize] as u64) << 32;
+                queue.push_back((child, s));
             }
         }
+        // Every node's slots for all 256 characters are in the table.
+        let top = slots.iter().map(|&e| e as u32 as usize + 256).max().unwrap_or(256);
+        slots.truncate(top.max(256));
+        assert!(self.pool.len() < u16::MAX as usize, "a pattern op pool too large for a packed trie");
+        Trie { slots, pool: self.pool.clone() }
     }
 }
 
@@ -225,14 +301,14 @@ impl Hyph {
 
     /// Language `lang`'s trie as `data_hyph` stores it ([`Trie::parts`]), built from its
     /// patterns.
-    pub fn trie_parts(&self, lang: u8) -> Option<[Vec<u32>; 6]> {
+    pub fn trie_parts(&self, lang: u8) -> Option<[Vec<u32>; 3]> {
         let records = self.patterns.get(lang as usize).filter(|r| !r.is_empty())?;
         Some(Trie::build(records).parts())
     }
 
     /// Language `lang`'s trie from `data_hyph`, in place of building it from the patterns
     /// at the first hyphenated word; `false` (and it is built as usual) if it is malformed.
-    pub fn set_trie(&mut self, lang: u8, parts: [Vec<u32>; 6]) -> bool {
+    pub fn set_trie(&mut self, lang: u8, parts: [Vec<u32>; 3]) -> bool {
         let Some(t) = Trie::from_parts(parts) else { return false };
         self.memo.clear();
         let l = lang as usize;
@@ -311,7 +387,7 @@ impl Hyph {
             exceptions.insert(k.into_boxed_slice(), v.into_boxed_slice());
         }
         // §1325: a format's trie is always ready.
-        Some(Hyph { patterns, exceptions, ready: true, seen: HashSet::new(), tries: Vec::new(), memo: HashMap::default(), memo_key: Vec::new() })
+        Some(Hyph { patterns, exceptions, ready: true, seen: HashSet::new(), tries: Vec::new(), memo: HashMap::default(), memo_key: Vec::new(), spare: Word::default() })
     }
 }
 
@@ -327,6 +403,37 @@ struct Word {
     hyphen_passed: usize,
     /// §907 `hold_head`: the last translation.
     hold: Vec<Node>,
+    /// §914–§918's lists, `lig_stack` and a ligature's characters, kept for their room.
+    pre: Vec<Node>,
+    post: Vec<Node>,
+    major: Vec<Node>,
+    out: Vec<Node>,
+    lig_stack: Vec<Item>,
+    from: Vec<u8>,
+}
+
+impl Default for Word {
+    fn default() -> Self {
+        Word { hu: [0; 66], hyf: [0; 66], hn: 0, hf: 0, init_list: Vec::new(), init_lig: false, init_lft: false, hyphen_passed: 0, hold: Vec::new(), pre: Vec::new(), post: Vec::new(), major: Vec::new(), out: Vec::new(), lig_stack: Vec::new(), from: Vec::new() }
+    }
+}
+
+impl std::fmt::Debug for Word {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Word")
+    }
+}
+
+impl Word {
+    /// A new word's state; the lists keep their room.
+    fn reset(&mut self) {
+        self.hu = [0; 66];
+        self.hyf = [0; 66];
+        (self.hn, self.hf, self.init_lig, self.init_lft, self.hyphen_passed) = (0, 0, false, false, 0);
+        self.init_list.clear();
+        self.hold.clear();
+        self.major.clear();
+    }
 }
 
 /// A `lig_stack` entry (§907): a pending character and the original it replaces, if any.
@@ -482,7 +589,11 @@ impl Machine<'_, '_> {
                     (l_hyf, r_hyf) = ((n.b >> 6) as usize, (n.b & 63) as usize);
                 }
                 Kind::Math => auto_breaking = n.sub == 1,
-                Kind::Glue if auto_breaking && par.get(k + 1).is_some_and(|n| n.kind == Kind::Word) => self.hyphenate_word(par, k, lang, l_hyf, r_hyf, &mut edits),
+                Kind::Glue if auto_breaking && par.get(k + 1).is_some_and(|n| n.kind == Kind::Word) => {
+                    if let Some(id) = self.hyphenate_word(par, k, lang, l_hyf, r_hyf, &mut edits) {
+                        par[k + 1].a = id as i32;
+                    }
+                }
                 Kind::Glue if auto_breaking => self.try_hyphenate(par, k, &mut lang, &mut l_hyf, &mut r_hyf, &mut edits),
                 _ => {}
             }
@@ -508,7 +619,15 @@ impl Machine<'_, '_> {
 
     /// §894: the word after glue node `g`.
     pub(super) fn try_hyphenate(&mut self, par: &[Node], g: usize, lang: &mut usize, l_hyf: &mut usize, r_hyf: &mut usize, edits: &mut Vec<(usize, usize, Vec<Node>)>) {
-        let mut w = Word { hu: [0; 66], hyf: [0; 66], hn: 0, hf: 0, init_list: Vec::new(), init_lig: false, init_lft: false, hyphen_passed: 0, hold: Vec::new() };
+        // One `Word` serves every word: its lists keep their room from word to word.
+        let mut w = std::mem::take(&mut self.e.hyph.spare);
+        w.reset();
+        self.try_hyphenate_in(&mut w, par, g, lang, l_hyf, r_hyf, edits);
+        self.e.hyph.spare = w;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn try_hyphenate_in(&mut self, w: &mut Word, par: &[Node], g: usize, lang: &mut usize, l_hyf: &mut usize, r_hyf: &mut usize, edits: &mut Vec<(usize, usize, Vec<Node>)>) {
         let mut hc = [0u16; 66];
         // §896: to the node before the first letter.
         let mut prev_s = g;
@@ -585,13 +704,13 @@ impl Machine<'_, '_> {
                     if n.font != w.hf {
                         break;
                     }
-                    let from = self.e.nodes.lig_from(&n).to_vec();
+                    let from = self.e.nodes.lig_from(&n);
                     if let Some(&c) = from.first() {
                         hyf_bchar = c as u16;
                     }
                     let mut j = w.hn;
                     let mut all = true;
-                    for &c in &from {
+                    for &c in from {
                         let l = self.lc(c as u32);
                         if l == 0 || j == 63 {
                             all = false;
@@ -640,11 +759,8 @@ impl Machine<'_, '_> {
         let mask = match hy.memo.get(hy.memo_key.as_slice()) {
             Some(&m) => m,
             None => {
-                let key = &hy.memo_key[..hn];
-                let mut exception = Vec::with_capacity(hn + 1);
-                exception.extend_from_slice(key);
-                exception.push(*lang as u8);
-                if let Some(pos) = hy.exceptions.get(exception.as_slice()) {
+                // The exception key, the word and its language, is the memo key's start.
+                if let Some(pos) = hy.exceptions.get(&hy.memo_key[..=hn]) {
                     for &p in pos.iter() {
                         w.hyf[p as usize] = 1;
                     }
@@ -674,13 +790,13 @@ impl Machine<'_, '_> {
         for j in 0..=hn {
             w.hyf[j] = (mask >> j & 1) as u8;
         }
-        let (keep, out) = self.replace_word(par, ha, hb, w, hyf_bchar, hyf_char as u16);
+        let (keep, out) = self.replace_word(par, ha, w, hyf_bchar, hyf_char as u16);
         edits.push((keep, hb, out));
     }
 
     /// §903, §913–§918: nodes `ha..=hb` replaced by the word with its discretionaries.
     /// Returns where the replaced nodes start (`keep`) and the nodes that replace `keep..=hb`.
-    fn replace_word(&mut self, par: &[Node], ha: usize, hb: usize, mut w: Word, hyf_bchar: u16, hyf_char: u16) -> (usize, Vec<Node>) {
+    fn replace_word(&mut self, par: &[Node], ha: usize, w: &mut Word, hyf_bchar: u16, hyf_char: u16) -> (usize, Vec<Node>) {
         let bchar = hyf_bchar;
         let hn = w.hn;
         let hf = w.hf;
@@ -694,10 +810,11 @@ impl Machine<'_, '_> {
         let (keep, mut j) = match a.kind {
             Kind::Char => {
                 if a.font != hf {
-                    found2(&mut w);
+                    found2(w);
                     (ha + 1, 0)
                 } else {
-                    w.init_list = vec![a.a as u8];
+                    w.init_list.clear();
+                    w.init_list.push(a.a as u8);
                     w.init_lig = false;
                     w.hu[0] = a.a as u16;
                     (ha, 0)
@@ -705,10 +822,11 @@ impl Machine<'_, '_> {
             }
             Kind::Lig => {
                 if a.font != hf {
-                    found2(&mut w);
+                    found2(w);
                     (ha + 1, 0)
                 } else {
-                    w.init_list = self.e.nodes.lig_from(&a).to_vec();
+                    w.init_list.clear();
+                    w.init_list.extend_from_slice(self.e.nodes.lig_from(&a));
                     w.init_lig = true;
                     w.init_lft = a.sub & 3 > 1;
                     w.hu[0] = a.a as u16;
@@ -723,7 +841,7 @@ impl Machine<'_, '_> {
                 // No punctuation: a left boundary ligature in the word means starting from it.
                 let r = par[ha + 1];
                 if r.kind == Kind::Lig && r.sub & 3 > 1 {
-                    found2(&mut w);
+                    found2(w);
                     (ha + 1, 0)
                 } else {
                     (ha + 1, 1)
@@ -731,13 +849,14 @@ impl Machine<'_, '_> {
             }
         };
         // §913
-        let mut out: Vec<Node> = Vec::with_capacity(2 * (hb + 1 - keep) + 4);
+        let mut out = std::mem::take(&mut w.out);
+        out.clear();
         let font_bchar = self.e.fonts.list[hf as usize].metrics.boundary().0;
         let has_bchar_label = self.e.fonts.list[hf as usize].metrics.boundary().1.is_some();
         let hyf_exists = self.e.fonts.list[hf as usize].metrics.exists(hyf_char as u8);
         loop {
             let mut l = j;
-            j = self.reconstitute(&mut w, j, hn, bchar, hyf_char) + 1;
+            j = self.reconstitute(w, j, hn, bchar, hyf_char) + 1;
             if w.hyphen_passed == 0 {
                 out.append(&mut w.hold);
                 if w.hyf[j - 1] & 1 == 1 {
@@ -749,12 +868,13 @@ impl Machine<'_, '_> {
             if w.hyphen_passed > 0 {
                 // §914
                 loop {
-                    let mut major = std::mem::take(&mut w.hold);
-                    let mut r_count = major.len();
+                    std::mem::swap(&mut w.major, &mut w.hold);
+                    w.hold.clear();
+                    let mut r_count = w.major.len();
                     let mut i = w.hyphen_passed;
                     w.hyf[i] = 0;
                     // §915: `hu[l..=i]` and a hyphen.
-                    let mut pre: Vec<Node> = Vec::new();
+                    w.pre.clear();
                     let mut c = 0;
                     if hyf_exists {
                         i += 1;
@@ -762,8 +882,8 @@ impl Machine<'_, '_> {
                         w.hu[i] = hyf_char;
                     }
                     while l <= i {
-                        l = self.reconstitute(&mut w, l, i, font_bchar, NON_CHAR) + 1;
-                        pre.append(&mut w.hold);
+                        l = self.reconstitute(w, l, i, font_bchar, NON_CHAR) + 1;
+                        w.pre.append(&mut w.hold);
                     }
                     if hyf_exists {
                         w.hu[i] = c;
@@ -772,7 +892,7 @@ impl Machine<'_, '_> {
                     }
                     let _ = i;
                     // §916: `hu[i+1..]`, until both branches end together.
-                    let mut post: Vec<Node> = Vec::new();
+                    w.post.clear();
                     let mut c_loc = 0;
                     if has_bchar_label {
                         l -= 1;
@@ -782,31 +902,31 @@ impl Machine<'_, '_> {
                     }
                     while l < j {
                         loop {
-                            l = self.reconstitute(&mut w, l, hn, bchar, NON_CHAR) + 1;
+                            l = self.reconstitute(w, l, hn, bchar, NON_CHAR) + 1;
                             if c_loc > 0 {
                                 w.hu[c_loc] = c;
                                 c_loc = 0;
                             }
-                            post.append(&mut w.hold);
+                            w.post.append(&mut w.hold);
                             if l >= j {
                                 break;
                             }
                         }
                         while l > j {
                             // §917
-                            j = self.reconstitute(&mut w, j, hn, bchar, NON_CHAR) + 1;
+                            j = self.reconstitute(w, j, hn, bchar, NON_CHAR) + 1;
                             r_count += w.hold.len();
-                            major.append(&mut w.hold);
+                            w.major.append(&mut w.hold);
                         }
                     }
                     // §918
                     if r_count <= 127 {
-                        let pre = self.e.nodes.store(&pre);
-                        let post = self.e.nodes.store(&post);
+                        let pre = self.e.nodes.store(&w.pre);
+                        let post = self.e.nodes.store(&w.post);
                         let d = self.e.nodes.add_disc([pre, post]);
                         out.push(Node { kind: Kind::Disc, sub: r_count as u8, font: 0, a: d as i32, b: 0 });
                     }
-                    out.append(&mut major);
+                    out.append(&mut w.major);
                     w.hyphen_passed = j - 1;
                     w.hold.clear();
                     if w.hyf[j - 1] & 1 == 0 {
@@ -851,7 +971,8 @@ impl Machine<'_, '_> {
         } else if cur_l < NON_CHAR {
             w.hold.push(ch(cur_l));
         }
-        let mut lig_stack: Vec<Item> = Vec::new();
+        let mut lig_stack = std::mem::take(&mut w.lig_stack);
+        lig_stack.clear();
         let (mut cur_r, mut cur_rh);
         macro_rules! set_cur_r {
             () => {
@@ -864,7 +985,8 @@ impl Machine<'_, '_> {
         macro_rules! wrap_lig {
             ($rt:expr) => {
                 if ligature_present {
-                    let from: Vec<u8> = w.hold.drain(cur_q..).map(|n| n.a as u8).collect();
+                    w.from.clear();
+                    w.from.extend(w.hold.drain(cur_q..).map(|n| n.a as u8));
                     let mut hits = 0;
                     if lft_hit {
                         hits = 2;
@@ -874,7 +996,7 @@ impl Machine<'_, '_> {
                         hits += 1;
                         rt_hit = false;
                     }
-                    let p = nodes.lig_node(hf, cur_l as u8, &from, hits);
+                    let p = nodes.lig_node(hf, cur_l as u8, &w.from, hits);
                     w.hold.push(p);
                     ligature_present = false;
                 }
@@ -1002,6 +1124,7 @@ impl Machine<'_, '_> {
                 pop_lig_stack!();
                 continue 'cont;
             }
+            w.lig_stack = lig_stack;
             return j;
         }
     }

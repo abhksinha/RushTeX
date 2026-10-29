@@ -143,10 +143,12 @@ fn subrs(t: &[u8], at: usize) -> Option<Vec<(std::ops::Range<usize>, std::ops::R
     }
 }
 
-/// Marks in `marked` the subroutines charstring `cs` calls (in clear, its first `len_iv`
-/// bytes random), and through them the ones those call: `callsubr` with its number, and
-/// hint replacement's `n 1 3 callothersubr pop callsubr` (writet1.c `cs_mark`).
-fn mark_subrs(cs: &[u8], len_iv: usize, list: &[(std::ops::Range<usize>, std::ops::Range<usize>)], t: &[u8], marked: &mut [bool]) {
+/// The subroutines charstring `cs` (in clear, its first `len_iv` bytes random) calls
+/// directly, numbers below `n`: `callsubr` with its number, and hint replacement's `n 1 3
+/// callothersubr pop callsubr` (writet1.c `cs_mark`). Each charstring is read with a stack
+/// of its own, so what it calls does not depend on who calls it: the calls form a graph,
+/// and what a glyph needs is what it reaches.
+fn calls(cs: &[u8], len_iv: usize, n: usize, out: &mut Vec<u32>) {
     let mut stack: Vec<i32> = Vec::new();
     let mut ps: Vec<i32> = Vec::new();
     let mut i = len_iv;
@@ -171,13 +173,10 @@ fn mark_subrs(cs: &[u8], len_iv: usize, list: &[(std::ops::Range<usize>, std::op
                 i += 4;
             }
             10 => {
+                // An operand that is no subroutine number ends the reading, as `cs_mark`'s.
                 let Some(k) = stack.pop().and_then(|k| usize::try_from(k).ok()) else { return };
-                if k < marked.len() && !marked[k] {
-                    marked[k] = true;
-                    let r = list[k].1.clone();
-                    if !r.is_empty() {
-                        mark_subrs(&t[r], len_iv, list, t, marked);
-                    }
+                if k < n && !out.contains(&(k as u32)) {
+                    out.push(k as u32);
                 }
             }
             12 => {
@@ -317,49 +316,197 @@ fn push_scanned(out: &mut Vec<u8>, text: &[u8]) {
     crate::data::data_embed::encrypt_charstrings(&mut out[at..]);
 }
 
-/// The binary text `t` (decrypted) with its CharStrings cut to `.notdef`, the glyphs
-/// `used` names and their `seac` components, every charstring written encrypted again
-/// (only the eexec layer is left to the caller); `None` if the dictionary cannot be read
-/// (the caller then keeps the font whole). Encrypting each charstring as it is copied
-/// replaces a second scan of the whole output for the charstrings.
-pub fn subset(t: &[u8], used: &[&str]) -> Option<Vec<u8>> {
+/// Where a decrypted binary text's Subrs and CharStrings are, read once: what [`subset`]
+/// needs of the program apart from the glyphs a document uses. `rushtex-gen` stores it
+/// beside each carried `.pfb` (`data_embed`), so a run reads the font's layout from the
+/// table instead of scanning the program; a font from disk is indexed when it is subset.
+/// Offsets are into the binary text. Each Subrs and CharStrings entry is one row, read
+/// whole when the entry is copied; the calls between charstrings are one pool with each
+/// row's start (compressed sparse rows).
+pub struct Index {
+    len_iv: u32,
+    /// The Subrs array is read and its unused entries become `return`: it lies wholly
+    /// before the CharStrings count.
+    subrs_read: bool,
+    count: [u32; 2],
+    /// The first entry's line start and the last's line end (both the dictionary's end
+    /// with no entries).
+    first: u32,
+    last: u32,
+    /// Per subroutine: `[line start, line end, cs start, cs end]`, all zero for a number the
+    /// array leaves out.
+    sub: Vec<[u32; 4]>,
+    /// Per CharStrings entry, in program order: `[name start, name end, line start, line
+    /// end, cs start, cs end]`.
+    ent: Vec<[u32; 6]>,
+    /// Per entry: its `seac` codes (`base << 8 | accent`), or `u32::MAX`.
+    seac: Vec<u32>,
+    /// The entries in name order.
+    order: Vec<u32>,
+    /// Where each charstring's direct calls start in `calls`: the subroutines' rows, then
+    /// the entries', and the end.
+    call_at: Vec<u32>,
+    calls: Vec<u32>,
+}
+
+/// The stored form's version.
+const LAYOUT: u32 = 2;
+
+impl Index {
+    /// The index as numbers for the table. A row is packed from its line start: the name
+    /// (or `dup k n RD `) length, the bytes up to the charstring, the charstring's length
+    /// and the line's tail each fit their field in every carried font; `None` when one
+    /// does not, and the font is then indexed when it is subset.
+    pub fn to_u32s(&self) -> Option<Vec<u32>> {
+        let mut v = vec![LAYOUT, self.len_iv, self.subrs_read as u32, self.count[0], self.count[1], self.first, self.last, self.sub.len() as u32, self.ent.len() as u32, self.calls.len() as u32];
+        // `[line start, cs start - line start (8 bits) | cs length (16) | tail (8)]`.
+        let pack = |line: u32, cs: [u32; 2], end: u32| -> Option<[u32; 2]> {
+            let (off, len, tail) = (cs[0].checked_sub(line)?, cs[1].checked_sub(cs[0])?, end.checked_sub(cs[1])?);
+            (off < 256 && len < 65536 && tail < 256).then_some([line, off << 24 | len << 8 | tail])
+        };
+        for &[l0, l1, c0, c1] in &self.sub {
+            v.extend(pack(l0, [c0, c1], l1)?);
+        }
+        for (e, &[n0, n1, l0, l1, c0, c1]) in self.ent.iter().enumerate() {
+            // A name starts after the line's `/`; its length shares the seac word's top.
+            if n0 != l0 + 1 || n1 - n0 >= 256 || self.order[e] >= 65536 {
+                return None;
+            }
+            v.extend(pack(l0, [c0, c1], l1)?);
+            let seac = if self.seac[e] == u32::MAX { 0 } else { self.seac[e] | 1 << 16 };
+            v.push((n1 - n0) << 24 | seac);
+            v.push(self.order[e]);
+        }
+        v.extend(&self.call_at);
+        v.extend(&self.calls);
+        Some(v)
+    }
+
+    /// The index [`Index::to_u32s`] wrote; `None` if `v` is not one of this layout.
+    pub fn from_u32s(v: &[u32]) -> Option<Index> {
+        let [LAYOUT, len_iv, subrs_read, c0, c1, first, last, ns, ne, nc] = *v.get(..10)? else { return None };
+        let (ns, ne, nc) = (ns as usize, ne as usize, nc as usize);
+        let rows = v.get(10..10 + 2 * ns + 4 * ne + ns + ne + 1 + nc)?;
+        let unpack = |r: &[u32]| {
+            let (line, w) = (r[0], r[1]);
+            let cs = line + (w >> 24);
+            let end = cs + (w >> 8 & 0xffff);
+            [line, end + (w & 255), cs, end]
+        };
+        let sub = rows[..2 * ns].as_chunks::<2>().0.iter().map(|r| unpack(r)).collect();
+        let (mut ent, mut seac, mut order) = (Vec::with_capacity(ne), Vec::with_capacity(ne), Vec::with_capacity(ne));
+        for r in rows[2 * ns..2 * ns + 4 * ne].as_chunks::<4>().0 {
+            let [l0, l1, c0, c1] = unpack(&r[..2]);
+            ent.push([l0 + 1, l0 + 1 + (r[2] >> 24), l0, l1, c0, c1]);
+            seac.push(if r[2] & 1 << 16 == 0 { u32::MAX } else { r[2] & 0xffff });
+            order.push(r[3]);
+        }
+        let call_at = rows[2 * ns + 4 * ne..2 * ns + 4 * ne + ns + ne + 1].to_vec();
+        let calls = rows[2 * ns + 4 * ne + ns + ne + 1..].to_vec();
+        Some(Index { len_iv, subrs_read: subrs_read != 0, count: [c0, c1], first, last, sub, ent, seac, order, call_at, calls })
+    }
+}
+
+fn range(r: [u32; 2]) -> std::ops::Range<usize> {
+    r[0] as usize..r[1] as usize
+}
+
+/// The layout of decrypted binary text `t`; `None` if its dictionary cannot be read.
+pub fn index(t: &[u8]) -> Option<Index> {
     // Each search covers only the part of the program its key lives in: the CharStrings
     // after the Subrs, and `/lenIV` among the Private dictionary's lines before either,
-    // where writet1.c's `t1_scan_param` reads it. Searching the whole program for each was
-    // half the subsetting cost.
+    // where writet1.c's `t1_scan_param` reads it.
     let subrs_at = find(t, 0, b"/Subrs");
     let sub = subrs_at.and_then(|at| subrs(t, at));
     let from = sub.as_ref().and_then(|s| s.iter().map(|e| e.0.end).max()).unwrap_or(0);
     let (count, list, end) = entries(t, from).or_else(|| entries(t, 0))?;
-    let head = &t[..subrs_at.unwrap_or(count.start).min(count.start)];
-    let len_iv = find(head, 0, b"/lenIV").map_or(Some(4), |p| std::str::from_utf8(&t[token(t, skip_space(t, p + 6))]).ok()?.parse::<usize>().ok())?;
-    let name = |e: &Entry| &t[e.name.clone()];
-    // Sorted, so each entry's name is a binary search: a linear `contains` per entry was
-    // most of the subsetting cost (entries times used names comparisons).
-    let mut keep: Vec<&[u8]> = used.iter().map(|n| n.as_bytes()).collect();
-    keep.push(b".notdef");
-    keep.sort_unstable();
-    let mut parts: Vec<&[u8]> = Vec::new();
-    for e in &list {
-        if keep.binary_search(&name(e)).is_ok() {
-            if let Some((b, a)) = seac(&t[e.cs.clone()], len_iv) {
-                parts.push(STANDARD[b as usize].as_bytes());
-                parts.push(STANDARD[a as usize].as_bytes());
-            }
+    let head_end = subrs_at.unwrap_or(count.start).min(count.start);
+    let len_iv = find(&t[..head_end], 0, b"/lenIV").map_or(Some(4), |p| std::str::from_utf8(&t[token(t, skip_space(t, p + 6))]).ok()?.parse::<usize>().ok())?;
+    let sub = sub.filter(|s| s.iter().all(|e| e.1.start <= count.start)).unwrap_or_default();
+    let mut order: Vec<u32> = (0..list.len() as u32).collect();
+    order.sort_by(|&a, &b| t[list[a as usize].name.clone()].cmp(&t[list[b as usize].name.clone()]));
+    let (mut call_at, mut pool) = (Vec::with_capacity(sub.len() + list.len() + 1), Vec::new());
+    for cs in sub.iter().map(|e| &e.1).chain(list.iter().map(|e| &e.cs)) {
+        call_at.push(pool.len() as u32);
+        let mut c = Vec::new();
+        if !sub.is_empty() && !cs.is_empty() {
+            calls(&t[cs.clone()], len_iv, sub.len(), &mut c);
         }
+        pool.extend(c);
     }
-    keep.extend(parts);
-    keep.sort_unstable();
-    let kept: Vec<&Entry> = list.iter().filter(|e| keep.binary_search(&name(e)).is_ok()).collect();
+    call_at.push(pool.len() as u32);
+    let r = |r: &std::ops::Range<usize>| [r.start as u32, r.end as u32];
+    Some(Index {
+        len_iv: len_iv as u32,
+        subrs_read: !sub.is_empty(),
+        count: r(&count),
+        first: list.first().map_or(end, |e| e.line.start) as u32,
+        last: list.last().map_or(end, |e| e.line.end) as u32,
+        sub: sub.iter().map(|(line, cs)| { let (a, b) = (r(line), r(cs)); [a[0], a[1], b[0], b[1]] }).collect(),
+        seac: list.iter().map(|e| seac(&t[e.cs.clone()], len_iv).map_or(u32::MAX, |(b, a)| (b as u32) << 8 | a as u32)).collect(),
+        ent: list.iter().map(|e| { let (n, l, c) = (r(&e.name), r(&e.line), r(&e.cs)); [n[0], n[1], l[0], l[1], c[0], c[1]] }).collect(),
+        order,
+        call_at,
+        calls: pool,
+    })
+}
+
+/// The binary text `t` (decrypted) with its CharStrings cut to `.notdef`, the glyphs
+/// `used` names and their `seac` components, every charstring written encrypted again
+/// (only the eexec layer is left to the caller); `None` if the dictionary cannot be read
+/// (the caller then keeps the font whole).
+pub fn subset(t: &[u8], used: &[&str]) -> Option<Vec<u8>> {
+    subset_with(t, &index(t)?, used, false)
+}
+
+/// [`subset`] with the program's layout already known. With `ready`, `t`'s charstrings
+/// are encrypted already (a carried font, `data_embed`'s `PFB_READY`), so what is kept
+/// is copied.
+pub fn subset_with(t: &[u8], ix: &Index, used: &[&str], ready: bool) -> Option<Vec<u8>> {
+    let push_encrypted = |out: &mut Vec<u8>, cs: &[u8]| if ready { out.extend_from_slice(cs) } else { push_encrypted(out, cs) };
+    let push_scanned = |out: &mut Vec<u8>, text: &[u8]| if ready { out.extend_from_slice(text) } else { push_scanned(out, text) };
+    let n = ix.ent.len();
+    if ix.last as usize > t.len() {
+        return None;
+    }
+    let name = |e: usize| &t[range([ix.ent[e][0], ix.ent[e][1]])];
+    // Each name the document uses, found among the entries in name order.
+    let mut kept = vec![false; n];
+    let keep = |want: &[u8], kept: &mut Vec<bool>| {
+        if let Ok(k) = ix.order.binary_search_by(|&e| name(e as usize).cmp(want)) {
+            kept[ix.order[k] as usize] = true;
+        }
+    };
+    for u in used {
+        keep(u.as_bytes(), &mut kept);
+    }
+    keep(b".notdef", &mut kept);
+    // The `seac` components of the glyphs used (not of the components themselves).
+    let parts: Vec<u32> = (0..n).filter(|&e| kept[e] && ix.seac[e] != u32::MAX).map(|e| ix.seac[e]).collect();
+    for v in parts {
+        keep(STANDARD[(v >> 8) as usize].as_bytes(), &mut kept);
+        keep(STANDARD[(v & 255) as usize].as_bytes(), &mut kept);
+    }
     let mut out = Vec::with_capacity(t.len());
+    let len_iv = ix.len_iv as usize;
     // Subrs 0 to 3 (flex and hint replacement) always stay, as writet1.c keeps them.
     let mut from = 0;
-    if let Some(sub) = sub.filter(|s| s.iter().all(|e| e.1.start <= count.start)) {
-        let mut marked: Vec<bool> = (0..sub.len()).map(|k| k < 4).collect();
-        for e in &kept {
-            mark_subrs(&t[e.cs.clone()], len_iv, &sub, t, &mut marked);
+    if ix.subrs_read {
+        // What the kept glyphs reach through the calls; 0 to 3 are kept and not followed,
+        // as `cs_mark` meets them already marked.
+        let ns = ix.sub.len();
+        let mut marked: Vec<bool> = (0..ns).map(|k| k < 4).collect();
+        let mut todo: Vec<usize> = (0..n).filter(|&e| kept[e]).map(|e| ns + e).collect();
+        while let Some(c) = todo.pop() {
+            for &k in &ix.calls[range([ix.call_at[c], ix.call_at[c + 1]])] {
+                if !marked[k as usize] {
+                    marked[k as usize] = true;
+                    todo.push(k as usize);
+                }
+            }
         }
-        for (k, (line, cs)) in sub.iter().enumerate() {
+        for (k, &[l0, l1, c0, c1]) in ix.sub.iter().enumerate() {
+            let (line, cs) = (l0 as usize..l1 as usize, c0 as usize..c1 as usize);
             if line.is_empty() {
                 continue;
             }
@@ -370,12 +517,15 @@ pub fn subset(t: &[u8], used: &[&str]) -> Option<Vec<u8>> {
             } else {
                 // `dup k n RD`, the random bytes, `return`, and the line's own ending.
                 out.extend_from_slice(b"dup ");
-                out.extend_from_slice(k.to_string().as_bytes());
+                crate::backend::backend_pdftex::print_int(&mut out, k as i64);
                 out.push(b' ');
-                out.extend_from_slice((len_iv + 1).to_string().as_bytes());
+                crate::backend::backend_pdftex::print_int(&mut out, len_iv as i64 + 1);
                 out.extend_from_slice(&t[cs.start - 4..cs.start]);
                 let at = out.len();
                 out.extend_from_slice(&t[cs.start..cs.start + len_iv]);
+                if ready {
+                    crate::data::data_embed::decrypt_charstring(&mut out[at..]);
+                }
                 out.push(11);
                 crate::data::data_embed::encrypt_charstring(&mut out[at..]);
             }
@@ -383,18 +533,18 @@ pub fn subset(t: &[u8], used: &[&str]) -> Option<Vec<u8>> {
             from = line.end;
         }
     }
+    let count = range(ix.count);
     push_scanned(&mut out, &t[from..count.start]);
-    out.extend_from_slice(kept.len().to_string().as_bytes());
-    let first = list.first().map_or(end, |e| e.line.start);
-    push_scanned(&mut out, &t[count.end..first]);
-    for e in &kept {
-        out.extend_from_slice(&t[e.line.start..e.cs.start]);
-        push_encrypted(&mut out, &t[e.cs.clone()]);
-        out.extend_from_slice(&t[e.cs.end..e.line.end]);
+    crate::backend::backend_pdftex::print_int(&mut out, kept.iter().filter(|&&k| k).count() as i64);
+    push_scanned(&mut out, &t[count.end..ix.first as usize]);
+    for e in (0..n).filter(|&e| kept[e]) {
+        let [_, _, l0, l1, c0, c1] = ix.ent[e];
+        out.extend_from_slice(&t[l0 as usize..c0 as usize]);
+        push_encrypted(&mut out, &t[c0 as usize..c1 as usize]);
+        out.extend_from_slice(&t[c1 as usize..l1 as usize]);
     }
     // The space before the dictionary's `end`.
-    let last = list.last().map_or(end, |e| e.line.end);
-    push_scanned(&mut out, &t[last..]);
+    push_scanned(&mut out, &t[ix.last as usize..]);
     Some(out)
 }
 
@@ -420,7 +570,9 @@ mod tests {
         let binary: Vec<u8> = segs(&pfb).into_iter().filter(|s| s.0 == 2).flat_map(|s| pfb[s.1].to_vec()).collect();
         let (_, all, _) = entries(&binary, 0).expect("a CharStrings dictionary");
         assert!(all.len() > 100);
-        let out = subset(&binary, &["A", "B"]).expect("subset");
+        // A carried font comes with its layout and its charstrings encrypted.
+        let ix = emb.layout("cmr12.pfb").and_then(|v| Index::from_u32s(&v)).expect("a stored layout");
+        let out = subset_with(&binary, &ix, &["A", "B"], true).expect("subset");
         let (count, kept, _) = entries(&out, 0).expect("the subset reads back");
         let names: Vec<&[u8]> = kept.iter().map(|e| &out[e.name.clone()]).collect();
         assert_eq!(names.len(), 3, "{:?}", names.iter().map(|n| String::from_utf8_lossy(n)).collect::<Vec<_>>());

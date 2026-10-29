@@ -1,0 +1,9 @@
+% The titlepage environment natively (report, one-sided): a new page in the empty style,
+% the page counter set to 1 at its start and again at its end.
+\documentclass[12pt]{report}
+\begin{document}
+\begin{titlepage}\centering\vspace*{.8in}{\Large Some University\par}{\large Department of Physics\par}\vspace{1.8in}{\Huge\bfseries Honors thesis title\par}\vspace{.6in}A thesis submitted in partial fulfilment of the requirements for\par the degree of Bachelor of Science\vfill\begin{tabular}{ll}Author:&Name Name\\Advisor:&Name Name\\Date:&\today\end{tabular}\end{titlepage}
+\chapter*{Abstract}Write the thesis abstract here.
+\chapter{Introduction}Begin here.\label{c}
+See chapter \ref{c}.
+\end{document}

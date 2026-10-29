@@ -37,6 +37,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // `rushtex fonts ...`: the font packs (native-architecture.md §4b).
+    if env::args().nth(1).as_deref() == Some("fonts") {
+        return fonts_command(&env::args().skip(2).collect::<Vec<_>>());
+    }
     let mut cli_arguments = env::args().skip(1);
     let mut input_file_path: Option<PathBuf> = None;
     let mut output_file_path: Option<PathBuf> = None;
@@ -131,8 +135,12 @@ fn main() -> ExitCode {
     };
 
     if native_gaps {
-        return match std::fs::read_to_string(&input_path) {
-            Ok(source_content) => {
+        // One `char` per byte, as the job reads the file (its UTF-8 is read byte by byte).
+        return match std::fs::read(&input_path) {
+            Ok(bytes) => {
+                let source_content: String = bytes.iter().map(|&b| char::from(b)).collect();
+                let bbl = std::fs::read(input_path.with_extension("bbl")).ok().map(|b| b.iter().map(|&b| char::from(b)).collect::<String>());
+                let source_content = rushtex::engine::engine_doc::splice_bibliography(&source_content, bbl.as_deref());
                 for what in rushtex::engine::engine_doc::native_blockers(&source_content) {
                     println!("{what}");
                 }
@@ -301,6 +309,12 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
         if std::env::var_os("RT_READS").is_some() {
             eprintln!("read {name}");
         }
+        // The document's own files (`.bbl`, figures) are found beside it first, as
+        // `Kpse::find` looks there first: read so, they cost no `ls-R` index.
+        let local = (!name.starts_with('/')).then(|| doc_dir.as_deref().unwrap_or(std::path::Path::new(".")).join(name));
+        if let Some(b) = local.filter(|p| p.is_file()).and_then(|p| std::fs::read(p).ok()) {
+            return Some(b);
+        }
         kpse()?.read(name)
     };
     let fmt_path = format_path.or_else(|| cache.as_ref().map(|c| c.join("pdflatex.rfmt")))?;
@@ -321,6 +335,9 @@ fn compile_engine(input: &std::path::Path, output: &std::path::Path, format_path
         if std::env::var_os("RT_TIME").is_some() {
             eprintln!("{:8.3} ms  before the job (paths, source)", start_time.elapsed().as_secs_f64() * 1e3);
         }
+        // `\bibliography` reads `\jobname.bbl` where the engine's file search finds it.
+        let bbl = if source.contains("\\bibliography") { read(&format!("{job_name}.bbl")).map(|b| b.iter().map(|&b| char::from(b)).collect::<String>()) } else { None };
+        let source = rushtex::engine::engine_doc::splice_bibliography(&source, bbl.as_deref());
         let job = rushtex::engine::engine_doc::run(&source, now, Some(&read));
         // `RT_NATIVE_WHY=1`: why the document runs on the engine.
         if let (Err(why), Some(_)) = (&job, std::env::var_os("RT_NATIVE_WHY")) {
@@ -418,6 +435,7 @@ rushtex — ultra-fast, zero-dependency LaTeX compiler in pure safe Rust
 
 USAGE:
   rushtex <file.tex> [-o out.pdf]
+  rushtex fonts list | install --from <dir>
   rushtex --ast <file.tex>
   rushtex <file.tex> --no-compress -o out.pdf
   rushtex --watch <file.tex> [-o out.pdf]
@@ -520,4 +538,32 @@ fn compiled(output: &std::path::Path, pages: usize, secs: f64) {
 /// `12 pages in 0.012 seconds`.
 fn pages_in(pages: usize, secs: f64) -> String {
     format!("{pages} {} in {secs:.3} seconds", if pages == 1 { "page" } else { "pages" })
+}
+
+/// `rushtex fonts list`: this build's font packs and where each is installed.
+/// `rushtex fonts install --from DIR`: copies the packs found in DIR into the cache.
+fn fonts_command(args: &[String]) -> ExitCode {
+    use rushtex::data::data_pack;
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            for l in data_pack::list() {
+                println!("{l}");
+            }
+            ExitCode::SUCCESS
+        }
+        Some("install") if args.get(1).map(String::as_str) == Some("--from") && args.len() == 3 => match data_pack::install_from(std::path::Path::new(&args[2])) {
+            Ok((done, missing)) => {
+                println!("{done} packs installed, {missing} not in {}", args[2]);
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("[ERROR] {e}");
+                ExitCode::from(1)
+            }
+        },
+        _ => {
+            eprintln!("usage: rushtex fonts list | rushtex fonts install --from <dir>");
+            ExitCode::from(2)
+        }
+    }
 }

@@ -2,19 +2,50 @@
 \usepackage[utf8]{inputenc}
 \usepackage[psamsfonts]{amssymb}
 \usepackage[pdftex,final]{graphicx}
+\usepackage{bm}
 \usepackage[centertags,sumlimits,nointlimits,namelimits]{amsmath}
+\usepackage{mathtools}
 \usepackage{amsthm}
+\usepackage{mathrsfs}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{float}
+\usepackage{textcomp}
+\usepackage{dcolumn}
+\usepackage{enumitem}
+\setlist[enumerate,2]{itemsep=1pt}
+\usepackage{fancyhdr}
+\fancyhf{}
+\fancyhead[L]{The RushTeX manual}
+\fancyhead[R]{Page \thepage}
+\cfoot{\thepage}
+\allowdisplaybreaks[1]
+\definecolor{rtblue}{rgb}{0.1,0.2,0.6}
+\definecolor{rtdeep}{HTML}{174A6E}
+\usepackage[textwidth=345pt,textheight=550pt,lmargin=8799518sp,tmargin=8209694sp]{geometry}
+\geometry{headsep=25pt}
+\numberwithin{equation}{section}
 \DeclareMathOperator{\tr}{tr}
 \newcommand{\gdl}{Guarded Direct Lowering}
+\def\half#1{\frac{#1}{2}}
+\renewcommand{\baselinestretch}{1}
+\renewcommand{\textfraction}{.2}
+\renewcommand{\thetable}{T\arabic{table}}
 \newtheorem{theorem}{Theorem}[section]
 \newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}{Corollary}[theorem]
+\newtheorem{example}{\scshape Example}
 \theoremstyle{definition}
 \newtheorem{definition}{Definition}
 \theoremstyle{remark}
 \newtheorem*{remark}{Remark}
 \renewcommand{\rmdefault}{ptm}
 \title{The RushTeX Book: Guarded Direct Lowering and the Work a Page Needs}
-\author{RushTeX Project}
+\author{RushTeX Project\thanks{The native path described here is the work of 22 to 27 October 2026.} \and The Contributors}
 \date{25 October 2026}
 
 \begin{document}
@@ -194,6 +225,14 @@ cost work for no visible result or risked a page that differs.
         is missing; a document that could observe it goes to the engine.
 \end{description}
 
+The first two rules now hold everywhere on the native path. No native command writes
+\TeX{} source to be read again: theorem heads, equation numbers, the contents, the
+accents and the operators of mathematics are built by node builders, and the only
+tokens a native command still places in the input are the author's own text and the
+braces, math shifts and alignment marks around it. The names a native command needs
+are looked up once, when the job starts, and the commands themselves are numbered when
+the program is compiled.
+
 The last rule is what makes the shortcuts safe. A word is kept as one node because a
 native document cannot look inside a box with \TeX's box-reading primitives: the guard
 refuses those, and a document using them runs on the engine.
@@ -241,9 +280,27 @@ Accents are commands that place a mark over or under the next letter: caf\'e, G\
 and na\"\i ve carry acute and diaeresis marks, and the full set is \`a, \'a, \^o,
 \~n, \=a, \.z, \H{o}, \u{a}, \v{c} and \r{a}. A dotless \i{} and \j{} take an accent
 without their own dot. Letters outside the basic alphabet are commands too: \ss, \ae,
-\oe, \o, \AE, \OE{} and \O. pdfLaTeX expands each accent command into a box built by
+\oe, \o, \AE, \OE{} and \O, and a cedilla, a ring over a capital and a barred l are
+built from boxes: gar\c{c}on, \AA ngstr\"om, \aa, \l\'od\'z and \L. pdfLaTeX expands each accent command into a box built by
 the \TeX{} primitive \texttt{accent}, which centres the mark using the slant of the
 font; RushTeX calls the same primitive's rule directly.
+
+The same letters may be typed directly in UTF-8: café, Gödel, naïve, Erdős, Škoda,
+señor, Straße, Français, Ångström and Łódź, with “curly quotes”, an en dash in 1–2, an em dash—like this—and an
+apostrophe in it’s. Each character stands for the kernel's command for it, so it is set
+exactly as the command would be. Text symbols have commands of their own as well:
+20\textdegree, 3\texttimes 4, \textpm 1, \textcopyright, \textregistered{} and
+Name\texttrademark.
+
+\medskip
+\noindent Vertical space comes in three standard amounts, \texttt{smallskip},
+\texttt{medskip} and \texttt{bigskip}, which add three, six or twelve points of stretchable space between
+paragraphs; this paragraph follows a medium one. The old declaration {\em em
+emphasises {\em and switches back} inside itself}, the formula \ensuremath{a^2+b^2}
+is set in math wherever it is typed, and a rule \rule{0.2\columnwidth}{0.4pt} can be
+measured against the column.\thispagestyle{plain}
+\smallskip
+
 
 Quotations are typed as ``double quotes'', the apostrophe in don't is a plain
 character, and the dashes -- en and --- em -- come from ligatures of the font, as
@@ -296,6 +353,18 @@ Sizes are declarations too, from {\tiny tiny}, {\scriptsize script size},
 {\large large}, {\Large Large}, {\LARGE LARGE}, {\huge huge} and {\Huge Huge}. A size
 sets the font and the baseline distance together, which is why this line is taller than
 its neighbours.
+
+Raised and lowered text, such as the 1\textsuperscript{st} of a date or the
+H\textsubscript{2}O of a formula written in text, is set at the script size of the
+surrounding type in the current shape: \textbf{bold\textsuperscript{b}} stays bold.
+
+A size need not be one of the class's. \texttt{fontsize} with its baseline distance,
+then \texttt{selectfont}, sets any size the font's shape holds:
+{\fontsize{13}{16}\selectfont this phrase is thirteen points on sixteen,} and
+{\fontsize{8.5}{10}\selectfont this one eight and a half on ten.} RushTeX takes such a
+size when the font definition file lists it or a range holding it, as Times' does for
+every size; a size that \LaTeX{} would replace by the nearest one it has, with a warning,
+still goes to the engine.
 
 \subsection{Kerns, ligatures and the word table}\label{sec:spacing}
 
@@ -378,6 +447,46 @@ follows after \vspace{6pt} of extra room. A box made with \texttt{mbox}, such as
 
 The paragraphs that follow are indented as usual: every paragraph starts with an indent
 box, and \texttt{noindent} only removes it.
+
+A paragraph can also be set inside a box of its own width.
+\parbox[t]{0.3\textwidth}{This \texttt{parbox} is three tenths of the text width and
+aligned by its first line,} beside a \parbox{0.3\textwidth}{second one centred on the
+line, as \LaTeX{} centres a box by default.} The \texttt{minipage} environment does the
+same for longer text, with paragraphs, lists and tables inside:
+
+\noindent\begin{minipage}[t]{0.47\textwidth}
+The left column of two minipages set side by side. Each is a box as tall as its text,
+so the taller one sets the height of the line.
+
+\begin{itemize}
+\item A list inside starts afresh at the first level.
+\end{itemize}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.47\textwidth}
+The right column. Inside a minipage the text width is the box's width, and the first
+paragraph is not indented.
+\end{minipage}
+
+RushTeX builds both boxes as \LaTeX{} does, from \texttt{\textbackslash @iiiparbox}: a
+vertical box at the given width, its paragraph shape restored, then a \texttt{vtop},
+\texttt{vbox} or centred box around it. A box with a fixed height, or a footnote
+inside a minipage, still goes to the engine.
+
+A frame is a box too: \fbox{this phrase} sits in \texttt{fbox}, three points of space
+inside a rule of four tenths of a point, and \fbox{\parbox{0.4\textwidth}{a framed
+parbox holds a whole paragraph}} the same way. With xcolor loaded, as here, the frame is
+drawn after the box by xcolor's own \texttt{boxframe}, and RushTeX draws it the same
+way.
+xcolor's \texttt{colorbox} puts a block of colour behind its box, as in
+\colorbox{yellow}{this highlighted phrase}, and \texttt{fcolorbox} adds a frame in a
+second colour: \fcolorbox{blue}{white}{a framed white box}. The block is a rule as large
+as the box plus its separation, laid under the text.
+Colours can also be given as web colours and mixed: \colorbox{rtdeep!12}{this box} is
+twelve parts of the colour \textcolor{rtdeep}{174A6E} to eighty-eight of white, and
+\textcolor{rtblue!50!black}{these words} are half the blue of this document and half
+black. xcolor works such mixtures out with its own fixed-point arithmetic, dividing to
+five decimals and moving decimal points as text, and RushTeX repeats each step, so the
+numbers written into the page are the same to the last digit.
 
 \section{Lists and displayed text}\label{sec:lists}
 
@@ -501,6 +610,51 @@ contents.
 \paragraph{A paragraph heading.} The fourth level is a run-in heading: its title starts
 the paragraph, in bold, and is not numbered or listed.
 
+\subsubsection{Chapters in the report class}
+
+The report class is native too. Its state at the first token of the document, every
+parameter, font and list setting, is a table written by \texttt{rushtex-gen class
+--class report} and checked word by word against pdfLaTeX's, exactly as article's is;
+the two tables differ only in where the figure and table counters live. What the class
+code defines otherwise is taken from a comparison of \texttt{report.cls} with
+\texttt{article.cls}, one macro at a time.
+
+A chapter is one more heading level above the section. \texttt{chapter} starts a new
+page, gives that page the plain style, keeps floats off its top, and sets the head as
+\texttt{@makechapterhead} does: fifty points down, ``Chapter'' and the number in
+\texttt{huge} bold, then the title in \texttt{Huge} bold, with no page break before the
+first paragraph and no indent at its start. Because the chapter is level~0 and the
+section level~1, the rules RushTeX already had give the class's numbering unchanged: the
+first three levels are numbered (report's \texttt{secnumdepth} is two), a section's number
+is the chapter's number, a point and its own, and stepping a chapter resets every level
+below it. The equation, figure, table and footnote counters start again in each chapter,
+and from the first chapter on an equation, figure or table number carries the chapter's
+number first, as in \textit{Figure 2.1}; one-pass references read those numbers as the
+pre-scan predicts them.
+
+The table of contents begins with a starred chapter, on a page of its own, and its
+three levels are set as article sets the same three: a chapter's entry in bold, as a
+section's is in article, a section's and a subsection's dotted, with the indents of
+article's subsection and subsubsection, since report shows two levels below the chapter
+where article shows three below the section. Only the chapter entry differs in its
+spacing: it is preceded by a plain vertical skip of one em, not one merged with the skip
+before it, and by a penalty of $-301$, and followed by a penalty of 301 that keeps it
+with its first section (\texttt{scripts/native\_probes/report-toc.tex}).
+
+What report changes and RushTeX does not take yet sends the document to the engine
+whole: the title page forms of \texttt{maketitle} and \texttt{abstract}, \texttt{part},
+\texttt{appendix}, the lists of figures and tables, the bibliography, \texttt{numberwithin}, theorems numbered
+within a counter, and the hyperref and fancyhdr packages, whose anchors and marks are
+still article's. The probe \texttt{scripts/native\_probes/report-chapters.tex} runs a
+report with chapters, starred chapters, sections, floats, equations, footnotes and
+references through both paths and compares every page.
+
+A thesis usually opens with a \texttt{titlepage} environment, in either class. It is the
+classes' definition, ported as it is: a new page with the empty page style, the page
+counter set to one at the start, and at the end another new page and, in a one-sided
+document, the page counter set to one again, so the page after the title is page~1. The
+probe \texttt{scripts/native\_probes/titlepage.tex} is a thesis title page of that kind.
+
 \subsection{Cross references in one pass}
 
 A label records a number at the place it stands, and a reference prints it anywhere.
@@ -525,6 +679,12 @@ A reference to a page uses \texttt{pageref}: the multi-level list of
 Section~\ref{sec:lists} began on page~\pageref{item:first-list}. A page reference to a
 place not yet written is not native yet, since its width could move the lines before
 it.
+
+A command the preamble defines is read through when its text numbers nothing. One whose
+text holds only unnumbered headings, such as a question heading made of a title and its
+points, numbers nothing either, except under the hyperref package: each such heading takes
+the next anchor of its own series, so the prediction steps that series once for every
+heading in the command's text.
 
 \subsection{Footnotes and citations}
 
@@ -662,7 +822,9 @@ Table rules come in three kinds: a full rule across every column, made with
 \texttt{hline}; a partial rule across some of them, \texttt{cline}; and a doubled rule
 made of two full rules in a row. A heading may span all the columns, and a cell may span
 two of them, with \texttt{multicolumn}. Table~\ref{tab:fit} in
-Section~\ref{sec:measurements} uses all of them.
+Section~\ref{sec:measurements} uses all of them. This document loads the array package,
+which builds every table and array its own way: a vertical rule is set at its full width
+between the column spaces, and a doubled rule has no backspace between its two lines.
 
 Extra space after a row break, as in a row ended with a bracketed length, separates the
 groups of the next table, which lists the sizes of the records the native path moves
@@ -680,6 +842,81 @@ Cache line & 64 \\
 A processor reads memory in lines of 64 bytes, so five nodes or sixteen tokens share a
 line, and a word stored as one node instead of five character nodes moves a fifth of the
 data through every later step.
+
+\subsection{Paragraph columns}
+
+A column of the letter p, with a width as its argument, holds a paragraph instead of a
+line: each cell is a top-aligned vertical box of that width, in which the text is broken
+into lines like any other paragraph. The array package sets a strut at the start of the
+first line and one at the end of the last, so the first baseline and the last depth of the
+cell match a row of single lines; a cell left empty still holds one line made of the two
+struts.
+
+\begin{center}
+\begin{tabular}{|l|p{6.5cm}|}
+\hline
+Step & What the native path does \\
+\hline
+Width & reads the argument once, when the table starts, in the font of that point \\
+Text & breaks the cell's paragraph with the column width as the line length, and
+leaves the rest of the paragraph settings as a box's own \\
+Empty &  \\
+\hline
+\end{tabular}
+\end{center}
+
+Without the array package the same letter takes \LaTeX's own definition, which has no
+strut in front of the first line and always backs up by one baseline before the closing
+strut when the cell ends outside a paragraph.
+
+\subsection{Tables of a given width}
+
+The tabularx package sets a table to a width given first, with columns of the letter X
+that share what the other columns leave. Its environment reads the whole table before
+setting any of it, sets it once with every X column as a paragraph column of the full
+width, measures the result, narrows the X columns by the excess shared among them, and
+sets it again until the width is reached; the last setting is an alignment spread to the
+width. The next table is set that way across the text width.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lX>{\raggedright\arraybackslash}X@{}}
+\toprule
+Trial & What is measured & What changes \\
+\midrule
+First & the table with each X column as wide as the whole table & the excess, divided
+among the X columns \\
+Second & the table with the narrowed columns & nothing, once it is within a tenth of a
+point of the width \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+RushTeX runs the trials as the package does, keeping the table's tokens once and reading
+them again for each trial; a table whose cells would count, label or write something twice
+is left to the engine.
+
+\subsection{Declarations in the preamble}
+
+The array package lets a preamble carry text of its own around each cell. A greater-than
+sign with a group before a column puts that group in front of every cell of the column, a
+less-than sign after it puts its group behind, and an exclamation mark with a group puts
+the group in place of a rule between columns. The next table sets its first column in
+bold, its second as a formula with a fixed exponent, and its third as a paragraph column
+whose declaration sets the text ragged right and then, with \texttt{arraybackslash}, gives
+the row break back to the table.
+
+\begin{center}
+\begin{tabular}{>{\bfseries}l!{\quad}>{$}c<{^2$}|>{\raggedright\arraybackslash}p{4cm}}
+Native & x & the declaration's tokens are read in place, and the steps after them wait \\
+Engine & y & the same tokens, written into the template by an expanded definition \\
+\end{tabular}
+\end{center}
+
+The declarations are kept as token lists when the table starts; a cell's steps stop where
+a list belongs, the list is read as the source would be, and the steps go on after it. A
+group after an at-sign is read the same way, so text such as a decimal point can stand
+between two columns; only a column separation that changes the space between all the
+columns is still left to the engine.
 
 \section{Pictures}\label{sec:graphics}
 
@@ -804,6 +1041,35 @@ the sum for $n+1$ is the sum for $n$ with one more term. The constant $e$ is the
 \]
 which the reader may compare with the bound in the product above.
 
+\subsection{Arrays of equations}\label{sec:eqnarray}
+
+Before amsmath, \LaTeX's own way to align a chain of relations was \texttt{eqnarray}:
+three columns, the left side set right, the relation centred and the right side set left,
+with a number on each line unless the line says \texttt{nonumber}:
+\begin{eqnarray}
+  (x+1)^{2} & = & x^{2} + 2x + 1 \label{eq:sq}\\
+            & \ge & 2x + 1 \nonumber\\[2pt]
+  \lefteqn{\sum_{k=0}^{n} a_{k} x^{k} = \frac{1-x^{n+1}}{1-x},} \nonumber\\
+  e^{i\pi} + 1 & = & 0. \label{eq:ei}
+\end{eqnarray}
+The starred form numbers nothing:
+\begin{eqnarray*}
+  f(x) & = & \int_{0}^{x} g(t)\,dt
+\end{eqnarray*}
+and (\ref{eq:sq}) and (\ref{eq:ei}) are the lines' numbers.
+
+The kernel builds \texttt{eqnarray} from \TeX's \texttt{halign}, stretched to the
+display's width, with a preamble of four columns: the three parts and a box of no width
+for the number. Glue of one thousand points of stretch on both outer sides centres the
+whole. The macros around the alignment count the columns a line has reached, so that a
+line's end can add the missing ampersands before the number. RushTeX passes the same
+preamble to its engine's alignment and writes the macros as functions. A line's number
+is placed as the line ends, and the counter as it stands is what a label in the line
+records. The rows are set as they come, because unlike amsmath's \texttt{align} nothing
+in the layout waits for later rows. One detail matters for exactness: the brace pair
+that hides the next ampersand while the line's end looks for a star or a space is, in a
+formula, an empty group, and \TeX{} sets it as an empty box.
+
 \section{The amsmath package}\label{sec:amsmath}
 
 \subsection{What amsmath changes}
@@ -821,7 +1087,9 @@ the generator.
 \subsection{Text, operators, dots and delimiters}
 
 Words inside formulae are set in text boxes: $f(x) = 0 \text{ for all } x \in
-\mathbb{R}$, and in an index $x_{\text{max}}$ the words shrink with the index. Operator
+\mathbb{R}$, and in an index $x_{\text{max}}$ the words shrink with the index. Text
+may hold a formula with text of its own, $\text{for $x \in \text{A}$ only}$: each of
+the four copies \TeX{} sets of a text box knows its own style. Operator
 names are upright with their own spacing, as in $\tr A$, declared in the preamble with
 \texttt{DeclareMathOperator}, $\operatorname{rank} M$ and
 \[
@@ -890,6 +1158,118 @@ number; the rows already built are then given those values. The second pass of a
 typesets every formula of the display again, the costliest work an alignment does, and
 RushTeX does not do it at all.
 
+A row may carry its own tag in place of a number, and the rows after it count on:
+\begin{align}
+  u &= v \label{eq:row-u}\\
+  w &= z \tag{T} \label{eq:row-tag}\\
+  s &= t \label{eq:row-s}
+\end{align}
+so \eqref{eq:row-u}, \eqref{eq:row-tag} and \eqref{eq:row-s} are the labels of these rows.
+
+\subsection{Gathered equations}
+
+Equations that belong together but share no relation sign to align on are gathered:
+each row is centred on its own, and numbered unless told otherwise.
+\begin{gather}
+  \nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0} \label{eq:maxwell-gauss} \\
+  \nabla \cdot \mathbf{B} = 0 \nonumber \\
+  \nabla \times \mathbf{E} = -\frac{\partial \mathbf{B}}{\partial t} \label{eq:faraday}
+\end{gather}
+Gauss's law \eqref{eq:maxwell-gauss} and Faraday's law \eqref{eq:faraday} are numbered, the
+middle row is not. The starred form numbers no row:
+\begin{gather*}
+  a + b = c \\
+  x^{2} + y^{2} + z^{2} = r^{2}
+\end{gather*}
+
+A gathered row moves left of centre only when its number would otherwise crowd it: its
+shift depends on its own formula and its own number, nothing else. amsmath still sets
+the whole display twice to learn each number's width. RushTeX sets each row once and
+writes its shift in when the display ends, once every number is known.
+
+\subsection{Equations too long for a line}
+
+An equation too long for one line is broken with \texttt{multline}: the first row sits
+against the left margin, the last against the right, the rows between are centred, and
+one number goes with the last row.
+\begin{multline}
+  (x_1 + x_2 + x_3 + x_4 + x_5 + x_6 + x_7 + x_8)^{2} = x_1^{2} + x_2^{2} + x_3^{2} \\
+  + x_4^{2} + x_5^{2} + x_6^{2} + x_7^{2} + x_8^{2} \\
+  + 2 \sum_{1 \le i < j \le 8} x_i x_j \label{eq:multline}
+\end{multline}
+Equation \eqref{eq:multline} has three rows and one number. amsmath measures the body
+first, to learn the width of the last row and so whether the number fits beside it;
+RushTeX learns that width as the last row is set, just before the number is placed.
+
+\subsection{Aligned blocks inside a formula}
+
+A block of aligned rows can also be one piece of a larger formula, with a single number
+for the whole: \texttt{aligned} is centred on the formula's axis, beside whatever else
+the formula holds.
+\begin{equation}
+  \begin{aligned}
+    (a+b)^{3} &= (a+b)(a+b)^{2} \\
+              &= a^{3} + 3a^{2}b + 3ab^{2} + b^{3}
+  \end{aligned}
+  \label{eq:cube}
+\end{equation}
+Equation \eqref{eq:cube} has two rows and one number. Its sibling \texttt{gathered}
+centres each row, and either can sit at the top or the bottom of its line instead:
+\[
+  x = \begin{aligned}[t] p &= q \\ r &= s \end{aligned}
+  \qquad
+  \begin{gathered} a + b \\ c \end{gathered}
+\]
+Neither measures anything first: amsmath sets their rows once too, so RushTeX simply
+follows it, row by row.
+
+\subsection{One equation over several lines}
+
+When a single equation needs several lines aligned at a sign, \texttt{split} inside
+\texttt{equation} keeps one number for all of them, centred on the rows:
+\begin{equation}
+  \begin{split}
+    \sum_{k=1}^{n} (2k-1) &= 2 \sum_{k=1}^{n} k - n \\
+                         &= n(n+1) - n \\
+                         &= n^{2}
+  \end{split}
+  \label{eq:odd}
+\end{equation}
+so the odd numbers add up to squares, as \eqref{eq:odd} shows. A fraction in a line of text
+is set small, $\frac{1}{n}$, unless asked to be full size, $\dfrac{1}{n}$; in a display
+the reverse holds, and $\tfrac{1}{2}$ asks for the small one. Binomial coefficients, such
+as $\binom{n}{k}$ in text or
+\[
+  \binom{n}{k} = \frac{n!}{k!\,(n-k)!} ,
+\]
+are fractions without a bar between brackets, all made by amsmath's \texttt{genfrac}. An equation may also carry a tag of its own instead of a number:
+\begin{equation}
+  e^{i\pi} + 1 = 0 \tag{E} \label{eq:euler-tag}
+\end{equation}
+and \eqref{eq:euler-tag} refers to it by that tag. Script letters come from mathrsfs: $\mathscr{L}(\mathscr{H})$ beside $\mathcal{L}(\mathcal{H})$. Equations here are numbered within their section, as amsmath's \texttt{numberwithin} asks: \eqref{eq:gauss} is the first of its section. Long arrows join a bar to a head, as in
+$f\colon A \longrightarrow B$ or $p \iff q$, and spacing commands fine-tune a formula:
+$a\,b$, $a\:b$, $a\;b$ and $a\!b$. A smashed or phantom box keeps only some of its
+size: $\sqrt{\smash[b]{y}}$ against $\sqrt{y}$, or $\sqrt{\mathstrut a}$ beside
+$\sqrt{b}$. Residues are written $a \equiv b \pmod{m}$ or $a \bmod m$, and text
+symbols such as \textbackslash, \textbar, \textsection\,2, \S\,3 and a dagger\dag{}
+need no math mode. A symbol can carry another above or below it, as in
+$a \overset{\mathrm{def}}{=} b$ or $\lim x_n \underset{n\to\infty}{\longrightarrow} x$, and a
+matrix can elide rows and diagonals with $\vdots$ and $\ddots$:
+\[
+\begin{pmatrix} a_{11} & \cdots & a_{1n} \\ \vdots & \ddots & \vdots \\ a_{m1} & \cdots & a_{mn} \end{pmatrix}.
+\] Vectors and matrices are often set in bold: $\boldsymbol{A}\boldsymbol{x} = \boldsymbol{b}$
+with $\boldsymbol{\alpha} \boldsymbol{+} \boldsymbol{\beta}_{\boldsymbol{k}}$ takes amsmath's
+\texttt{boldsymbol}, and {\boldmath $x^2 + \theta \le \sum_i y_i$} the whole formula in the bold math version. Conditions stack under a sum with
+\texttt{substack}, as in $\sum_{\substack{0 \le i \le m\\ 0 < j < n}} P(i,j)$, and an arrow
+stretches to its labels: $A \xrightarrow{f} B \xleftarrow[\text{below}]{g \circ h} C$. Arrows over a symbol take its width:
+$\overrightarrow{AB} + \overleftarrow{CD} = \overleftrightarrow{EF}$, also in a script,
+$a^{\overrightarrow{v}}$. Roots of any order take an index, $\sqrt[3]{x}$ or
+$\sqrt[\uproot{2} n]{1 + y^{2}}$, and the plain commands still work after amsmath, which
+only warns in the log: ${a \over b}$, ${n \choose k}$, $x \buildrel \mathrm{def} \over = y$ and
+$a \doteq b$. amsmath builds this as a
+gathered display of one row, whose only entry is the split's block of rows; RushTeX
+builds the same boxes and sets the number once the block is complete.
+
 \subsection{Cases, matrices and arrays}\label{sec:arrays}
 
 A definition by cases, a matrix and a determinant are all one construction: \LaTeX's
@@ -918,6 +1298,14 @@ an array may sit in an aligned row:
   A &= \begin{pmatrix} a_{11} & \cdots & a_{1n} \\ a_{m1} & \cdots & a_{mn} \end{pmatrix}.
 \end{align}
 So (\ref{eq:abs}) and \eqref{eq:piecewise} are numbered as any other display.
+A small matrix fits in a line of text, its entries in script size:
+$\bigl(\begin{smallmatrix} a & b \\ c & d \end{smallmatrix}\bigr)$. An entry may span
+columns, with \texttt{multicolumn} or with a row of dots from \texttt{hdotsfor}:
+\[
+  \begin{pmatrix} a_{11} & a_{12} & a_{13} \\ \hdotsfor{3} \\ a_{31} & \hdotsfor[2]{2} \end{pmatrix}
+  \qquad
+  \begin{array}{ccc} 1 & 2 & 3 \\ \multicolumn{2}{l}{x + y} & z \end{array}
+\]
 
 In \LaTeX{} the array's column pattern becomes text, the \emph{preamble}, which is read
 back as tokens at every entry, and each entry opens and closes its own formula. RushTeX
@@ -1027,13 +1415,126 @@ are all in that table stays on the native path. An option that does change somet
 such as amsmath's \texttt{fleqn}, which moves displays to the left, or
 \texttt{intlimits}, sends the document to the engine path until a native for it exists.
 
+\subsection{Latin Modern}\label{sec:lmodern}
+
+The lmodern package, loaded by a quarter of the thesis and report templates, is one such
+table: it sets \texttt{rmdefault}, \texttt{sfdefault} and \texttt{ttdefault} to the Latin
+Modern families, and declares the math fonts and alphabets anew. Its math declarations do
+not add families; \texttt{SetSymbolFont} gives the four families every document has,
+operators, letters, symbols and large symbols, Latin Modern shapes in place of Computer
+Modern ones, so RushTeX replaces those families' shapes where they are and moves no
+family number. The font shapes come from the pinned \texttt{.fd} files, read once by
+LaTeX at build time; the pin now holds \texttt{ot1lmtt.fd} too, the typewriter family in
+the OT1 encoding. A text family whose \texttt{.fd} file is not in the tables declines the
+document, because LaTeX would read the file and RushTeX cannot; before, it was silently
+replaced by the default family. The probe \texttt{scripts/native\_probes/lmodern.tex}
+sets every shape and a page of mathematics in Latin Modern with T1 and amsmath.
+
+\subsection{Margin kerning and font expansion}\label{sec:microtype}
+
+The microtype package, loaded by a fifth of the essay and newsletter templates, turns on
+two features of pdf\TeX: characters such as hyphens, full stops and the round sides of
+letters hang a little into the margin, and the letters of a line may be widened or
+narrowed by up to two per cent so that the spaces between words vary less. Both are
+properties of a font, set by the package when \LaTeX\ first selects it: a code for each
+character's protrusion at either margin, and the limits of the font's expansion.
+RushTeX does not read the package's configuration files at run time. A generator sets
+each font the native job can select, one selection to a run of the engine, and keeps
+what the package gave it, so that a native selection installs the same codes from a
+table; a font the table lacks sends the document to the engine. The package also places
+explicit kerns of its own: before the first character of a list item, of a footnote and
+of a contents entry, and around the parentheses of an equation number, each the margin
+kern that character would have; in verbatim text both features are switched off. This
+document does not load microtype, since it would move every line of it; the probes
+\texttt{scripts/native\_probes/microtype.tex} and
+\texttt{scripts/native\_probes/microtype-patches.tex} are set with it.
+
+\subsection{Packages loaded and not used}\label{sec:siunitx}
+
+Lab report templates often load siunitx and never set a quantity with it. Loading it is
+not nothing: the package loads amstext and array as it starts, and color when the document
+begins, so the tables follow array's rules and every page's head and foot sit in a colour
+group, as they do under xcolor (Section~\ref{sec:color}). RushTeX loads those three in
+its place.
+None of siunitx's own commands is native yet, so a quantity, a number or an \texttt{S}
+column sends the document to the engine
+(\texttt{scripts/native\_probes/siunitx-load.tex}).
+
+\subsection{Paragraphs set apart}\label{sec:parskip}
+
+Letters and CVs often load parskip, which marks a new paragraph with space instead of an
+indent: \texttt{parskip} becomes half the normal line distance, with two points of
+stretch, and \texttt{parindent} zero. The package then makes the space between paragraphs
+the only space in lists: in the outer three levels the space above a list and between
+its items is zero and the space between paragraphs within an item is \texttt{parskip}
+itself; \texttt{small} and \texttt{footnotesize} keep their own outer lists, as their
+\texttt{@listi} is not the one the package redefines. Every heading's space above, and a
+displayed heading's space below, is less one \texttt{parskip}, since the paragraph that
+follows adds it back. RushTeX sets these values when the package loads and checks them at
+each list and heading; the package's patches of the table of contents and of amsthm's
+theorem heads are not ported, so either sends the document to the engine
+(\texttt{scripts/native\_probes/parskip.tex}).
+
+\subsection{Page layout}\label{sec:geometry}
+
+The page of this document is set by the geometry package, with the numbers the article
+class would have chosen itself: a text block 345pt wide and 550pt high, its left edge
+62pt and its top 16pt past \TeX's one-inch origin, given in scaled points so that no
+decimal rounds. geometry finds the right and bottom margins from the paper size, and a
+second \texttt{geometry} command in the preamble keeps the keys given before it and
+adds its own. The page therefore looks as it would without the package, and any slip in
+the arithmetic moves every line of the document.
+
+\subsection{Colour}\label{sec:color}
+
+This document loads the xcolor package and, apart from \textcolor{rtblue}{these words}
+and {\color[RGB]{153,0,0} these}, sets no colour, yet the package changes every page: once a colour package is loaded, \LaTeX's \texttt{normalcolor} pushes the default
+colour, black, onto pdf\TeX's colour stack and pops it at the end of the group. That
+happens around each page's head and foot, around every float, inside each caption, list
+label and theorem head, at the footnote rule, in the numbers of \texttt{eqnarray} and in
+the page numbers of the contents. The marks change nothing on the page; they only have to
+be where \LaTeX{} puts them. A colour given by name, by a model's values, or defined in the
+preamble with \texttt{definecolor} becomes the literal pdf\TeX{} writes, digit for digit as
+the colour packages print it.
+
+\subsection{Web addresses}\label{sec:url}
+
+The url package sets an address such as \url{https://example.org/rushtex/a_b-c?page=1&x=2#top}
+in the typewriter font as one formula, so that it can break after a slash, a dot or
+another punctuation mark but never inside a word, and so that none of its characters has
+its usual meaning: \url{~user/50%off} keeps its tilde and its percent sign. A file name
+is given with \texttt{path}, as in \path{/usr/local/texlive}; \urlstyle{rm}\url{example.org}
+is the same address in the roman style\urlstyle{tt}.
+
+Under the hyperref package an address becomes a link, and \texttt{href} links a text of
+the writer's own to an address. hyperref reads that address with the special characters
+made ordinary, as url does, when it comes straight from the file. Inside the argument of
+another command, a table cell or a group read whole, the address has been read already,
+for pdfLaTeX too, so its letters and other characters are the address as written; one
+holding a command, a space or a special character sends the document to the engine
+(\texttt{scripts/native\_probes/hyperref-href-argument.tex}).
+
+hyperref also gives each heading an entry in the PDF's outline, the bookmarks a viewer
+lists beside the page. The title is written as \texttt{pdfstringdef} makes it: two bytes
+to a character (UTF-16), each byte an octal escape unless it is the low byte of a printable
+ASCII character other than a space, a parenthesis or one of \texttt{\#\$\%\&\_}. A title may
+therefore hold accented and other non-ASCII letters typed as UTF-8, dashes and curly
+quotes, and \texttt{\textbackslash\&} and its four kin, and its bytes
+equal pdfLaTeX's (\texttt{scripts/native\_probes/hyperref-bookmark-utf8.tex}).
+
 \subsection{Definitions in the preamble}
 
 An author's own short commands are part of most papers. This document's preamble
 defines one, \texttt{gdl}, which prints \gdl, with \texttt{newcommand}; it redefines the
 roman family with \texttt{renewcommand} and declares an operator name with
-\texttt{DeclareMathOperator}. A definition whose text uses only native commands is
-native too: RushTeX expands it as \TeX{} would.
+\texttt{DeclareMathOperator}. The plain \TeX{} form works as well: \texttt{def} gives
+\texttt{half}, so that $\half{x}$ halves its argument, and a \texttt{def} in the body,
+\def\gdlnote{like this one}\gdlnote, is read the same way. A definition whose text uses
+only native commands is native too: RushTeX expands it as \TeX{} would. A document that
+redefines a macro the native commands read themselves, such as \texttt{thesection} or
+\texttt{labelitemi}, is set by the engine, which reads every definition. Numbers held in
+macros are read as \TeX{} reads them: this document's preamble sets
+\texttt{baselinestretch} to 1 and \texttt{textfraction} to 0.2, their usual values.
 
 Such a command also matters to the pre-scan. To set forward references and the contents
 in one pass, the pre-scan reads the headings and labels of the body ahead of
@@ -1133,14 +1634,23 @@ Over pdfLaTeX's three runs the factors are 72.6, 58.5 and 36.9. Peak memory is 1
 
 The fit separates the two costs. The column specification of the next table removes the
 padding at both ends with an empty at-sign argument and repeats one column pattern with
-a star.
+a star. Its rules are the booktabs package's: a heavy top and bottom rule, a light middle
+one, a partial rule under the last two headings trimmed at both ends, and a little extra
+space before the last row. The first heading spans both heading rows, with the multirow
+package, centred between them.
 
 \begin{center}
 \begin{tabular}{@{}*{3}{c}@{}}
-Repeats & Pages & RushTeX \\
+\toprule
+\multirow{2}{*}{Repeats} & \multicolumn{2}{c}{Size} \\
+\cmidrule(lr){2-3}
+ & Pages & RushTeX \\
+\midrule
 1 & 61 & 279.1M \\
 4 & 242 & 875.8M \\
+\addlinespace
 10 & 603 & 2063.5M \\
+\bottomrule
 \end{tabular}
 \end{center}
 
@@ -1168,41 +1678,230 @@ RushTeX loads no format and reads no package or font file. The cost per page is 
 times on long documents too, which the per-page cost does not yet meet; the work
 behind each page, Section~\ref{sec:work}, is where the rest must come from.
 
+\section{Ports of 27 October 2026}\label{sec:oct27}
+
+This section documents the commands made native on 27 October 2026, chosen by how many
+papers of the arXiv sample each one held back, the cheapest first. Each paragraph says
+what \LaTeX{} does, taken from its source, and what the native path does instead; the
+text around it is the test.
+
+\subsection{Bibliographies from BibTeX}
+The kernel's \texttt{bibliography} writes the database names to the auxiliary file and
+inputs \texttt{\textbackslash jobname.bbl}; \texttt{bibliographystyle} only writes to the
+auxiliary file. The native path reads no auxiliary file: before the pre-scan it puts the
+text of the \texttt{.bbl} file where \texttt{bibliography} stands and drops
+\texttt{bibliographystyle}. The references at the end of this book come that way, from
+\texttt{master.bbl}~\cite{knuth86}.
+
+\subsection{Pages}
+\texttt{clearpage} ends the page and puts every waiting float on float pages. In one
+column it is \texttt{newpage}, a \texttt{write} to no file, an empty box and the penalty
+$-10001$ that makes the output routine run \texttt{\textbackslash @doclearpage}. The write stays in
+the list, at the top of the next page.
+
+This page carries a running head from the fancyhdr package, given with
+\texttt{thispagestyle\{fancy\}}; the other pages keep the plain style. fancyhdr sets
+its head as three paragraphs, one flush left, one centred, one flush right, each as wide
+as the text and boxed by \texttt{parbox}, with a rule underneath, and its foot the same
+way above the page number. RushTeX writes those boxes from the six texts the preamble
+gives, so the head is the one pdf\TeX{} makes, down to the strut at the end of each part.
+fancyhdr also redefines \texttt{sectionmark} and \texttt{subsectionmark}, so every
+numbered heading in this document now leaves two marks in the page for a head to read
+back, even though no head here reads them; the marks are made the same way.
+\thispagestyle{fancy}
+
+\subsection{Mathematics}
+The kernel builds $x\notin A$ by overlaying a slash on $\in$ in each style, $A\cong B$ by
+stacking $\sim$ over $=$, and braces from four pieces joined by rules:
+\[
+  \underbrace{a_1+a_2+\cdots+a_n}_{n\ \text{terms}} \;=\; \overbrace{1+1+\cdots+1}^{n},
+  \qquad X_{y\notin B,\ u\cong v}.
+\]
+The \texttt{bm} package sets a bold symbol as the same character in a bold font family:
+$\bm{x}$, $\bm{\gamma}_k^2$, $\bm{\Gamma}$, $\bm{0} \bm{=} \bm{\mu}$ and $\bm{\gamma^\ast}$,
+where amsmath's \texttt{boldsymbol} boxes it: $\boldsymbol{B}_x$ against $\bm{B}_x$. Here
+bm is loaded after amssymb and before amsmath and mathrsfs: its three families are numbered
+after amssymb's two, mathrsfs's after them, and amsmath's \texttt{boldsymbol}, defined
+later, stays its own.
+
+\subsection{Floats set here}
+The \texttt{float} package's \texttt{H} placement sets the float where it stands, between
+two \texttt{intextsep} skips, with its caption numbered as any other.
+\begin{figure}[H]
+  \centering
+  \rule{4cm}{1.5cm}
+  \caption{A figure placed with \texttt{H}.}\label{fig:here}
+\end{figure}
+Figure~\ref{fig:here} came out where it was written, and so does Table~\ref{tab:here}, begun
+in the middle of this paragraph:
+\begin{table}[H]
+  \caption{A table placed with \texttt{H}.}\label{tab:here}
+  \centering
+  \begin{tabular}{lc}
+    package & papers \\ \hline
+    float & 48 \\
+    bm & 46
+  \end{tabular}
+\end{table}
+
+\subsection{Text symbols and the title}
+\texttt{textcomp} and \texttt{dcolumn} load as tables and change nothing until used:
+\textdegree, \texttrademark, \textsection{} and \textdagger{} come from the TS1 fonts, also
+inside a table cell:
+\begin{tabular}{c} a\textdagger \\ b\textdaggerdbl \end{tabular}.
+The title of this book carries a \texttt{thanks}, marked with the footnote symbol
+\textasteriskcentered, and two authors separated by \texttt{and}.
+
+\subsection{Boxes, glue and penalties by hand}
+Authors reach for \TeX's own commands: \hbox{a box}, \hbox to 3cm{spread\hfil out},
+\raise 2pt\hbox{raised} and \lower 1pt\hbox{lowered} text, a \rlap{\_\_}lap and a
+\llap{\_\_}lap, an\enspace en space, a \kern 3pt kern, a \vrule width 1pt height 5pt
+depth 1pt rule, and \nobreak\ penalties. The kernel's \texttt{rlap}, \texttt{llap},
+\texttt{null}, \texttt{nobreak}, \texttt{allowbreak}, \texttt{break}, \texttt{sloppy} and
+\texttt{fussy} are made of these primitives alone, and run as their definitions.
+\vskip 6pt plus 2pt
+\hbox{A box set in vertical mode, after a \texttt{vskip}.}
+\vskip 6pt
+{\sloppy A paragraph set under \texttt{sloppy}, with its tolerance of 9999 and an emergency
+stretch of 3em, so that a line with a long word such as \texttt{pdfTeX-compatibility} is
+spaced out rather than left overfull.\par}
+
+\subsection{Counter forms}
+A preamble may give \texttt{thefigure}, \texttt{thetable} or \texttt{theequation} a fixed
+prefix before \texttt{arabic}, as supplementary material does with \texttt{S}. This book
+numbers its tables T1, T2 and so on: Table~\ref{tab:here} above is one. The prefix goes
+into the caption and into every reference; another form, or one given in the body, sends
+the document to the engine.
+
+\subsection{mathtools and calc}
+This book loads \texttt{mathtools}, which loads \texttt{calc} and amsmath, and graphicx at
+\texttt{begin\{document\}}. Its \texttt{overbrace} and \texttt{underbrace} kern
+$0.7$ and $0.5$ of the axis height (the fifth parameter of the symbol font) where the
+kernel kerns 3pt, so the braces of Section~\ref{sec:oct27} sit closer to their arguments.
+Its \texttt{nonumber}, \texttt{notag} and ends of the align environments do what amsmath's
+do when \texttt{showonlyrefs} is off. With calc, \texttt{setlength} and \texttt{setcounter}
+take a plain value natively; an expression such as \texttt{\textbackslash textwidth-2cm}
+sends the document to the engine.
+
+This document loads the \texttt{enumitem} package. With no keys on its lists it makes the
+same lists as the kernel, save one \texttt{nobreak} before each label; its
+\texttt{description} differs more: each label is set with \texttt{labelsep} zero and
+followed by \texttt{hfil}, and the item indent becomes \texttt{labelsep} less the left
+margin, so the label starts 5pt further right. The native path builds both, as in the
+description lists of this document.
+
+Its keys on \texttt{enumerate} and \texttt{itemize}, in the optional argument or kept by
+\texttt{\textbackslash setlist} in the preamble, are native too: the vertical lengths
+(\texttt{topsep}, \texttt{itemsep}, \texttt{parsep}, \texttt{partopsep}) and
+\texttt{nosep}, \texttt{noitemsep}, \texttt{nolistsep}; the horizontal ones with a value
+(\texttt{leftmargin}, \texttt{labelsep}, \texttt{labelwidth}, \texttt{itemindent},
+\texttt{rightmargin}, \texttt{listparindent}); \texttt{leftmargin=*}, for which enumitem
+measures the label with the counter at its widest (\texttt{0}, \texttt{m}, \texttt{viii})
+and makes the margin the label's width and \texttt{labelsep}; and \texttt{label}, whose
+\texttt{\textbackslash arabic*} and its kin stand for the list's counter and whose whole
+text becomes what a \texttt{\textbackslash ref} to the item prints. A value is read as
+enumitem's own assignment reads it, so it may be an expression such as
+\texttt{\textbackslash dimexpr\textbackslash linewidth-2\textbackslash fboxsep}, which
+takes the assignment's closing \texttt{\textbackslash relax} as its end; the native job checks
+that nothing of the value is left after it. RushTeX reads the keys
+in enumitem's order: \texttt{\textbackslash setlist} for every list, for every list at the
+depth, for the environment and for the environment at its depth, then the list's own. This
+document's preamble has \texttt{\textbackslash setlist[enumerate,2]\{itemsep=1pt\}}, so
+every second-level numbered list in it has its items 1pt apart, and the lists below give
+their own keys:
+\begin{enumerate}[label=(\roman*), leftmargin=*]
+  \item a first item in lower-case roman numerals, the margin as wide as the label
+    \texttt{(viii)} and \texttt{labelsep},\label{it:tmpl}
+  \item a second, holding a list of its own:
+    \begin{enumerate}[label=Case \Alph*:, topsep=2pt, rightmargin=\dimexpr 2\fboxsep+1pt]
+      \item the words around \texttt{\textbackslash Alph*} are copied, the letter counts,\label{it:case}
+      \item and this list's \texttt{itemsep} comes from the preamble, its right margin
+        from an expression.
+    \end{enumerate}
+\end{enumerate}
+The label text, without the outer list's, is what a reference prints, and RushTeX reads
+it from the source in the same single pass as every other reference: items~\ref{it:tmpl} and~\ref{it:case}. A list
+with \texttt{nosep} has no space around or between its items:
+\begin{itemize}[nosep]
+  \item one,
+  \item two.
+\end{itemize}
+
+\subsection{The enumerate package}
+The \texttt{enumerate} package leaves a list without an optional argument as the kernel
+makes it. With one, such as \texttt{[(i)]}, each \texttt{A}, \texttt{a}, \texttt{i},
+\texttt{I} or \texttt{1} outside braces stands for the counter in that style, the rest is
+copied, and the left margin of that depth becomes the width of the label at seven plus
+\texttt{labelsep}. It is native too, but it replaces the same \texttt{enumerate} that
+enumitem does, so this document loads enumitem, the one far more templates use, and the
+enumerate package is tested in a document of its own.
+
+\subsection{Display breaks}
+amsmath sets \texttt{interdisplaylinepenalty} to 10000, so its multi-line displays never
+break across pages. \texttt{allowdisplaybreaks[n]} in the preamble sets it to 10000, 9999,
+6999, 2999 or 0 for $n$ from 0 to 4 (4 when $n$ is left out); this book uses 1, so a
+break between rows is allowed but only as a last resort. The native path reads that value
+at every row end of \texttt{align}, \texttt{gather}, \texttt{multline} and, under amsmath,
+\texttt{eqnarray}. In the body, where it is a local assignment, the command still sends
+the document to the engine.
+
+\subsection{Theorems within theorems, titles with commands}
+\texttt{newtheorem\{corollary\}\{Corollary\}[theorem]} resets the corollary counter with
+each step of the theorem counter (a lemma sharing it steps it too) and numbers it
+\texttt{\textbackslash thetheorem.\textbackslash arabic\{corollary\}}. Since
+\texttt{\textbackslash @stpelt} steps a reset counter from $-1$, a new section resets the
+corollaries along with the theorems.
+\begin{theorem}\label{thm:within}A theorem.\end{theorem}
+\begin{corollary}\label{cor:first}Its first corollary.\end{corollary}
+\begin{lemma}A lemma, which steps the shared counter.\end{lemma}
+\begin{corollary}\label{cor:reset}A corollary numbered again from one.\end{corollary}
+\begin{example}A title may hold font commands; this one is set in small capitals.\end{example}
+The references read \ref{thm:within}, \ref{cor:first} and \ref{cor:reset}.
+
+\subsection{The T1 font encoding}
+\texttt{\textbackslash usepackage[T1]\{fontenc\}} is native. It sets the encoding of every
+text font to T1 (the EC fonts drawn by cm-super), where an accented letter is one
+character: \'e, \`a, \^o, \"u, \~n, \c{c}, \r{a} and \v{s} become precomposed glyphs that
+hyphenate as letters (caract\'eristiques, t\'el\'ecommunications), while \H{o}, \u{g} and
+\'x keep the accent over the letter. The symbols \textbackslash, \{, \}, \$, \_,
+\textbar\ and \textsection\ come from the text font itself.
+This document is set in OT1; the gates compile it a second time with T1 loaded, and both
+must match the engine box for box and pdf\LaTeX\ pixel for pixel.
+
+\clearpage
 \section{Current limits}\label{sec:limits}
 
 The native path is young, and its limits are part of an honest description.
 
 \begin{itemize}
   \item It takes the article class without the \texttt{twocolumn}, \texttt{titlepage},
-        \texttt{leqno} and \texttt{fleqn} options, and six packages.
+        \texttt{leqno} and \texttt{fleqn} options; journal classes (amsart, revtex,
+        elsarticle) run on the engine.
   \item graphicx takes PDF and PNG pictures at a width, height or scale, but not
         rotated, clipped or in JPEG.
-  \item amsmath's other multi-line environments (\texttt{gather}, \texttt{multline},
-        \texttt{split}, \texttt{smallmatrix}), \texttt{tag}, \texttt{binom} and the
-        vertical and diagonal dots are not yet native.
-  \item hyperref, \texttt{newtheoremstyle}, \texttt{qedhere}, BibTeX bibliographies, package options that change what a
-        package does, input in characters outside ASCII and the T1 font encoding are not
-        yet native.
-  \item A page reference to a later page, a tabular column of fixed width, and a command
-        the author defines with a text that could step a counter, such as one holding a
-        heading, used in a document with a contents list or a forward reference, send the
-        document to the engine path.
+  \item natbib, caption, mathtools, enumitem's \texttt{description}, \texttt{newlist}, its keys \texttt{align}, \texttt{font}, \texttt{widest} and \texttt{resume}, \texttt{newtheoremstyle},
+        \texttt{qedhere}, the \texttt{.bbl} preambles of natbib and revtex styles, and package
+        options that change what a package does are not yet native.
+  \item A page reference to a later page, a tabular column of fixed width, a redefined
+        counter representation other than a prefix, and a command the author defines
+        with a text that could step a counter, used in a document with a contents list or a
+        forward reference, send the document to the engine path.
   \item The engine path needs an installed \TeX{} Live.
-  \item The cost per page is about five times below pdfLaTeX's, short of the forty
-        times the project aims for.
 \end{itemize}
 
 Most papers therefore still run on the engine path. Each limit is on the work list, in
 the order of the papers it would unblock.
 
+\appendix
 \section{What this document tests}\label{sec:tests}
+This appendix, numbered with letters after \texttt{appendix}, lists what each section exercises.
 
 Each section of this document exercises the constructs it describes. The list below
 names them, commands without their backslash, so that a change to RushTeX that breaks
 one shows which section to read.
 
 \begin{description}
-  \item[Front matter] \texttt{documentclass}, \texttt{usepackage} with options,
+  \item[Front matter] \texttt{documentclass}, \texttt{usepackage} with options, \texttt{geometry},
         \texttt{newcommand}, \texttt{renewcommand}, \texttt{DeclareMathOperator},
         \texttt{title}, \texttt{author}, \texttt{date}, \texttt{maketitle},
         \texttt{abstract}, \texttt{tableofcontents}.
@@ -1236,7 +1935,9 @@ one shows which section to read.
   \item[Section~\ref{sec:math}] inline and display math, fractions, roots,
         indices, Greek letters, symbols, operators with limits, named functions,
         \texttt{mathbb}, \texttt{mathcal}, \texttt{mathbf}, \texttt{mathrm},
-        \texttt{mathfrak}, \texttt{left} and \texttt{right}, \texttt{equation}.
+        \texttt{mathfrak}, \texttt{left} and \texttt{right}, \texttt{equation},
+        \texttt{eqnarray} with \texttt{nonumber}, \texttt{lefteqn} and a row space,
+        \texttt{eqnarray*}.
   \item[Section~\ref{sec:amsmath}] \texttt{text}, \texttt{operatorname} and its
         starred form, accents, the dots, \texttt{colon}, \texttt{widehat},
         \texttt{widetilde}, the \texttt{big} family, \texttt{equation*},
@@ -1253,7 +1954,14 @@ one shows which section to read.
         \texttt{DeclareMathOperator}.
   \item[Section~\ref{sec:measurements}] \texttt{tabular} with an at-sign argument
         and a starred pattern, \texttt{multicolumn}, a table with a caption.
-  \item[Section~\ref{sec:bib}] \texttt{thebibliography} and \texttt{bibitem}.
+  \item[Section~\ref{sec:oct27}] \texttt{bibliography} from a \texttt{.bbl} file,
+        \texttt{clearpage} with floats, \texttt{notin}, \texttt{cong},
+        \texttt{underbrace}, \texttt{overbrace}, bm, float's \texttt{H}, textcomp,
+        dcolumn, text symbols in a table cell, \texttt{thanks} and \texttt{and},
+        \texttt{hbox}, \texttt{vskip}, \texttt{rlap}, \texttt{llap}, \texttt{nobreak},
+        \texttt{sloppy}, a prefixed \texttt{thetable}.
+  \item[Section~\ref{sec:bib}] \texttt{bibliography}, \texttt{bibliographystyle} and the
+        \texttt{thebibliography} they bring.
 \end{description}
 
 \section{References}\label{sec:bib}
@@ -1267,41 +1975,7 @@ follows the deflate specification~\cite{deutsch96}. The chain of stages in
 Figure~\ref{fig:pipeline} is a common design for compilers in general, as Aho and
 colleagues describe~\cite{aho06}.
 
-\begin{thebibliography}{9}
-\bibitem{knuth81}
-  Donald E.~Knuth and Michael F.~Plass.
-  \emph{Breaking paragraphs into lines}.
-  Software: Practice and Experience, 11(11), 1981.
-
-\bibitem{knuth86}
-  Donald E.~Knuth.
-  \emph{The \TeX book}.
-  Addison-Wesley, 1986.
-
-\bibitem{knuth86b}
-  Donald E.~Knuth.
-  \emph{\TeX: The Program}.
-  Addison-Wesley, 1986.
-
-\bibitem{liang83}
-  Franklin M.~Liang.
-  \emph{Word Hy-phen-a-tion by Com-put-er}.
-  PhD thesis, Stanford University, 1983.
-
-\bibitem{lamport94}
-  Leslie Lamport.
-  \emph{\LaTeX: A Document Preparation System}.
-  Addison-Wesley, second edition, 1994.
-
-\bibitem{deutsch96}
-  L.~Peter Deutsch.
-  \emph{DEFLATE Compressed Data Format Specification version 1.3}.
-  RFC 1951, 1996.
-
-\bibitem{aho06}
-  Alfred V.~Aho, Monica S.~Lam, Ravi Sethi and Jeffrey D.~Ullman.
-  \emph{Compilers: Principles, Techniques, and Tools}.
-  Addison-Wesley, second edition, 2006.
-\end{thebibliography}
+\bibliographystyle{plain}
+\bibliography{master}
 
 \end{document}

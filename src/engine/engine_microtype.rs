@@ -587,3 +587,111 @@ impl Machine<'_, '_> {
         Some([x.step as i32, limit(x.stretch), if x.shrink == 0 { -1 } else { -limit(x.shrink) }])
     }
 }
+
+/// `rushtex-gen microtype`'s table: per text font (TFM name and size in sp) what microtype's
+/// `\pickup@font` hook gives it, `-` or its `\pdffontexpand` stretch, shrink, step and
+/// autoexpand, then its codes other than the defaults (`lp65=38`); then `sub KEY SIZE`, a
+/// substituted selection that would give its font other codes.
+static MICROTYPE: &str = include_str!("../../assets/tables/microtype.txt");
+
+/// The table's font lines by (TFM name, size), and its substituted selections by (key,
+/// size).
+struct MtTable {
+    fonts: std::collections::HashMap<(&'static str, i32), &'static str>,
+    subs: std::collections::HashSet<(&'static str, i32)>,
+}
+
+/// The table, read once.
+fn microtype_table() -> &'static MtTable {
+    static T: std::sync::OnceLock<MtTable> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let (mut fonts, mut subs) = (std::collections::HashMap::new(), std::collections::HashSet::new());
+        for l in MICROTYPE.lines().skip(1) {
+            let sub = l.strip_prefix("sub ");
+            let mut w = sub.unwrap_or(l).splitn(3, ' ');
+            let (Some(name), Some(Ok(size))) = (w.next(), w.next().map(str::parse)) else { continue };
+            match sub {
+                Some(_) => {
+                    subs.insert((name, size));
+                }
+                None => {
+                    fonts.insert((name, size), w.next().unwrap_or("-"));
+                }
+            }
+        }
+        MtTable { fonts, subs }
+    })
+}
+
+/// `\pdfadjustspacing` and `\pdfprotrudechars` as `\MT@setup@` sets them.
+pub(super) fn microtype_ints() -> (i32, i32) {
+    let mut w = MICROTYPE.lines().next().unwrap_or_default().split(' ').skip(1).map(|v| v.parse().unwrap_or(0));
+    (w.next().unwrap_or(0), w.next().unwrap_or(0))
+}
+
+impl Machine<'_, '_> {
+    /// microtype's `\MT@setupfont` for text font `f`, once: its codes and its
+    /// `\pdffontexpand` from the table; a font the table lacks goes to the engine.
+    pub(super) fn microtype_setup(&mut self, key: &str, f: u16) {
+        // microtype's sets (`alltext`): the text encodings; others it leaves alone.
+        if !matches!(key.split('/').next(), Some("OT1" | "T1" | "TS1")) {
+            return;
+        }
+        let size = self.e.fonts.list[f as usize].size;
+        if microtype_table().subs.contains(&(key, size)) {
+            return self.not_native("microtype: a substituted font shape with codes of its own");
+        }
+        let Some(doc) = self.doc.as_mut() else { return };
+        if doc.mt_fonts.contains(&f) {
+            return;
+        }
+        doc.mt_fonts.push(f);
+        let font = &self.e.fonts.list[f as usize];
+        let Some(&line) = microtype_table().fonts.get(&(&*font.name, font.size)) else {
+            return self.not_native("microtype: a font without its codes");
+        };
+        let mut w = line.split(' ');
+        let expand = match w.next() {
+            Some("-") | None => None,
+            Some(stretch) => {
+                let mut n = || w.next().and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+                Some((stretch.parse::<i32>().unwrap_or(0), n(), n(), n() != 0))
+            }
+        };
+        for code in w {
+            let (which, rest) = code.split_at(2);
+            let Some((c, v)) = rest.split_once('=') else { continue };
+            let (Ok(c), Ok(v)) = (c.parse::<u8>(), v.parse::<i32>()) else { continue };
+            let which = match which {
+                "lp" => LP,
+                "rp" => RP,
+                _ => EF,
+            };
+            self.e.fonts.micro.set(f, which, c, v);
+        }
+        if let Some((stretch, shrink, step, auto)) = expand {
+            self.set_expand_params(f, auto, stretch, shrink, step);
+        }
+    }
+}
+
+impl Machine<'_, '_> {
+    /// microtype's `\MT@get@prot` of character `c` in the current font: the margin kern of a
+    /// line of `c` alone (`\leftmarginkern` or `\rightmarginkern`), which `\leftprotrusion`
+    /// and `\rightprotrusion` add as a kern when it is not zero; 0 without microtype.
+    pub(super) fn protrusion_of(&self, c: u8, right: bool) -> i32 {
+        if !self.microtype() || self.e.eqtb.word(super::engine_names::param_const("pdfprotrudechars")) <= 0 {
+            return 0;
+        }
+        let n = Node { kind: Kind::Char, sub: 0, font: self.cur_font(), a: c as i32, b: 0 };
+        -char_pw(&self.e.fonts, Some(n), right)
+    }
+
+    /// [`Self::protrusion_of`] as an explicit kern in the current list.
+    pub(super) fn protrusion_kern(&mut self, c: u8, right: bool) {
+        let w = self.protrusion_of(c, right);
+        if w != 0 {
+            self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, w) });
+        }
+    }
+}

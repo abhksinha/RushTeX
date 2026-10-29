@@ -174,16 +174,17 @@ impl Machine<'_, '_> {
         self.nest.last().map_or(0, |l| l.aux)
     }
 
-    /// amsmath's `\halign{&...&...\cr` in a display (`\align@`), its two templates built
-    /// by a native: a periodic preamble of columns `u[0]`/`v[0]` and `u[1]`/`v[1]`, all
-    /// tabskip glue zero until [`Self::align_retab`] sets it.
-    pub(super) fn init_align_periodic(&mut self, u: [Span; 2], v: [Span; 2]) {
+    /// amsmath's `\halign{&...&...\cr` (`\align@`, `\start@aligned`), its two templates
+    /// built by a native: a periodic preamble of columns `u[0]`/`v[0]` and `u[1]`/`v[1]`,
+    /// the tabskip glue `tabskips` (before the first column and after each), which
+    /// [`Self::align_retab`] may set again.
+    pub(super) fn init_align_periodic(&mut self, u: [Span; 2], v: [Span; 2], tabskips: [Glue; 3]) {
         let saved_state = self.input.align_state;
         let prev_depth = self.align_prev_depth();
         self.push_nest(Mode::Vertical, true, prev_depth);
         self.begin_group(ALIGN_GROUP);
         let cols = (0..2).map(|k| Column { u: u[k], v: v[k], width: NULL_FLAG, omit: false, ended_by: 0, spans: Vec::new() }).collect();
-        self.aligns.push(Align { cols, tabskips: vec![Glue::default(); 3], cur: 0, span_start: 0, cur_loop: Some(0), unsets: Vec::new(), exact: false, size: 0, saved_state, adjusts: Vec::new() });
+        self.aligns.push(Align { cols, tabskips: tabskips.to_vec(), cur: 0, span_start: 0, cur_loop: Some(0), unsets: Vec::new(), exact: false, size: 0, saved_state, adjusts: Vec::new() });
         self.begin_group(ALIGN_GROUP);
         self.align_peek();
     }
@@ -265,12 +266,20 @@ impl Machine<'_, '_> {
     /// internal vertical list the native has opened; `\everycr` is empty there (the
     /// pre-scan refuses it).
     pub(super) fn init_align_with(&mut self, n: usize, u: Span, v: Span) {
+        self.init_align_cols(&vec![(u, v); n], vec![Glue::default(); n + 1], false, 0);
+    }
+
+    /// §774 `init_align` with a preamble built by a native: column `k`'s templates
+    /// `cols[k]` and the tabskip glue `tabskips` (one more than the columns), as a scanned
+    /// preamble's assignments would leave them; `\halign to size` when `exact`. `\everycr`
+    /// is not inserted: the native has made it empty.
+    pub(super) fn init_align_cols(&mut self, cols: &[(Span, Span)], tabskips: Vec<Glue>, exact: bool, size: i32) {
         let saved_state = self.input.align_state;
-        let prev_depth = self.aux;
+        let prev_depth = self.align_prev_depth();
         self.push_nest(Mode::Vertical, true, prev_depth);
         self.begin_group(ALIGN_GROUP);
-        let cols = vec![Column { u, v, width: NULL_FLAG, omit: false, ended_by: 0, spans: Vec::new() }; n];
-        self.aligns.push(Align { cols, tabskips: vec![Glue::default(); n + 1], cur: 0, span_start: 0, cur_loop: None, unsets: Vec::new(), exact: false, size: 0, saved_state, adjusts: Vec::new() });
+        let cols = cols.iter().map(|&(u, v)| Column { u, v, width: NULL_FLAG, omit: false, ended_by: 0, spans: Vec::new() }).collect();
+        self.aligns.push(Align { cols, tabskips, cur: 0, span_start: 0, cur_loop: None, unsets: Vec::new(), exact, size, saved_state, adjusts: Vec::new() });
         self.begin_group(ALIGN_GROUP);
         self.align_peek();
     }
@@ -466,7 +475,8 @@ impl Machine<'_, '_> {
         col.omit = multi || m == Meaning::Prim(Prim::Omit);
         if multi {
             self.input.align_state = 0;
-            return self.multicolumn();
+            let hdots = self.is_hdotsfor(m);
+            return self.multicolumn(hdots);
         }
         if col.omit {
             self.input.align_state = 0;

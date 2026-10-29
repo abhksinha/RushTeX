@@ -16,6 +16,7 @@
 //!   parity-testing tj DOC PAGE [--width W]
 //!   parity-testing hlist DOC PATTERN
 //!   parity-testing glyphs PDF                 (the extracted glyphs, to check against pymupdf)
+//!   parity-testing bench [FILE.tex [N] | docs | templates | compare OLD_BIN | all | check [BASE]]   (`cargo benchmark`)
 //!   common: [-j N] parallel jobs (default: every core)
 //!
 //! `zero` interprets each page's content stream with exact decimal arithmetic (every operand
@@ -2423,9 +2424,23 @@ fn cmd_zero(o: &Opts) {
             die(&e);
         }
     }
+    let mut summary = Vec::new();
+    zero_each(o, |line, ok| {
+        println!("{line}");
+        if let Some(ok) = ok {
+            summary.push(ok);
+        }
+    });
+    if summary.len() > 1 {
+        println!("zero-shift: {}/{} documents", summary.iter().filter(|x| **x).count(), summary.len());
+    }
+}
+
+/// Each document's `zero` line, in order as soon as it and those before it are done, and
+/// whether it is zero (`None` for a `--why` answer).
+fn zero_each(o: &Opts, mut each: impl FnMut(&str, Option<bool>) + Send) {
     let docs = o.docs();
     let kind = if o.engine { "engine" } else { "ours" };
-    let summary = Mutex::new(Vec::new());
     par_ordered(
         &docs,
         o.jobs,
@@ -2476,17 +2491,8 @@ fn cmd_zero(o: &Opts) {
                 }
             }
         },
-        |(line, ok)| {
-            println!("{line}");
-            if let Some(ok) = ok {
-                summary.lock().unwrap().push(ok);
-            }
-        },
+        |(line, ok)| each(&line, ok),
     );
-    let s = summary.into_inner().unwrap();
-    if s.len() > 1 {
-        println!("zero-shift: {}/{} documents", s.iter().filter(|x| **x).count(), s.len());
-    }
 }
 
 fn die(msg: &str) -> ! {
@@ -3021,7 +3027,7 @@ const USAGE: &str = "usage: parity-testing COMMAND [DOC..] [--all] [--engine] [-
 commands: zero [--why PAGE], score [--save-baseline] [--tol T] [--dx PAGE:DX], exact [-v], gaps [-n N],
   rank DOC [-n N], lines DOC PAGE [--all] [--cached], miss DOC PAGE [--dx DX], boxes DOC PAGE [--all],
   tj DOC PAGE [--width N], hlist DOC PATTERN, repro DOC [A B] [--body TEXT] [--name N] [--trace pages|lists] [--all],
-  glyphs PDF";
+  glyphs PDF, bench (bench -h)";
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -3044,12 +3050,12 @@ fn main() {
             "--dpi" => o.dpi = value().parse().unwrap_or_else(|_| die("--dpi N")),
             "--why" => o.why = Some(value().parse().unwrap_or_else(|_| die("--why N"))),
             "-j" | "--jobs" => o.jobs = value().parse::<usize>().unwrap_or_else(|_| die("-j N")).max(1),
-            "--tol" | "--dx" | "--n" | "-n" | "--width" | "--body" | "--name" | "--trace" => {
+            "--tol" | "--dx" | "--n" | "-n" | "--width" | "--body" | "--name" | "--trace" | "--timeout" => {
                 let v = value();
                 o.flags.insert(a.trim_start_matches('-').into(), v);
             }
             "-h" | "--help" => {
-                println!("{USAGE}");
+                println!("{}", if cmd == "bench" { BENCH_USAGE } else { USAGE });
                 return;
             }
             f if f.starts_with('-') => {
@@ -3075,6 +3081,7 @@ fn main() {
         "repro" => cmd_repro(&o),
         "tj" => cmd_tj(&o),
         "hlist" => cmd_hlist(&o),
+        "bench" => cmd_bench(&o),
         _ => die(USAGE),
     }
 }
@@ -3088,6 +3095,935 @@ fn cmd_glyphs(o: &Opts) {
         for g in p {
             println!("{} {:?} {:?} {:?} {}", i + 1, g.x, g.y, g.size, g.c.chars().map(|c| format!("{:x}", c as u32)).collect::<Vec<_>>().join(","));
         }
+    }
+}
+
+fn timeout_of(o: &Opts) -> std::time::Duration {
+    std::time::Duration::from_secs(o.flags.get("timeout").map_or(300, |t| t.parse().unwrap_or_else(|_| die("--timeout S"))))
+}
+
+/// Instructions retired by rushtex and by pdfLaTeX on each of `docs`, a table written to
+/// `out` in `docs`' order as rows complete: one rushtex binary, or two (before and after a
+/// change: both measured on each document, pdfLaTeX once). Each document's folder is copied
+/// to a scratch directory so neither side sees the other's files. rushtex: one warm-up run,
+/// then one counted run, as a user runs it; whether the native job took it. pdfLaTeX: from
+/// clean, rerun until the PDF stops changing; the runs up to the first that made the final
+/// PDF, and the first run alone (the one-run floor). No BibTeX. Counts do not depend on how
+/// many documents run at once, so `jobs` only changes the wall time.
+fn instructions_table(docs: &[String], out: &Path, rushes: &[PathBuf], jobs: usize, timeout: std::time::Duration) {
+    let scratch = std::env::temp_dir().join(format!("rushtex_bench_instr_{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap_or_else(|e| die(&format!("{}: {e}", scratch.display())));
+    let mut f = std::io::BufWriter::new(std::fs::File::create(out).unwrap_or_else(|e| die(&format!("{}: {e}", out.display()))));
+    use std::io::Write as _;
+    let before = if rushes.len() > 1 { "rushtex_before_instructions\t" } else { "" };
+    let _ = writeln!(f, "doc\trushtex_mode\trushtex_pages\tpdflatex_pages\t{before}rushtex_instructions\tpdflatex_one_run\tpdflatex_cycle\tpdflatex_runs");
+    let columns = 7 + rushes.len();
+    let next = AtomicUsize::new(0);
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, Vec<String>)>();
+    std::thread::scope(|sc| {
+        for _ in 0..jobs.min(docs.len()) {
+            let tx = tx.clone();
+            let (next, scratch) = (&next, &scratch);
+            sc.spawn(move || loop {
+                let k = next.fetch_add(1, Ordering::Relaxed);
+                let Some(d) = docs.get(k) else { break };
+                let row = bench_doc(Path::new(d), rushes, scratch, timeout).unwrap_or_else(|e| {
+                    let name = Path::new(d).file_stem().map_or(String::new(), |s| s.to_string_lossy().into_owned());
+                    let mut v = vec![name, format!("error: {e}").chars().take(80).collect()];
+                    v.resize(columns, String::new());
+                    v
+                });
+                let _ = tx.send((k, row));
+            });
+        }
+        drop(tx);
+        // In LIST's order: a finished row waits for the ones before it.
+        let mut done: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+        let mut at = 0;
+        for (k, row) in rx {
+            done.insert(k, row);
+            while let Some(row) = done.remove(&at) {
+                let _ = writeln!(f, "{}", row.join("\t"));
+                let _ = f.flush();
+                at += 1;
+            }
+        }
+    });
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// One document's row: name, rushtex mode and pages (the last binary's), pdfLaTeX pages,
+/// each binary's instructions, pdfLaTeX's first run and its runs up to the final PDF, and how
+/// many those were.
+fn bench_doc(tex: &Path, rushes: &[PathBuf], scratch: &Path, timeout: std::time::Duration) -> Result<Vec<String>, String> {
+    let tex = std::path::absolute(tex).map_err(|e| e.to_string())?;
+    let name = tex.file_stem().ok_or("no file name")?.to_string_lossy().into_owned();
+    let dir = tex.parent().ok_or("no folder")?;
+    // Templates are all `main.tex`: the folder names the document and its scratch copy.
+    let slug = if name == "main" { dir.file_name().map_or(name.clone(), |d| d.to_string_lossy().into_owned()) } else { name.clone() };
+    let work = scratch.join(&slug);
+    let _ = std::fs::remove_dir_all(&work);
+    copy_tree(dir, &work).map_err(|e| format!("copy {}: {e}", dir.display()))?;
+    let src = work.join(tex.file_name().ok_or("no file name")?);
+    // rushtex.
+    let out = work.join("rushtex-out.pdf");
+    let log = work.join("rushtex-why.log");
+    let (mut mode, mut ins) = ("engine", Vec::new());
+    for rush in rushes {
+        let mut warm = Command::new(rush);
+        warm.arg(&src).arg("-o").arg(&out).current_dir(&work).envs(FIXED_DATE).env("RT_NATIVE_WHY", "1");
+        run_until(&mut warm, &log, timeout);
+        mode = if std::fs::read(&log).is_ok_and(|b| b.windows(19).any(|w| w == b"native job accepted")) { "native" } else { "engine" };
+        ins.push(measure(&[rush.as_os_str(), src.as_os_str(), "-o".as_ref(), out.as_os_str()], &work, timeout).0);
+    }
+    let r_pages = pdf_pages(&out);
+    // pdfLaTeX, from clean until the PDF is final.
+    let (counts, n) = pdflatex_cycle(&work, &src, timeout);
+    let p_pages = pdf_pages(&work.join(format!("{name}.pdf")));
+    let _ = std::fs::remove_dir_all(&work);
+    let mut row = vec![slug, mode.into(), r_pages.to_string(), p_pages.to_string()];
+    row.extend(ins.iter().map(u64::to_string));
+    row.extend([counts[0].to_string(), counts[..n].iter().sum::<u64>().to_string(), n.to_string()]);
+    Ok(row)
+}
+
+/// pdfLaTeX on `src` in `work` from clean, rerun until the PDF stops changing (at most 6
+/// runs): each run's instructions, and how many runs made the final PDF (the confirming run
+/// not counted).
+fn pdflatex_cycle(work: &Path, src: &Path, timeout: std::time::Duration) -> (Vec<u64>, usize) {
+    let name = stem(src);
+    for e in ["aux", "toc", "lof", "lot", "out", "log", "pdf"] {
+        let _ = std::fs::remove_file(work.join(format!("{name}.{e}")));
+    }
+    let pdf = work.join(format!("{name}.pdf"));
+    let (mut counts, mut hashes) = (Vec::new(), Vec::new());
+    while counts.len() < 6 {
+        counts.push(measure(&["pdflatex".as_ref(), "-interaction=batchmode".as_ref(), "-no-shell-escape".as_ref(), src.as_os_str()], work, timeout).0);
+        hashes.push(std::fs::read(&pdf).map_or(String::new(), |b| sha256(&b)));
+        if hashes.len() > 1 && hashes[hashes.len() - 1] == hashes[hashes.len() - 2] {
+            break;
+        }
+    }
+    let last = hashes.last().cloned().unwrap_or_default();
+    let n = hashes.iter().position(|h| *h == last).map_or(1, |i| i + 1);
+    (counts, n)
+}
+
+/// The pages of a PDF, by this framework's reader; 0 when it does not open.
+fn pdf_pages(pdf: &Path) -> usize {
+    Pdf::open(pdf).map_or(0, |p| p.pages.len())
+}
+
+/// `src` copied to `dst` with its subfolders, symbolic links kept as links.
+fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for e in std::fs::read_dir(src)? {
+        let e = e?;
+        let (from, to) = (e.path(), dst.join(e.file_name()));
+        let t = e.file_type()?;
+        if t.is_symlink() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(std::fs::read_link(&from)?, &to)?;
+        } else if t.is_dir() {
+            copy_tree(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Runs `c` with stdout and stderr into `log`, killed after `timeout`; whether it exited 0.
+fn run_until(c: &mut Command, log: &Path, timeout: std::time::Duration) -> bool {
+    let Ok(file) = std::fs::File::create(log) else { return false };
+    let Ok(err) = file.try_clone() else { return false };
+    let Ok(mut child) = c.stdin(Stdio::null()).stdout(file).stderr(err).spawn() else { return false };
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if start.elapsed() < timeout => std::thread::sleep(std::time::Duration::from_millis(5)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+}
+
+/// (instructions retired, peak RSS in bytes, ok) of one run of `cmd` in `cwd` with the fixed
+/// date, under `/usr/bin/time -l` on macOS or `perf stat` and `/usr/bin/time -f` on Linux;
+/// 0 instructions on a timeout or when none are reported.
+fn measure(cmd: &[&std::ffi::OsStr], cwd: &Path, timeout: std::time::Duration) -> (u64, u64, bool) {
+    let mac = cfg!(target_os = "macos");
+    let mut c = if mac {
+        let mut c = Command::new("/usr/bin/time");
+        c.arg("-l");
+        c
+    } else {
+        let mut c = Command::new("perf");
+        c.args(["stat", "-x,", "-e", "instructions:u", "/usr/bin/time", "-f", "RSS %M"]);
+        c
+    };
+    c.args(cmd);
+    // The child's own output goes to the log too; only the counters' lines are read.
+    let log = cwd.join(format!(".measure-{:?}.log", std::thread::current().id()).replace(['(', ')'], ""));
+    let ok = run_until(c.current_dir(cwd).envs(FIXED_DATE), &log, timeout);
+    let text = std::fs::read(&log).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let _ = std::fs::remove_file(&log);
+    let (mut ins, mut rss) = (0, 0);
+    for l in text.lines().map(str::trim) {
+        if mac {
+            if let Some(n) = l.strip_suffix("instructions retired") {
+                ins = n.trim().parse().unwrap_or(0);
+            } else if let Some(n) = l.strip_suffix("maximum resident set size") {
+                rss = n.trim().parse().unwrap_or(0);
+            }
+        } else if l.split(',').nth(2).is_some_and(|k| k.starts_with("instructions")) {
+            ins = l.split(',').next().and_then(|n| n.parse().ok()).unwrap_or(0);
+        } else if let Some(n) = l.strip_prefix("RSS ") {
+            rss = n.trim().parse::<u64>().unwrap_or(0) * 1024;
+        }
+    }
+    (ins, rss, ok)
+}
+
+// ---- bench: the benchmark (`cargo benchmark` runs it) ----------------------------------------------
+
+const BENCH_USAGE: &str = "usage: cargo benchmark [FILE.tex [N] | docs [N] | templates | compare OLD_BIN | all [N] | check [BASE]] [-j N]
+  (from the repository root; the alias runs `parity-testing bench` in testing/, built when needed)
+  (no arguments)    at a terminal, a menu of these
+  FILE.tex [N]      one document against pdfLaTeX, full report (N runs a median, default 3)
+  docs [N]          docs/master.tex and every scripts/bench/*.tex
+  templates         the template-corpus documents the native job accepts (target/bench/templates.tsv)
+  compare OLD_BIN   the same templates, OLD_BIN against the current binary (target/bench/compare.tsv)
+  all [N]           docs, then templates
+  check [BASE]      for contributors: is the output still identical? (BASE: a git ref, e.g. origin/master)
+  env: TIME_RUNS (timed runs, default 11), RUSHTEX_BIN (the rushtex binary)";
+
+/// `bench …`: the benchmark of rushtex against pdfLaTeX (instructions retired, CPU and wall
+/// time, peak RAM), and the contributor's check.
+fn cmd_bench(o: &Opts) {
+    let rush = std::env::var_os("RUSHTEX_BIN").map_or_else(rushtex, PathBuf::from);
+    // No arguments at a terminal: the menu, which answers with the arguments it stands for.
+    use std::io::IsTerminal as _;
+    // Without a terminal (CI, scripts) a mode or a file must be named.
+    let args = match (o.docs.is_empty(), std::io::stdin().is_terminal()) {
+        (true, true) => bench_menu(),
+        (true, false) => die(BENCH_USAGE),
+        _ => o.docs.clone(),
+    };
+    let arg = |k: usize| args.get(k).map(String::as_str);
+    let runs = |k: usize| arg(k).map_or(3, |n| n.parse::<usize>().unwrap_or_else(|_| die(BENCH_USAGE)).max(1));
+    if !on_path("pdflatex") {
+        die("pdflatex not found on PATH (install TeX Live)");
+    }
+    if arg(0) == Some("check") {
+        return bench_check(o, &rush, arg(1));
+    }
+    if !rush.exists() && Command::new("cargo").args(["build", "--release"]).current_dir(root()).status().map_or(true, |s| !s.success()) {
+        die("cargo build --release failed");
+    }
+    match arg(0) {
+        Some("docs") => bench_docs(&rush, runs(1)),
+        Some("templates") => bench_templates(o, &rush),
+        Some("all") => {
+            bench_docs(&rush, runs(1));
+            bench_templates(o, &rush);
+        }
+        Some("compare") => {
+            let old = PathBuf::from(arg(1).unwrap_or_else(|| die("bench compare OLD_BIN")));
+            let docs = native_templates(&rush, o.jobs);
+            let table = root().join("target/bench/compare.tsv");
+            instructions_table(&docs, &table, &[old.clone(), rush.clone()], o.jobs, timeout_of(o));
+            println!("Before ({}) and after ({}), target/bench/compare.tsv:", old.display(), rush.display());
+            summarise(&table);
+        }
+        doc => {
+            let tex = Path::new(doc.unwrap_or_default());
+            if !tex.is_file() {
+                die(BENCH_USAGE);
+            }
+            bench_report(tex, runs(1), &rush).unwrap_or_else(|e| die(&e));
+        }
+    }
+}
+
+fn bench_docs(rush: &Path, runs: usize) {
+    let mut docs = vec![root().join("docs/master.tex")];
+    let mut bench: Vec<PathBuf> = std::fs::read_dir(root().join("scripts/bench")).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "tex")).collect()).unwrap_or_default();
+    bench.sort();
+    docs.extend(bench);
+    for d in docs {
+        bench_report(&d, runs, rush).unwrap_or_else(|e| eprintln!("{}: {e}", d.display()));
+    }
+}
+
+fn bench_templates(o: &Opts, rush: &Path) {
+    let docs = native_templates(rush, o.jobs);
+    let table = root().join("target/bench/templates.tsv");
+    instructions_table(&docs, &table, &[rush.to_path_buf()], o.jobs, timeout_of(o));
+    println!("Templates (target/bench/templates.tsv):");
+    summarise(&table);
+}
+
+/// The template-corpus documents (`template-corpus/*/main.tex`) the native job accepts with
+/// `rush`, listed in target/bench/native_templates.tsv. The arXiv corpus is not benchmarked.
+fn native_templates(rush: &Path, jobs: usize) -> Vec<String> {
+    let mut all: Vec<PathBuf> = std::fs::read_dir(root().join("template-corpus")).map(|d| d.flatten().map(|e| e.path().join("main.tex")).filter(|p| p.is_file()).collect()).unwrap_or_default();
+    all.sort();
+    let next = AtomicUsize::new(0);
+    let accepted: Vec<Mutex<bool>> = all.iter().map(|_| Mutex::new(false)).collect();
+    let logs = std::env::temp_dir().join(format!("rushtex_bench_native_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&logs);
+    std::thread::scope(|sc| {
+        for w in 0..jobs.max(1) {
+            let (all, next, accepted, logs) = (&all, &next, &accepted, &logs);
+            sc.spawn(move || loop {
+                let k = next.fetch_add(1, Ordering::Relaxed);
+                let Some(tex) = all.get(k) else { break };
+                let log = logs.join(format!("{w}.log"));
+                let mut c = Command::new(rush);
+                c.arg("main.tex").args(["-o", "/dev/null"]).current_dir(tex.parent().unwrap()).env("RT_NATIVE_WHY", "1");
+                run_until(&mut c, &log, std::time::Duration::from_secs(60));
+                *accepted[k].lock().unwrap() = std::fs::read(&log).is_ok_and(|b| b.windows(19).any(|w| w == b"native job accepted"));
+            });
+        }
+    });
+    let _ = std::fs::remove_dir_all(&logs);
+    let docs: Vec<String> = all.iter().zip(&accepted).filter(|(_, a)| *a.lock().unwrap()).map(|(p, _)| p.display().to_string()).collect();
+    let dir = root().join("target/bench");
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join("native_templates.tsv"), docs.iter().map(|d| format!("{d}\n")).collect::<String>());
+    println!("{} templates the native job accepts", docs.len());
+    docs
+}
+
+/// Totals of an `instructions` table; for a before/after table also the mean saving.
+fn summarise(table: &Path) {
+    let text = std::fs::read_to_string(table).unwrap_or_default();
+    let mut lines = text.lines();
+    let two = lines.next().is_some_and(|h| h.contains("rushtex_before"));
+    let k = usize::from(two);
+    let (mut n, mut pages, mut before, mut r, mut p1, mut pc, mut runs, mut higher) = (0u64, 0u64, 0f64, 0f64, 0f64, 0f64, 0f64, 0);
+    let (mut bad, mut eng) = (Vec::new(), Vec::new());
+    for l in lines {
+        let c: Vec<&str> = l.split('\t').collect();
+        let num = |i: usize| c.get(i).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+        if num(4 + k) <= 0.0 || num(6 + k) <= 0.0 {
+            continue;
+        }
+        n += 1;
+        pages += num(2) as u64;
+        r += num(4 + k);
+        p1 += num(5 + k);
+        pc += num(6 + k);
+        runs += num(7 + k);
+        if two {
+            before += num(4);
+            higher += usize::from(num(5) > num(4));
+        }
+        if c[2] != c[3] {
+            bad.push(c[0]);
+        }
+        if c[1] != "native" {
+            eng.push(c[0]);
+        }
+    }
+    if n == 0 {
+        println!(" no rows");
+        return;
+    }
+    let nf = n as f64;
+    if two {
+        println!(" RushTeX before mean {:.1}M, after mean {:.1}M: saved {:.2}M a document ({:.1}%), {higher} of {n} documents higher after", before / nf / 1e6, r / nf / 1e6, (before - r) / nf / 1e6, 100.0 * (before - r) / before);
+    }
+    println!(" {n} documents, {pages} pages; RushTeX mean {:.1}M", r / nf / 1e6);
+    println!(" pdfLaTeX one run mean {:.0}M ({:.1}x), final PDF mean {:.0}M ({:.1}x, {:.2} runs)", p1 / nf / 1e6, p1 / r, pc / nf / 1e6, pc / r, runs / nf);
+    if !bad.is_empty() {
+        println!(" page counts differ: {}", bad.join(" "));
+    }
+    if !eng.is_empty() {
+        println!(" ran on the engine: {}", eng.join(" "));
+    }
+}
+
+fn on_path(tool: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(tool).is_file()))
+}
+
+/// The terminal's settings while the menu reads single keys (`stty raw -echo`), restored when
+/// dropped, also on a panic. `stty` keeps this std only and free of the per-platform
+/// `termios` layouts.
+struct RawTerminal(String);
+
+impl RawTerminal {
+    fn new() -> Option<RawTerminal> {
+        let saved = Command::new("stty").arg("-g").stdin(Stdio::inherit()).output().ok().filter(|o| o.status.success())?;
+        let saved = String::from_utf8_lossy(&saved.stdout).trim().to_string();
+        Command::new("stty").args(["raw", "-echo"]).stdin(Stdio::inherit()).status().ok().filter(|s| s.success())?;
+        Some(RawTerminal(saved))
+    }
+}
+
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        let _ = Command::new("stty").arg(&self.0).stdin(Stdio::inherit()).status();
+        print!("\x1b[?25h");
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+    }
+}
+
+/// A key of the menu.
+enum Key {
+    Up,
+    Down,
+    Enter,
+    Quit,
+    Digit(usize),
+    Other,
+}
+
+fn read_key() -> Key {
+    use std::io::Read as _;
+    let mut b = [0u8; 1];
+    let mut next = || std::io::stdin().read(&mut b).ok().filter(|&n| n == 1).map(|_| b[0]);
+    match next() {
+        None | Some(3 | 4 | b'q' | b'Q') => Key::Quit,
+        Some(b'\r' | b'\n') => Key::Enter,
+        Some(b'k') => Key::Up,
+        Some(b'j') => Key::Down,
+        Some(c @ b'1'..=b'9') => Key::Digit(usize::from(c - b'0')),
+        // `ESC [ A` and `ESC [ B` (or `ESC O A/B`); a lone escape quits.
+        Some(0x1b) => match (next(), next()) {
+            (Some(b'[' | b'O'), Some(b'A')) => Key::Up,
+            (Some(b'[' | b'O'), Some(b'B')) => Key::Down,
+            _ => Key::Quit,
+        },
+        _ => Key::Other,
+    }
+}
+
+/// The menu `cargo benchmark` shows with no arguments at a terminal: arrows (or `j`/`k`) move,
+/// a digit or Enter chooses, `q` quits. Each entry is a command line of `bench`, printed
+/// before it runs so it can be typed again (or used in CI) without the menu.
+fn bench_menu() -> Vec<String> {
+    let mut entries: Vec<(&str, &str)> = vec![
+        ("master.tex against pdfLaTeX", "instructions, CPU and wall time, RAM, cost per page, glyph-to-glyph and pixel match"),
+        ("Any document against pdfLaTeX", "the same report for a file you name"),
+        ("Every bench document", "docs/master.tex and scripts/bench/*.tex, one report each"),
+        ("Check my change", "unit tests, native against engine page boxes, match with pdfLaTeX, byte-identical to a base"),
+        ("Before/after one change", "an old rushtex binary against the current one"),
+    ];
+    // The template corpus is not in the public tree: listed only where it is.
+    if root().join("template-corpus").is_dir() {
+        entries.push(("Templates against pdfLaTeX", "the template-corpus documents the native job accepts"));
+    }
+    let draw = |sel: usize, first: bool| {
+        use std::io::Write as _;
+        let mut s = String::new();
+        // Back to the menu's first line, redrawn in place.
+        if !first {
+            s += &format!("\x1b[{}A", entries.len() + 3);
+        }
+        s += "\r\x1b[2K\x1b[1mRushTeX benchmark\x1b[0m\r\n";
+        for (i, (name, what)) in entries.iter().enumerate() {
+            let row = format!("{}. {name:<31} \x1b[2m{what}\x1b[0m", i + 1);
+            s += &if i == sel { format!("\r\x1b[2K \x1b[7m>\x1b[0m \x1b[1m{row}\x1b[0m\r\n") } else { format!("\r\x1b[2K   {row}\r\n") };
+        }
+        s += "\r\x1b[2K\r\n\r\x1b[2K\x1b[2m↑/↓ move   1-9 or Enter choose   q quit\x1b[0m\r\n";
+        print!("{s}");
+        let _ = std::io::stdout().flush();
+    };
+    let chosen = {
+        let Some(_raw) = RawTerminal::new() else { die("the menu needs a terminal: name a mode (cargo benchmark --help)") };
+        print!("\x1b[?25l");
+        let mut sel = 0;
+        draw(sel, true);
+        loop {
+            match read_key() {
+                Key::Up => sel = (sel + entries.len() - 1) % entries.len(),
+                Key::Down => sel = (sel + 1) % entries.len(),
+                Key::Digit(d) if d <= entries.len() => break Some(d - 1),
+                Key::Enter => break Some(sel),
+                Key::Quit => break None,
+                _ => continue,
+            }
+            draw(sel, false);
+        }
+    };
+    let Some(pick) = chosen else { std::process::exit(0) };
+    println!("\n{}. {}", pick + 1, entries[pick].0);
+    let ask = |q: &str, default: &str| -> String {
+        use std::io::Write as _;
+        print!("{q}{}: ", if default.is_empty() { String::new() } else { format!(" [{default}]") });
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
+            std::process::exit(0);
+        }
+        let v = if line.trim().is_empty() { default.to_string() } else { line.trim().to_string() };
+        if v.is_empty() {
+            die(&format!("{q}: no answer"));
+        }
+        v
+    };
+    let args = match pick {
+        0 => vec![root().join("docs/master.tex").display().to_string()],
+        1 => vec![ask("Document", "docs/master.tex")],
+        2 => vec!["docs".into()],
+        3 => vec!["check".into(), ask("Base to compare with (a git ref)", "origin/master")],
+        4 => vec!["compare".into(), ask("Old rushtex binary", "")],
+        _ => vec!["templates".into()],
+    };
+    println!("Running: cargo benchmark {}\n", args.join(" "));
+    args
+}
+
+/// User and system CPU time, in milliseconds, of the children waited for so far
+/// (`getrusage(RUSAGE_CHILDREN)`): one child's is the difference around its run.
+fn children_cpu_ms() -> f64 {
+    #[repr(C)]
+    struct Timeval {
+        sec: i64,
+        #[cfg(target_os = "macos")]
+        usec: i32,
+        #[cfg(not(target_os = "macos"))]
+        usec: i64,
+    }
+    #[repr(C)]
+    struct Rusage {
+        utime: Timeval,
+        stime: Timeval,
+        rest: [i64; 14],
+    }
+    extern "C" {
+        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+    }
+    let mut ru = std::mem::MaybeUninit::<Rusage>::zeroed();
+    // SAFETY: `ru` is a `struct rusage` of this platform's layout, which the call fills.
+    if unsafe { getrusage(-1, ru.as_mut_ptr()) } != 0 {
+        return 0.0;
+    }
+    // SAFETY: zeroed, then filled by `getrusage`.
+    let ru = unsafe { ru.assume_init() };
+    let ms = |t: &Timeval| t.sec as f64 * 1e3 + t.usec as f64 / 1e3;
+    ms(&ru.utime) + ms(&ru.stime)
+}
+
+fn load_average() -> f64 {
+    extern "C" {
+        fn getloadavg(loads: *mut f64, n: i32) -> i32;
+    }
+    let mut l = [0f64; 3];
+    // SAFETY: room for the three averages asked for.
+    if unsafe { getloadavg(l.as_mut_ptr(), 3) } < 1 {
+        return 0.0;
+    }
+    l[0]
+}
+
+fn median(v: &[f64]) -> f64 {
+    let mut s = v.to_vec();
+    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = s.len();
+    if n == 0 {
+        0.0
+    } else if n % 2 == 1 {
+        s[n / 2]
+    } else {
+        (s[n / 2 - 1] + s[n / 2]) / 2.0
+    }
+}
+
+/// Median instructions and the largest peak RSS of `runs` runs of `cmd`.
+fn median_of(cmd: &[&std::ffi::OsStr], cwd: &Path, runs: usize) -> (f64, u64) {
+    let (mut ins, mut rss) = (Vec::new(), 0);
+    for _ in 0..runs {
+        let (i, r, _) = measure(cmd, cwd, std::time::Duration::from_secs(600));
+        ins.push(i as f64);
+        rss = rss.max(r);
+    }
+    (median(&ins), rss)
+}
+
+/// Median wall and CPU (user + sys) milliseconds of `k` runs of each command, after one
+/// warm-up each, as (wall, cpu) per command. The commands' runs alternate, so a change in the
+/// machine's load falls on all of them alike.
+fn timed(cmds: &[Vec<&std::ffi::OsStr>], cwd: &Path, k: usize) -> Vec<(f64, f64)> {
+    let run = |cmd: &[&std::ffi::OsStr]| {
+        let t = std::time::Instant::now();
+        let c0 = children_cpu_ms();
+        let _ = Command::new(cmd[0]).args(&cmd[1..]).current_dir(cwd).envs(FIXED_DATE).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        (t.elapsed().as_secs_f64() * 1e3, children_cpu_ms() - c0)
+    };
+    for cmd in cmds {
+        run(cmd);
+    }
+    let mut v = vec![(Vec::new(), Vec::new()); cmds.len()];
+    for _ in 0..k {
+        for (i, cmd) in cmds.iter().enumerate() {
+            let (w, c) = run(cmd);
+            v[i].0.push(w);
+            v[i].1.push(c);
+        }
+    }
+    v.iter().map(|(w, c)| (median(w), median(c))).collect()
+}
+
+/// `1234.5M` with thousands separators and one decimal (Python's `{:,.1f}`).
+fn millions(x: f64) -> String {
+    let s = format!("{:.1}", x.abs() / 1e6);
+    let (int, frac) = s.split_once('.').unwrap_or((&s, "0"));
+    let mut grouped = String::new();
+    for (i, c) in int.chars().enumerate() {
+        if i > 0 && (int.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    format!("{}{grouped}.{frac}M", if x < 0.0 && s != "0.0" { "-" } else { "" })
+}
+
+/// RushTeX's value against pdfLaTeX's, one decimal, said the way round that is above 1.
+fn ratio(r: f64, p: f64, better: &str, worse: &str) -> String {
+    if r <= p {
+        format!("{:.1}x {better}", p / r)
+    } else {
+        format!("{:.1}x {worse}", r / p)
+    }
+}
+
+/// Every `\label`, `\ref`, `\pageref`, `\eqref`, `\cite`, `\bibitem` key renamed `key-i`, so
+/// copy `i` of a body has its own (keys after an optional `*` and `[..]`, comma lists too).
+fn rename_keys(text: &str, i: usize) -> String {
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len() + 256);
+    let mut at = 0;
+    let mut k = 0;
+    while k < b.len() {
+        let found = (b[k] == b'\\')
+            .then(|| {
+                ["label", "ref", "pageref", "eqref", "cite", "bibitem"].iter().find_map(|name| {
+                    let mut j = k + 1;
+                    b[j..].starts_with(name.as_bytes()).then_some(())?;
+                    j += name.len();
+                    if b.get(j) == Some(&b'*') {
+                        j += 1;
+                    }
+                    if b.get(j) == Some(&b'[') {
+                        j += b[j..].iter().position(|&c| c == b']')? + 1;
+                    }
+                    (b.get(j) == Some(&b'{')).then_some(())?;
+                    let close = j + 1 + b[j + 1..].iter().position(|&c| c == b'}')?;
+                    Some((j + 1, close))
+                })
+            })
+            .flatten();
+        match found {
+            Some((open, close)) => {
+                out.push_str(&text[at..open]);
+                out.push_str(&text[open..close].split(',').map(|key| format!("{}-{i}", key.trim())).collect::<Vec<_>>().join(","));
+                out.push('}');
+                at = close + 1;
+                k = close + 1;
+            }
+            None => k += 1,
+        }
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+fn latin1_write(path: &Path, text: &str) -> std::io::Result<()> {
+    std::fs::write(path, text.chars().map(|c| c as u32 as u8).collect::<Vec<u8>>())
+}
+
+fn command_line(cmd: &str, args: &[&str]) -> String {
+    Command::new(cmd).args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").trim().to_string()).unwrap_or_default()
+}
+
+/// One document's full report: rushtex (one run, no `.aux`) against pdfLaTeX (one run, and
+/// the runs a user needs), instructions, CPU and wall time, RAM, PDF size, start-up, the
+/// cost of a page from copies of the body (x1, x4, x10, each box-checked against the
+/// engine), and the parity line against pdfLaTeX.
+fn bench_report(tex: &Path, runs: usize, rush: &Path) -> Result<(), String> {
+    let tex = std::path::absolute(tex).map_err(|e| e.to_string())?;
+    let work = std::env::temp_dir().join(format!("rushtex_bench_{}_{}", std::process::id(), stem(&tex)));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let r = bench_report_in(&tex, runs, rush, &work);
+    let _ = std::fs::remove_dir_all(&work);
+    r
+}
+
+fn refs(v: &[std::ffi::OsString]) -> Vec<&std::ffi::OsStr> {
+    v.iter().map(|s| s.as_os_str()).collect()
+}
+
+fn bench_report_in(tex: &Path, runs: usize, rush: &Path, work: &Path) -> Result<(), String> {
+    let os = |p: &Path| p.as_os_str().to_owned();
+    let name = stem(tex);
+    let dir = tex.parent().ok_or("no folder")?;
+    let src = work.join(tex.file_name().ok_or("no file name")?);
+    std::fs::copy(tex, &src).map_err(|e| e.to_string())?;
+    // Its BibTeX output, read in place of `\bibliography`.
+    let bbl = tex.with_extension("bbl");
+    if bbl.exists() {
+        let _ = std::fs::copy(&bbl, work.join(bbl.file_name().unwrap()));
+    }
+    // The images the document includes, from the folders beside it (`figures/`).
+    for d in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+        let has_images = |p: &Path| std::fs::read_dir(p).is_ok_and(|r| r.flatten().any(|f| f.path().extension().is_some_and(|x| x == "pdf" || x == "png")));
+        if d.path().is_dir() && has_images(&d.path()) {
+            copy_tree(&d.path(), &work.join(d.file_name())).map_err(|e| e.to_string())?;
+        }
+    }
+    // rushtex: one run, no .aux.
+    let rush_pdf = work.join("rush.pdf");
+    let rush_cmd: Vec<std::ffi::OsString> = vec![os(rush), os(&src), "-o".into(), os(&rush_pdf)];
+    let accepted = |cmd: &[std::ffi::OsString]| Command::new(&cmd[0]).args(&cmd[1..]).current_dir(work).envs(FIXED_DATE).env("RT_NATIVE_WHY", "1").output().is_ok_and(|o| String::from_utf8_lossy(&o.stderr).contains("native job accepted"));
+    let native = accepted(&rush_cmd);
+    let (r_ins, r_rss) = median_of(&refs(&rush_cmd), work, runs);
+    // pdfLaTeX: the real cycle from clean, then one run with the .aux complete.
+    let timeout = std::time::Duration::from_secs(600);
+    let mut cycle = Vec::new();
+    for _ in 0..runs {
+        let (counts, n) = pdflatex_cycle(work, &src, timeout);
+        cycle.push((counts[..n].iter().sum::<u64>() as f64, n));
+    }
+    let p_real = median(&cycle.iter().map(|c| c.0).collect::<Vec<_>>());
+    let p_runs = cycle[0].1;
+    let pdf_cmd: Vec<std::ffi::OsString> = vec!["pdflatex".into(), "-interaction=batchmode".into(), os(&src)];
+    let (p_ins, p_rss) = median_of(&refs(&pdf_cmd), work, runs);
+    let p_pdf = work.join(format!("{name}.pdf"));
+    let k = std::env::var("TIME_RUNS").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(11).max(1);
+    let load = load_average();
+    let t = timed(&[refs(&rush_cmd), refs(&pdf_cmd)], work, k);
+    let ((r_wall, r_cpu), (p_wall, p_cpu)) = (t[0], t[1]);
+    let (rp, pp) = (pdf_pages(&rush_pdf), pdf_pages(&p_pdf));
+    let size = |p: &Path| std::fs::metadata(p).map_or(0.0, |m| m.len() as f64 / 1024.0);
+    let (rk, pk) = (size(&rush_pdf), size(&p_pdf));
+    let text: String = std::fs::read(tex).map_err(|e| e.to_string())?.iter().map(|&b| char::from(b)).collect();
+
+    // Start-up: the same preamble with a one-word body (process, class and packages, one
+    // page), and the OS's own process floor.
+    let (pre, body) = text.split_once("\\begin{document}").ok_or("no \\begin{document}")?;
+    let mut body = body.rsplit_once("\\end{document}").map_or(body, |(b, _)| b).to_string();
+    // The scaled copies are new jobs with no .bbl of their own: the bibliography goes in as text.
+    if bbl.exists() {
+        let bib: String = std::fs::read(&bbl).map_err(|e| e.to_string())?.iter().map(|&b| char::from(b)).collect::<String>().trim_end_matches('\n').to_string();
+        body = replace_command(&body, "\\bibliography{", Some(&bib));
+        body = replace_command(&body, "\\bibliographystyle{", None);
+    }
+    let word = work.join("word.tex");
+    latin1_write(&word, &format!("{pre}\\begin{{document}}\nx\n\\end{{document}}\n")).map_err(|e| e.to_string())?;
+    let word_rush: Vec<std::ffi::OsString> = vec![os(rush), os(&word), "-o".into(), os(&work.join("word-rush.pdf"))];
+    let word_pdf: Vec<std::ffi::OsString> = vec!["pdflatex".into(), "-interaction=batchmode".into(), os(&word)];
+    let (rb_ins, _) = median_of(&refs(&word_rush), work, runs);
+    let (pb_ins, _) = median_of(&refs(&word_pdf), work, runs);
+    let t = timed(&[refs(&word_rush), refs(&word_pdf)], work, k);
+    let ((rb_wall, rb_cpu), (pb_wall, pb_cpu)) = (t[0], t[1]);
+    let (os_ins, _) = median_of(&["/usr/bin/true".as_ref()], work, runs);
+
+    // Scaling: the body after the title and contents repeated 1, 4 and 10 times (keys renamed
+    // per copy), instructions against pages; the slope is the cost of a page, the intercept
+    // the fixed cost. pdfLaTeX is measured on a run with its .aux complete.
+    let cut = ["\\tableofcontents", "\\maketitle", "\\end{abstract}"].iter().filter_map(|m| body.find(m).map(|i| i + m.len())).max().unwrap_or(0);
+    let (head, rest) = body.split_at(cut);
+    // Each native copy is also box-checked against the engine (`native_probes.sh`): a native
+    // run is not proof of a right page.
+    let (mut fit, mut all_native, mut boxes) = (Vec::new(), true, Vec::new());
+    for n in [1usize, 4, 10] {
+        let f = work.join(format!("scale{n}.tex"));
+        let copies: String = (0..n).map(|i| if i == 0 { rest.to_string() } else { rename_keys(rest, i) }).collect();
+        latin1_write(&f, &format!("{pre}\\begin{{document}}{head}{copies}\\end{{document}}\n")).map_err(|e| e.to_string())?;
+        let out = work.join(format!("scale{n}-rush.pdf"));
+        let cmd: Vec<std::ffi::OsString> = vec![os(rush), os(&f), "-o".into(), os(&out)];
+        all_native &= accepted(&cmd);
+        let probe = Command::new("zsh").arg(root().join("scripts/native_probes.sh")).arg(&f).args(["-n", "0"]).current_dir(root()).env("RT_BIN", rush).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        boxes.push(format!("x{n} {}", if probe.lines().last().is_some_and(|l| l.ends_with("identical")) { "identical" } else { "DIFFERS" }));
+        let (ri, _) = median_of(&refs(&cmd), work, runs);
+        let latex: Vec<std::ffi::OsString> = vec!["pdflatex".into(), "-interaction=batchmode".into(), os(&f)];
+        for _ in 0..2 {
+            let _ = Command::new("pdflatex").arg("-interaction=batchmode").arg(&f).current_dir(work).envs(FIXED_DATE).output();
+        }
+        let (pi, _) = median_of(&refs(&latex), work, runs);
+        fit.push((pdf_pages(&out) as f64, ri, pdf_pages(&work.join(format!("scale{n}.pdf"))) as f64, pi));
+    }
+    let line = |xs: &[f64], ys: &[f64]| {
+        let (mx, my) = (xs.iter().sum::<f64>() / xs.len() as f64, ys.iter().sum::<f64>() / ys.len() as f64);
+        let slope = xs.iter().zip(ys).map(|(x, y)| (x - mx) * (y - my)).sum::<f64>() / xs.iter().map(|x| (x - mx).powi(2)).sum::<f64>().max(1.0);
+        (slope, my - slope * mx)
+    };
+    let (r_slope, r_icpt) = line(&fit.iter().map(|f| f.0).collect::<Vec<_>>(), &fit.iter().map(|f| f.1).collect::<Vec<_>>());
+    let (p_slope, p_icpt) = line(&fit.iter().map(|f| f.2).collect::<Vec<_>>(), &fit.iter().map(|f| f.3).collect::<Vec<_>>());
+
+    // The output against pdfLaTeX's, `zero --engine --pixels` (the `rushtex` command as users
+    // run it: glyphs, paths, links, pixels at 300 dpi), its line for the document.
+    let mut parity = String::from("no result");
+    let zo = Opts { docs: vec![tex.display().to_string()], all: false, build: false, engine: true, cached: false, pixels: true, dpi: 300, why: None, jobs: JOBS.load(Ordering::Relaxed).max(1), flags: HashMap::new() };
+    zero_each(&zo, |l, _| parity = l.trim().to_string());
+
+    let mac = cfg!(target_os = "macos");
+    let ver = command_line("pdflatex", &["--version"]);
+    let rev = command_line("git", &["-C", &rush.parent().map_or(String::from("."), |p| p.display().to_string()), "rev-parse", "--short", "HEAD"]);
+    let cpu_name = if mac { command_line("sysctl", &["-n", "machdep.cpu.brand_string"]) } else { command_line("uname", &["-p"]) };
+    let cpu_name = if cpu_name.is_empty() || cpu_name == "unknown" { std::env::consts::ARCH.to_string() } else { cpu_name };
+    let counter = if mac { "/usr/bin/time -l (counts the kernel's process set-up and dyld too)" } else { "perf stat -e instructions:u (user space only)" };
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let shown = tex.strip_prefix(&cwd).map_or(tex.display().to_string(), |p| p.display().to_string());
+    let rule = "=".repeat(84);
+    let s = |n: usize| if n > 1 { "s" } else { "" };
+    println!("{rule}");
+    println!(" Machine: {cpu_name}, {} {}; instructions: {counter}", command_line("uname", &["-s"]), command_line("uname", &["-r"]));
+    println!(" pdfLaTeX: {ver}; `pdflatex -interaction=batchmode`, no latexmk");
+    println!("   (the benchmark reruns it itself until the PDF stops changing); RushTeX {rev}, one run");
+    println!(" {shown}: {rp} pages (pdfLaTeX {pp}); RushTeX ran {}", if native { "natively" } else { "on the ENGINE (not native)" });
+    println!(" Instructions: median of {runs}; times: median of {k} after a warm-up, runs alternating, load average {load:.1}; pdfLaTeX needed {p_runs} run{} for its final PDF", s(p_runs));
+    println!(" Parity against pdfLaTeX: {parity}");
+    println!("{rule}");
+    let mb = |x: u64| format!("{:.1} MB", x as f64 / 1048576.0);
+    let rows = [
+        ("Instructions, 1 run".to_string(), millions(r_ins), millions(p_ins), ratio(r_ins, p_ins, "less", "more")),
+        (format!("Instructions, real ({p_runs} run{})", s(p_runs)), millions(r_ins), millions(p_real), ratio(r_ins, p_real, "less", "more")),
+        ("CPU time (user+sys), 1 run".into(), format!("{r_cpu:.1} ms"), format!("{p_cpu:.1} ms"), ratio(r_cpu, p_cpu, "less", "more")),
+        ("Wall time, 1 run".into(), format!("{r_wall:.1} ms"), format!("{p_wall:.1} ms"), ratio(r_wall, p_wall, "less", "more")),
+        ("Peak RAM (RSS)".into(), mb(r_rss), mb(p_rss), ratio(r_rss as f64, p_rss as f64, "less", "more")),
+        ("PDF size".into(), format!("{rk:.1} KB"), format!("{pk:.1} KB"), ratio(rk, pk, "smaller", "larger")),
+        ("Fixed cost (fit intercept)".into(), millions(r_icpt), millions(p_icpt), ratio(r_icpt, p_icpt, "less", "more")),
+        ("Cost per page (fit slope)".into(), millions(r_slope), millions(p_slope), ratio(r_slope, p_slope, "less", "more")),
+        ("Same preamble, one-word body".into(), millions(rb_ins), millions(pb_ins), ratio(rb_ins, pb_ins, "less", "more")),
+        ("  its CPU / wall time".into(), format!("{rb_cpu:.1}/{rb_wall:.1} ms"), format!("{pb_cpu:.0}/{pb_wall:.0} ms"), String::new()),
+        ("OS process floor (/usr/bin/true)".into(), millions(os_ins), millions(os_ins), String::new()),
+    ];
+    println!(" {:<34} {:>13} {:>13}   Factor", "Metric", "RushTeX", "pdfLaTeX");
+    for (m, a, b, f) in rows {
+        println!(" {m:<34} {a:>13} {b:>13}   {f}");
+    }
+    println!("{}", "-".repeat(84));
+    let pts: Vec<String> = [1, 4, 10].iter().zip(&fit).map(|(n, f)| format!("x{n}: {} p {} / {} p {}", f.0, millions(f.1), f.2, millions(f.3))).collect();
+    println!(" Fit points (RushTeX / pdfLaTeX): {}{}", pts.join("; "), if all_native { "" } else { "  [a RushTeX variant ran on the ENGINE]" });
+    println!(" Box check of the copies against the engine: {}", boxes.join(", "));
+    println!("{rule}");
+    Ok(())
+}
+
+/// Every `cmd{…}` (`cmd` ends with `{`; the argument holds no `}`) replaced by `with`, or
+/// removed.
+fn replace_command(text: &str, cmd: &str, with: Option<&str>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find(cmd) {
+        let Some(close) = rest[i + cmd.len()..].find('}') else { break };
+        out.push_str(&rest[..i]);
+        out.push_str(with.unwrap_or(""));
+        rest = &rest[i + cmd.len() + close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `bench check [BASE]`: the contributor's question, "is my output still identical?", in one
+/// run: build, unit tests, the native job against the engine page box by page box, master
+/// and `scripts/bench` against pdfLaTeX, and with BASE every PDF byte-identical to BASE's.
+/// `PASS`/`FAIL` per step; exits 1 on a failure.
+fn bench_check(o: &Opts, rush: &Path, base: Option<&str>) {
+    let root = root();
+    let mut fails = 0;
+    let mut verdict = |ok: bool, what: String| {
+        println!("  {}  {what}", if ok { "PASS" } else { "FAIL" });
+        fails += usize::from(!ok);
+    };
+    for t in ["cargo", "pdflatex", "kpsewhich", "mutool", "zsh", "git"] {
+        if !on_path(t) {
+            die(&format!("{t} not found on PATH (needed: Rust, TeX Live, MuPDF's mutool, zsh, git)"));
+        }
+    }
+    println!("1/5 Building rushtex");
+    if !Command::new("cargo").args(["build", "--release", "--quiet"]).current_dir(&root).status().is_ok_and(|s| s.success()) {
+        println!("  FAIL  build");
+        std::process::exit(1);
+    }
+    // The engine's LaTeX format, made once (about 10 s): the probes run the engine on it.
+    if !root.join("target/parity/pdflatex.rfmt").exists() {
+        let _ = Command::new(rush).arg("scripts/native_probes/title.tex").args(["-o", "target/parity/format-check.pdf"]).current_dir(&root).env("RT_ENGINE", "1").env("RUSHTEX_CACHE", root.join("target/parity")).output();
+    }
+    println!("2/5 Unit tests");
+    let out = Command::new("cargo").args(["test", "--release", "--lib", "--quiet"]).current_dir(&root).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)).unwrap_or_default();
+    let result = out.lines().find(|l| l.starts_with("test result")).unwrap_or("did not run").to_string();
+    verdict(result.contains(" 0 failed"), format!("unit tests ({})", result.trim_start_matches("test result: ")));
+    println!("3/5 Native job against the engine, page box by page box (scripts/native_probes.sh)");
+    let probes = Command::new("zsh").arg("scripts/native_probes.sh").args(["-n", "6"]).current_dir(&root).env("RT_BIN", rush).output();
+    let text = probes.as_ref().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let ok = probes.is_ok_and(|o| o.status.success());
+    if !ok {
+        for l in text.lines().filter(|l| !l.ends_with("identical")) {
+            println!("        {l}");
+        }
+    }
+    verdict(ok, if ok { format!("{} documents identical", text.lines().filter(|l| l.ends_with("identical")).count()) } else { "native probes".into() });
+    println!("4/5 Against pdfLaTeX: glyphs, paths, links, pixels at 300 dpi (parity-testing zero)");
+    let mut docs = vec![root.join("docs/master.tex").display().to_string()];
+    let mut bench: Vec<String> = std::fs::read_dir(root.join("scripts/bench")).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "tex")).map(|p| p.display().to_string()).collect()).unwrap_or_default();
+    bench.sort();
+    docs.extend(bench);
+    // `engine: true`: the `rushtex` command as users run it (the native job where it accepts
+    // the document, else the engine on the format); without it the framework runs `--native`.
+    let zo = Opts { docs: docs.clone(), all: false, build: false, engine: true, cached: false, pixels: true, dpi: 300, why: None, jobs: o.jobs, flags: HashMap::new() };
+    JOBS.store(1, Ordering::Relaxed);
+    let mut zero = 0;
+    zero_each(&zo, |l, ok| {
+        println!("        {l}");
+        zero += usize::from(ok == Some(true));
+    });
+    verdict(zero == docs.len(), if zero == docs.len() { format!("{zero} documents identical to pdfLaTeX") } else { format!("{} of {} documents differ from pdfLaTeX", docs.len() - zero, docs.len()) });
+    println!("5/5 Byte-identical to {}", base.unwrap_or("BASE (none given: cargo benchmark check origin/master)"));
+    let Some(base) = base else {
+        println!("  SKIP  no BASE given");
+        return finish_check(fails);
+    };
+    let wt = root.join("target/check-base");
+    let base_target = root.join("target/check-base-target");
+    let git = |args: &[&std::ffi::OsStr]| Command::new("git").args(args).current_dir(&root).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+    git(&["worktree".as_ref(), "remove".as_ref(), "--force".as_ref(), wt.as_os_str()]);
+    let built = git(&["worktree".as_ref(), "add".as_ref(), "--detach".as_ref(), "--quiet".as_ref(), wt.as_os_str(), base.as_ref()]) && Command::new("cargo").args(["build", "--release", "--quiet"]).current_dir(&wt).env("CARGO_TARGET_DIR", &base_target).status().is_ok_and(|s| s.success());
+    if built {
+        let (old, now) = (root.join("target/check-pdfs/base"), root.join("target/check-pdfs/now"));
+        let _ = std::fs::remove_dir_all(root.join("target/check-pdfs"));
+        let _ = std::fs::create_dir_all(&old);
+        let _ = std::fs::create_dir_all(&now);
+        let mut files: Vec<PathBuf> = std::fs::read_dir(root.join("scripts/native_probes")).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "tex")).collect()).unwrap_or_default();
+        files.sort();
+        files.extend(docs.iter().map(PathBuf::from));
+        let compile = |bin: &Path, f: &Path, out: &Path| Command::new(bin).arg(f).arg("-o").arg(out).current_dir(&root).envs(FIXED_DATE).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let mut differ = Vec::new();
+        for f in &files {
+            let pdf = format!("{}.pdf", stem(f));
+            let _ = compile(&base_target.join("release/rushtex"), f, &old.join(&pdf));
+            let _ = compile(rush, f, &now.join(&pdf));
+            let (a, b) = (std::fs::read(old.join(&pdf)).unwrap_or_default(), std::fs::read(now.join(&pdf)).unwrap_or_default());
+            if a.is_empty() || a != b {
+                differ.push(stem(f));
+            }
+        }
+        verdict(differ.is_empty(), if differ.is_empty() { format!("{} PDFs byte-identical to {base}", files.len()) } else { format!("{} PDFs differ from {base}: {} (both in target/check-pdfs/)", differ.len(), differ.join(" ")) });
+    } else {
+        verdict(false, format!("building {base}"));
+    }
+    git(&["worktree".as_ref(), "remove".as_ref(), "--force".as_ref(), wt.as_os_str()]);
+    finish_check(fails);
+}
+
+fn finish_check(fails: usize) {
+    println!();
+    if fails == 0 {
+        println!("check: PASS");
+    } else {
+        println!("check: FAIL ({fails} step{})", if fails > 1 { "s" } else { "" });
+        std::process::exit(1);
     }
 }
 

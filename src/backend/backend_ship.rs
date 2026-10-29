@@ -7,6 +7,7 @@
 //! used, as pdfTeX writes them.
 
 use crate::backend::backend_pdftex::{divide_scaled, pdf_font_size, print_bp, print_int, print_real};
+use crate::engine::engine_tounicode::{GlyphCode, GlyphUnicode};
 
 /// One shipped page: its object number (given by the engine, which refers to it), its size
 /// in scaled points, its content stream and its annotations' objects.
@@ -406,6 +407,34 @@ fn encoding_names(enc: &str) -> Vec<&str> {
     names
 }
 
+/// An encoding file read and its glyph names found once per job, shared by the fonts that
+/// name it (and by the threads that subset them): the names as spans of the file's text,
+/// the `/Differences` entries, and the ToUnicode mappings of the fonts with no entries of
+/// their own (`tfm:`), made by the first such font.
+struct Encoding {
+    text: String,
+    spans: Vec<(u32, u32)>,
+    differences: Vec<u8>,
+    unicode_body: std::sync::OnceLock<Vec<u8>>,
+}
+
+impl Encoding {
+    fn new(text: String) -> Encoding {
+        let base = text.as_ptr() as usize;
+        let spans: Vec<(u32, u32)> = encoding_names(&text).iter().map(|n| ((n.as_ptr() as usize - base) as u32, (n.as_ptr() as usize - base + n.len()) as u32)).collect();
+        let mut differences = Vec::with_capacity(spans.len() * 10);
+        for &(a, b) in &spans {
+            differences.extend_from_slice(b" /");
+            differences.extend_from_slice(&text.as_bytes()[a as usize..b as usize]);
+        }
+        Encoding { text, spans, differences, unicode_body: std::sync::OnceLock::new() }
+    }
+
+    fn names(&self) -> Vec<&str> {
+        self.spans.iter().map(|&(a, b)| &self.text[a as usize..b as usize]).collect()
+    }
+}
+
 /// A `.pfb` file's three segments (cleartext, binary, trailer), as `/Length1..3` count
 /// them; `None` when it is not a PFB.
 /// A Type 1 program's `/FontName` (`/FontName /NimbusRomNo9L-Regu def` in its cleartext).
@@ -439,20 +468,126 @@ fn pfb_segments(pfb: &[u8]) -> Option<(Vec<u8>, [usize; 3])> {
     (lens[0] > 0).then_some((data, lens))
 }
 
-/// pdfTeX's generated ToUnicode CMap (tounicode.c `write_tounicode`) for a font whose
-/// codes have glyph `names`: one `bfchar` entry per code whose name has a Unicode.
-fn tounicode_cmap(font: &str, names: &[&str], unicode: &dyn Fn(&str) -> Option<String>) -> Vec<u8> {
-    let entries: Vec<(usize, String)> = names.iter().enumerate().filter_map(|(c, n)| unicode(n).map(|u| (c, u.replace(' ', "")))).collect();
-    let mut s = format!("%!PS-Adobe-3.0 Resource-CMap\n/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo\n<< /Registry (TeX)\n/Ordering ({font})\n/Supplement 0\n>> def\n/CMapName /TeX-{font}-0 def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n");
-    for chunk in entries.chunks(100) {
-        s.push_str(&format!("{} beginbfchar\n", chunk.len()));
-        for (c, u) in chunk {
-            s.push_str(&format!("<{c:02X}> <{u}>\n"));
-        }
-        s.push_str("endbfchar\n");
+/// pdfTeX's generated ToUnicode CMap (tounicode.c `write_tounicode`) for font `tfm` with
+/// encoding file `enc` (`None`: the program's own encoding), around `body`
+/// (`tounicode_body`): only the name `<tfm>-<enc>` differs between fonts.
+fn tounicode_cmap(tfm: &str, enc: Option<&str>, body: &[u8]) -> Vec<u8> {
+    let enc = enc.map_or("builtin", |e| e.strip_suffix(".enc").unwrap_or(e));
+    let mut s = Vec::with_capacity(body.len() + 640);
+    let id = |s: &mut Vec<u8>| {
+        s.extend_from_slice(tfm.as_bytes());
+        s.push(b'-');
+        s.extend_from_slice(enc.as_bytes());
+    };
+    s.extend_from_slice(b"%!PS-Adobe-3.0 Resource-CMap\n%%DocumentNeededResources: ProcSet (CIDInit)\n%%IncludeResource: ProcSet (CIDInit)\n%%BeginResource: CMap (TeX-");
+    id(&mut s);
+    s.extend_from_slice(b"-0)\n%%Title: (TeX-");
+    id(&mut s);
+    s.extend_from_slice(b"-0 TeX ");
+    id(&mut s);
+    s.extend_from_slice(b" 0)\n%%Version: 1.000\n%%EndComments\n/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo\n<< /Registry (TeX)\n/Ordering (");
+    id(&mut s);
+    s.extend_from_slice(b")\n/Supplement 0\n>> def\n/CMapName /TeX-");
+    id(&mut s);
+    s.extend_from_slice(b"-0 def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n");
+    s.extend_from_slice(body);
+    s.extend_from_slice(b"endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n%%EndResource\n%%EOF\n");
+    s
+}
+
+/// `digits` hex digits of `v`, in capitals.
+fn push_hex(s: &mut Vec<u8>, v: u32, digits: u32) {
+    for k in (0..digits).rev() {
+        s.push(b"0123456789ABCDEF"[(v >> (4 * k) & 15) as usize]);
     }
-    s.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n%%EndResource\n%%EOF\n");
-    s.into_bytes()
+}
+
+/// `utf16be` written into `s`.
+fn push_utf16be(s: &mut Vec<u8>, code: u32) {
+    if code <= 0xFFFF {
+        push_hex(s, code, 4);
+    } else {
+        let v = code - 0x10000;
+        push_hex(s, v / 0x400 + 0xD800, 4);
+        push_hex(s, v % 0x400 + 0xDC00, 4);
+    }
+}
+
+/// The mappings of font `tfm`'s ToUnicode CMap, whose codes have glyph `names`: runs of
+/// consecutive code points as `bfrange`s, the other codes as `bfchar`s, each in groups of
+/// at most 100.
+fn tounicode_body(tfm: &str, names: &[&str], unicode: &GlyphUnicode) -> Vec<u8> {
+    let gtab: Vec<Option<GlyphCode>> = (0..257).map(|c| names.get(c).filter(|_| c < 256).and_then(|n| unicode.glyph_code(n, tfm))).collect();
+    let code = |c: usize| match gtab[c] {
+        Some(GlyphCode::Code(u)) => Some(u),
+        _ => None,
+    };
+    // `range_size`: a run of codes whose code points follow one another, the last byte of
+    // the first not carried past 255 (`is_last_byte_valid`).
+    let mut size = [0usize; 256];
+    let mut c = 0;
+    while c < 256 {
+        match code(c) {
+            None => {
+                size[c] = usize::from(gtab[c].is_some());
+                c += 1;
+            }
+            Some(_) => {
+                let j = c;
+                while c < 256 && code(c + 1).is_some_and(|n| code(c) == Some(n.wrapping_sub(1))) && (code(c).unwrap_or(0) & 0xFF) < (255 - (c - j)) as u32 {
+                    c += 1;
+                }
+                c += 1;
+                size[j] = c - j;
+            }
+        }
+    }
+    let starts = |single: bool| {
+        let mut v = Vec::new();
+        let mut c = 0;
+        while c < 256 {
+            if (size[c] == 1) == single && size[c] > 0 {
+                v.push(c);
+            }
+            c += size[c].max(1);
+        }
+        v
+    };
+    let (ranges, chars) = (starts(false), starts(true));
+    let mut s = Vec::with_capacity(4096);
+    // Each kind is written at least once, as `0 beginbfrange` when there is none.
+    let groups = |v: &[usize]| if v.is_empty() { vec![Vec::new()] } else { v.chunks(100).map(<[usize]>::to_vec).collect() };
+    for group in groups(&ranges) {
+        print_int(&mut s, group.len() as i64);
+        s.extend_from_slice(b" beginbfrange\n");
+        for &c in &group {
+            s.push(b'<');
+            push_hex(&mut s, c as u32, 2);
+            s.extend_from_slice(b"> <");
+            push_hex(&mut s, (c + size[c] - 1) as u32, 2);
+            s.extend_from_slice(b"> <");
+            push_utf16be(&mut s, code(c).unwrap_or(0));
+            s.extend_from_slice(b">\n");
+        }
+        s.extend_from_slice(b"endbfrange\n");
+    }
+    for group in groups(&chars) {
+        print_int(&mut s, group.len() as i64);
+        s.extend_from_slice(b" beginbfchar\n");
+        for &c in &group {
+            s.push(b'<');
+            push_hex(&mut s, c as u32, 2);
+            s.extend_from_slice(b"> <");
+            match &gtab[c] {
+                Some(GlyphCode::Seq(q)) => s.extend_from_slice(q.as_bytes()),
+                Some(GlyphCode::Code(u)) => push_utf16be(&mut s, *u),
+                None => {}
+            }
+            s.extend_from_slice(b">\n");
+        }
+        s.extend_from_slice(b"endbfchar\n");
+    }
+    s
 }
 
 /// The four numbers after `key` in a font's cleartext (`/FontBBox {-40 -250 1009 750}`).
@@ -463,8 +598,9 @@ fn font_bbox(clear: &[u8]) -> [i32; 4] {
     std::array::from_fn(|_| v.next().unwrap_or(0))
 }
 
-/// Looks up a glyph name's Unicode (space-separated UTF-16 hex), for ToUnicode maps.
-pub type ToUnicode<'f> = Option<&'f dyn Fn(&str) -> Option<String>>;
+/// The table that gives a font's glyph names their Unicode (tounicode.c
+/// `set_glyph_unicode`), for ToUnicode maps.
+pub type ToUnicode<'f> = Option<&'f GlyphUnicode>;
 
 /// What the document says about itself: `\pdfminorversion`, and the text of `\pdfinfo`
 /// and `\pdfcatalog` (pdfTeX's `pdf_info_toks`, `pdf_catalog_toks`).
@@ -483,6 +619,243 @@ pub struct DocMeta<'m> {
     pub objcompress: i32,
     /// The shipped forms.
     pub forms: &'m [ShippedForm],
+}
+
+/// Content bytes each compressing worker gets at least (about 8 pages, 0.25 ms on one
+/// core). Measured on `docs/master.tex` (260 KB of streams): 0.65 ms on one thread, 0.30 ms
+/// on four, 0.26 ms on eight; a spawn costs about 0.15M instructions, so four of 64 KB.
+#[cfg(not(target_arch = "wasm32"))]
+const PARALLEL_MIN_BYTES: usize = 1 << 16;
+
+/// Fonts each worker gets at least: a font takes 0.05-0.2 ms to subset and compress, a
+/// spawn about 0.15M instructions. 6 against 4: 0.4-0.8% fewer instructions on 26-font
+/// documents for the same wall time; 8 gives no more.
+#[cfg(not(target_arch = "wasm32"))]
+const FONTS_PER_WORKER: usize = 6;
+
+/// A Type 1 font's parts: read and named in order (`font_work`, which calls the file
+/// resolver and the ToUnicode lookup), subset and compressed on any thread
+/// (`FontWork::prepare`), then written in order (`Doc::write_font`).
+struct FontWork<'f> {
+    f: &'f DocFont,
+    /// The built-in program, when the map file gives none.
+    program: Option<&'static crate::backend::backend_cm_fonts::CmFontProgram>,
+    base: String,
+    enc: Option<std::sync::Arc<Encoding>>,
+    /// Whether the font names its glyphs by the encoding's `/Differences`.
+    differences: bool,
+    stored_names: Option<Vec<u8>>,
+    layout: Option<Vec<u8>>,
+    italic: i32,
+    /// The map file's program to embed, decrypted, and its segments' lengths.
+    pfb: Option<(Vec<u8>, [usize; 3])>,
+    /// The ToUnicode map, compressed by `prepare`.
+    unicode: Option<Vec<u8>>,
+    /// The embedded program: its stream, `/Length1` and `/Length2`, and `/FontBBox`.
+    embedded: Option<(Vec<u8>, [usize; 2], [i32; 4])>,
+}
+
+/// Font `f`'s files read and its names, encoding and ToUnicode map made: everything that
+/// needs the file resolver, in the fonts' order.
+///
+/// `encodings` keeps the encoding files read so far, by name.
+fn font_work<'f>(f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, encodings: &mut Vec<(String, std::sync::Arc<Encoding>)>) -> FontWork<'f> {
+    let entry = map.get(f.name.as_str()).map(|l| map_entry(l));
+    // The map file's Type 1 program, decrypted: `#clear` where the file layer has it,
+    // else the file decrypted here. It is subset as pdfTeX subsets it, so a font the
+    // map names is embedded from its own file even when a whole built-in program exists.
+    let clear = |file: &str| {
+        files(&format!("{file}#clear")).and_then(|b| pfb_segments(&b)).or_else(|| {
+            let (mut data, lens) = pfb_segments(&files(file)?)?;
+            crate::data::data_embed::decrypt_binary(&mut data[lens[0]..lens[0] + lens[1]]);
+            Some((data, lens))
+        })
+    };
+    let own = entry.as_ref().and_then(|e| e.file).and_then(clear);
+    let program = if own.is_some() { None } else { crate::backend::backend_optical::program_by_name(&f.name) };
+    // A font from the map file carries its glyph names; its program is embedded whole.
+    // With `\pdfgentounicode`, every font's ToUnicode comes from its glyph names (the
+    // `.enc` file's, else the program's built-in encoding), as pdfTeX makes it.
+    let enc_name = entry.as_ref().and_then(|e| e.enc);
+    let enc = enc_name.and_then(|name| {
+        if let Some((_, e)) = encodings.iter().find(|(k, _)| k == name) {
+            return Some(e.clone());
+        }
+        let e = std::sync::Arc::new(Encoding::new(files(name)?.iter().map(|&c| char::from(c)).collect()));
+        encodings.push((name.to_string(), e.clone()));
+        Some(e)
+    });
+    // A built-in program's glyph names, stored as text where the file layer has them
+    // (`X.pfb#names`): the `.pfb` itself is not read then.
+    // A program read from its file needs them too, to name the glyphs it keeps.
+    let stored_names = if enc.is_none() && (program.is_none() || to_unicode.is_some()) { entry.as_ref().and_then(|e| e.file).and_then(|f| files(&format!("{f}#names"))) } else { None };
+    let wants_pfb = program.is_none() || (to_unicode.is_some() && enc.is_none() && stored_names.is_none());
+    // With a program of its own, only the file's clear text is used (its encoding):
+    // `#head` asks for that alone, where the file layer can give it (`data_embed`).
+    // Embedded, the program is subset (`backend_type1`) from its decrypted form: `#clear`
+    // asks for that where the file layer has it, else the file is decrypted here.
+    let read_head = |file: &str| files(&format!("{file}#head")).or_else(|| files(file)).and_then(|b| pfb_segments(&b));
+    let mut pfb = match program {
+        None => own,
+        Some(_) if wants_pfb => entry.as_ref().and_then(|e| e.file).and_then(read_head),
+        Some(_) => None,
+    };
+    // A map entry's `SlantFont`/`ExtendFont` change the embedded program (writet1.c).
+    let mut italic = 0;
+    if let (Some(e), Some((data, lens))) = (&entry, &mut pfb) {
+        if e.slant != 0 || e.extend != 0 {
+            let (clear, angle) = t1_effects(&data[..lens[0]], e.slant, e.extend);
+            italic = angle.unwrap_or(0);
+            data.splice(..lens[0], clear.iter().copied());
+            lens[0] = clear.len();
+        }
+    }
+    // An embedded program is named by its own `/FontName`, as pdfTeX names it.
+    let base = match (program, &entry, &pfb) {
+        (Some(p), _, _) => p.name.to_string(),
+        (None, _, Some((data, lens))) if font_name(&data[..lens[0]]).is_some() => font_name(&data[..lens[0]]).unwrap_or_default(),
+        (None, Some(e), _) if !e.ps.is_empty() => e.ps.to_string(),
+        _ => f.name.to_ascii_uppercase(),
+    };
+    // A subset is named with a tag of six capitals from the glyphs it holds (PDF 1.7
+    // §5.5.3), as pdfTeX's `make_subset_tag` names it.
+    let base = if program.is_none() && pfb.is_some() { format!("{}+{base}", subset_tag(&base, &f.used)) } else { base };
+    let mut cmap = None;
+    // A font from the map file with an encoding names its glyphs by `/Differences`.
+    let differences = enc.is_some() && program.is_none();
+    if let (Some(e), Some(u)) = (&enc, to_unicode) {
+        // Fonts with the same encoding and no entries of their own share the mappings.
+        cmap = Some(if u.has_font_entries(&f.name) {
+            tounicode_cmap(&f.name, enc_name, &tounicode_body(&f.name, &e.names(), u))
+        } else {
+            tounicode_cmap(&f.name, enc_name, e.unicode_body.get_or_init(|| tounicode_body(&f.name, &e.names(), u)))
+        });
+    } else if let (Some(u), Some(text)) = (to_unicode, &stored_names) {
+        let names: Vec<&str> = text.split(|&c| c == b'\n').map(|l| if l.is_empty() { ".notdef" } else { std::str::from_utf8(l).unwrap_or(".notdef") }).collect();
+        cmap = Some(tounicode_cmap(&f.name, None, &tounicode_body(&f.name, &names, u)));
+    } else if let (Some(u), Some((data, lens))) = (to_unicode, &pfb) {
+        let names = builtin_encoding_names(&data[..lens[0]]);
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        cmap = Some(tounicode_cmap(&f.name, None, &tounicode_body(&f.name, &names, u)));
+    }
+    let pfb = if program.is_none() { pfb } else { None };
+    let map = if program.is_some() && cmap.is_none() { crate::backend::backend_optical::tounicode_by_name(&f.name) } else { None };
+    let unicode = map.map(crate::backend::backend_pdf::build_tounicode_cmap_bytes).or(cmap);
+    // The layout `rushtex-gen` stored with a carried font, else the program is indexed when
+    // it is subset.
+    let layout = if pfb.is_some() { entry.as_ref().and_then(|e| e.file).and_then(|file| files(&format!("{file}#layout"))) } else { None };
+    FontWork { f, program, base, enc, differences, stored_names, layout, italic, pfb, unicode, embedded: None }
+}
+
+impl FontWork<'_> {
+    /// The ToUnicode map compressed, and the map file's program subset as pdfTeX subsets it
+    /// (`writet1.c`), encrypted and compressed.
+    fn prepare(&mut self, deflate: &mut crate::backend::backend_deflate::DeflateCompressor) {
+        if let Some(text) = &mut self.unicode {
+            let mut out = Vec::with_capacity(text.len() / 2 + 64);
+            deflate.compress_zlib(text, &mut out);
+            *text = out;
+        }
+        let Some((mut data, mut lens)) = self.pfb.take() else { return };
+        let f = self.f;
+        let used = |c: usize| f.used[c / 64] >> (c % 64) & 1 != 0;
+        // pdfTeX's subset (`writet1.c`): the glyphs the pages used, by the encoding's
+        // names (the `.enc` file's, else the program's own).
+        // Borrowed from the encoding or the stored names: no string is made per glyph.
+        let names: Vec<std::borrow::Cow<str>> = match (&self.enc, &self.stored_names) {
+            (Some(enc), _) => enc.names().into_iter().map(std::borrow::Cow::Borrowed).collect(),
+            (None, Some(text)) => text.split(|&c| c == b'\n').map(|l| if l.is_empty() { std::borrow::Cow::Borrowed(".notdef") } else { String::from_utf8_lossy(l) }).collect(),
+            (None, None) => builtin_encoding_names(&data[..lens[0]]).into_iter().map(std::borrow::Cow::Owned).collect(),
+        };
+        let used: Vec<&str> = (0..256).filter(|&c| used(c)).filter_map(|c| names.get(c).map(|n| n.as_ref())).collect();
+        let tag = self.base.split('+').next().unwrap_or_default();
+        let clear = crate::backend::backend_type1::subset_clear(&data[..lens[0]], &|c: usize| f.used[c / 64] >> (c % 64) & 1 != 0, tag);
+        data.splice(..lens[0], clear.iter().copied());
+        lens[0] = clear.len();
+        let binary = lens[0]..lens[0] + lens[1];
+        // A subset comes with its charstrings encrypted; a font kept whole is encrypted
+        // here, charstrings and eexec.
+        let layout = self.layout.as_ref().and_then(|b| crate::backend::backend_type1::Index::from_u32s(&b.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect::<Vec<_>>()));
+        let subset = match &layout {
+            Some(ix) => crate::backend::backend_type1::subset_with(&data[binary.clone()], ix, &used, true),
+            None => crate::backend::backend_type1::subset(&data[binary.clone()], &used),
+        };
+        let text = match subset {
+            Some(mut text) => {
+                crate::data::data_embed::encrypt_eexec(&mut text);
+                text
+            }
+            // A carried font with a layout has its charstrings encrypted already.
+            None if layout.is_some() => {
+                let mut text = data[binary.clone()].to_vec();
+                crate::data::data_embed::encrypt_eexec(&mut text);
+                text
+            }
+            None => {
+                let mut text = data[binary.clone()].to_vec();
+                crate::data::data_embed::encrypt_binary(&mut text);
+                text
+            }
+        };
+        lens[1] = text.len();
+        data.splice(binary, text);
+        let bbox = font_bbox(&data[..lens[0]]);
+        // The clear text is compressed; the eexec part, pseudo-random, is stored as is.
+        let mut packed = Vec::with_capacity(data.len() + 64);
+        deflate.compress_zlib_parts(&data[..lens[0]], &data[lens[0]..lens[0] + lens[1]], &mut packed);
+        self.embedded = Some((packed, [lens[0], lens[1]], bbox));
+    }
+}
+
+/// Every font's `prepare`, and `streams` (the pages' and forms' contents) compressed as
+/// zlib streams, in order. For many fonts or a long document both are split over the same
+/// workers: worker `k` prepares the `k`-th chunk of fonts and compresses the `k`-th run of
+/// streams (contiguous, about equal bytes), with its own compressor (its 32 KB table stays
+/// in that core's L1). Each font's and stream's bytes depend only on its own input, so the
+/// file equals a serial run's.
+fn prepare_all(fonts: &mut [&mut FontWork], streams: &[&[u8]]) -> Vec<Vec<u8>> {
+    use crate::backend::backend_deflate::DeflateCompressor;
+    let serial = |fonts: &mut [&mut FontWork], run: &[&[u8]]| {
+        let mut deflate = DeflateCompressor::new();
+        fonts.iter_mut().for_each(|w| w.prepare(&mut deflate));
+        run.iter().map(|s| {
+            let mut out = Vec::with_capacity(s.len() / 3 + 16);
+            deflate.compress_zlib(s, &mut out);
+            out
+        }).collect::<Vec<_>>()
+    };
+    let total: usize = streams.iter().map(|s| s.len()).sum();
+    #[cfg(target_arch = "wasm32")]
+    let workers = 1;
+    #[cfg(not(target_arch = "wasm32"))]
+    let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min((total / PARALLEL_MIN_BYTES).min(streams.len()).max(fonts.len() / FONTS_PER_WORKER));
+    if workers <= 1 {
+        return serial(fonts, streams);
+    }
+    // Run `k` ends at the first stream whose end passes `k + 1` workers' share of the
+    // bytes; the last run takes the rest, and runs past the streams are empty.
+    let mut runs: Vec<&[&[u8]]> = Vec::with_capacity(workers);
+    let (mut start, mut sum) = (0, 0);
+    for (i, s) in streams.iter().enumerate() {
+        sum += s.len();
+        if runs.len() + 1 < workers && sum * workers >= total * (runs.len() + 1) {
+            runs.push(&streams[start..=i]);
+            start = i + 1;
+        }
+    }
+    runs.push(&streams[start..]);
+    runs.resize(workers, &[]);
+    let mut chunks = fonts.chunks_mut(fonts.len().div_ceil(workers).max(1));
+    let mut jobs = runs.into_iter().map(|run| (chunks.next().unwrap_or_default(), run));
+    let (first_fonts, first_run) = jobs.next().unwrap();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = jobs.map(|(fonts, run)| scope.spawn(move || serial(fonts, run))).collect();
+        let mut out = serial(first_fonts, first_run);
+        for h in handles {
+            out.extend(h.join().unwrap());
+        }
+        out
+    })
 }
 
 /// The PDF of `pages`; `fonts[i]` is engine font `i` when a page uses it. `files` reads
@@ -518,6 +891,12 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
     // One PDF font per given font, in order of the engine's fonts: the caller passes only
     // the font each file name's other sizes share (`engine_ship`'s `font_base`).
     let mut font_obj = vec![0usize; fonts.len()];
+    // Type 1 fonts' files read in order; their programs subset and every stream compressed
+    // (`prepare_all`, on several threads); then every object written in order.
+    let mut encodings = Vec::new();
+    let mut work: Vec<Option<FontWork>> = fonts.iter().map(|f| f.as_ref().filter(|f| f.pk.is_none()).map(|f| font_work(f, &map, files, to_unicode, &mut encodings))).collect();
+    let streams: Vec<&[u8]> = pages.iter().map(|p| &p.content[..]).chain(meta.forms.iter().map(|f| &f.content[..])).collect();
+    let mut packed = prepare_all(&mut work.iter_mut().flatten().collect::<Vec<_>>(), &streams).into_iter();
     for (i, f) in fonts.iter().enumerate() {
         let Some(f) = f else { continue };
         font_obj[i] = next;
@@ -526,7 +905,9 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
             next = d.write_type3(next, i, f, pk, &data);
             continue;
         }
-        d.write_font(next, f, &map, files, to_unicode);
+        if let Some(w) = &work[i] {
+            d.write_font(next, w);
+        }
         next += 4;
     }
     // The fonts are shared by every page; a page that shows images has its own resources
@@ -547,8 +928,6 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
     d.buf.extend_from_slice(&font_dict);
     d.buf.extend_from_slice(b" >>\n");
     d.end();
-    let mut deflate = crate::backend::backend_deflate::DeflateCompressor::new();
-    let mut packed = Vec::new();
     for (k, p) in pages.iter().enumerate() {
         let content = first_content + k;
         d.begin(p.id as usize);
@@ -589,9 +968,7 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
             d.buf.extend_from_slice(b" >>\n");
             d.end();
         }
-        packed.clear();
-        deflate.compress_zlib(&p.content, &mut packed);
-        d.stream(content, b"", &packed, true);
+        d.stream(content, b"", &packed.next().unwrap(), true);
     }
     // pdfTeX's `Write out Form stream header`, the resources given inline.
     let mut dict = Vec::new();
@@ -617,9 +994,7 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
             xobjects(&mut dict, &f.forms, &f.images);
         }
         dict.extend_from_slice(b" >>\n");
-        packed.clear();
-        deflate.compress_zlib(&f.content, &mut packed);
-        d.stream(f.id as usize, &dict, &packed, true);
+        d.stream(f.id as usize, &dict, &packed.next().unwrap(), true);
     }
     d.begin(tree);
     d.buf.extend_from_slice(b"<< /Type /Pages /Count ");
@@ -799,60 +1174,9 @@ impl Doc {
         next
     }
 
-    fn write_font(&mut self, id: usize, f: &DocFont, map: &std::collections::HashMap<&str, &str>, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode) {
-        let entry = map.get(f.name.as_str()).map(|l| map_entry(l));
-        // The map file's Type 1 program, decrypted: `#clear` where the file layer has it,
-        // else the file decrypted here. It is subset as pdfTeX subsets it, so a font the
-        // map names is embedded from its own file even when a whole built-in program exists.
-        let clear = |file: &str| {
-            files(&format!("{file}#clear")).and_then(|b| pfb_segments(&b)).or_else(|| {
-                let (mut data, lens) = pfb_segments(&files(file)?)?;
-                crate::data::data_embed::decrypt_binary(&mut data[lens[0]..lens[0] + lens[1]]);
-                Some((data, lens))
-            })
-        };
-        let own = entry.as_ref().and_then(|e| e.file).and_then(clear);
-        let program = if own.is_some() { None } else { crate::backend::backend_optical::program_by_name(&f.name) };
-        // A font from the map file carries its glyph names; its program is embedded whole.
-        // With `\pdfgentounicode`, every font's ToUnicode comes from its glyph names (the
-        // `.enc` file's, else the program's built-in encoding), as pdfTeX makes it.
-        let enc = entry.as_ref().and_then(|e| e.enc).and_then(files).map(|b| b.iter().map(|&c| char::from(c)).collect::<String>());
-        // A built-in program's glyph names, stored as text where the file layer has them
-        // (`X.pfb#names`): the `.pfb` itself is not read then.
-        // A program read from its file needs them too, to name the glyphs it keeps.
-        let stored_names = if enc.is_none() && (program.is_none() || to_unicode.is_some()) { entry.as_ref().and_then(|e| e.file).and_then(|f| files(&format!("{f}#names"))) } else { None };
-        let wants_pfb = program.is_none() || (to_unicode.is_some() && enc.is_none() && stored_names.is_none());
-        // With a program of its own, only the file's clear text is used (its encoding):
-        // `#head` asks for that alone, where the file layer can give it (`data_embed`).
-        // Embedded, the program is subset (`backend_type1`) from its decrypted form: `#clear`
-        // asks for that where the file layer has it, else the file is decrypted here.
-        let read_head = |file: &str| files(&format!("{file}#head")).or_else(|| files(file)).and_then(|b| pfb_segments(&b));
-        let mut pfb = match program {
-            None => own,
-            Some(_) if wants_pfb => entry.as_ref().and_then(|e| e.file).and_then(read_head),
-            Some(_) => None,
-        };
-        // A map entry's `SlantFont`/`ExtendFont` change the embedded program (writet1.c).
-        let mut italic = 0;
-        if let (Some(e), Some((data, lens))) = (&entry, &mut pfb) {
-            if e.slant != 0 || e.extend != 0 {
-                let (clear, angle) = t1_effects(&data[..lens[0]], e.slant, e.extend);
-                italic = angle.unwrap_or(0);
-                data.splice(..lens[0], clear.iter().copied());
-                lens[0] = clear.len();
-            }
-        }
-        // An embedded program is named by its own `/FontName`, as pdfTeX names it.
-        let base = match (program, &entry, &pfb) {
-            (Some(p), _, _) => p.name.to_string(),
-            (None, _, Some((data, lens))) if font_name(&data[..lens[0]]).is_some() => font_name(&data[..lens[0]]).unwrap_or_default(),
-            (None, Some(e), _) if !e.ps.is_empty() => e.ps.to_string(),
-            _ => f.name.to_ascii_uppercase(),
-        };
-        // A subset is named with a tag of six capitals from the glyphs it holds (PDF 1.7
-        // §5.5.3), as pdfTeX's `make_subset_tag` names it.
+    fn write_font(&mut self, id: usize, w: &FontWork) {
+        let f = w.f;
         let used = |c: usize| f.used[c / 64] >> (c % 64) & 1 != 0;
-        let base = if program.is_none() && pfb.is_some() { format!("{}+{base}", subset_tag(&base, &f.used)) } else { base };
         let size = pdf_font_size(f.size);
         // `/Widths` from the first to the last character used, 0 for those not used, as
         // pdfTeX's `write_fontdict` writes them.
@@ -862,18 +1186,18 @@ impl Doc {
         };
         self.begin(id);
         self.buf.extend_from_slice(b"<< /Type /Font /Subtype /Type1 /BaseFont /");
-        self.buf.extend_from_slice(base.as_bytes());
+        self.buf.extend_from_slice(w.base.as_bytes());
         self.buf.extend_from_slice(b" /FirstChar ");
         print_int(&mut self.buf, first as i64);
         self.buf.extend_from_slice(b" /LastChar ");
         print_int(&mut self.buf, last as i64);
         self.buf.extend_from_slice(b" /Widths [");
-        for (c, &w) in f.widths.iter().enumerate().take(last + 1).skip(first) {
+        for (c, &wd) in f.widths.iter().enumerate().take(last + 1).skip(first) {
             self.buf.push(b' ');
-            print_real(&mut self.buf, if used(c) { divide_scaled(w as i64, size, 4).0 } else { 0 }, 1);
+            print_real(&mut self.buf, if used(c) { divide_scaled(wd as i64, size, 4).0 } else { 0 }, 1);
         }
         self.buf.push(b']');
-        if let Some(p) = program {
+        if let Some(p) = w.program {
             if !p.diff_encoding.is_empty() {
                 self.buf.extend_from_slice(b" /Encoding << /Type /Encoding /Differences [ ");
                 self.buf.extend_from_slice(p.diff_encoding.as_bytes());
@@ -882,92 +1206,38 @@ impl Doc {
             self.buf.extend_from_slice(b" /FontDescriptor ");
             self.reference(id + 1);
         }
-        let mut cmap = None;
-        if let Some(enc) = &enc {
-            let names = encoding_names(enc);
-            cmap = to_unicode.map(|u| tounicode_cmap(&f.name, &names, u));
-            if program.is_none() {
-                self.buf.extend_from_slice(b" /Encoding << /Type /Encoding /Differences [ 0");
-                for n in &names {
-                    self.buf.extend_from_slice(b" /");
-                    self.buf.extend_from_slice(n.as_bytes());
-                }
-                self.buf.extend_from_slice(b" ] >>");
-            }
-        } else if let (Some(u), Some(text)) = (to_unicode, &stored_names) {
-            let names: Vec<&str> = text.split(|&c| c == b'\n').map(|l| if l.is_empty() { ".notdef" } else { std::str::from_utf8(l).unwrap_or(".notdef") }).collect();
-            cmap = Some(tounicode_cmap(&f.name, &names, u));
-        } else if let (Some(u), Some((data, lens))) = (to_unicode, &pfb) {
-            let names = builtin_encoding_names(&data[..lens[0]]);
-            let names: Vec<&str> = names.iter().map(String::as_str).collect();
-            cmap = Some(tounicode_cmap(&f.name, &names, u));
+        if let Some(enc) = w.enc.as_ref().filter(|_| w.differences) {
+            self.buf.extend_from_slice(b" /Encoding << /Type /Encoding /Differences [ 0");
+            self.buf.extend_from_slice(&enc.differences);
+            self.buf.extend_from_slice(b" ] >>");
         }
-        let pfb = if program.is_none() { pfb } else { None };
-        if pfb.is_some() {
+        if w.embedded.is_some() {
             self.buf.extend_from_slice(b" /FontDescriptor ");
             self.reference(id + 1);
         }
-        let map = if program.is_some() && cmap.is_none() { crate::backend::backend_optical::tounicode_by_name(&f.name) } else { None };
-        if map.is_some() || cmap.is_some() {
+        if w.unicode.is_some() {
             self.buf.extend_from_slice(b" /ToUnicode ");
             self.reference(id + 3);
         }
         self.buf.extend_from_slice(b" >>\n");
         self.end();
-        if let Some(map) = map {
-            let data = self.deflated(&crate::backend::backend_pdf::build_tounicode_cmap_bytes(map));
-            self.stream(id + 3, b"", &data, true);
+        if let Some(data) = &w.unicode {
+            self.stream(id + 3, b"", data, true);
         }
-        if let Some(cmap) = &cmap {
-            let data = self.deflated(cmap);
-            self.stream(id + 3, b"", &data, true);
-        }
-        if let Some((mut data, mut lens)) = pfb {
-            // pdfTeX's subset (`writet1.c`): the glyphs the pages used, by the encoding's
-            // names (the `.enc` file's, else the program's own).
-            let names: Vec<String> = match (&enc, &stored_names) {
-                (Some(enc), _) => encoding_names(enc).iter().map(|n| n.to_string()).collect(),
-                (None, Some(text)) => text.split(|&c| c == b'\n').map(|l| if l.is_empty() { ".notdef".to_string() } else { String::from_utf8_lossy(l).into_owned() }).collect(),
-                (None, None) => builtin_encoding_names(&data[..lens[0]]),
-            };
-            let used: Vec<&str> = (0..256).filter(|&c| used(c)).filter_map(|c| names.get(c).map(String::as_str)).collect();
-            let tag = base.split('+').next().unwrap_or_default();
-            let clear = crate::backend::backend_type1::subset_clear(&data[..lens[0]], &|c: usize| f.used[c / 64] >> (c % 64) & 1 != 0, tag);
-            data.splice(..lens[0], clear.iter().copied());
-            lens[0] = clear.len();
-            let binary = lens[0]..lens[0] + lens[1];
-            // A subset comes with its charstrings encrypted; a font kept whole is encrypted
-            // here, charstrings and eexec.
-            let text = match crate::backend::backend_type1::subset(&data[binary.clone()], &used) {
-                Some(mut text) => {
-                    crate::data::data_embed::encrypt_eexec(&mut text);
-                    text
-                }
-                None => {
-                    let mut text = data[binary.clone()].to_vec();
-                    crate::data::data_embed::encrypt_binary(&mut text);
-                    text
-                }
-            };
-            lens[1] = text.len();
-            data.splice(binary, text);
-            let bbox = font_bbox(&data[..lens[0]]);
+        if let Some((packed, lens, bbox)) = &w.embedded {
             self.begin(id + 1);
             self.buf.extend_from_slice(b"<< /Type /FontDescriptor /FontName /");
-            self.buf.extend_from_slice(base.as_bytes());
-            self.buf.extend_from_slice(format!(" /Flags 4 /FontBBox [{} {} {} {}] /Ascent {} /Descent {} /CapHeight {} /ItalicAngle {} /StemV 80 /FontFile ", bbox[0], bbox[1], bbox[2], bbox[3], bbox[3], bbox[1], bbox[3], italic).as_bytes());
+            self.buf.extend_from_slice(w.base.as_bytes());
+            self.buf.extend_from_slice(format!(" /Flags 4 /FontBBox [{} {} {} {}] /Ascent {} /Descent {} /CapHeight {} /ItalicAngle {} /StemV 80 /FontFile ", bbox[0], bbox[1], bbox[2], bbox[3], bbox[3], bbox[1], bbox[3], w.italic).as_bytes());
             self.reference(id + 2);
             self.buf.extend_from_slice(b" >>\n");
             self.end();
             // pdfTeX writes no trailer segment (the zeros and `cleartomark`): `/Length3 0`.
-            // The clear text is compressed; the eexec part, pseudo-random, is stored as is.
             let dict = format!(" /Length1 {} /Length2 {} /Length3 0", lens[0], lens[1]);
-            let mut packed = Vec::with_capacity(data.len() + 64);
-            self.deflate.compress_zlib_parts(&data[..lens[0]], &data[lens[0]..lens[0] + lens[1]], &mut packed);
-            self.stream(id + 2, dict.as_bytes(), &packed, true);
+            self.stream(id + 2, dict.as_bytes(), packed, true);
             return;
         }
-        let Some(p) = program else { return };
+        let Some(p) = w.program else { return };
         self.begin(id + 1);
         self.buf.extend_from_slice(b"<< /Type /FontDescriptor /FontName /");
         self.buf.extend_from_slice(p.name.as_bytes());
@@ -1005,5 +1275,25 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&clear), "/FontName /BeraSerif-Roman-Slant_167 def\n/ItalicAngle -9.4809 def\n/FontMatrix [0.001 0 0.000167 0.001 0 0 ]readonly def\n");
         assert_eq!(angle, Some(-9));
         assert_eq!(encoding_names("% c\n/T1Encoding [\n/grave /acute % x\n/circumflex] def"), ["grave", "acute", "circumflex"]);
+    }
+
+    #[test]
+    fn streams_compress_alike_on_threads() {
+        // Long enough for several workers, with an empty stream first, last and between,
+        // and one stream bigger than a worker's share.
+        let page = |k: usize| (0..9000 + 37 * k).map(|i| b"BT /F1 9.96 Tf 0 -11.96 Td [(text)-333(more)]TJ ET\n"[i % 51] ^ (k as u8 & 3)).collect::<Vec<u8>>();
+        let mut pages: Vec<Vec<u8>> = (0..40).map(page).collect();
+        pages[0].clear();
+        pages[17].clear();
+        pages[20] = pages[20].repeat(30);
+        pages.push(Vec::new());
+        let streams: Vec<&[u8]> = pages.iter().map(|p| &p[..]).collect();
+        let mut deflate = crate::backend::backend_deflate::DeflateCompressor::new();
+        let serial: Vec<Vec<u8>> = streams.iter().map(|s| {
+            let mut out = Vec::new();
+            deflate.compress_zlib(s, &mut out);
+            out
+        }).collect();
+        assert_eq!(prepare_all(&mut [], &streams), serial);
     }
 }

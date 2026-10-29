@@ -72,6 +72,11 @@ impl<'a> Lexer<'a> {
     /// The text up to `end`, read past the tokenizer (`\@xverbatim`): the rest of the current
     /// line, then whole lines, each ending in `\n` (trailing spaces removed, as §362 reads
     /// lines). The lexer resumes after `end`; `None` at the file's end.
+    /// The rest of the current line, unread.
+    pub fn raw_peek(&self) -> String {
+        self.buf[self.loc.min(self.buf.len())..].iter().collect()
+    }
+
     pub fn raw_until(&mut self, end: &str, end_line_char: i32) -> Option<String> {
         let mut text = String::new();
         loop {

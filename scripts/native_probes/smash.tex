@@ -1,0 +1,17 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+Smashed text \smash{$\displaystyle\int_0^1$ tall} and math $a\smash{\frac{x}{y}}b$,
+$\sqrt{\smash[b]{y}}$, $\sqrt{\smash[t]{\frac{1}{2}}}$, $x^{\smash{q}}$.
+Phantoms: [\phantom{abc}] [$\vphantom{\int}x$] [$\hphantom{xyz}$], $\sqrt{\mathstrut a}$.
+
+\smash{Starts a paragraph}12 more.
+
+Arrows $a \longrightarrow b \longleftarrow c \longmapsto d$, $p \iff q$,
+$f\colon A \longrightarrow B$, $\smash[b]{y}\longrightarrow z$, $\smash[t]{y}\longleftarrow w$, and in a script $x_{\longrightarrow}$.
+Spaces: $a\,b\:c\;d\!e\>f$, $a\thickspace b\medspace c\negthinspace d\negmedspace e\negthickspace f$;
+in text a\,b\;c\:d\!e and a\thickspace b\negthickspace c.
+\[
+A \longrightarrow B \iff C \quad \smash{\sum_{k=0}^{n}} k
+\]
+\end{document}

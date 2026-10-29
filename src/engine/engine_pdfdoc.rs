@@ -760,6 +760,55 @@ impl Machine<'_, '_> {
     }
 
     /// pdfTeX's `scan_action`: `user {…}`, `goto …` or `thread …`.
+    /// `\pdfdest name{name} xyz`, for natives (hyperref's `\Hy@DestName`).
+    pub(super) fn append_dest(&mut self, name: String) {
+        self.pdf_doc.dests.push(Dest { id: DestId::Name(name), view: XYZ, zoom: None, dims: [None; 3] });
+        self.cur.push(Node { kind: Kind::Whatsit, sub: DEST, font: 0, a: self.pdf_doc.dests.len() as i32 - 1, b: 0 });
+    }
+
+    /// `\pdfcatalog{text}`, with `openaction goto page n{view}` when `open` is given.
+    pub(super) fn add_catalog(&mut self, text: &str, open: Option<(i32, &str)>) {
+        self.pdf_doc.catalog.push_str(text);
+        self.pdf_doc.catalog.push(' ');
+        if let Some((n, view)) = open {
+            let mut out = Vec::new();
+            self.pdf_doc.write_action(&Action::Go { thread: false, file: None, new_window: 0, target: Target::Page(n, view.to_string()) }, &mut out);
+            self.pdf_doc.open_action = Some(out);
+        }
+    }
+
+    /// `\pdfoutline goto name{name} count n {title}`.
+    pub(super) fn append_outline(&mut self, name: &str, count: i32, title: &str) {
+        let mut action = Vec::new();
+        self.pdf_doc.write_action(&Action::Go { thread: false, file: None, new_window: 0, target: Target::Name(name.to_string()) }, &mut action);
+        let obj = self.pdf_doc.new_obj();
+        self.pdf_doc.add_outline(Outline { obj, title: title.to_string(), action, attr: String::new(), count, parent: NONE, prev: NONE, next: NONE, first: NONE, last: NONE });
+    }
+
+    /// `\pdfstartlink attr{attr} goto name{name}` (running dimensions), for natives.
+    pub(super) fn append_start_link(&mut self, attr: &str, name: &str) {
+        let obj = self.pdf_doc.new_obj();
+        self.pdf_doc.last_link = obj;
+        let action = Action::Go { thread: false, file: None, new_window: 0, target: Target::Name(name.to_string()) };
+        self.pdf_doc.links.push(Link { dims: [None; 3], attr: attr.to_string(), action, obj, shipped: false });
+        self.cur.push(Node { kind: Kind::Whatsit, sub: START_LINK, font: 0, a: self.pdf_doc.links.len() as i32 - 1, b: 0 });
+    }
+
+    /// `\pdfstartlink attr{attr} user{/Subtype/Link/A<</Type/Action/S/URI/URI(uri)>>}`.
+    pub(super) fn append_uri_link(&mut self, attr: &str, uri: &str) {
+        let obj = self.pdf_doc.new_obj();
+        self.pdf_doc.last_link = obj;
+        let action = Action::User(format!("/Subtype/Link/A<</Type/Action/S/URI/URI({uri})>>"));
+        self.pdf_doc.links.push(Link { dims: [None; 3], attr: attr.to_string(), action, obj, shipped: false });
+        self.cur.push(Node { kind: Kind::Whatsit, sub: START_LINK, font: 0, a: self.pdf_doc.links.len() as i32 - 1, b: 0 });
+    }
+
+    /// `\pdfinfo{text}`.
+    pub(super) fn add_info(&mut self, text: &str) {
+        self.pdf_doc.info.push_str(text);
+        self.pdf_doc.info.push(' ');
+    }
+
     fn scan_action(&mut self) -> Option<Action> {
         if self.scan_keyword("user") {
             return Some(Action::User(self.general_text_string()));

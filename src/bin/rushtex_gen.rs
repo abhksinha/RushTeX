@@ -5,6 +5,7 @@
 //!     rushtex-gen nfss --list FILE [--format FMT] [--out assets/tables/nfss.rtdb] [--dump]
 //!     rushtex-gen pkgs --list FILE [--format FMT] [--out assets/tables/pkgs.rtdb]
 //!     rushtex-gen embed --list FILE [--set assets/tables/embed.set] [--out assets/tables/embed.rtdb]
+//!     rushtex-gen packs --list FILE [--def scripts/texlive/packs.tsv] [--out-dir target/packs] [--catalog assets/tables/packs.rtdb]
 //!     rushtex-gen class [--format FMT] [--out assets/tables/class-article.rtdb]
 //!
 //! `FILE` lists TFM paths, one per line, or `scripts/texlive/files.tsv` rows (path first).
@@ -327,6 +328,99 @@ fn embed(args: &[String]) -> Result<String, String> {
     Ok(format!("{out}: {} files, {raw} bytes as {packed} compressed ({} in all), every file read back exactly", files.len(), bytes.len()))
 }
 
+/// `rushtex-gen packs`: the pinned font files neither the binary (`embed.set`) nor the TFM
+/// table carries, grouped into font packs (`data_pack`) by the definitions
+/// (`scripts/texlive/packs.tsv`: a pack's name, then its patterns; a file goes to the first
+/// pack that matches it), each pack with the `pdftex.map` lines of its programs as
+/// `<pack>.map`; then the catalog the binary reads them through.
+fn packs(args: &[String]) -> Result<String, String> {
+    use rushtex::data::{data_embed, data_pack};
+    let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
+    let list = arg("--list").ok_or("--list FILE is required")?;
+    let def_path = arg("--def").unwrap_or_else(|| "scripts/texlive/packs.tsv".into());
+    let set_path = arg("--set").unwrap_or_else(|| "assets/tables/embed.set".into());
+    let out_dir = arg("--out-dir").unwrap_or_else(|| "target/packs".into());
+    let catalog_path = arg("--catalog").unwrap_or_else(|| "assets/tables/packs.rtdb".into());
+    let lines = |path: &str| -> Result<Vec<String>, String> {
+        Ok(std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect())
+    };
+    let embedded = lines(&set_path)?;
+    let defs: Vec<(String, Vec<String>)> = lines(&def_path)?.iter().filter_map(|l| l.split_once('\t')).map(|(n, p)| (n.to_string(), p.split_whitespace().map(String::from).collect())).collect();
+    let text = std::fs::read_to_string(&list).map_err(|e| format!("{list}: {e}"))?;
+    let tfm = data_tfm::fonts().ok_or("no TFM table in this build")?;
+    const FONT_FILES: [&str; 7] = [".pfb", ".pfa", ".otf", ".ttf", ".enc", ".vf", ".tfm"];
+    let mut groups: Vec<Vec<(String, Vec<u8>)>> = vec![Vec::new(); defs.len()];
+    let mut map_text = String::new();
+    let mut seen = std::collections::HashSet::new();
+    for path in text.lines().filter_map(|l| l.split('\t').next()) {
+        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+        if name == "pdftex.map" && map_text.is_empty() {
+            map_text = read_listed(path)?.iter().map(|&c| char::from(c)).collect();
+            continue;
+        }
+        if !FONT_FILES.iter().any(|e| name.ends_with(e)) || !seen.insert(name.clone()) || embedded.iter().any(|p| glob(p, &name)) {
+            continue;
+        }
+        if name.strip_suffix(".tfm").is_some_and(|s| tfm.lookup(s).is_some()) {
+            continue;
+        }
+        if let Some(k) = defs.iter().position(|(_, pats)| pats.iter().any(|p| glob(p, &name))) {
+            groups[k].push((name, read_listed(path)?));
+        }
+    }
+    if map_text.is_empty() {
+        return Err("the list has no pdftex.map".into());
+    }
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("{out_dir}: {e}"))?;
+    let (mut packs, mut files) = (Vec::new(), Vec::new());
+    for (k, (pack, _)) in defs.iter().enumerate() {
+        let group = &mut groups[k];
+        if group.is_empty() {
+            continue;
+        }
+        // The map lines (first per name, as mapfile.c keeps them) of the fonts whose program
+        // or metrics the pack holds.
+        let held: std::collections::HashSet<&str> = group.iter().map(|f| f.0.as_str()).collect();
+        let mut map = String::new();
+        let mut names = std::collections::HashSet::new();
+        for l in map_text.lines() {
+            let Some(n) = l.split_whitespace().next().filter(|n| !n.starts_with(['%', '#', '*', ';'])) else { continue };
+            if !names.insert(n) {
+                continue;
+            }
+            let program = l.split_whitespace().map(|w| w.trim_start_matches(['<', '['])).find(|w| w.ends_with(".pfb") || w.ends_with(".pfa"));
+            if held.contains(format!("{n}.tfm").as_str()) || program.is_some_and(|p| held.contains(p)) {
+                map.push_str(l);
+                map.push('\n');
+            }
+        }
+        let index = packs.len() as u16;
+        for f in group.iter() {
+            files.push((f.0.clone(), index));
+        }
+        group.push((format!("{pack}.map"), map.into_bytes()));
+        let mut w = BlobWriter::default();
+        data_embed::write(&mut w, group)?;
+        let bytes = w.finish();
+        let table = Blob::new(&bytes).and_then(|b| data_embed::EmbedTable::from_blob(&b)).ok_or("not an embed table")?;
+        data_embed::check(&table, group)?;
+        let id = table.content_id();
+        std::fs::write(format!("{out_dir}/{pack}-{id:016x}.rtpk"), &bytes).map_err(|e| format!("{pack}: {e}"))?;
+        packs.push((pack.clone(), id, bytes.len() as u32));
+    }
+    let mut w = BlobWriter::default();
+    data_pack::write_catalog(&mut w, &packs, &files)?;
+    let bytes = w.finish();
+    std::fs::write(&catalog_path, &bytes).map_err(|e| format!("{catalog_path}: {e}"))?;
+    let c = Blob::new(&bytes).and_then(|b| data_pack::Catalog::from_blob(&b)).ok_or("the catalog does not read back")?;
+    if files.iter().any(|(n, k)| c.pack_of(n) != Some(*k as usize)) {
+        return Err("the catalog maps a file to the wrong pack".into());
+    }
+    let total: u32 = packs.iter().map(|p| p.2).sum();
+    let summary: Vec<String> = packs.iter().map(|p| format!("{} {} KB", p.0, p.2 / 1024)).collect();
+    Ok(format!("{catalog_path}: {} packs, {} files, {} KB in all ({}); packs in {out_dir}", packs.len(), files.len(), total / 1024, summary.join(", ")))
+}
+
 /// The harvest rule (`2026-10-23-kernel-macro-harvest.md`): the macros of `e` whose bodies use
 /// only characters (no `&`, no active character), parameters, the primitives of
 /// `data_kernel::MACRO_PRIMITIVES`, TeX parameters, `\chardef`, `\mathchardef` and `\let`
@@ -462,6 +556,15 @@ fn harvested_macros<'e>(e: &'e rushtex::engine::Engine, harvested: &[u32], user:
 /// package redefines, listed apart. An added command is data (a `\chardef`, register, `\let`
 /// or font), taken by the rule, or left out with what keeps it out. Uses are papers writing
 /// the command, each command counted once. Measures; writes nothing.
+///
+/// Then the commands left out that the native job stops at in a paper (`native_blockers`),
+/// in four groups by what a one-time lowerer to builder ops would face, worst first over
+/// what their bodies reach (argument parsers such as `\@ifstar` and `\@testopt` stop the
+/// walk: a registration row's signature takes them): (d) expansion programming
+/// (`\csname`, `\expandafter`, definitions, catcodes), (c) branching (`\if..`), (b)
+/// straight line over builders, registers and fonts; (a) is data or taken. Each group also
+/// by the command's own body alone, macros left out counted as ops: the two bracket what a
+/// lowerer with constant folding at generation would take.
 #[cfg(feature = "oracle")]
 fn measure(args: &[String]) -> Result<String, String> {
     use rushtex::engine::engine_prim::Meaning;
@@ -473,6 +576,8 @@ fn measure(args: &[String]) -> Result<String, String> {
     // The corpus: per name, the papers that write it.
     let dir = arg("--corpus").ok_or("--corpus DIR is required")?;
     let (mut uses, mut seen, mut papers): (HashMap<String, u32>, HashSet<u64>, u32) = (HashMap::new(), HashSet::new(), 0);
+    // Per name, the papers whose native job stops at it.
+    let (mut gaps, mut gap_total): (HashMap<String, u32>, u32) = (HashMap::new(), 0);
     let mut paper_dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&dir).map_err(|e| format!("{dir}: {e}"))?.filter_map(|d| d.ok().map(|d| d.path())).filter(|p| p.join("main.tex").is_file()).collect();
     paper_dirs.sort();
     fn has_style(d: &std::path::Path) -> bool {
@@ -528,6 +633,10 @@ fn measure(args: &[String]) -> Result<String, String> {
         for n in names {
             *uses.entry(n).or_default() += 1;
         }
+        for n in rushtex::engine::engine_doc::native_blockers(&src) {
+            *gaps.entry(n.to_string()).or_default() += 1;
+            gap_total += 1;
+        }
     }
     let engine = Engine::new(arg("--format"))?;
     let read = |name: &str| engine.kpse.read(name);
@@ -545,13 +654,15 @@ fn measure(args: &[String]) -> Result<String, String> {
     enum Kind {
         Data,
         Taken,
-        Left { direct: Vec<String>, reach: usize, prims: BTreeSet<String> },
+        Left { direct: Vec<String>, reach: usize, prims: BTreeSet<String>, sig: bool },
     }
     struct Cmd {
         name: String,
         patch: bool,
         kind: Kind,
     }
+    // Argument parsers: a registration row's signature (star, optional argument) does their work.
+    let signature = |b: &str| ["\\@ifstar", "\\@ifnextchar", "\\kernel@ifnextchar", "\\new@ifnextchar", "\\@testopt", "\\@protected@testopt", "\\@dblarg", "\\@ifstar@"].contains(&b) || b.starts_with("\\__cmd_");
     let missing: Vec<&str> = pkgs.iter().copied().filter(|p| engine.kpse.read(&format!("{p}.sty")).is_none()).collect();
     let mut loaded: Vec<(&str, Vec<Cmd>)> = Vec::new();
     for &pkg in &pkgs {
@@ -561,7 +672,7 @@ fn measure(args: &[String]) -> Result<String, String> {
         let mut cmds = Vec::new();
         run(&format!("\\documentclass{{article}}\\usepackage{{{pkg}}}\\begin{{document}}"), &mut |m| {
             let e = &*m.e;
-            let seed: HashSet<u32> = ["protect"].iter().filter_map(|n| e.cs.get(n)).collect();
+            let seed: HashSet<u32> = ["protect"].into_iter().chain(rushtex::data::data_kernel::HARVEST_NATIVES).filter_map(|n| e.cs.get(n)).collect();
             let (harvested, left) = harvest(e, seed);
             let harvested: HashSet<u32> = harvested.into_iter().collect();
             let macro_of = |b: &str| b.strip_prefix('\\').filter(|n| !n.contains(" (")).and_then(|n| e.cs.get(n)).filter(|id| left.contains_key(id));
@@ -572,9 +683,13 @@ fn measure(args: &[String]) -> Result<String, String> {
                         Meaning::Macro(_) if harvested.contains(&id) => Kind::Taken,
                         Meaning::Macro(_) => {
                             let direct = left.get(&id).cloned().unwrap_or_default();
-                            let (mut seen, mut stack, mut prims) = (HashSet::from([id]), vec![id], BTreeSet::new());
+                            let (mut seen, mut stack, mut prims, mut sig) = (HashSet::from([id]), vec![id], BTreeSet::new(), false);
                             while let Some(x) = stack.pop() {
                                 for b in left.get(&x).into_iter().flatten() {
+                                    if signature(b) {
+                                        sig = true;
+                                        continue;
+                                    }
                                     match macro_of(b) {
                                         Some(m) => {
                                             if seen.insert(m) {
@@ -587,7 +702,7 @@ fn measure(args: &[String]) -> Result<String, String> {
                                     }
                                 }
                             }
-                            Kind::Left { direct, reach: seen.len() - 1, prims }
+                            Kind::Left { direct, reach: seen.len() - 1, prims, sig }
                         }
                         _ => Kind::Data,
                     };
@@ -655,7 +770,7 @@ fn measure(args: &[String]) -> Result<String, String> {
     needs.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
     s.push_str("commands left out, by uses (package; macros left out it reaches; primitives they need; what its own body needs):\n");
     for (u, n, pkg, c) in needs.iter().take(top) {
-        if let Kind::Left { direct, reach, prims } = &c.kind {
+        if let Kind::Left { direct, reach, prims, .. } = &c.kind {
             s.push_str(&format!("  {u:>4} \\{n:<16} {pkg:<10} reach {reach:>3}  prims {:>2}  needs {}\n", prims.len(), direct.join(" ")));
         }
     }
@@ -664,6 +779,109 @@ fn measure(args: &[String]) -> Result<String, String> {
     s.push_str("what their own bodies need, by the uses of the commands needing it:\n");
     for (b, (u, cs)) in ranked.iter().take(top) {
         s.push_str(&format!("  {u:>5}  {b:<28} {}\n", cs.iter().take(8).map(|c| format!("\\{c}")).collect::<Vec<_>>().join(" ")));
+    }
+    // The four groups, by the papers whose native job stops at the command.
+    let group = |toks: &mut dyn Iterator<Item = &String>| -> usize {
+        let mut g = 1;
+        for t in toks {
+            let n = t.strip_prefix('\\').and_then(|t| t.split(" (").next()).unwrap_or("");
+            if t.ends_with("(primitive)") && ["csname", "expandafter", "noexpand", "futurelet", "afterassignment", "aftergroup", "string", "meaning", "detokenize", "unexpanded", "scantokens", "uppercase", "lowercase", "catcode", "def", "edef", "gdef", "xdef", "let", "romannumeral", "endcsname"].contains(&n) {
+                return 3;
+            }
+            if t.ends_with("(primitive)") && n.starts_with("if") {
+                g = 2;
+            }
+        }
+        g
+    };
+    let (mut by_reach, mut by_body, mut sig_uses, mut top_b) = ([0u32; 4], [0u32; 4], 0u32, Vec::new());
+    let mut pkg_gaps = 0u32;
+    let mut done: HashSet<&str> = HashSet::new();
+    for (pkg, cmds) in &loaded {
+        for c in cmds.iter().filter(|c| !c.patch && !noise.contains(c.name.as_str())) {
+            let u = gaps.get(&c.name).copied().unwrap_or(0);
+            if u == 0 || !done.insert(&c.name) {
+                continue;
+            }
+            pkg_gaps += u;
+            let (r, b) = match &c.kind {
+                Kind::Left { direct, prims, sig, .. } => {
+                    if *sig {
+                        sig_uses += u;
+                    }
+                    (group(&mut prims.iter()), group(&mut direct.iter()))
+                }
+                _ => (0, 0),
+            };
+            by_reach[r] += u;
+            by_body[b] += u;
+            if r == 1 {
+                top_b.push((u, c.name.as_str(), *pkg));
+            }
+        }
+    }
+    let pct = |k: u32| (100.0 * k as f64) / pkg_gaps.max(1) as f64;
+    s.push_str(&format!("\nlowerer groups: {gap_total} native stops in all ({} distinct names); {pkg_gaps} at commands the packages add\n", gaps.len()));
+    for (i, l) in ["(a) data or taken", "(b) straight line", "(c) branching", "(d) expansion programming"].iter().enumerate() {
+        s.push_str(&format!("  {l:<26} reach {:>5} ({:>5.1}%)   own body {:>5} ({:>5.1}%)\n", by_reach[i], pct(by_reach[i]), by_body[i], pct(by_body[i])));
+    }
+    s.push_str(&format!("  argument parsers met (signature): {sig_uses} stops\n"));
+    top_b.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
+    s.push_str(&format!("  (b) by stops: {}\n", top_b.iter().take(top).map(|(u, n, p)| format!("\\{n} {u} ({p})")).collect::<Vec<_>>().join(", ")));
+    let mut other: Vec<(&String, &u32)> = gaps.iter().filter(|(n, _)| !done.contains(n.as_str())).collect();
+    other.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    s.push_str(&format!("  other stops (kernel, options, packages): {}\n", other.iter().take(top).map(|(n, u)| format!("{n} {u}")).collect::<Vec<_>>().join(", ")));
+    // Mechanisms by payoff: a command clears when every macro its own body calls (argument
+    // parsers aside) and every branching or expansion primitive in it is native; builder
+    // primitives, registers and characters are ops. Greedy: each step makes native the
+    // mechanism with the most stops credited (a command's stops shared over what it still
+    // needs), so a step that clears nothing yet still ranks what comes next.
+    let hard = |t: &str| {
+        let n = t.strip_prefix('\\').and_then(|t| t.split(" (").next()).unwrap_or("");
+        !t.ends_with("(primitive)") || n.starts_with("if") || ["csname", "expandafter", "noexpand", "futurelet", "afterassignment", "aftergroup", "string", "meaning", "detokenize", "unexpanded", "scantokens", "uppercase", "lowercase", "catcode", "def", "edef", "gdef", "xdef", "let", "romannumeral", "endcsname"].contains(&n)
+    };
+    let mut open: Vec<(u32, &str, BTreeSet<&str>)> = Vec::new();
+    let mut cleared = 0u32;
+    let mut seen_cmd: HashSet<&str> = HashSet::new();
+    for (_, cmds) in &loaded {
+        for c in cmds.iter().filter(|c| !c.patch && !noise.contains(c.name.as_str())) {
+            let u = gaps.get(&c.name).copied().unwrap_or(0);
+            if u == 0 || !seen_cmd.insert(&c.name) {
+                continue;
+            }
+            let needs: BTreeSet<&str> = match &c.kind {
+                Kind::Left { direct, .. } => direct.iter().map(String::as_str).filter(|t| !signature(t) && hard(t) && !t.ends_with("(Undefined)")).collect(),
+                _ => BTreeSet::new(),
+            };
+            if needs.is_empty() {
+                cleared += u;
+            } else {
+                open.push((u, &c.name, needs));
+            }
+        }
+    }
+    s.push_str(&format!("\nmechanisms by payoff ({pkg_gaps} stops at package commands; {cleared} need no mechanism):\n"));
+    for step in 1..=top {
+        let mut credit: HashMap<&str, f64> = HashMap::new();
+        for (u, _, needs) in &open {
+            for n in needs {
+                *credit.entry(n).or_default() += *u as f64 / needs.len() as f64;
+            }
+        }
+        let Some((&best, _)) = credit.iter().max_by(|a, b| a.1.total_cmp(b.1).then(b.0.cmp(a.0))) else { break };
+        let users = open.iter().filter(|o| o.2.contains(best)).count();
+        let mut freed = Vec::new();
+        open.retain_mut(|(u, n, needs)| {
+            needs.remove(best);
+            if needs.is_empty() {
+                cleared += *u;
+                freed.push(format!("\\{n}"));
+                false
+            } else {
+                true
+            }
+        });
+        s.push_str(&format!("  {step:>2}. {best:<30} used by {users:>3}  cleared {cleared:>4} ({:>5.1}%)  {}\n", pct(cleared), freed.iter().take(6).cloned().collect::<Vec<_>>().join(" ")));
     }
     patched.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
     s.push_str(&format!("kernel commands the packages redefine (hook points a native command must offer), by uses:\n  {}\n", patched.iter().take(top).map(|(u, n, p)| format!("\\{n} {u} ({p})")).collect::<Vec<_>>().join(", ")));
@@ -883,8 +1101,9 @@ fn kernel_values(e: &rushtex::engine::Engine) -> Result<KernelValues, String> {
     }
     ops.sort();
     delims.sort();
-    // Kernel macros to a fixed point (`harvest`), keeping what a document can name.
-    let seed = ops.iter().map(|o| o.0.as_str()).chain(delims.iter().map(|d| d.0.as_str())).chain(["protect"]).filter_map(|n| e.cs.get(n));
+    // Kernel macros to a fixed point (`harvest`), keeping what a document can name; a
+    // macro may reach a native that ports a kernel macro exactly (`HARVEST_NATIVES`).
+    let seed = ops.iter().map(|o| o.0.as_str()).chain(delims.iter().map(|d| d.0.as_str())).chain(["protect"]).chain(rushtex::data::data_kernel::HARVEST_NATIVES).filter_map(|n| e.cs.get(n));
     let (harvested, _) = harvest(e, seed.collect());
     let macros = harvested_macros(e, &harvested, |n| n.bytes().all(|b| b.is_ascii_alphabetic())).into_iter().map(|(n, f, t)| (n, f, t.into_iter().map(Tok::own).collect())).collect::<Vec<(String, u8, Vec<Tok>)>>();
     // The `\chardef`s and `\mathchardef`s the macros name (`\dabar@`), internal or not.
@@ -1058,9 +1277,13 @@ fn natpkg(args: &[String]) -> Result<String, String> {
         accents.sort();
         let mut lets: Vec<(String, String)> = after_lets.into_iter().filter(|l| !before_lets.contains(l) && !l.0.ends_with(' ')).collect();
         lets.sort();
-        if before_words != after_words {
+        // The PDF page size, set at `\begin{document}` by packages the native job knows.
+        let page = rushtex::engine::engine_tables::INT_PARAMS + rushtex::engine::engine_doc::PDF_PAGE_WIDTH;
+        let page_set = |k: usize| rushtex::engine::engine_doc::PAGE_SIZE_PACKAGES.contains(&name.as_str()) && (k as u32 == page || k as u32 == page + 1);
+        if before_words.iter().zip(&after_words).enumerate().any(|(k, (a, b))| a != b && !page_set(k)) {
             let n = before_words.iter().zip(&after_words).filter(|(a, b)| a != b).count();
-            return Err(format!("{name} changes {n} parameters, codes or catcodes"));
+            let at: Vec<String> = before_words.iter().zip(&after_words).enumerate().filter(|(_, (a, b))| a != b).map(|(k, (a, b))| format!("{k}: {a:?} to {b:?}")).collect();
+            return Err(format!("{name} changes {n} parameters, codes or catcodes (word {})", at.join(", ")));
         }
         let new = |a: &[(String, Def)], b: &[(String, Def)]| a.iter().filter(|x| !b.contains(x)).cloned().collect::<Vec<_>>();
         let chars = new(&after.chars, &before.chars);
@@ -1177,6 +1400,8 @@ fn class(args: &[String]) -> Result<String, String> {
     let engine = Engine::new(arg("--format"))?;
     let read = |name: &str| engine.kpse.read(name);
     let dir = arg("--out-dir").unwrap_or_else(|| "assets/tables".into());
+    // `--class report`: the same table for another class (`class-report.rtdb`, ...).
+    let cls = arg("--class").unwrap_or_else(|| "article".into());
     // What the check compares, from a machine: parameters, codes, catcodes, and per font
     // (by identifier) its TFM, size, `\hyphenchar`, `\skewchar` and parameters.
     let state = |m: &rushtex::engine::engine_run::Machine, keep: &dyn Fn(&str) -> bool| -> State {
@@ -1208,7 +1433,7 @@ fn class(args: &[String]) -> Result<String, String> {
     };
     let mut notes = Vec::new();
     for (si, size) in data_class::CLASS_SIZES.iter().enumerate() {
-        let doc = |opts: &str, body: &str| format!("\\documentclass[{size}{opts}]{{article}}\\begin{{document}}{body}");
+        let doc = |opts: &str, body: &str| format!("\\documentclass[{size}{opts}]{{{cls}}}\\begin{{document}}{body}");
         // The base and each combination: the table's words and the oracle's state.
         let mut combos: Vec<(u32, GenClass, State)> = Vec::new();
         let mut dropped = Vec::new();
@@ -1422,7 +1647,7 @@ fn class(args: &[String]) -> Result<String, String> {
             g.lists.extend(list.concat());
         }
         // The table, written, read back, and loaded per combination by `load_class`.
-        let out = if si == 0 { format!("{dir}/class-article.rtdb") } else { format!("{dir}/class-article-{size}.rtdb") };
+        let out = if si == 0 { format!("{dir}/class-{cls}.rtdb") } else { format!("{dir}/class-{cls}-{size}.rtdb") };
         let mut w = rushtex::data::data_blob::BlobWriter::default();
         data_class::write(&mut w, &g);
         let bytes: &'static [u8] = Box::leak(w.finish().into_boxed_slice());
@@ -1494,6 +1719,150 @@ fn names(args: &[String]) -> Result<String, String> {
     Ok(format!("{out}: {} bytes", blob.len()))
 }
 
+/// `microtype`: what microtype's `\pickup@font` hook gives each text font the native job
+/// can select, read from the engine: one run per selection (size, family, series, shape,
+/// under each class size, encoding and font package), so that no earlier selection is in
+/// it. Per font (TFM name and size in sp) its `\pdffontexpand` parameters and its codes
+/// other than the defaults, as the selection that names the font itself gives them; then
+/// `sub KEY SIZE` for each selection a font shape substitution brings to a font whose codes
+/// it sets otherwise (microtype reads the asked-for shape), which the native job leaves to
+/// the engine. Written as text, one font or selection a line.
+#[cfg(feature = "oracle")]
+fn microtype(args: &[String]) -> Result<String, String> {
+    use rushtex::engine::engine_eqtb::{Reg, Region};
+    use rushtex::engine::engine_prim::Meaning;
+    use std::collections::BTreeMap;
+    let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
+    let out_path = arg("--out").unwrap_or_else(|| "assets/tables/microtype.txt".into());
+    let engine = Engine::new(arg("--format"))?;
+    let read = |name: &str| engine.kpse.read(name);
+    const SIZES: [&str; 10] = ["tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge"];
+    // (font, size) to its codes from the selection naming it; the substituted selections.
+    let mut fonts: BTreeMap<(String, i32), String> = BTreeMap::new();
+    let mut subs: Vec<(String, i32, String, String)> = Vec::new();
+    let mut ints = None;
+    for opt in ["10pt", "11pt", "12pt"] {
+        // TS1: textcomp's symbols, selected over the OT1 setup.
+        for enc in ["OT1", "T1", "TS1"] {
+            for lm in [false, true] {
+                let pre = format!("\\documentclass[{opt}]{{article}}{}{}\\usepackage{{microtype}}", if enc == "T1" { "\\usepackage[T1]{fontenc}" } else { "" }, if lm { "\\usepackage{lmodern}" } else { "" });
+                let fams = if lm { ["lmr", "lmss", "lmtt"] } else { ["cmr", "cmss", "cmtt"] };
+                for size in SIZES {
+                    for (fam, family) in ["rmfamily", "sffamily", "ttfamily"].iter().zip(fams) {
+                        for (ser, series) in [("mdseries", "m"), ("bfseries", "bx")] {
+                            for (shape, sh) in [("upshape", "n"), ("itshape", "it"), ("slshape", "sl"), ("scshape", "sc")] {
+                                let key = format!("{enc}/{family}/{series}/{sh}");
+                                let ts1 = if enc == "TS1" { "\\fontencoding{TS1}\\selectfont" } else { "" };
+                                let src = format!("{pre}\\begin{{document}}\\{size}\\{fam}\\{ser}\\{shape}{ts1} x\\end{{document}}");
+                                let mut got = None;
+                                let mut run_ints = (0, 0);
+                                let job = rushtex::engine::engine_job::run(&|| Some(engine.fmt.clone()), &src, &rushtex::engine::engine_job::Opts { job_name: "rtgen", now: 0, max_runs: 1 }, &read, &mut |_| {}, &mut |m| {
+                                    let e = &*m.e;
+                                    // `\pdfadjustspacing` and `\pdfprotrudechars`.
+                                    run_ints = (e.eqtb.word(Reg { region: Region::Int, slot: 75 }), e.eqtb.word(Reg { region: Region::Int, slot: 76 }));
+                                    let Meaning::Font(f) = e.eqtb.meaning(rushtex::engine::CUR_FONT_ID) else { return };
+                                    let font = &e.fonts.list[f as usize];
+                                    let mi = &e.fonts.micro;
+                                    let x = mi.expand(f);
+                                    let mut line = if x.step == 0 {
+                                        "-".to_string()
+                                    } else {
+                                        let ratio = |k: u16| if k == 0 { 0 } else { e.fonts.list[k as usize].expand as i32 };
+                                        format!("{} {} {} {}", ratio(x.stretch), -ratio(x.shrink), x.step, x.auto as u8)
+                                    };
+                                    for (tag, get, def) in [("lp", 0, 0), ("rp", 1, 0), ("ef", 2, 1000)] {
+                                        for c in 0..=255u8 {
+                                            let v = match get {
+                                                0 => mi.lp(f, c),
+                                                1 => mi.rp(f, c),
+                                                _ => mi.ef(f, c),
+                                            };
+                                            if v != def {
+                                                line.push_str(&format!(" {tag}{c}={v}"));
+                                            }
+                                        }
+                                    }
+                                    // The font is named after the selection unless a substitution
+                                    // brought it.
+                                    let direct = e.cs.name(font.ident).starts_with(&format!("{key}/"));
+                                    got = Some((font.name.to_string(), font.size, direct, line));
+                                })
+                                .ok_or("the format is not one of this build")?;
+                                if !job.errors.is_empty() {
+                                    return Err(format!("{opt} {enc} {key}: {}", job.errors[0].lines().next().unwrap_or("")));
+                                }
+                                match ints {
+                                    None => ints = Some(run_ints),
+                                    Some(i) if i != run_ints => return Err(format!("{opt} {enc} {key}: the integers differ")),
+                                    _ => {}
+                                }
+                                let (name, sp, direct, line) = got.ok_or("no current font")?;
+                                if direct {
+                                    match fonts.get(&(name.clone(), sp)) {
+                                        Some(old) if *old != line => return Err(format!("{name} at {sp}sp: codes differ between selections naming it")),
+                                        _ => {
+                                            fonts.insert((name, sp), line);
+                                        }
+                                    }
+                                } else {
+                                    subs.push((name, sp, key, line));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let (adjust, protrude) = ints.ok_or("no run")?;
+    let mut text = format!("microtype {adjust} {protrude}\n");
+    for ((name, size), line) in &fonts {
+        text.push_str(&format!("{name} {size} {line}\n"));
+    }
+    // A substitution whose codes are the font's own needs nothing; the others, and one to a
+    // font no selection names, are listed.
+    let mut listed = std::collections::BTreeSet::new();
+    for (name, sp, key, line) in &subs {
+        if fonts.get(&(name.clone(), *sp)) != Some(line) {
+            listed.insert(format!("sub {key} {sp}"));
+        }
+    }
+    for l in &listed {
+        text.push_str(l);
+        text.push('\n');
+    }
+    std::fs::write(&out_path, &text).map_err(|e| format!("{out_path}: {e}"))?;
+    Ok(format!("wrote {out_path}: {} fonts, {} substitutions listed, {} bytes", fonts.len(), listed.len(), text.len()))
+}
+
+/// `glyphs`: the format's `\pdfglyphtounicode` table (`glyphtounicode.tex`) as
+/// `data_glyphs`, for the native job's ToUnicode maps; checked to read back.
+#[cfg(feature = "oracle")]
+fn glyphs(args: &[String]) -> Result<String, String> {
+    let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
+    let engine = Engine::new(arg("--format"))?;
+    let read = |name: &str| engine.kpse.read(name);
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    rushtex::engine::engine_job::run(&|| Some(engine.fmt.clone()), "\\documentclass{article}\\begin{document}\\end{document}", &rushtex::engine::engine_job::Opts { job_name: "rtgen", now: 0, max_runs: 1 }, &read, &mut |_| {}, &mut |m| {
+        pairs = m.e.glyph_unicode.pairs().map(|(n, h)| (n.to_string(), h.to_string())).collect();
+    })
+    .ok_or("the format is not one of this build")?;
+    if pairs.is_empty() {
+        return Err("the format has no \\pdfglyphtounicode table".into());
+    }
+    let mut w = rushtex::data::data_blob::BlobWriter::default();
+    rushtex::data::data_glyphs::write(&mut w, pairs.iter().map(|(n, h)| (n.as_str(), h.as_str()))).map_err(|e| format!("the glyph names' hash: {e:?}"))?;
+    let bytes = w.finish();
+    let blob = rushtex::data::data_blob::Blob::new(&bytes).ok_or("the table does not read")?;
+    let table = rushtex::data::data_glyphs::GlyphTable::from_blob(&blob).ok_or("the table does not check")?;
+    if !table.pairs().map(|(n, h)| (n.to_vec(), h)).eq(pairs.iter().map(|(n, h)| (n.as_bytes().to_vec(), h.as_str()))) {
+        return Err("the table does not read back to the format's pairs".into());
+    }
+    let out = arg("--out").unwrap_or_else(|| "assets/tables/glyphs.rtdb".into());
+    std::fs::write(&out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+    Ok(format!("{out}: {} glyph names, {} bytes", pairs.len(), bytes.len()))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
@@ -1501,6 +1870,7 @@ fn main() -> ExitCode {
         #[cfg(feature = "oracle")]
         Some("nfss") => nfss(&args[1..]),
         Some("embed") => embed(&args[1..]),
+        Some("packs") => packs(&args[1..]),
         Some("names") => names(&args[1..]),
         #[cfg(feature = "oracle")]
         Some("class") => class(&args[1..]),
@@ -1510,7 +1880,11 @@ fn main() -> ExitCode {
         Some("measure") => measure(&args[1..]),
         #[cfg(feature = "oracle")]
         Some("natpkg") => natpkg(&args[1..]),
-        _ => Err("usage: rushtex-gen fonts --list FILE --use USE [--out PATH] [--check] | nfss --list FILE [--format FMT] [--out PATH] [--dump] | pkgs --list FILE [--format FMT] [--out PATH] | embed --list FILE [--set PATH] [--out PATH] | class [--format FMT] [--out-dir DIR] [--hyph-out PATH] [--kernel-out PATH] | measure --pkgs FILE --corpus DIR [--format FMT] [--top N] | natpkg NAME.. [--format FMT] [--out-dir DIR] | names [--out PATH]".into()),
+        #[cfg(feature = "oracle")]
+        Some("glyphs") => glyphs(&args[1..]),
+        #[cfg(feature = "oracle")]
+        Some("microtype") => microtype(&args[1..]),
+        _ => Err("usage: rushtex-gen fonts --list FILE --use USE [--out PATH] [--check] | nfss --list FILE [--format FMT] [--out PATH] [--dump] | pkgs --list FILE [--format FMT] [--out PATH] | embed --list FILE [--set PATH] [--out PATH] | class [--format FMT] [--out-dir DIR] [--hyph-out PATH] [--kernel-out PATH] | measure --pkgs FILE --corpus DIR [--format FMT] [--top N] | natpkg NAME.. [--format FMT] [--out-dir DIR] | names [--out PATH] | glyphs [--format FMT] [--out PATH] | microtype [--format FMT] [--out PATH]".into()),
     };
     match result {
         Ok(msg) => {

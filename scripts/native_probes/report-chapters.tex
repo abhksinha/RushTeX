@@ -1,0 +1,33 @@
+% The report class natively: \chapter and \chapter*, sections numbered within the
+% chapter, the counters reset per chapter (equation, figure, table, footnote), the
+% chapter prefix of equation, figure and table numbers, and one-pass references.
+\documentclass[11pt]{report}
+\begin{document}
+\begin{equation}E = mc^2\label{eq:zero}\end{equation}
+Before the first chapter an equation has no chapter prefix: (\ref{eq:zero}).
+\chapter{Introduction}\label{ch:intro}
+The chapter head starts a new page in the plain style, fifty points down, with the word
+Chapter and its number above the title. The first paragraph after it is not indented.
+
+A second paragraph is indented as usual. Chapter~\ref{ch:intro} is this one, and
+Section~\ref{sec:bg} follows.
+\begin{figure}[t]\centering\fbox{A figure at the top of a later page}\caption{A figure}\label{fig:a}\end{figure}
+\begin{table}[b]\centering\begin{tabular}{|l|r|}\hline Item & Value\\\hline One & 1\\\hline\end{tabular}\caption{A table}\label{tab:a}\end{table}
+\section{Background}\label{sec:bg}
+Figure~\ref{fig:a} and Table~\ref{tab:a} carry the chapter's number first.
+\begin{equation}a^2 + b^2 = c^2\label{eq:pyth}\end{equation}
+Equation~(\ref{eq:pyth}) is numbered within the chapter.\footnote{Footnotes start again in each chapter.}
+\subsection{A subsection}
+A subsection is numbered three deep.
+\subsubsection{A subsubsection}
+In report a subsubsection is not numbered: \texttt{secnumdepth} is two.
+\paragraph{A run-in paragraph heading.} Its title starts the paragraph.
+\chapter*{An Unnumbered Chapter}
+A starred chapter has no number, no contents entry and resets no counter.
+\chapter[Short title]{A Longer Second Chapter Title That Runs Onto a Second Line}
+\section{Again}
+Text with a note.\footnote{This is footnote 1 again.} See Section~\ref{sec:two}, still to come.
+\begin{equation}x = y\label{eq:two}\end{equation}
+\section{Two}\label{sec:two}
+Equation~(\ref{eq:two}) is the first of chapter two.
+\end{document}

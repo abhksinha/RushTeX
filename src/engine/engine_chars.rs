@@ -185,6 +185,7 @@ impl Machine<'_, '_> {
                             cur_l_next(&mut lig_stack, c);
                             Step::Lookahead1
                         }
+                        None if self.doc.is_some() && self.lookahead_doc(x) => Step::Lookahead,
                         None => {
                             if x.m == Meaning::Prim(Prim::NoBoundary) {
                                 bchar = NON_CHAR;
@@ -345,12 +346,11 @@ impl Machine<'_, '_> {
     pub(super) fn make_accent(&mut self) {
         let a_char = self.scan_char_num();
         let af = self.cur_font();
-        let font = &self.e.fonts.list[af as usize];
-        let Some([a, _, _, _]) = font.dims(a_char, &self.e.fonts.info) else { return };
-        let (x, s) = (font.params(&self.e.fonts.info)[4], font.params(&self.e.fonts.info)[0] as f64 / 65536.0);
+        if self.e.fonts.list[af as usize].dims(a_char, &self.e.fonts.info).is_none() {
+            return;
+        }
         self.do_assignments();
         // §1124: the character to accent.
-        let f = self.cur_font();
         let next = self.get_x_token(false);
         let c = match next {
             Some(n) => match n.m {
@@ -364,6 +364,16 @@ impl Machine<'_, '_> {
             },
             None => None,
         };
+        self.build_accent(a_char, af, c);
+    }
+
+    /// §1123–§1125 once the accent `a_char` of font `af` and the character `c` of the
+    /// current font are known: the accent alone, or over `c` with its kerns.
+    pub(super) fn build_accent(&mut self, a_char: u8, af: u16, c: Option<u8>) {
+        let font = &self.e.fonts.list[af as usize];
+        let Some([a, _, _, _]) = font.dims(a_char, &self.e.fonts.info) else { return };
+        let (x, s) = (font.params(&self.e.fonts.info)[4], font.params(&self.e.fonts.info)[0] as f64 / 65536.0);
+        let f = self.cur_font();
         let font = &self.e.fonts.list[f as usize];
         let q = c.and_then(|c| font.dims(c, &self.e.fonts.info).map(|d| (c, d)));
         let accent = Node { kind: Kind::Char, sub: 0, font: af, a: a_char as i32, b: 0 };

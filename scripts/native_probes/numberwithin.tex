@@ -1,0 +1,40 @@
+\documentclass{article}
+\usepackage{amsmath}
+\numberwithin{equation}{section}
+\begin{document}
+\section{First}
+Forward reference to \eqref{eq:late} and to \eqref{eq:g2}.
+\begin{equation}
+a = b \label{eq:one}
+\end{equation}
+\begin{align}
+x &= y \label{eq:a1} \\
+u &= v \nonumber \\
+p &= q
+\end{align}
+\subsection{Inner}
+The count goes on in a subsection: \eqref{eq:one}, \eqref{eq:a1}.
+\begin{gather}
+c = d \\
+e = f \label{eq:g2}
+\end{gather}
+\section*{Unnumbered}
+No reset here.
+\begin{equation}
+g = h
+\end{equation}
+\section{Second}
+\begin{multline}
+s = t \\ + w \label{eq:m}
+\end{multline}
+\begin{equation}
+\begin{split}
+k &= l \\ &= m
+\end{split} \label{eq:late}
+\end{equation}
+\begin{eqnarray}
+r &=& s \\
+t &=& u
+\end{eqnarray}
+See \eqref{eq:m} and \eqref{eq:late}.
+\end{document}

@@ -1,0 +1,22 @@
+% enumerate.sty's label templates, moved out of docs/master.tex when the manual took
+% enumitem (the two cannot be loaded together).
+\documentclass{article}
+\usepackage{enumerate}
+\begin{document}
+\section{The enumerate package}
+The \texttt{enumerate} package leaves a list without an optional argument as the kernel
+makes it. With one, such as \texttt{[(i)]}, each \texttt{A}, \texttt{a}, \texttt{i},
+\texttt{I} or \texttt{1} outside braces stands for the counter in that style, the rest is
+copied, and the left margin of that depth becomes the width of the label at seven plus
+\texttt{labelsep}:
+\begin{enumerate}[(i)]
+  \item a first item in lower-case roman numerals,\label{it:tmpl}
+  \item a second, holding a list of its own:
+    \begin{enumerate}[{Case} A:]
+      \item the word in braces is copied, the letter counts,\label{it:case}
+      \item and the margin fits \emph{Case G:}.
+    \end{enumerate}
+\end{enumerate}
+The new counter form reaches the references too: items~\ref{it:tmpl} and~\ref{it:case}.
+
+\end{document}

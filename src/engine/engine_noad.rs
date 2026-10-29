@@ -95,7 +95,7 @@ impl Machine<'_, '_> {
         self.e.eqtb.word(Reg { region: Region::Int, slot })
     }
 
-    fn set_local(&mut self, region: Region, slot: u32, v: i32) {
+    pub(super) fn set_local(&mut self, region: Region, slot: u32, v: i32) {
         self.e.eqtb.set_word(Reg { region, slot }, v, false);
     }
 
@@ -189,19 +189,11 @@ impl Machine<'_, '_> {
             }
             Prim::Vcenter => self.begin_vcenter(),
             // §1169
-            Prim::DisplayStyle | Prim::TextStyle | Prim::ScriptStyle | Prim::ScriptScriptStyle => {
-                let style = 2 * (p as u8 - Prim::DisplayStyle as u8);
-                self.append_noad(Noad { sub: style, ..Noad::new(STYLE) });
-            }
-            Prim::NonScript => {
-                let g = self.e.nodes.glue_node(Glue::default(), COND_MATH_GLUE);
-                self.cur.push(g);
-            }
+            Prim::DisplayStyle | Prim::TextStyle | Prim::ScriptStyle | Prim::ScriptScriptStyle => self.build_style(2 * (p as u8 - Prim::DisplayStyle as u8)),
+            Prim::NonScript => self.build_nonscript(),
             // §1172 `append_choices`
             Prim::MathChoice => {
-                self.append_noad(Noad::new(CHOICE));
-                self.math_saved.push(0);
-                self.push_math(MATH_CHOICE_GROUP, false);
+                self.math_choice_noad();
                 self.scan_left_brace();
             }
             Prim::Above | Prim::Over | Prim::Atop | Prim::AboveWithDelims | Prim::OverWithDelims | Prim::AtopWithDelims => self.math_fraction(p as u8 - Prim::Above as u8),
@@ -399,16 +391,30 @@ impl Machine<'_, '_> {
         let v = if r {
             self.scan_twenty_seven_bit() as i32
         } else {
-            match self.next_non_blank_non_relax() {
-                Some(x) => match x.m {
-                    Meaning::Char(t) if matches!(t.cat(), Some(Cat::Letter | Cat::Other)) => self.e.eqtb.code(Code::Del, t.chr() as u32),
-                    Meaning::Prim(Prim::Delimiter) => self.scan_twenty_seven_bit() as i32,
-                    _ => {
-                        self.input.back(x.t);
-                        -1
-                    }
-                },
-                None => -1,
+            loop {
+                break match self.next_non_blank_non_relax() {
+                    Some(x) => match x.m {
+                        Meaning::Char(t) if matches!(t.cat(), Some(Cat::Letter | Cat::Other)) => self.e.eqtb.code(Code::Del, t.chr() as u32),
+                        Meaning::Prim(Prim::Delimiter) => self.scan_twenty_seven_bit() as i32,
+                        // A native that is a delimiter's macro in a formula (LaTeX's `\{`,
+                        // `\ifmmode\lbrace`), which `get_x_token` would have expanded.
+                        Meaning::Doc(_) => match self.math_delimiter_alias(x.t) {
+                            Some(t) => {
+                                self.input.back(t);
+                                continue;
+                            }
+                            None => {
+                                self.input.back(x.t);
+                                -1
+                            }
+                        },
+                        _ => {
+                            self.input.back(x.t);
+                            -1
+                        }
+                    },
+                    None => -1,
+                };
             }
         };
         if v < 0 {
@@ -514,7 +520,7 @@ impl Machine<'_, '_> {
 
     /// §1186: the `}` of a subformula; braces around a lone ordinary atom, or around an
     /// accent that is an atom's nucleus, vanish.
-    fn end_math_group(&mut self) {
+    pub(super) fn end_math_group(&mut self) {
         self.end_group(MATH_GROUP);
         let slot = self.math_saved.pop().unwrap_or(0);
         let p = self.fin_mlist(None);
@@ -592,10 +598,98 @@ impl Machine<'_, '_> {
     }
 
     /// §1139 "Go into ordinary math mode".
+    /// §1169: a style noad (0 `\displaystyle`, 2 text, 4 script, 6 scriptscript).
+    pub(super) fn build_style(&mut self, style: u8) {
+        self.append_noad(Noad { sub: style, ..Noad::new(STYLE) });
+    }
+
+    /// A noad of `kind` whose nucleus is a formula group opened here, `sub` its limits: as
+    /// `\mathop{` (§1151 then §1153), or `{` in a formula with `ORD`. The caller's tokens
+    /// and a `}` token close the group, so the brace count of an alignment entry
+    /// (`align_state`, §347) counts the `{` this stands for.
+    pub(super) fn build_math_group(&mut self, kind: u8, sub: u8) {
+        self.input.align_state += 1;
+        let i = self.append_noad(Noad { sub, ..Noad::new(kind) });
+        self.math_saved.push(i * 4);
+        self.push_math(MATH_GROUP, false);
+    }
+
+    /// `\mathaccent c{` (§1165): the accent noad, its nucleus a formula group opened here
+    /// and closed by a `}` token, as [`Self::build_math_group`].
+    pub(super) fn build_math_accent(&mut self, c: u32) {
+        self.input.align_state += 1;
+        let accent = self.math_char_field(c);
+        let i = self.append_noad(Noad { extra: accent, ..Noad::new(ACCENT) });
+        self.math_saved.push(i * 4);
+        self.push_math(MATH_GROUP, false);
+    }
+
+    /// `\mathchoice{` (§1172): the choice noad and its first branch's group, closed by a `}`
+    /// token. Each later branch reads its own `{`.
+    pub(super) fn build_math_choice(&mut self) {
+        self.input.align_state += 1;
+        self.math_choice_noad();
+    }
+
+    /// §1172 before the first branch's group is read.
+    fn math_choice_noad(&mut self) {
+        self.append_noad(Noad::new(CHOICE));
+        self.math_saved.push(0);
+        self.push_math(MATH_CHOICE_GROUP, false);
+    }
+
+    /// `\mskip g` (§1057), `g` in math units.
+    pub(super) fn build_mskip(&mut self, g: Glue) {
+        let n = self.e.nodes.glue_node(g, MU_GLUE);
+        self.cur.push(n);
+    }
+
+    /// `\mkern d` (§1061).
+    pub(super) fn build_mkern(&mut self, d: i32) {
+        self.cur.push(Node { sub: MU_GLUE, ..kern(d) });
+    }
+
+    /// `\nonscript` (§1171).
+    pub(super) fn build_nonscript(&mut self) {
+        let g = self.e.nodes.glue_node(Glue::default(), COND_MATH_GLUE);
+        self.cur.push(g);
+    }
+
+    /// `\thinmuskip`.
+    pub(super) fn thin_mu_skip(&self) -> Glue {
+        self.e.eqtb.glue(Reg { region: Region::Glue, slot: super::engine_mlist::THIN_MU_SKIP })
+    }
+
+    /// `\fam n`, local.
+    pub(super) fn set_cur_fam(&mut self, n: i32) {
+        self.set_local(Region::Int, CUR_FAM, n);
+    }
+
+    /// `\everymath{t}`, local.
+    pub(super) fn set_every_math(&mut self, t: &[Token]) {
+        let span = self.e.toks.store(t);
+        self.e.eqtb.set_toks(Reg { region: Region::Toks, slot: EVERY_MATH }, span, false);
+    }
+
+    /// `\nulldelimiterspace\z@`, local.
+    pub(super) fn null_delimiter_space_zero(&mut self) {
+        self.set_local(Region::Dimen, super::engine_mlist::NULL_DELIMITER_SPACE, 0);
+    }
+
+    /// `\m@th`: `\mathsurround\z@`, local.
+    pub(super) fn math_surround_zero(&mut self) {
+        self.set_local(Region::Dimen, MATH_SURROUND, 0);
+    }
+
     pub(super) fn enter_text_math(&mut self) {
+        self.push_text_math();
+        self.insert_toks(EVERY_MATH);
+    }
+
+    /// `$` in a horizontal list without `\everymath`, for a builder that does its work itself.
+    pub(super) fn push_text_math(&mut self) {
         self.push_math(MATH_SHIFT_GROUP, false);
         self.set_local(Region::Int, CUR_FAM, -1);
-        self.insert_toks(EVERY_MATH);
     }
 
     /// §1138 `init_math`: `$` in a horizontal list; `$$` in a paragraph starts a display.

@@ -65,9 +65,9 @@ const BIN_OP_PENALTY: u32 = 9;
 const REL_PENALTY: u32 = 10;
 const DELIMITER_FACTOR: u32 = 18;
 const DELIMITER_SHORTFALL: u32 = 10;
-const NULL_DELIMITER_SPACE: u32 = 11;
+pub(super) const NULL_DELIMITER_SPACE: u32 = 11;
 const SCRIPT_SPACE: u32 = 12;
-const THIN_MU_SKIP: u32 = 15;
+pub(super) const THIN_MU_SKIP: u32 = 15;
 const MED_MU_SKIP: u32 = 16;
 const THICK_MU_SKIP: u32 = 17;
 

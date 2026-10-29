@@ -29,6 +29,10 @@ const PFB: u32 = 1;
 /// A `.pfb` stored decrypted and not compressed: a font is subset from it on every use, so
 /// reading it is a copy, not an inflate.
 const PFB_PLAIN: u32 = 2;
+/// A `.pfb` stored with its eexec layer decrypted and its charstrings as the file has
+/// them (encrypted), not compressed, with a stored layout (`em.x`): subsetting copies the
+/// charstrings it keeps, nothing is encrypted again but the eexec layer.
+const PFB_READY: u32 = 4;
 
 /// Type 1's eexec and charstring keys and constants (Adobe Type 1 Font Format §7.1).
 const EEXEC_KEY: u16 = 55665;
@@ -94,6 +98,11 @@ pub fn encrypt_charstring(cs: &mut [u8]) {
     encrypt(cs, CHARSTRING_KEY);
 }
 
+/// The first bytes of an encrypted charstring in clear (decryption reads only those).
+pub fn decrypt_charstring(cs: &mut [u8]) {
+    decrypt(cs, CHARSTRING_KEY);
+}
+
 /// The charstrings found in binary text `text` (decrypted) encrypted in place, by the same
 /// scan [`decrypt_binary`] uses to find them.
 pub fn encrypt_charstrings(text: &mut [u8]) {
@@ -129,13 +138,22 @@ fn pfb_binary_segments(pfb: &[u8]) -> Option<Vec<std::ops::Range<usize>>> {
 /// Runs the eexec transform over a `.pfb`'s binary segments as one stream, then the
 /// charstring transform (`decode`), or the other order (`!decode`).
 fn transform_pfb(pfb: &mut [u8], decode: bool) -> Option<()> {
+    transform_layers(pfb, decode, true)
+}
+
+/// As [`transform_pfb`], the charstrings' layer only when `cs`.
+fn transform_layers(pfb: &mut [u8], decode: bool, cs: bool) -> Option<()> {
     let segs = pfb_binary_segments(pfb)?;
     let mut text: Vec<u8> = segs.iter().flat_map(|r| pfb[r.clone()].iter().copied()).collect();
     if decode {
         decrypt(&mut text, EEXEC_KEY);
-        charstrings(&mut text, decrypt);
+        if cs {
+            charstrings(&mut text, decrypt);
+        }
     } else {
-        charstrings(&mut text, encrypt);
+        if cs {
+            charstrings(&mut text, encrypt);
+        }
         encrypt(&mut text, EEXEC_KEY);
     }
     let mut at = 0;
@@ -153,6 +171,10 @@ pub struct EmbedTable<'a> {
     data: &'a [u8],
     glyph_recs: U32s<'a>,
     glyphs: &'a [u8],
+    /// Per file: where its Type 1 layout (`backend_type1::Index`) lies in `layouts`, a
+    /// zero length for a file without one.
+    layout_recs: U32s<'a>,
+    layouts: U32s<'a>,
     id: u64,
 }
 
@@ -162,9 +184,11 @@ impl<'a> EmbedTable<'a> {
         let names = Phf::from_blob(b, "emf")?;
         let (recs, data, id) = (b.u32s("em.r")?, b.section("em.z")?, b.u32s("em.id")?);
         let (glyph_recs, glyphs) = (b.u32s("em.gn")?, b.section("em.gb")?);
-        let sound = recs.len() == 3 * names.len() && id.len() == 2 && (0..names.len()).all(|f| (recs.get(3 * f) as usize).checked_add(recs.get(3 * f + 1) as usize).is_some_and(|e| e <= data.len()) && matches!(recs.get(3 * f + 2), RAW | PFB | PFB_PLAIN | PLAIN));
+        let (layout_recs, layouts) = (b.u32s("em.xr")?, b.u32s("em.x")?);
+        let layouts_sound = layout_recs.len() == 2 * names.len() && (0..names.len()).all(|f| (layout_recs.get(2 * f) as usize).checked_add(layout_recs.get(2 * f + 1) as usize).is_some_and(|e| e <= layouts.len()));
+        let sound = recs.len() == 3 * names.len() && id.len() == 2 && (0..names.len()).all(|f| (recs.get(3 * f) as usize).checked_add(recs.get(3 * f + 1) as usize).is_some_and(|e| e <= data.len()) && matches!(recs.get(3 * f + 2), RAW | PFB | PFB_PLAIN | PLAIN | PFB_READY));
         let glyphs_sound = glyph_recs.len() == 2 * names.len() && (0..names.len()).all(|f| (glyph_recs.get(2 * f) as usize).checked_add(glyph_recs.get(2 * f + 1) as usize).is_some_and(|e| e <= glyphs.len()));
-        (sound && glyphs_sound).then(|| EmbedTable { names, recs, data, glyph_recs, glyphs, id: (id.get(1) as u64) << 32 | id.get(0) as u64 })
+        (sound && glyphs_sound && layouts_sound).then(|| EmbedTable { names, recs, data, glyph_recs, glyphs, layout_recs, layouts, id: (id.get(1) as u64) << 32 | id.get(0) as u64 })
     }
 
     pub fn content_id(&self) -> u64 {
@@ -193,13 +217,16 @@ impl<'a> EmbedTable<'a> {
     /// program the binary carries in another form still reads from its file. `X.pfb#clear`
     /// is the whole `.pfb` with its binary text decrypted ([`decrypt_binary`]), as stored.
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
+        if let Some(file) = name.strip_suffix("#layout") {
+            return self.layout(file).map(|v| v.iter().flat_map(|x| x.to_le_bytes()).collect());
+        }
         if let Some(file) = name.strip_suffix("#names") {
             return self.glyph_names(file).map(<[u8]>::to_vec);
         }
         if let Some(file) = name.strip_suffix("#clear") {
             let f = self.names.get(file.as_bytes())? as usize;
             let (at, n, kind) = (self.recs.get(3 * f) as usize, self.recs.get(3 * f + 1) as usize, self.recs.get(3 * f + 2));
-            if kind == PFB_PLAIN {
+            if kind == PFB_PLAIN || kind == PFB_READY {
                 return Some(self.data[at..at + n].to_vec());
             }
             if kind != PFB {
@@ -213,7 +240,7 @@ impl<'a> EmbedTable<'a> {
             let f = self.names.get(file.as_bytes())? as usize;
             let (at, n) = (self.recs.get(3 * f) as usize, self.recs.get(3 * f + 1) as usize);
             let z = &self.data[at..at + n];
-            if self.recs.get(3 * f + 2) == PFB_PLAIN {
+            if matches!(self.recs.get(3 * f + 2), PFB_PLAIN | PFB_READY) {
                 return pfb_head(z).map(|h| z[..6 + h.len()].to_vec());
             }
             // The clear text is a few kilobytes: a prefix is decompressed, all of it only when
@@ -234,7 +261,7 @@ impl<'a> EmbedTable<'a> {
         let f = self.names.get(name.as_bytes())? as usize;
         let (at, n, kind) = (self.recs.get(3 * f) as usize, self.recs.get(3 * f + 1) as usize, self.recs.get(3 * f + 2));
         let mut out = Vec::new();
-        if kind == PFB_PLAIN || kind == PLAIN {
+        if matches!(kind, PFB_PLAIN | PLAIN | PFB_READY) {
             out.extend_from_slice(&self.data[at..at + n]);
         } else {
             crate::backend::backend_inflate::zlib_decompress(&self.data[at..at + n], &mut out)?;
@@ -242,11 +269,22 @@ impl<'a> EmbedTable<'a> {
         if kind == PFB || kind == PFB_PLAIN {
             transform_pfb(&mut out, false)?;
         }
+        if kind == PFB_READY {
+            transform_layers(&mut out, false, false)?;
+        }
         Some(out)
     }
 }
 
 impl<'a> EmbedTable<'a> {
+    /// `.pfb` `file`'s Type 1 layout as `rushtex-gen` indexed its decrypted binary text
+    /// (`X.pfb#layout` through [`EmbedTable::read`]), so subsetting does not scan it.
+    pub fn layout(&self, file: &str) -> Option<Vec<u32>> {
+        let f = self.names.get(file.as_bytes())? as usize;
+        let (at, n) = (self.layout_recs.get(2 * f) as usize, self.layout_recs.get(2 * f + 1) as usize);
+        (n > 0).then(|| (at..at + n).map(|i| self.layouts.get(i)).collect())
+    }
+
     /// `.pfb` `file`'s built-in encoding (`X.pfb#names`): 256 lines, the glyph name of each
     /// code, an empty line for `.notdef`. Borrowed from the table, nothing decompressed.
     pub fn glyph_names(&self, file: &str) -> Option<&'a [u8]> {
@@ -284,6 +322,16 @@ fn names_text(clear: &[u8]) -> Vec<u8> {
     lines.join("\n").into_bytes()
 }
 
+/// A `.pfb`'s binary (type 2) segments joined, as `write_font` reads them.
+#[cfg(any(test, feature = "gen"))]
+fn binary_text(pfb: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    for r in pfb_binary_segments(pfb)? {
+        out.extend_from_slice(&pfb[r]);
+    }
+    Some(out)
+}
+
 /// A `.pfb`'s first segment (its clear text), if it is one.
 fn pfb_head(pfb: &[u8]) -> Option<&[u8]> {
     match pfb.get(..6)? {
@@ -315,6 +363,7 @@ pub fn write(w: &mut super::data_blob::BlobWriter, files: &[(String, Vec<u8>)]) 
     let names: Vec<&[u8]> = files.iter().map(|f| f.0.as_bytes()).collect();
     super::data_phf::write(w, "emf", &names).map_err(|e| format!("{e:?}"))?;
     let (mut recs, mut data, mut glyph_recs, mut glyphs) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut layout_recs, mut layouts) = (Vec::new(), Vec::new());
     let mut id = crate::backend::backend_hash::ContentHasher::new();
     let mut z = crate::backend::backend_deflate::DeflateCompressor::new();
     for (name, bytes) in files {
@@ -324,15 +373,26 @@ pub fn write(w: &mut super::data_blob::BlobWriter, files: &[(String, Vec<u8>)]) 
         // Every carried `.pfb` is subset from its decrypted text on each use (`write_font`
         // embeds a font the map file names from its own file), so it is stored plain:
         // reading it is a copy, not an inflate.
+        // With its layout stored, a `.pfb` keeps its charstrings encrypted (`PFB_READY`): the
+        // layout is read from the program in clear, the charstrings are stored as the file
+        // has them.
+        let mut layout = Vec::new();
         let kind = if name.ends_with(".pfb") && transform_pfb(&mut body, true).is_some() {
-            PFB_PLAIN
+            layout = binary_text(&body).and_then(|t| crate::backend::backend_type1::index(&t)).and_then(|ix| ix.to_u32s()).unwrap_or_default();
+            if layout.is_empty() {
+                PFB_PLAIN
+            } else {
+                body = bytes.clone();
+                transform_layers(&mut body, true, false).ok_or("eexec")?;
+                PFB_READY
+            }
         } else if name.ends_with(".enc") || name.ends_with(".map") {
             PLAIN
         } else {
             RAW
         };
         let at = data.len();
-        if kind == PFB_PLAIN || kind == PLAIN {
+        if matches!(kind, PFB_PLAIN | PLAIN | PFB_READY) {
             data.extend_from_slice(&body);
         } else {
             z.compress_zlib(&body, &mut data);
@@ -341,12 +401,16 @@ pub fn write(w: &mut super::data_blob::BlobWriter, files: &[(String, Vec<u8>)]) 
         let names = if name.ends_with(".pfb") { pfb_head(bytes).map(names_text).unwrap_or_default() } else { Vec::new() };
         glyph_recs.extend_from_slice(&[glyphs.len() as u32, names.len() as u32]);
         glyphs.extend_from_slice(&names);
+        layout_recs.extend_from_slice(&[layouts.len() as u32, layout.len() as u32]);
+        layouts.extend_from_slice(&layout);
     }
     let size = data.len();
     w.u32s("em.r", &recs);
     w.bytes("em.z", data);
     w.u32s("em.gn", &glyph_recs);
     w.bytes("em.gb", glyphs);
+    w.u32s("em.xr", &layout_recs);
+    w.u32s("em.x", &layouts);
     let h = id.finish() as u64;
     w.u32s("em.id", &[h as u32, (h >> 32) as u32]);
     Ok(size)

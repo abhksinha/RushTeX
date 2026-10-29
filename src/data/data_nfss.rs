@@ -287,6 +287,19 @@ impl<'a> NfssTable<'a> {
     /// nearest to it, the first of equals (`\try@size@substitution`), run again with that
     /// size's text. `None` where LaTeX reports the shape not found. Substitution chains
     /// (`sub`, `ssub`, `alias`) are followed, at most `DEPTH` deep.
+    /// Whether an entry of `shape` holds `size` (`\try@size@range`): a single size equal
+    /// to it or a range containing it, so no `\try@size@substitution` runs.
+    pub fn holds(&self, shape: u32, size: &str) -> bool {
+        let Some(sp) = decimal_sp(size) else { return false };
+        self.entries(shape).iter().any(|e| match e[15] {
+            SINGLE => le_i32(e, 0) == sp,
+            _ => {
+                let hi = le_i32(e, 4);
+                sp < if hi == 0 { MAX_DIMEN } else { hi } && sp >= le_i32(e, 0)
+            }
+        })
+    }
+
     pub fn external(&self, shape: u32, size: &'a str) -> Option<External<'a>> {
         self.external_at(shape, size, 0)
     }

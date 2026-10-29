@@ -1,0 +1,16 @@
+\documentclass{article}
+\usepackage{hyperref}
+\newcommand{\contact}[2]{\noindent\textbf{#1}\quad #2\par}
+\begin{document}
+\begin{center}
+\small\href{mailto:alex.morgan@example.org}{alex.morgan@example.org}\quad |\quad
+\href{https://example.org/alex}{example.org/alex}
+\end{center}
+\contact{Web}{\href{https://example.org/a-b?page=1}{a page}}
+\begin{tabular}{ll}
+Mail & \href{mailto:x@example.org}{x@example.org} \\
+ORCID & \href{https://orcid.org/0000-0000-0000-0000}{ORCID 0000-0000-0000-0000}
+\end{tabular}
+
+{\itshape See \href{https://example.org/notes}{the notes}.}
+\end{document}

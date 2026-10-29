@@ -580,28 +580,52 @@ impl Nodes {
     /// `list` with every word replaced by the nodes it stands for, each ligature with
     /// characters of its own, as the main loop would have made them.
     pub fn expand_words(&mut self, list: &mut Vec<Node>) {
-        if !list.iter().any(|n| n.kind == Kind::Word) {
+        self.expand_words_if(list, false);
+    }
+
+    /// [`Self::expand_words`] for the words holding a discretionary alone (`only_disc`), or
+    /// for every word.
+    pub fn expand_words_if(&mut self, list: &mut Vec<Node>, only_disc: bool) {
+        let expands = |ws: &super::engine_words::WordStore, n: &Node| n.kind == Kind::Word && (!only_disc || ws.rec(n.a as u32).disc);
+        if !list.iter().any(|n| expands(&self.words, n)) {
             return;
         }
         let old = std::mem::take(list);
         list.reserve(old.len() * 4);
         for n in old {
-            if n.kind != Kind::Word {
+            if !expands(&self.words, &n) {
                 list.push(n);
                 continue;
             }
             let (s, e) = self.words.range(n.a as u32);
-            for i in s..e {
-                let m = self.words.items[i];
-                if m.kind == Kind::Lig {
+            self.make_items(s as u32, e as u32, list);
+        }
+    }
+
+    /// The nodes of word-store items `s..e`, each ligature and discretionary with what it
+    /// owns made anew.
+    pub fn make_items(&mut self, s: u32, e: u32, out: &mut Vec<Node>) {
+        for i in s..e {
+            let m = self.words.items[i as usize];
+            match m.kind {
+                Kind::Lig => {
                     let mut from = [0u8; 64];
                     let src = self.words.lig_from(&m);
                     from[..src.len()].copy_from_slice(src);
                     let lig = self.lig_node(m.font, m.a as u8, &from[..src.len()], m.sub & 3);
-                    list.push(lig);
-                } else {
-                    list.push(m);
+                    out.push(lig);
                 }
+                Kind::Disc if m.a >= 0 => {
+                    let [pre, post] = self.words.discs[m.a as usize];
+                    let mut list = Vec::new();
+                    self.make_items(pre.0, pre.1, &mut list);
+                    let pre = self.store(&list);
+                    list.clear();
+                    self.make_items(post.0, post.1, &mut list);
+                    let post = self.store(&list);
+                    out.push(Node { a: self.add_disc([pre, post]) as i32, ..m });
+                }
+                _ => out.push(m),
             }
         }
     }

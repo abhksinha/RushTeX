@@ -1,0 +1,34 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+A first display of one row, before any row break:
+\begin{multline}
+a = b
+\end{multline}
+A long sum broken over three rows, numbered:
+\begin{multline}
+a + b + c + d + e + f + g + h + i + j + k + l + m \\
++ n + o + p + q + r + s + t + u + v + w \\
++ x + y + z = \sum_{k=1}^{26} \alpha_k \label{eq:long}
+\end{multline}
+See \eqref{eq:long} and \eqref{eq:two}. Unnumbered:
+\begin{multline*}
+\int_0^1 f(x)\,dx + \int_1^2 f(x)\,dx \\[3pt]
++ \int_2^3 f(x)\,dx = \int_0^3 f(x)\,dx
+\end{multline*}
+Two rows, a starred break, and a fraction:
+\begin{multline}
+\frac{1}{2} + \frac{1}{3} + \frac{1}{4} \\*
+= \frac{13}{12} \label{eq:two}
+\end{multline}
+One row:
+\begin{multline}
+x = y
+\end{multline}
+And one with no number:
+\begin{multline}
+p = q + r \nonumber \\
++ s
+\end{multline}
+Text after.
+\end{document}

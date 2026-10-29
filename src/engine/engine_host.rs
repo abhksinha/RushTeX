@@ -38,6 +38,36 @@ fn format_of(name: &str) -> usize {
     }
 }
 
+/// A reader over the saved index's bytes.
+struct Bytes<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Bytes<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let s = self.b.get(self.at..self.at.checked_add(n)?)?;
+        self.at += n;
+        Some(s)
+    }
+
+    fn len(&mut self) -> Option<usize> {
+        usize::try_from(u64::from_le_bytes(self.take(8)?.try_into().ok()?)).ok()
+    }
+
+    /// A length, then that many bytes.
+    fn part(&mut self) -> Option<&'a [u8]> {
+        let n = self.len()?;
+        self.take(n)
+    }
+}
+
+/// The names `data_embed` gives the stored forms of a file (`EmbedTable::read`).
+const STORED_FORMS: [&str; 4] = ["#clear", "#layout", "#names", "#head"];
+
+/// The saved index's first bytes (`Index::save`); a new layout takes a new number.
+const INDEX_MAGIC: &[u8] = b"RTKPSEI1";
+
 /// FNV-1a: the name hash of the flat index.
 fn hash(s: &[u8]) -> u64 {
     s.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
@@ -73,6 +103,79 @@ impl Index {
     fn seal(&mut self) {
         self.files.sort_by_key(|f| f.0);
         self.text.shrink_to_fit();
+    }
+
+    /// What the saved index depends on: each root's database path, size and modification
+    /// time (nanoseconds), one line per root.
+    fn stamp(roots: &[&str]) -> Vec<u8> {
+        let mut s = Vec::new();
+        for root in roots {
+            for name in ["ls-R", "ls-r"] {
+                let path = format!("{root}/{name}");
+                if let Ok(m) = std::fs::metadata(&path) {
+                    let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+                    s.extend_from_slice(format!("{path}\t{}\t{t}\n", m.len()).as_bytes());
+                    break;
+                }
+            }
+        }
+        s
+    }
+
+    /// Saved as: magic, the stamp, the roots with a database, then `text`, `dirs` and
+    /// `files` as little-endian arrays, each behind its length. Written beside its final
+    /// name and renamed, so a reader never sees half of it.
+    fn save(&self, path: &Path, stamp: &[u8], roots: &[Vec<u8>]) {
+        let mut out = Vec::with_capacity(self.text.len() + self.dirs.len() * 8 + self.files.len() * 20 + stamp.len() + 64);
+        let len = |out: &mut Vec<u8>, n: usize| out.extend_from_slice(&(n as u64).to_le_bytes());
+        out.extend_from_slice(INDEX_MAGIC);
+        len(&mut out, stamp.len());
+        out.extend_from_slice(stamp);
+        let roots = roots.join(&b'\n');
+        len(&mut out, roots.len());
+        out.extend_from_slice(&roots);
+        len(&mut out, self.text.len());
+        out.extend_from_slice(&self.text);
+        len(&mut out, self.dirs.len());
+        for &(a, b) in &self.dirs {
+            out.extend_from_slice(&a.to_le_bytes());
+            out.extend_from_slice(&b.to_le_bytes());
+        }
+        len(&mut out, self.files.len());
+        for &(h, d, a, n) in &self.files {
+            out.extend_from_slice(&h.to_le_bytes());
+            for v in [d, a, n] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        let tmp = path.with_extension("part");
+        if std::fs::write(&tmp, &out).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+
+    /// The index saved at `path` when its stamp is `stamp`, with the roots that had a
+    /// database; `None` when it is missing, of another stamp, or not sound.
+    fn load(path: &Path, stamp: &[u8]) -> Option<(Index, Vec<Vec<u8>>)> {
+        let b = std::fs::read(path).ok()?;
+        if b.get(..INDEX_MAGIC.len())? != INDEX_MAGIC {
+            return None;
+        }
+        let mut r = Bytes { b: &b, at: INDEX_MAGIC.len() };
+        if r.part()? != stamp {
+            return None;
+        }
+        let roots: Vec<Vec<u8>> = r.part()?.split(|&c| c == b'\n').filter(|r| !r.is_empty()).map(<[u8]>::to_vec).collect();
+        let text = r.part()?.to_vec();
+        let u32_at = |s: &[u8], i: usize| u32::from_le_bytes([s[i], s[i + 1], s[i + 2], s[i + 3]]);
+        let n = r.len()?;
+        let raw = r.take(n.checked_mul(8)?)?;
+        let dirs: Vec<(u32, u32)> = raw.as_chunks::<8>().0.iter().map(|c| (u32_at(c, 0), u32_at(c, 4))).collect();
+        let n = r.len()?;
+        let raw = r.take(n.checked_mul(20)?)?;
+        let files: Vec<(u64, u32, u32, u32)> = raw.as_chunks::<20>().0.iter().map(|c| (u64::from_le_bytes(c[..8].try_into().unwrap()), u32_at(c, 8), u32_at(c, 12), u32_at(c, 16))).collect();
+        let sound = dirs.iter().all(|&(a, l)| (a as usize).checked_add(l as usize).is_some_and(|e| e <= text.len())) && files.iter().all(|&(_, d, a, l)| (d as usize) < dirs.len() && (a as usize).checked_add(l as usize).is_some_and(|e| e <= text.len()));
+        sound.then_some((Index { text, dirs, files }, roots))
     }
 
     /// db.c `kpathsea_db_search`: each directory holding `base` whose path matches `elt`,
@@ -262,16 +365,30 @@ impl Kpse {
             }).collect()
         };
         let paths: [Vec<Elt>; 9] = std::array::from_fn(|i| elts(&lines[i]));
-        let mut db = Index::default();
-        let mut db_roots = Vec::new();
-        for root in lines[FORMATS.len()].split(':').map(|r| r.trim_start_matches("!!").trim_end_matches('/')).filter(|r| !r.is_empty()) {
-            let text = std::fs::read(format!("{root}/ls-R")).or_else(|_| std::fs::read(format!("{root}/ls-r")));
-            if let Ok(text) = text {
-                db.read_ls_r(root.as_bytes(), &text);
-                db_roots.push(root.as_bytes().to_vec());
+        // The `ls-R` databases, indexed once and kept beside the search paths
+        // (`kpse-index`), valid while every database keeps its size and modification time.
+        let roots: Vec<&str> = lines[FORMATS.len()].split(':').map(|r| r.trim_start_matches("!!").trim_end_matches('/')).filter(|r| !r.is_empty()).collect();
+        let stamp = Index::stamp(&roots);
+        let saved = cache.map(|c| c.with_file_name("kpse-index"));
+        let (db, db_roots) = match saved.as_ref().and_then(|p| Index::load(p, &stamp)) {
+            Some(loaded) => loaded,
+            None => {
+                let mut db = Index::default();
+                let mut db_roots = Vec::new();
+                for root in &roots {
+                    let text = std::fs::read(format!("{root}/ls-R")).or_else(|_| std::fs::read(format!("{root}/ls-r")));
+                    if let Ok(text) = text {
+                        db.read_ls_r(root.as_bytes(), &text);
+                        db_roots.push(root.as_bytes().to_vec());
+                    }
+                }
+                db.seal();
+                if let Some(p) = &saved {
+                    db.save(p, &stamp, &db_roots);
+                }
+                (db, db_roots)
             }
-        }
-        db.seal();
+        };
         Some(Kpse { paths, db_roots, db, disk: Default::default(), doc_dir, found: Default::default() })
     }
 
@@ -294,10 +411,16 @@ impl Kpse {
                 return Some(b);
             }
         }
-        self.read_disk(name).or_else(embedded)
+        // Then an installed font pack (`data_pack`, native-architecture.md §4b).
+        self.read_disk(name).or_else(embedded).or_else(|| crate::data::data_pack::read(name))
     }
 
     fn read_disk(&self, name: &str) -> Option<Vec<u8>> {
+        // The stored forms of the binary's files (`X.pfb#clear`, `data_embed`) are never
+        // files on disk; a search for one would walk every directory without an `ls-R`.
+        if STORED_FORMS.iter().any(|f| name.ends_with(f)) {
+            return None;
+        }
         if let Some(p) = self.found.borrow().get(name) {
             return p.as_ref().and_then(|p| std::fs::read(p).ok());
         }

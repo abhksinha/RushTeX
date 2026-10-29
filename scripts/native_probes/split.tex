@@ -1,0 +1,49 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+A split in a numbered equation, its number centred on the rows:
+\begin{equation}
+\begin{split}
+(a+b)^4 &= (a+b)^2 (a+b)^2 \\
+        &= (a^2 + 2ab + b^2)(a^2 + 2ab + b^2) \\
+        &= a^4 + 4a^3b + 6a^2b^2 + 4ab^3 + b^4
+\end{split}
+\label{eq:four}
+\end{equation}
+See \eqref{eq:four} and \eqref{eq:after}. Unnumbered, with a space and a starred break:
+\begin{equation*}
+\begin{split}
+\int_0^1 x^2\,dx &= \left. \frac{x^3}{3} \right|_0^1 \\[4pt]
+                 &= \frac{1}{3} \\*
+                 &\approx 0.333
+\end{split}
+\end{equation*}
+A row of one field, and a label before the split:
+\begin{equation}
+\label{eq:after}
+\begin{split}
+f(x) = \sum_{n=0}^{\infty} \frac{x^n}{n!} \\
+     & = e^x
+\end{split}
+\end{equation}
+Numbered, then not after all, and the next number:
+\begin{equation}
+\begin{split}
+u &= v + w
+\end{split}
+\nonumber
+\end{equation}
+\begin{equation}
+\begin{split}
+p &= q
+\end{split}
+\end{equation}
+In brackets:
+\[
+\begin{split}
+a &= b + c \\
+  &= d
+\end{split}
+\]
+Text after.
+\end{document}

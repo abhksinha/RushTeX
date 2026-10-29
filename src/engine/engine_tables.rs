@@ -10,7 +10,7 @@ pub const GLUE_PARAMS: u32 = 18;
 pub const TOKS_PARAMS: u32 = 14;
 
 /// Parameters by name, sorted: (name, region, slot).
-pub static PARAMS: [(&str, Region, u16); 174] = [
+pub const PARAMS: [(&str, Region, u16); 174] = [
     ("TeXXeTstate", Region::Int, 103),
     ("abovedisplayshortskip", Region::Glue, 5),
     ("abovedisplayskip", Region::Glue, 3),

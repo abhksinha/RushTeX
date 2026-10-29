@@ -1,0 +1,49 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{microtype}
+\newtheorem{theorem}{Theorem}
+\begin{document}
+\section{Lists}
+\begin{itemize}
+\item Text after an item, long enough to wrap onto a second line of the list so that
+both margins are reached by the item text.
+\item \textbf{Bold} start, and \emph{then} more.
+
+A second paragraph in the same item, starting with a ``quote'' and running on.
+\item {Grouped} start.
+\end{itemize}
+\begin{enumerate}
+\item Visible text. \item[(x)] Label given.
+\end{enumerate}
+\begin{description}
+\item[Term] Wonderful description text.
+\end{description}
+\section{Theorems and quotes}
+\begin{theorem}
+Your theorem text, which also wraps over the end of the first line to show the
+protrusion at the margins of a theorem.
+\end{theorem}
+\begin{quote}
+Quoted text, with a final full stop.
+\end{quote}
+\begin{center}
+Centred text.
+\end{center}
+Text with a footnote.\footnote{The footnote text starts here.}
+\section{Equations}
+\begin{equation}
+a = b
+\end{equation}
+\begin{align}
+c &= d \\
+e &= f \tag{T}
+\end{align}
+See \eqref{x} and the verbatim:
+\begin{verbatim}
+verbatim text, not protruded.
+\end{verbatim}
+\begin{equation}\label{x}
+g = h
+\end{equation}
+\end{document}

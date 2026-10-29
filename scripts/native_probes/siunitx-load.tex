@@ -1,0 +1,18 @@
+\documentclass{article}
+\usepackage{siunitx}
+\begin{document}
+\section{Results}
+Loading siunitx loads amstext, so $x = \text{mean}$ works, and array, so this table's
+first column is set by a declaration:
+\begin{center}
+\begin{tabular}{>{\bfseries}l|c}
+Run & Time \\ \hline
+A & 12.5 \\
+B & 13.0
+\end{tabular}
+\end{center}
+At the start of the document it loads color too, so every page's head and foot sit in
+\color{red}a colour group\color{black}.
+\newpage
+A second page.
+\end{document}

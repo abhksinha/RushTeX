@@ -74,20 +74,42 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// Word-store items as the nodes they stand for: ligatures read the store's
+    /// characters, and a hyphenated form's discretionary its texts there (as §195).
+    fn show_word_items(&self, items: &[Node], depth: usize, out: &mut String) {
+        let words = &self.e.nodes.words;
+        for m in items {
+            match m.kind {
+                Kind::Char | Kind::Lig => self.show_char(m, words.lig_from(m), depth, out),
+                Kind::Disc if m.a >= 0 => {
+                    Self::line(depth, out);
+                    out.push_str("\\discretionary");
+                    if m.sub > 0 {
+                        out.push_str(" replacing ");
+                        out.push_str(&m.sub.to_string());
+                    }
+                    let [pre, post] = words.discs[m.a as usize];
+                    self.show_word_items(&words.items[pre.0 as usize..pre.1 as usize], depth + 1, out);
+                    for p in &words.items[post.0 as usize..post.1 as usize] {
+                        Self::line(depth + 1, out);
+                        out.push('|');
+                        let mut s = String::new();
+                        self.show_word_items(std::slice::from_ref(p), 0, &mut s);
+                        out.push_str(s.trim_start_matches('\n'));
+                    }
+                }
+                _ => self.show_node(m, depth, out),
+            }
+        }
+    }
+
     fn show_node(&self, n: &Node, depth: usize, out: &mut String) {
         let nodes = &self.e.nodes;
         match n.kind {
             Kind::Box => self.show_box_rec(&nodes.boxes[n.a as usize], depth, out),
             Kind::Char | Kind::Lig => self.show_char(n, nodes.lig_from(n), depth, out),
             // A word shows as the nodes it stands for.
-            Kind::Word => {
-                for m in nodes.word_items(n) {
-                    match m.kind {
-                        Kind::Char | Kind::Lig => self.show_char(m, nodes.words.lig_from(m), depth, out),
-                        _ => self.show_node(m, depth, out),
-                    }
-                }
-            }
+            Kind::Word => self.show_word_items(nodes.word_items(n), depth, out),
             Kind::Rule => {
                 Self::line(depth, out);
                 let [w, h, d] = nodes.rules[n.a as usize];

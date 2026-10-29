@@ -3662,7 +3662,7 @@ We evaluate full-pipeline OpenType math font rendering:
         );
         // Reported, not asserted: wall-clock throughput under the parallel test runner depends
         // on what else is running (1,179 docs/s under load against 6,500 alone), so a threshold
-        // here fails at random. Speed is gated by `benchmark.sh` and `examples/bench_loop.rs`.
+        // here fails at random. Speed is gated by `cargo benchmark`.
         assert!(docs_per_sec > 0.0);
     }
 

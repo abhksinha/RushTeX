@@ -120,6 +120,50 @@ impl<'e, 'a> Machine<'e, 'a> {
         self.box_end(Ctx::Shift(0), Some(idx));
     }
 
+    /// `\hbox to w{...}`, whose material `fill` builds, in the current list.
+    pub(super) fn build_hbox_to(&mut self, w: i32, fill: impl FnOnce(&mut Self)) {
+        self.push_nest(Mode::Horizontal, true, 1000);
+        fill(self);
+        let start = self.start as usize;
+        let b = self.hpack(start, w, true);
+        self.pop_nest();
+        let idx = self.e.nodes.add_box(b);
+        self.box_end(Ctx::Shift(0), Some(idx));
+    }
+
+    /// `\leaders` of the box `fill` builds (natural width) over glue `g` (§1078).
+    pub(super) fn build_leaders(&mut self, g: Glue, fill: impl FnOnce(&mut Self)) {
+        self.push_nest(Mode::Horizontal, true, 1000);
+        fill(self);
+        let start = self.start as usize;
+        let b = self.hpack(start, 0, false);
+        self.pop_nest();
+        let idx = self.e.nodes.add_box(b);
+        let mut n = self.e.nodes.glue_node(g, 100);
+        n.b = idx as i32;
+        self.cur.push(n);
+    }
+
+    /// `\box n`: register `n`'s box appended, the register void at its own level (§1079).
+    pub(super) fn build_box_register(&mut self, n: u32) {
+        let b = self.e.eqtb.box_reg(n);
+        self.e.eqtb.replace_box(n, None);
+        self.box_end(Ctx::Shift(0), b);
+    }
+
+    /// `\copy n`: a copy of register `n`'s box appended (§1079).
+    pub(super) fn build_copy_register(&mut self, n: u32) {
+        let b = self.e.eqtb.box_reg(n).map(|b| self.e.nodes.copy_box(b));
+        self.box_end(Ctx::Shift(0), b);
+    }
+
+    /// `\quad`: `\hskip1em\relax`, the em of the current font.
+    pub(super) fn build_quad(&mut self) {
+        let font = self.cur_font() as usize;
+        let quad = self.e.fonts.list.get(font).and_then(|x| x.params(&self.e.fonts.info).get(5)).copied().unwrap_or(0);
+        self.build_glue(Glue { width: quad, ..Glue::default() }, true);
+    }
+
     /// §1041 `\ `: interword glue at space factor 1000, the space factor kept.
     pub(super) fn build_control_space(&mut self) {
         let sf = std::mem::replace(&mut self.aux, 1000);

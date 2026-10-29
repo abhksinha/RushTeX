@@ -1,0 +1,27 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+Forward: \eqref{eq:star}, \eqref{eq:x} and \ref{eq:both}; and numbered \eqref{eq:n2}.
+\begin{equation}
+a = b \label{eq:n1}
+\end{equation}
+\begin{equation}
+c = d \tag{1a} \label{eq:x}
+\end{equation}
+\begin{equation}
+\label{eq:both} e = f \tag{A}
+\end{equation}
+\begin{equation*}
+g = h \tag{3'} \label{eq:prime}
+\end{equation*}
+\[
+x = y \tag*{[Eq. 7]}
+\]
+\[
+p = q \tag*{(star)} \label{eq:star}
+\]
+\begin{equation}
+r = s \label{eq:n2}
+\end{equation}
+Back: \eqref{eq:n1}, \eqref{eq:prime}, \ref{eq:star}.
+\end{document}

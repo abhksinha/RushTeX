@@ -39,12 +39,48 @@ pub struct WordRec {
     pub disc: bool,
 }
 
-/// Every entry's nodes; a ligature's `b` is where its characters start in `ligs`.
+/// Every entry's nodes; a ligature's `b` is where its characters start in `ligs`. A
+/// hyphenated form's discretionary has its `a` in `discs`, whose pre- and post-break
+/// texts are ranges of `items` too.
 #[derive(Debug, Default)]
 pub struct WordStore {
     pub recs: Vec<WordRec>,
     pub items: Vec<Node>,
     pub ligs: Vec<u8>,
+    pub discs: Vec<[(u32, u32); 2]>,
+    /// Per entry (indexed by its id; absent or empty for a plain word), the range of its
+    /// discretionaries' rows in `rows`, which only the second pass reads.
+    pub brk: Vec<(u32, u32)>,
+    pub rows: Vec<BreakRow>,
+    /// `capture_list`'s lists while they are read, a stack: an inner list is written past
+    /// its outer one and taken off when it moves to `items`.
+    stack: Vec<Node>,
+}
+
+/// One discretionary of a hyphenated form, as §869 and §840 read it, all widths natural
+/// (no glue in a word, so no stretch or shrink): read whole, one row per break.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BreakRow {
+    /// The width of the form's nodes before the discretionary (replaced ones included).
+    pub before: i32,
+    /// The pre-break text's width (§869 `disc_width`).
+    pub pre: i32,
+    /// The width of the `sub` nodes it replaces, and of its post-break text (§840).
+    pub rep: i32,
+    pub post: i32,
+    /// The discretionary's place among the form's items.
+    pub at: u8,
+    /// [`BreakRow::PRE_EMPTY`], [`BreakRow::POST_EMPTY`], [`BreakRow::ENDS_WORD`].
+    pub flags: u8,
+}
+
+impl BreakRow {
+    /// An empty pre-break text: `\exhyphenpenalty`, no pre-break width (§869).
+    pub const PRE_EMPTY: u8 = 1;
+    /// An empty post-break text: §840 discards what follows the replaced nodes.
+    pub const POST_EMPTY: u8 = 2;
+    /// The replaced nodes reach the form's end: what §840 then reads is the paragraph's.
+    pub const ENDS_WORD: u8 = 4;
 }
 
 impl WordStore {
@@ -70,98 +106,127 @@ impl WordStore {
         let at = n.b as usize;
         &self.ligs[at..at + (n.sub >> 2) as usize]
     }
-}
 
-pub struct Words {
-    /// Key: font, hyphen character, paragraph, the characters; value: the entry.
-    map: HashMap<Box<[u8]>, u32, WordHash>,
-    /// The key being looked up, and the word's characters after the first, reused.
-    key: Vec<u8>,
-    run: Vec<u8>,
-    check: bool,
-    nodes: bool,
-    /// Per entry, language and hyphen minima: what §894–§903 make of the word.
-    forms: Forms,
-}
+    /// The store's lengths, to undo what [`Self::capture`] added.
+    fn marks(&self) -> [usize; 5] {
+        [self.recs.len(), self.items.len(), self.ligs.len(), self.discs.len(), self.rows.len()]
+    }
 
-/// A word's hyphenated forms (§903's result), with no node owned: a discretionary's `a`
-/// indexes `discs`, whose lists are ranges of `items`; a ligature's `b` indexes `ligs`.
-#[derive(Default)]
-struct Forms {
-    map: HashMap<u64, Form, WordHash>,
-    items: Vec<Node>,
-    ligs: Vec<u8>,
-    discs: Vec<[(u32, u32); 2]>,
-}
+    fn truncate(&mut self, [r, i, l, d, w]: [usize; 5]) {
+        self.recs.truncate(r);
+        self.items.truncate(i);
+        self.ligs.truncate(l);
+        self.discs.truncate(d);
+        self.rows.truncate(w);
+        self.brk.truncate(r);
+    }
 
-#[derive(Clone, Copy)]
-enum Form {
-    /// No hyphen: the word stays one node.
-    Whole,
-    /// The nodes that replace the word.
-    Nodes(u32, u32),
-    /// Nodes a form cannot hold: hyphenated every time.
-    Again,
-}
+    /// Entry `id`'s break rows (none for a plain word).
+    #[inline]
+    pub fn rows(&self, id: u32) -> &[BreakRow] {
+        self.brk.get(id as usize).map_or(&[], |&(s, e)| &self.rows[s as usize..e as usize])
+    }
 
-impl Forms {
-    /// `list` (nodes §903 made) as a form: its range, or `None` for a node it cannot hold.
-    fn capture(&mut self, nodes: &super::engine_node::Nodes, list: &[Node]) -> Option<(u32, u32)> {
-        let mut out = Vec::with_capacity(list.len());
+    /// `list` (nodes §903 made, owned by `nodes`) as a new entry, its size from `dims`;
+    /// `None` for a node an entry cannot hold.
+    fn capture(&mut self, nodes: &super::engine_node::Nodes, list: &[Node], dims: &impl Fn(&Node) -> [i32; 4]) -> Option<u32> {
+        let marks = self.marks();
+        let main = self.capture_list(nodes, list);
+        let Some((start, end)) = main else {
+            self.truncate(marks);
+            self.stack.clear();
+            return None;
+        };
+        let width_of = |ws: &Self, (s, e): (u32, u32)| -> i32 {
+            ws.items[s as usize..e as usize].iter().map(|n| match n.kind {
+                Kind::Char | Kind::Lig => dims(n)[0],
+                Kind::Kern => n.a,
+                _ => 0,
+            }).sum()
+        };
+        let (mut width, mut height, mut depth) = (0, 0, 0);
+        let row_start = self.rows.len() as u32;
+        let len = (end - start) as usize;
+        if len > u8::MAX as usize {
+            self.truncate(marks);
+            return None;
+        }
+        for (k, i) in (start..end).enumerate() {
+            let n = self.items[i as usize];
+            match n.kind {
+                Kind::Char | Kind::Lig => {
+                    let [w, h, d, _] = dims(&n);
+                    height = height.max(h);
+                    depth = depth.max(d);
+                    width += w;
+                }
+                Kind::Kern => width += n.a,
+                Kind::Disc => {
+                    let r = n.sub as usize;
+                    let (pre, post) = if n.a >= 0 { let [p, q] = self.discs[n.a as usize]; (width_of(self, p), Some((width_of(self, q), q.0 == q.1, p.0 == p.1))) } else { (0, None) };
+                    let (post, post_empty, pre_empty) = post.unwrap_or((0, true, true));
+                    let rep_end = (i + 1 + r as u32).min(end);
+                    let rep = width_of(self, (i + 1, rep_end));
+                    let mut flags = 0;
+                    if pre_empty {
+                        flags |= BreakRow::PRE_EMPTY;
+                    }
+                    if post_empty {
+                        flags |= BreakRow::POST_EMPTY;
+                    }
+                    if k + 1 + r >= len {
+                        flags |= BreakRow::ENDS_WORD;
+                    }
+                    self.rows.push(BreakRow { before: width, pre, rep, post, at: k as u8, flags });
+                }
+                _ => {}
+            }
+        }
+        let id = self.recs.len() as u32;
+        self.recs.push(WordRec { start, end, width, height, depth, disc: true });
+        if self.brk.len() < id as usize {
+            self.brk.resize(id as usize, (0, 0));
+        }
+        self.brk.push((row_start, self.rows.len() as u32));
+        Some(id)
+    }
+
+    /// `list`'s nodes appended to `items` (a discretionary's texts first): their range.
+    fn capture_list(&mut self, nodes: &super::engine_node::Nodes, list: &[Node]) -> Option<(u32, u32)> {
+        let base = self.stack.len();
         for n in list {
             match n.kind {
-                Kind::Char | Kind::Kern => out.push(*n),
+                Kind::Char => self.stack.push(*n),
+                // A kern §903 makes is a font kern; another would be a break (`kern_break`).
+                Kind::Kern if n.sub == 0 => self.stack.push(*n),
                 Kind::Lig => {
                     let at = self.ligs.len() as i32;
                     self.ligs.extend_from_slice(nodes.lig_from(n));
-                    out.push(Node { b: at, ..*n });
+                    self.stack.push(Node { b: at, ..*n });
                 }
-                Kind::Disc if n.a < 0 => out.push(*n),
+                Kind::Disc if n.a < 0 => self.stack.push(*n),
                 Kind::Disc => {
                     let [pre, post] = nodes.discs[n.a as usize];
-                    let pre = self.capture(nodes, nodes.get(pre))?;
-                    let post = self.capture(nodes, nodes.get(post))?;
+                    let pre = self.capture_list(nodes, nodes.get(pre))?;
+                    let post = self.capture_list(nodes, nodes.get(post))?;
                     self.discs.push([pre, post]);
-                    out.push(Node { a: self.discs.len() as i32 - 1, ..*n });
+                    self.stack.push(Node { a: self.discs.len() as i32 - 1, ..*n });
                 }
                 _ => return None,
             }
         }
         let s = self.items.len() as u32;
-        self.items.extend(out);
+        self.items.extend_from_slice(&self.stack[base..]);
+        self.stack.truncate(base);
         Some((s, self.items.len() as u32))
     }
 
-    /// The nodes of form range `r`, each ligature and discretionary with lists of its own.
-    fn make(&self, nodes: &mut super::engine_node::Nodes, (s, e): (u32, u32), out: &mut Vec<Node>) {
-        for &n in &self.items[s as usize..e as usize] {
-            match n.kind {
-                Kind::Lig => {
-                    let at = n.b as usize;
-                    let from = &self.ligs[at..at + (n.sub >> 2) as usize];
-                    out.push(nodes.lig_node(n.font, n.a as u8, from, n.sub & 3));
-                }
-                Kind::Disc if n.a >= 0 => {
-                    let [pre, post] = self.discs[n.a as usize];
-                    let mut list = Vec::new();
-                    self.make(nodes, pre, &mut list);
-                    let pre = nodes.store(&list);
-                    list.clear();
-                    self.make(nodes, post, &mut list);
-                    let post = nodes.store(&list);
-                    out.push(Node { a: nodes.add_disc([pre, post]) as i32, ..n });
-                }
-                _ => out.push(n),
-            }
-        }
-    }
-
-    /// A canonical text of form range `r`, to compare two forms.
+    /// A canonical text of item range `r`, to compare two entries.
     fn text(&self, (s, e): (u32, u32), out: &mut Vec<i64>) {
         for n in &self.items[s as usize..e as usize] {
             out.extend([n.kind as i64, n.sub as i64, n.font as i64]);
             match n.kind {
-                Kind::Lig => out.extend(self.ligs[n.b as usize..n.b as usize + (n.sub >> 2) as usize].iter().map(|&c| c as i64).chain([n.a as i64])),
+                Kind::Lig => out.extend(self.lig_from(n).iter().map(|&c| c as i64).chain([n.a as i64])),
                 Kind::Disc if n.a >= 0 => {
                     let [pre, post] = self.discs[n.a as usize];
                     out.push(-1);
@@ -176,15 +241,79 @@ impl Forms {
     }
 }
 
+/// The characters after the first that a word's key packs into a `u128`.
+const SHORT: usize = 9;
+
+/// A `u128` key hashed by one folded 64×64-bit multiply of its halves.
+#[derive(Clone, Copy, Default)]
+pub struct PackedHash;
+
+impl std::hash::BuildHasher for PackedHash {
+    type Hasher = Folded;
+    fn build_hasher(&self) -> Folded {
+        Folded(0)
+    }
+}
+
+pub struct Folded(u64);
+
+impl std::hash::Hasher for Folded {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    fn write_u128(&mut self, v: u128) {
+        let m = ((v as u64) ^ 0x243f_6a88_85a3_08d3) as u128 * (((v >> 64) as u64) ^ 0x1319_8a2e_0370_7344) as u128;
+        self.0 = (m as u64) ^ ((m >> 64) as u64);
+    }
+}
+
+pub struct Words {
+    /// Key: font, hyphen character, paragraph, the characters; value: the entry. Words of
+    /// up to [`SHORT`] characters after the first are in `short`, keyed as one `u128`.
+    map: HashMap<Box<[u8]>, u32, WordHash>,
+    short: HashMap<u128, u32, PackedHash>,
+    short_key: Option<u128>,
+    /// The key being looked up, and the word's characters after the first, reused.
+    key: Vec<u8>,
+    run: Vec<u8>,
+    /// `hyphenate_word`'s lists, kept for their room.
+    temp: Vec<Node>,
+    made: Vec<Node>,
+    check: bool,
+    nodes: bool,
+    /// Per entry, language and hyphen minima: what §894–§903 make of the word.
+    forms: HashMap<u64, Form, WordHash>,
+}
+
+#[derive(Clone, Copy)]
+enum Form {
+    /// No hyphen: the word stays one node.
+    Whole,
+    /// The hyphenated form, an entry of its own (holding discretionaries).
+    Word(u32),
+    /// Nodes an entry cannot hold: hyphenated every time.
+    Again,
+}
+
 impl Default for Words {
     fn default() -> Self {
         let check = std::env::var_os("RT_WORD_CHECK").is_some_and(|v| v == "1");
         let nodes = std::env::var_os("RT_WORD_NODES").is_none_or(|v| v != "0");
-        Words { map: HashMap::default(), key: Vec::new(), run: Vec::new(), check, nodes, forms: Forms::default() }
+        Words { map: HashMap::default(), short: HashMap::default(), short_key: None, key: Vec::new(), run: Vec::new(), temp: Vec::new(), made: Vec::new(), check, nodes, forms: HashMap::default() }
     }
 }
 
 impl Machine<'_, '_> {
+    /// `RT_WORD_CHECK=1`: every shortcut of the word table is checked against the slow way.
+    pub(super) fn words_checked(&self) -> bool {
+        self.words.check
+    }
+
     /// The word that starts with `first` and continues with the characters next in the file,
     /// appended from the table (made and entered the first time). `false` when the word is
     /// not one the table can hold; the main loop then reads it token by token.
@@ -230,19 +359,36 @@ impl Machine<'_, '_> {
         let Some(lx) = self.input.file_next() else { return false };
         let Some(end) = lx.word_run(cats) else { return false };
         let w = &mut self.words;
-        w.run.clear();
-        w.run.extend(lx.run_bytes(end));
-        w.key.clear();
-        w.key.extend_from_slice(&f.to_le_bytes());
-        w.key.extend_from_slice(&match u8::try_from(hyphen) {
+        let hyphen = match u8::try_from(hyphen) {
             Ok(h) => [1, h],
             Err(_) => [0, 0],
-        });
-        w.key.push(paragraph as u8);
-        w.key.push(first);
-        w.key.extend_from_slice(&w.run);
+        };
+        // A short word's key is one `u128`: font, hyphen character, paragraph, first
+        // character, up to nine more and their count; compared and hashed as one value.
+        let mut packed = [0u8; 16];
+        let [f0, f1] = f.to_le_bytes();
+        packed[..6].copy_from_slice(&[f0, f1, hyphen[0], hyphen[1], paragraph as u8, first]);
+        w.run.clear();
+        for (i, c) in lx.run_bytes(end).enumerate() {
+            w.run.push(c);
+            if i < SHORT {
+                packed[6 + i] = c;
+            }
+        }
         let n = w.run.len();
-        let found = w.map.get(w.key.as_slice()).copied();
+        w.short_key = (n <= SHORT).then(|| {
+            packed[15] = n as u8;
+            u128::from_le_bytes(packed)
+        });
+        let found = match w.short_key {
+            Some(k) => w.short.get(&k).copied(),
+            None => {
+                w.key.clear();
+                w.key.extend_from_slice(&[f0, f1, hyphen[0], hyphen[1], paragraph as u8, first]);
+                w.key.extend_from_slice(&w.run);
+                w.map.get(w.key.as_slice()).copied()
+            }
+        };
         // §581: a missing character ends the main loop early; such a word is not entered.
         // An entry was made from characters the font has, which it keeps.
         if found.is_none() && (!font.metrics.exists(first) || !w.run.iter().all(|&c| font.metrics.exists(c))) {
@@ -350,7 +496,14 @@ impl Machine<'_, '_> {
             None => {
                 let id = ws.recs.len() as u32;
                 ws.recs.push(rec);
-                self.words.map.insert(self.words.key.as_slice().into(), id);
+                match self.words.short_key {
+                    Some(k) => {
+                        self.words.short.insert(k, id);
+                    }
+                    None => {
+                        self.words.map.insert(self.words.key.as_slice().into(), id);
+                    }
+                }
                 Some(id)
             }
             Some(id) => {
@@ -359,7 +512,7 @@ impl Machine<'_, '_> {
                 let ligs = |r: (usize, usize)| -> Vec<u8> { ws.items[r.0..r.1].iter().filter(|n| n.kind == Kind::Lig).flat_map(|n| ws.lig_from(n).iter().copied()).collect() };
                 let (os, oe) = (old.start as usize, old.end as usize);
                 let ok = oe - os == e - s && ws.items[os..oe].iter().zip(&ws.items[s..e]).all(|(a, b)| same(a, b)) && ligs((os, oe)) == ligs((s, e)) && (old.width, old.height, old.depth, old.disc) == (width, height, depth, disc);
-                assert!(ok, "RT_WORD_CHECK: the word table's entry for {:?} differs from the main loop's nodes", String::from_utf8_lossy(&self.words.key[5..]));
+                assert!(ok, "RT_WORD_CHECK: the word table's entry for {:?} differs from the main loop's nodes", String::from_utf8_lossy(&self.words.run));
                 ws.items.truncate(s);
                 ws.ligs.truncate(lig_mark);
                 Some(id)
@@ -400,23 +553,22 @@ impl Machine<'_, '_> {
     /// §894–§903 for the word node after glue `g`, which a glue or penalty follows
     /// ([`Machine::expand_words_near`]): the word is hyphenated as its nodes would be, alone
     /// between that glue and a penalty, which is all §896–§899 read of the paragraph. A word
-    /// without hyphens stays one node; whether it has any is kept per entry, language and
-    /// hyphen minima.
-    pub(super) fn hyphenate_word(&mut self, par: &[Node], g: usize, lang: usize, l_hyf: usize, r_hyf: usize, edits: &mut Vec<(usize, usize, Vec<Node>)>) {
+    /// without hyphens stays as it is; a hyphenated one becomes the entry of its form, which
+    /// replaces the word node's entry (returned). What a word becomes is kept per entry,
+    /// language and hyphen minima. A form an entry cannot hold goes on `edits` as nodes.
+    pub(super) fn hyphenate_word(&mut self, par: &[Node], g: usize, lang: usize, l_hyf: usize, r_hyf: usize, edits: &mut Vec<(usize, usize, Vec<Node>)>) -> Option<u32> {
         let word = par[g + 1];
         let key = (word.a as u64) << 24 | (lang as u64 & 0xFF) << 16 | (l_hyf as u64 & 0xFF) << 8 | (r_hyf as u64 & 0xFF);
-        let known = self.words.forms.map.get(&key).copied();
+        let known = self.words.forms.get(&key).copied();
         match known {
-            Some(Form::Whole) if !self.words.check => return,
-            Some(Form::Nodes(s, e)) if !self.words.check => {
-                let mut nodes = Vec::with_capacity((e - s) as usize);
-                self.words.forms.make(&mut self.e.nodes, (s, e), &mut nodes);
-                edits.push((g + 1, g + 1, nodes));
-                return;
-            }
+            Some(Form::Whole) if !self.words.check => return None,
+            Some(Form::Word(id)) if !self.words.check => return Some(id),
             _ => {}
         }
-        let mut temp = vec![par[g], word];
+        // `temp` and `nodes` are the table's, kept for their room.
+        let mut temp = std::mem::take(&mut self.words.temp);
+        temp.clear();
+        temp.extend_from_slice(&[par[g], word]);
         self.e.nodes.expand_words(&mut temp);
         temp.push(Node::new(Kind::Penalty, 0));
         let (mut lang, mut l_hyf, mut r_hyf) = (lang, l_hyf, r_hyf);
@@ -424,39 +576,60 @@ impl Machine<'_, '_> {
         self.try_hyphenate(&temp, 0, &mut lang, &mut l_hyf, &mut r_hyf, &mut one);
         let last = temp.len() - 1;
         let Some((keep, hb, out)) = one.pop() else {
-            assert!(!matches!(known, Some(Form::Nodes(..))), "RT_WORD_CHECK: a word's hyphenated form is not hyphenated again");
-            self.words.forms.map.insert(key, Form::Whole);
+            assert!(!matches!(known, Some(Form::Word(..))), "RT_WORD_CHECK: a word's hyphenated form is not hyphenated again");
+            self.words.forms.insert(key, Form::Whole);
             for &n in &temp[1..last] {
                 self.e.nodes.flush_node(n);
             }
-            return;
+            self.words.temp = temp;
+            return None;
         };
         // §903: the replaced nodes go; the rest of the word moves into the paragraph.
         for &n in &temp[keep..=hb] {
             self.e.nodes.flush_node(n);
         }
-        let mut nodes = Vec::with_capacity(last + out.len());
+        let mut nodes = std::mem::take(&mut self.words.made);
+        nodes.clear();
         nodes.extend_from_slice(&temp[1..keep]);
-        nodes.extend(out);
+        nodes.extend_from_slice(&out);
         nodes.extend_from_slice(&temp[hb + 1..last]);
-        let forms = &mut self.words.forms;
-        let marks = (forms.items.len(), forms.ligs.len(), forms.discs.len());
-        let form = forms.capture(&self.e.nodes, &nodes).map_or(Form::Again, |(s, e)| Form::Nodes(s, e));
-        match (known, form) {
-            (Some(Form::Nodes(os, oe)), Form::Nodes(s, e)) => {
+        self.e.hyph.give_back(out);
+        self.words.temp = temp;
+        let fonts = &self.e.fonts;
+        let dims = |n: &Node| u8::try_from(n.a).ok().and_then(|c| fonts.dims(n.font, c)).unwrap_or_default();
+        let mut ws = std::mem::take(&mut self.e.nodes.words);
+        let marks = ws.marks();
+        let form = ws.capture(&self.e.nodes, &nodes, &dims).map_or(Form::Again, Form::Word);
+        let form = match (known, form) {
+            (Some(Form::Word(old)), Form::Word(new)) => {
                 let (mut a, mut b) = (Vec::new(), Vec::new());
-                forms.text((os, oe), &mut a);
-                forms.text((s, e), &mut b);
-                assert!(a == b, "RT_WORD_CHECK: a word's hyphenated form differs from §903's nodes");
-                forms.items.truncate(marks.0);
-                forms.ligs.truncate(marks.1);
-                forms.discs.truncate(marks.2);
+                let r = |id: u32| (ws.recs[id as usize].start, ws.recs[id as usize].end);
+                ws.text(r(old), &mut a);
+                ws.text(r(new), &mut b);
+                assert!(a == b && (ws.recs[old as usize].width, ws.recs[old as usize].height, ws.recs[old as usize].depth) == (ws.recs[new as usize].width, ws.recs[new as usize].height, ws.recs[new as usize].depth), "RT_WORD_CHECK: a word's hyphenated form differs from §903's nodes");
+                ws.truncate(marks);
+                Form::Word(old)
             }
             (Some(Form::Whole), _) => panic!("RT_WORD_CHECK: a word kept whole is hyphenated"),
             _ => {
-                forms.map.insert(key, form);
+                self.words.forms.insert(key, form);
+                form
+            }
+        };
+        self.e.nodes.words = ws;
+        match form {
+            Form::Word(id) => {
+                // The entry holds the form; the nodes made for it go.
+                for &n in &nodes {
+                    self.e.nodes.flush_node(n);
+                }
+                self.words.made = nodes;
+                Some(id)
+            }
+            _ => {
+                edits.push((g + 1, g + 1, nodes));
+                None
             }
         }
-        edits.push((g + 1, g + 1, nodes));
     }
 }

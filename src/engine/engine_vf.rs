@@ -45,7 +45,13 @@ pub struct Vf {
     /// Shared with the font's expanded copies (pdftex.web `auto_expand_vf`).
     packets: Rc<[(u32, u32)]>,
     code: Rc<[u8]>,
+    /// Per character, made on first use: the local font and code of a packet that only
+    /// selects a font and sets one character (`(font << 8) | code`), else `NOT_DIRECT`.
+    direct: std::cell::OnceCell<Box<[u32; 256]>>,
 }
+
+/// A character whose packet does more than set one character of a local font.
+const NOT_DIRECT: u32 = u32::MAX;
 
 /// Which fonts are virtual: per font, 0 not yet checked, 1 real, `n + 2` virtual font `n`.
 #[derive(Default)]
@@ -94,10 +100,51 @@ fn read(code: &[u8], at: &mut usize, k: usize, signed: bool) -> i32 {
 }
 
 impl Vf {
+    /// The local font and code that character `c`'s packet sets, when the packet is only
+    /// that: `NOP`s, at most one font selection, then one `set_char` (no move, rule, push or
+    /// special). Typesetting such a packet is writing that character at the reference point.
+    pub fn direct(&self, c: u8) -> Option<(u16, u8)> {
+        let map = self.direct.get_or_init(|| Box::new(std::array::from_fn(|c| self.direct_of(c as u8))));
+        let d = map[c as usize];
+        (d != NOT_DIRECT).then_some(((d >> 8) as u16, d as u8))
+    }
+
+    fn direct_of(&self, c: u8) -> u32 {
+        let Some(&(start, len)) = self.packets.get(c as usize) else { return NOT_DIRECT };
+        if len == u32::MAX {
+            return NOT_DIRECT;
+        }
+        let code = &self.code[start as usize..(start + len) as usize];
+        let mut f = self.locals.first().map_or(0, |l| l.1);
+        let (mut at, mut selected, mut set) = (0, false, None);
+        while at < code.len() {
+            let cmd = code[at];
+            at += 1;
+            match cmd {
+                NOP => {}
+                FNT_NUM_0..=234 | FNT1 if !selected && set.is_none() => {
+                    let k = if cmd == FNT1 { read(code, &mut at, 1, false) as u32 } else { (cmd - FNT_NUM_0) as u32 };
+                    let Some(l) = self.locals.iter().find(|l| l.0 == k) else { return NOT_DIRECT };
+                    (f, selected) = (l.1, true);
+                }
+                0..=127 if set.is_none() => set = Some(cmd),
+                SET1 if set.is_none() => set = Some(read(code, &mut at, 1, false) as u8),
+                _ => return NOT_DIRECT,
+            }
+        }
+        set.map_or(NOT_DIRECT, |ch| (f as u32) << 8 | ch as u32)
+    }
+
     /// pdfTeX's `do_vf_packet` for character `c` of the font, whose size `size` scales the
     /// packet's movements, with the reference point at (`h`, `v`).
     pub fn typeset(&self, size: i32, c: u8, h: i32, v: i32, depth: u8, out: &mut dyn PacketOut) {
         if depth >= MAX_RECURSION {
+            return;
+        }
+        // A packet that only sets one character (`direct`): the loop below would select its
+        // font and write that character at the reference point, and nothing else.
+        if let Some((f, ch)) = self.direct(c) {
+            out.packet_char(f, ch, h, v, depth + 1);
             return;
         }
         let Some(&(start, len)) = self.packets.get(c as usize) else { return };
@@ -297,7 +344,7 @@ impl Machine<'_, '_> {
             }
             at += len;
         }
-        self.vf.vfs.push(Vf { locals, packets: packets.into(), code: code.into() });
+        self.vf.vfs.push(Vf { locals, packets: packets.into(), code: code.into(), direct: Default::default() });
         let n = self.vf.vfs.len() as u32 + 1;
         self.vf.set(f, n);
     }
@@ -320,7 +367,7 @@ impl Machine<'_, '_> {
                 todo.push(l.1);
             }
         }
-        self.vf.vfs.push(Vf { locals, packets, code });
+        self.vf.vfs.push(Vf { locals, packets, code, direct: Default::default() });
         let n = self.vf.vfs.len() as u32 + 1;
         self.vf.set(f, n);
         true

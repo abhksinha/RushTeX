@@ -1,0 +1,13 @@
+% lmodern natively, with T1 and amsmath/amssymb: Latin Modern text in every shape, the
+% typewriter family (ot1lmtt.fd pinned), and the four base math families replaced.
+\documentclass{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\begin{document}
+\section{Latin Modern}\subsection{Shapes}
+Roman, \textit{italic}, \textsl{slanted}, \textsc{Small Caps}, \textbf{bold \textit{bold italic}}, \textsf{sans \textbf{bold sans}}, \texttt{typewriter \textbf{bold}}, {\small small} {\large large} {\Huge Huge} {\tiny tiny}. Accents: caf\'e na\"ive \c{c}a \v{s} --- dashes -- ``quotes'' fi ff ffl.
+\[ \int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}, \quad \mathbf{A}\mathcal{B}\mathit{c}\mathrm{d}\mathsf{e}\mathtt{f}, \quad \sum_{n=1}^{N} \alpha_n \beta^n \le \Gamma \]
+\begin{equation} \left( \frac{a}{b} \right)^2 \neq \mathbb{R} \cup \{x\} \label{e}\end{equation}
+\begin{itemize}\item One \item Two\end{itemize} See (\ref{e}).
+\end{document}

@@ -179,6 +179,17 @@ impl<'a> Input<'a> {
         }
     }
 
+    /// The rest of the file line being read, unread; `None` when a token list is pending.
+    pub fn raw_peek(&mut self) -> Option<String> {
+        self.trim();
+        let i = match self.frames.last() {
+            None => 0,
+            Some(f) if f.arena == Arena::File => f.pos as usize,
+            Some(_) => return None,
+        };
+        Some(self.files[i].raw_peek())
+    }
+
     /// [`Lexer::raw_until`] on the file being read, when no token list is pending.
     pub fn raw_until(&mut self, end: &str, end_line_char: i32) -> Option<String> {
         self.trim();

@@ -70,6 +70,20 @@ impl Machine<'_, '_> {
         self.whatsit(SAVE_POS, 0, Span { start: 0, end: 0 });
     }
 
+    /// color.sty's `\set@color` (`\pdfcolorstack0 push{text}`) with `Some(text)`, or its
+    /// `\reset@color` (`pop`), as a whatsit on the current list.
+    pub(super) fn color_stack(&mut self, push: Option<&str>) {
+        let span = match push {
+            Some(text) => {
+                let mut toks = Vec::with_capacity(text.len());
+                super::engine_value::str_toks(text, &mut toks);
+                self.e.toks.store(&toks)
+            }
+            None => Span::default(),
+        };
+        self.whatsit(if push.is_some() { COLOR_PUSH } else { COLOR_POP }, 0, span);
+    }
+
     fn whatsit(&mut self, sub: u8, font: u16, span: Span) {
         self.cur.push(Node { kind: Kind::Whatsit, sub, font, a: span.start as i32, b: span.end as i32 });
     }

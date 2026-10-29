@@ -1,0 +1,16 @@
+\documentclass{article}
+\begin{document}
+\begin{tabular}{|l|p{3cm}|r|}
+\hline
+Name & A long description that wraps over several lines in the paragraph column & 12 \\
+\hline
+Short & Brief & 3 \\
+Empty &  & 4 \\
+\hline
+\end{tabular}
+
+\begin{tabular}{@{}p{.3\textwidth}p{2.5cm}@{}}
+First column text that is long enough to wrap around & Second \\[4pt]
+x & y
+\end{tabular}
+\end{document}

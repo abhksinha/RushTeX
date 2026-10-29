@@ -46,6 +46,15 @@ debug = true
 strip = false
 panic = "abort"
 
+# Iterating on a feature (`cargo build --profile iter`): release code without LTO, built
+# incrementally in parallel units. Gates, benchmarks and instruction counts use `release`.
+[profile.iter]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+debug = false
+
 [profile.bench]
 opt-level = 3
 debug = true

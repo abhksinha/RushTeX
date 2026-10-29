@@ -1,0 +1,26 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\numberwithin{equation}{section}
+\newtheorem{lemma}{Lemma}[section]
+\begin{document}
+\tableofcontents
+\section{Main}\label{sec:main}
+See Appendix~\ref{app:proofs}, Lemma~\ref{lem:b} and \eqref{eq:b}.
+\begin{equation}
+a = b \label{eq:a}
+\end{equation}
+\begin{lemma}\label{lem:a} First. \end{lemma}
+\appendix
+\section{Proofs}\label{app:proofs}
+\begin{lemma}\label{lem:b} In the appendix. \end{lemma}
+\begin{equation}
+c = d \label{eq:b}
+\end{equation}
+\subsection{Details}\label{app:details}
+Back to Section~\ref{sec:main}, \eqref{eq:a}, Lemma~\ref{lem:a} and \ref{app:details}.
+\section{More}
+\begin{align}
+e &= f \\ g &= h
+\end{align}
+\end{document}

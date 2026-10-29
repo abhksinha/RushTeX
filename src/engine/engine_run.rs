@@ -50,6 +50,8 @@ pub struct Machine<'e, 'a> {
     /// definition's text.
     pub(super) collect: Vec<Token>,
     pub(super) pattern: Vec<Token>,
+    /// The line breaker's lists, lent to each paragraph.
+    pub(super) break_pool: std::cell::Cell<super::engine_linebreak::BreakPool>,
     pub(super) def: Vec<Token>,
     /// §211 the semantic nest: the enclosing lists while a box is built (empty at the
     /// outer level, whose lists are the native pipeline's), the build buffer holding every
@@ -194,7 +196,7 @@ pub(super) struct X {
 
 impl<'e, 'a> Machine<'e, 'a> {
     pub fn new(e: &'e mut Engine, src: &'a str) -> Self {
-        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), text_run: None, words: Default::default(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), dead_buf: Vec::new(), kernel: None, doc: None, #[cfg(all(test, feature = "oracle"))] used_cs: Vec::new(), #[cfg(feature = "mprof")] mprof: Default::default(), run_index: 1 }
+        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), text_run: None, words: Default::default(), break_pool: Default::default(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), dead_buf: Vec::new(), kernel: None, doc: None, #[cfg(all(test, feature = "oracle"))] used_cs: Vec::new(), #[cfg(feature = "mprof")] mprof: Default::default(), run_index: 1 }
     }
 
     /// Records an error with TeX's `l.<line>` context of the innermost file.
@@ -577,6 +579,8 @@ impl<'e, 'a> Machine<'e, 'a> {
             }
             // pdfTeX's protrusion and expansion codes and `\pdffontexpand`.
             Meaning::Kernel(i) => return self.kernel_command(i, x.t),
+            // The kernel's UTF-8 lead bytes, active: the native reads the character's bytes.
+            Meaning::Doc(i) if i as usize == super::engine_doc::UTF8_LEAD => return self.utf8_char(x.t),
             Meaning::Doc(i) => return self.doc_command(i),
             Meaning::Native(i) if self.micro_command(super::engine_tables::PRIMITIVES[i as usize].0) => return,
             // pdfTeX's `\pdfxform` and `\pdfrefxform`.

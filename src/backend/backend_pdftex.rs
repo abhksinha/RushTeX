@@ -305,9 +305,46 @@ impl TextState {
     /// [`Self::char`] in a font automatically expanded by `ea` thousandths.
     #[inline]
     pub fn char_ex(&mut self, out: &mut Vec<u8>, c: u8, w: i64, h: i64, v: i64, ea: i64) {
+        // The next character of an open string, on its baseline, in an unexpanded scalable
+        // font, where the viewer already is: `begin_string_ex` would write nothing, since
+        // its displacement `divide_scaled(dh, font_size, 3)` rounds to 0 exactly when
+        // `2000·|dh| < font_size`, and no new position is due. Most characters take this.
+        if self.doing_string && ea == 0 && self.tm_a == 0 && self.pk_scale == 0 && !self.lost && (v - self.v).abs() < MIN_BP_VAL && 2000 * (h - (self.tj_start_h + self.delta_h)).abs() < self.font_size {
+            print_char(out, c);
+            self.delta_h += divide_scaled(w, self.font_size, 4).1;
+            return;
+        }
         self.begin_string_ex(out, h, v, ea);
         print_char(out, c);
         self.advance(w);
+    }
+
+    /// The current font's `pdf_font_size`.
+    #[inline]
+    pub fn font_size(&self) -> i64 {
+        self.font_size
+    }
+
+    /// Characters that [`Self::char_ex`] would each write by its fast path, written at
+    /// once: the first at `h`, on baseline `v`, in an unexpanded scalable font. `drift` is
+    /// the least and greatest of TeX's widths less the viewer's advances over the
+    /// characters before each one (0 for the first), and `adv` the viewer's advance over
+    /// them all. Each character takes the fast path exactly when its own drift from the
+    /// viewer's position keeps `2000·|dh| < font_size`, and `|·|` is greatest at an end of
+    /// the range, so the two ends decide for all. Returns false, writing nothing, if any
+    /// character would not take it.
+    #[inline]
+    pub fn run(&mut self, out: &mut Vec<u8>, bytes: &[u8], h: i64, v: i64, drift: [i64; 2], adv: i64) -> bool {
+        if !self.doing_string || self.tm_a != 0 || self.pk_scale != 0 || self.lost || (v - self.v).abs() >= MIN_BP_VAL {
+            return false;
+        }
+        let dh = h - (self.tj_start_h + self.delta_h);
+        if 2000 * (dh + drift[0]).abs() >= self.font_size || 2000 * (dh + drift[1]).abs() >= self.font_size {
+            return false;
+        }
+        out.extend_from_slice(bytes);
+        self.delta_h += adv;
+        true
     }
 
     /// `adv_char_width`: the viewer's advance over a character of TeX width `w`, through

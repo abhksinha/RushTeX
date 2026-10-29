@@ -2,11 +2,13 @@
 # matched against the pinned file list (scripts/texlive/files.tsv). The set is what most
 # documents use: Computer Modern and the AMS fonts (text, math, symbols, Fraktur), Latin
 # Modern (T1 text with lmodern), and the URW clones of the PostScript base fonts (Times,
-# Helvetica, Courier, Palatino, Symbol), with the encodings their map lines name.
+# Helvetica, Courier, Palatino, Symbol), with the encodings their map lines name; the
+# maths fonts the native packages use (rsfs for mathrsfs's \mathscr).
 cm*.pfb
 msam*.pfb
 msbm*.pfb
 eu*.pfb
+rsfs*.pfb
 lm*.pfb
 utm*.pfb
 uhv*.pfb
@@ -19,3 +21,23 @@ lm-*.enc
 # article's TS1 text font (tcrm1000 is cm-super's sfrm1000 through its TS1 encoding).
 sfrm1000.pfb
 cm-super-ts1.enc
+# T1 text (`[T1]{fontenc}`, the EC fonts drawn by cm-super): its encoding and the programs
+# most templates use (10, 10.95 and 12pt text, headings, footnotes), by measured use.
+cm-super-t1.enc
+sfrm1200.pfb
+sfrm1095.pfb
+sfbx1440.pfb
+sfrm1728.pfb
+sfbx1000.pfb
+sfbx1095.pfb
+sfrm0800.pfb
+sfrm0900.pfb
+sfbx1728.pfb
+sfti1000.pfb
+sfbx1200.pfb
+sfrm0600.pfb
+sfti1095.pfb
+sftt1000.pfb
+sfss1000.pfb
+sfrm1440.pfb
+sfbx0900.pfb

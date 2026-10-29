@@ -1,0 +1,45 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+An aligned block in an equation:
+\begin{equation}
+\begin{aligned}
+f(x) &= (x+1)^2 \\
+     &= x^2 + 2x + 1
+\end{aligned}
+\label{eq:al}
+\end{equation}
+Two pairs, rows of different lengths, a space and a starred break:
+\[
+\begin{aligned}
+a &= 1, & b &= 2, \\[2pt]
+c &= 3 \\*
+d &= 4, & e &= 5
+\end{aligned}
+\]
+Placed at the top and the bottom, beside text in the formula:
+\[
+x = \begin{aligned}[t] p &= q \\ r &= s \end{aligned}
+\quad\text{and}\quad
+\begin{aligned}[b] u &= v \\ w &= z \end{aligned}
+\]
+After a negative kern, and a trailing break:
+\[
+A \kern-2pt \begin{aligned} \alpha &= \beta \\ \gamma &= \delta \\ \end{aligned}
+\]
+Gathered rows, centred:
+\begin{equation}
+\left\{
+\begin{gathered}
+x + y = 1 \\
+x - y = \frac{1}{2} \\[3pt]
+\sum_{k=1}^{n} k = \frac{n(n+1)}{2}
+\end{gathered}
+\right.
+\end{equation}
+See \eqref{eq:al}. Gathered at the top:
+\[
+\begin{gathered}[t] a \\ bb \end{gathered} + c
+\]
+Text after.
+\end{document}

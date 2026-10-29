@@ -82,7 +82,7 @@ pub(super) struct Floats {
     botroom: i32,
     textfloatsheight: i32,
     /// `\@topnum`, `\@botnum`, `\@colnum`.
-    topnum: i32,
+    pub(super) topnum: i32,
     botnum: i32,
     colnum: i32,
     /// `\@floatpenalty`; the open float's slot and type (`\@captype`: 1 figure, 2 table).
@@ -102,6 +102,10 @@ pub(super) struct Floats {
     clearing: bool,
     /// The caption's text (`#3`).
     caption: Vec<Token>,
+    /// float.sty's `[H]`: the open float is set here, not floated (`\@float@HH`).
+    here: bool,
+    /// The `[H]` box, between `\@endfloatbox` and `\float@endH`'s skips.
+    here_box: u32,
 }
 
 impl Default for Floats {
@@ -110,7 +114,7 @@ impl Default for Floats {
         for k in 0..SLOTS as u8 {
             free.push(k);
         }
-        Floats { boxes: [0; SLOTS], count: [0; SLOTS], free, cur: Queue::default(), top: Queue::default(), bot: Queue::default(), mid: Queue::default(), defer: Queue::default(), hold: None, colht: 0, colroom: 0, toproom: 0, botroom: 0, textfloatsheight: 0, topnum: 0, botnum: 0, colnum: 0, penalty: 0, open: 0, captype: 0, savsk: 0, savsf: 0, ignore: false, saved: (false, false, 0), minipage: false, clearing: false, caption: Vec::new() }
+        Floats { boxes: [0; SLOTS], count: [0; SLOTS], free, cur: Queue::default(), top: Queue::default(), bot: Queue::default(), mid: Queue::default(), defer: Queue::default(), hold: None, colht: 0, colroom: 0, toproom: 0, botroom: 0, textfloatsheight: 0, topnum: 0, botnum: 0, colnum: 0, penalty: 0, open: 0, captype: 0, savsk: 0, savsf: 0, ignore: false, saved: (false, false, 0), minipage: false, clearing: false, caption: Vec::new(), here: false, here_box: 0 }
     }
 }
 
@@ -128,13 +132,13 @@ impl Floats {
 
 /// article's float parameters that are macros (`\renewcommand\topfraction{.7}`), as
 /// §452's fractions of the unit.
-const TOP_FRACTION: (&str, i64) = ("topfraction", 45875);
-const BOTTOM_FRACTION: (&str, i64) = ("bottomfraction", 19661);
-const TEXT_FRACTION: (&str, i64) = ("textfraction", 13107);
-const FLOATPAGE_FRACTION: (&str, i64) = ("floatpagefraction", 32768);
+const TOP_FRACTION: (usize, i64) = (named!("topfraction"), 45875);
+const BOTTOM_FRACTION: (usize, i64) = (named!("bottomfraction"), 19661);
+const TEXT_FRACTION: (usize, i64) = (named!("textfraction"), 13107);
+const FLOATPAGE_FRACTION: (usize, i64) = (named!("floatpagefraction"), 32768);
 
 impl Machine<'_, '_> {
-    fn fl(&mut self) -> &mut Floats {
+    pub(super) fn fl(&mut self) -> &mut Floats {
         &mut self.doc.as_mut().expect("a native document").floats
     }
 
@@ -148,8 +152,8 @@ impl Machine<'_, '_> {
 
     /// `\topfraction\@colht` and kin: a fraction macro (the user's, or article's value)
     /// times `v`, as §455 scans a factor before an internal dimension.
-    fn fraction_of(&mut self, f: (&str, i64), v: i32) -> i32 {
-        let id = self.e.cs.intern(f.0);
+    fn fraction_of(&mut self, f: (usize, i64), v: i32) -> i32 {
+        let id = self.named_id(f.0);
         self.macro_factor(id, (false, 0, f.1)).map_or(0, |m| m(v))
     }
 
@@ -181,26 +185,28 @@ impl Machine<'_, '_> {
         let w = self.dimen_param(super::super::engine_pack::HSIZE);
         self.set_rw(super::R_LINEWIDTH, w, false);
         self.set_rw(super::R_TOTALLEFTMARGIN, 0, false);
-        self.set_dimen_named("parindent", 0);
-        for name in ["parskip", "leftskip", "rightskip"] {
-            self.set_glue_named(name, Glue::default());
+        self.set_dimen_named(param!("parindent"), 0);
+        for r in [param!("parskip"), param!("leftskip"), param!("rightskip")] {
+            self.set_glue_named(r, Glue::default());
         }
         self.set_rg(super::R_ATRIGHTSKIP, Glue::default());
-        self.set_glue_named("parfillskip", Glue { stretch: 65536, stretch_order: 1, ..Glue::default() });
+        self.set_glue_named(param!("parfillskip"), Glue { stretch: 65536, stretch_order: 1, ..Glue::default() });
         let one = self.dimen_of("1pt");
-        self.set_glue_named("lineskip", Glue { width: one, ..Glue::default() });
-        self.set_dimen_named("lineskiplimit", 0);
+        self.set_glue_named(param!("lineskip"), Glue { width: one, ..Glue::default() });
+        self.set_dimen_named(param!("lineskiplimit"), 0);
+        let normal = self.e.eqtb.glue(super::NORMAL_BASELINE_SKIP);
+        self.e.eqtb.set_glue(Reg { region: Region::Glue, slot: BASELINE_SKIP }, normal, false);
         // `\sloppy`, in the font around the box.
-        self.set_int_named("tolerance", 9999);
+        self.set_int_named(param!("tolerance"), 9999);
         let e = self.dimen_of("3em");
-        self.set_dimen_named("emergencystretch", e);
+        self.set_dimen_named(param!("emergencystretch"), e);
         let half = self.dimen_of(".5pt");
-        self.set_dimen_named("hfuzz", half);
-        self.set_dimen_named("vfuzz", half);
+        self.set_dimen_named(param!("hfuzz"), half);
+        self.set_dimen_named(param!("vfuzz"), half);
     }
 
     /// `\@setminipage`: `\@minipagetrue \everypar{\@minipagefalse\everypar{}}`.
-    fn set_minipage(&mut self) {
+    pub(super) fn set_minipage(&mut self) {
         self.fl().minipage = true;
         self.set_everypar(MINIPAGE);
     }
@@ -221,6 +227,10 @@ impl Machine<'_, '_> {
                 }
             }
             fps.retain(|c| *c != b' ');
+        }
+        // float.sty's `\@xfloat#1[`: `[H]` is `\@float@HH`, the box set in place.
+        if fps == b"H" && self.doc.as_ref().is_some_and(|d| d.packages.contains(&"float")) {
+            return self.float_here_open(ftype);
         }
         // `\@fpsadddefault`: an empty placement or a lone `!` takes `\fps@<type>` (`tbp`).
         if fps.is_empty() || fps == b"!" {
@@ -256,11 +266,43 @@ impl Machine<'_, '_> {
         // `\global\setbox\@currbox \color@vbox \normalcolor \vbox\bgroup`.
         self.open_box(VBOX_GROUP, Ctx::Set { n: FLOAT_BOX, global: true }, false, 0, false);
         self.begin_group(SEMI_SIMPLE_GROUP);
+        if self.colored() {
+            // `\normalcolor`: `\let\current@color\default@color \set@color`.
+            self.e.eqtb.set_word(super::CURRENT_COLOR, 0, false);
+            self.color_stack(Some(super::DEFAULT_COLOR));
+        }
         self.open_box(VBOX_GROUP, Ctx::Shift(0), false, 0, false);
         // `\hsize\columnwidth \@parboxrestore \@floatboxreset` (`\reset@font \normalsize
         // \@setminipage`).
         let w = self.doc.as_ref().map_or(0, |d| d.class.dimen("textwidth"));
-        self.set_dimen_named("hsize", w);
+        self.set_dimen_named(param!("hsize"), w);
+        self.par_box_restore();
+        self.normal_font();
+        self.size_command(NORMALSIZE);
+        self.set_minipage();
+    }
+
+    /// float.sty's `\@float@HH#1[H]` in vertical mode, for an unstyled type: `\@captype`,
+    /// `\setbox\@currbox\color@vbox\normalcolor\vbox\bgroup\hsize\columnwidth\@parboxrestore
+    /// \@floatboxreset\@setnobreak` (no slot, no `\@floatpenalty`, a local box).
+    fn float_here_open(&mut self, ftype: u8) {
+        if self.mode == Mode::Math || self.inner {
+            return self.not_native("a float in a box or a formula");
+        }
+        let doc = self.doc.as_mut().expect("a native document");
+        let saved = (doc.nobreak, doc.noskipsec, doc.cr_base);
+        (doc.nobreak, doc.noskipsec, doc.cr_base) = (false, false, doc.lists.len());
+        let f = &mut doc.floats;
+        (f.captype, f.saved, f.here) = (ftype, saved, true);
+        self.open_box(VBOX_GROUP, Ctx::Set { n: FLOAT_BOX, global: false }, false, 0, false);
+        self.begin_group(SEMI_SIMPLE_GROUP);
+        if self.colored() {
+            self.e.eqtb.set_word(super::CURRENT_COLOR, 0, false);
+            self.color_stack(Some(super::DEFAULT_COLOR));
+        }
+        self.open_box(VBOX_GROUP, Ctx::Shift(0), false, 0, false);
+        let w = self.doc.as_ref().map_or(0, |d| d.class.dimen("textwidth"));
+        self.set_dimen_named(param!("hsize"), w);
         self.par_box_restore();
         self.normal_font();
         self.size_command(NORMALSIZE);
@@ -279,6 +321,9 @@ impl Machine<'_, '_> {
         self.fl().minipage = false;
         self.package();
         self.end_group(SEMI_SIMPLE_GROUP);
+        if self.colored() {
+            self.color_stack(None);
+        }
         self.package();
         let b = self.e.eqtb.box_reg(FLOAT_BOX).unwrap_or(0);
         self.e.eqtb.replace_box(FLOAT_BOX, None);
@@ -286,9 +331,24 @@ impl Machine<'_, '_> {
         let doc = self.doc.as_mut().expect("a native document");
         (doc.nobreak, doc.noskipsec, doc.cr_base) = doc.floats.saved;
         let f = &mut doc.floats;
+        f.captype = 0;
+        // float.sty's `\float@endH`: `\vskip\intextsep \box\@currbox \vskip\intextsep\relax`.
+        // In a paragraph the `\vskip` ends it first (§1094).
+        if std::mem::take(&mut f.here) {
+            f.here_box = b;
+            let mut ops = if self.mode == Mode::Horizontal { vec![self.cur_par()] } else { Vec::new() };
+            ops.push(Op::Call(|m| {
+                let g = m.rg(R_INTEXTSEP);
+                m.build_glue(g, false);
+                let b = m.flr().here_box;
+                m.append_to_vlist(b);
+                m.build_glue(g, false);
+                m.float_env_end();
+            }));
+            return self.run_ops(ops);
+        }
         let k = f.open;
         f.boxes[k as usize] = b;
-        f.captype = 0;
         let p = f.penalty;
         if p >= 0 {
             return self.float_env_end();
@@ -351,7 +411,16 @@ impl Machine<'_, '_> {
         let r = R_FIGURE + t as usize - 1;
         let n = self.rw(r) + 1;
         self.set_rw(r, n, true);
-        self.set_current_label(&n.to_string());
+        // hyperref: `\H@refstepcounter` (no anchor here) and `\hyper@makecurrent{figure}`;
+        // the anchor goes in the caption text (`caption_tokens`).
+        // hyperref names the anchor by `\theHfigure`, `\arabic{figure}`: no prefix.
+        let prefix = self.doc.as_ref().map_or(String::new(), |d| d.the_prefix[t as usize - 1].clone());
+        if self.hyper() {
+            self.store_current_label(&format!("{prefix}{n}"));
+            self.set_current_href(&format!("{}.{n}", ["figure", "table"][t as usize - 1]));
+        } else {
+            self.set_current_label(&format!("{prefix}{n}"));
+        }
         if self.next_is('[') {
             self.bracket_arg();
         }
@@ -364,17 +433,24 @@ impl Machine<'_, '_> {
     /// The tokens of `#1: #2` (`\fnum@<type>`: `\figurename\nobreakspace\thefigure`).
     fn caption_tokens(&mut self, out: &mut Vec<Token>) {
         let t = self.flr().captype;
-        let name = if t == 1 { ("figurename", "Figure") } else { ("tablename", "Table") };
-        let id = self.e.cs.intern(name.0);
+        let name = if t == 1 { (named!("figurename"), "Figure") } else { (named!("tablename"), "Table") };
+        let id = self.named_id(name.0);
         if matches!(self.e.eqtb.meaning(id), Meaning::Macro(_)) {
             out.push(Token::cs(id));
         } else {
             out.extend(name.1.chars().map(|c| Token::char(super::Cat::Letter, c)));
         }
-        out.push(self.doc_id_named("nobreakspace"));
+        out.push(self.named_cs(named!("nobreakspace")));
         let n = self.rw(R_FIGURE + t as usize - 1);
+        let prefix = self.doc.as_ref().map_or(String::new(), |d| d.the_prefix[t as usize - 1].clone());
+        out.extend(prefix.chars().map(|c| Token::char(if c.is_ascii_alphabetic() { super::Cat::Letter } else { super::Cat::Other }, c)));
         out.extend(n.to_string().chars().map(|c| Token::char(super::Cat::Other, c)));
-        out.extend([Token::char(super::Cat::Other, ':'), Token::char(super::Cat::Space, ' '), self.doc_id_named("ignorespaces")]);
+        out.extend([Token::char(super::Cat::Other, ':'), Token::char(super::Cat::Space, ' '), self.named_cs(named!("ignorespaces"))]);
+        // hyperref's `\@caption`: `\Hy@raisedlink{\hyper@@anchor{figure.N}{\relax}}` first.
+        if self.hyper() {
+            let t = self.text_raised_link(format!("{}.{n}", ["figure", "table"][t as usize - 1]));
+            out.extend(t);
+        }
         out.extend_from_slice(&self.flr().caption);
     }
 
@@ -393,6 +469,10 @@ impl Machine<'_, '_> {
         self.build_glue(g, false);
         self.open_box(HBOX_GROUP, Ctx::Set { n: TEMP_BOX, global: false }, false, 0, false);
         self.begin_group(SEMI_SIMPLE_GROUP);
+        if self.colored() {
+            let c = self.current_color();
+            self.color_stack(Some(&c));
+        }
         let mut list = Vec::new();
         self.caption_tokens(&mut list);
         list.push(self.doc_id(CAPTION_MID));
@@ -403,6 +483,9 @@ impl Machine<'_, '_> {
     /// paragraph when it is wider.
     pub(super) fn caption_mid(&mut self) {
         self.end_group(SEMI_SIMPLE_GROUP);
+        if self.colored() {
+            self.color_stack(None);
+        }
         self.package();
         let b = self.e.eqtb.box_reg(TEMP_BOX).unwrap_or(0);
         let hsize = self.dimen_param(super::super::engine_pack::HSIZE);
@@ -440,7 +523,7 @@ impl Machine<'_, '_> {
     // The output routine.
 
     fn output_penalty(&self) -> i32 {
-        super::super::engine_names::param("outputpenalty").map_or(0, |r| self.e.eqtb.word(r))
+        self.e.eqtb.word(param!("outputpenalty"))
     }
 
     /// `\@specialoutput` (`\outputpenalty` below `-\@M`).
@@ -448,13 +531,16 @@ impl Machine<'_, '_> {
         if p > -10002 {
             return self.doc_clear_page();
         }
-        let b = self.e.eqtb.box_reg(255).unwrap_or(0);
+        // Box 0 is a box like any other: a void `\box255` is `None`.
+        let b = self.e.eqtb.box_reg(255);
         self.e.eqtb.replace_box(255, None);
         let d = self.dimen_param(BOX_MAX_DEPTH);
         let start = self.cur.len();
         if p < -10003 {
             // `\global\setbox\@holdpg\vbox{\unvbox\@cclv}`.
-            self.unvbox(b);
+            if let Some(b) = b {
+                self.unvbox(b);
+            }
             let h = self.vpack(start, 0, false, d);
             let h = self.e.nodes.add_box(BoxRec { vertical: true, ..h });
             self.fl().hold = Some(h);
@@ -465,7 +551,9 @@ impl Machine<'_, '_> {
         if let Some(h) = self.fl().hold.take() {
             self.unvbox(h);
         }
-        self.unvbox(b);
+        if let Some(b) = b {
+            self.unvbox(b);
+        }
         if self.cur.len() > start && self.cur.last().is_some_and(|n| n.kind == Kind::Box) {
             if let Some(n) = self.cur.pop() {
                 self.e.nodes.flush_node(n);
@@ -498,7 +586,7 @@ impl Machine<'_, '_> {
             if self.doc.as_ref().is_some_and(|d| d.nobreak) {
                 ops.push(Op::Penalty(10000));
             } else {
-                let p = self.int_named("interlinepenalty");
+                let p = self.int_named(param!("interlinepenalty"));
                 self.add_penalty(p, &mut ops);
             }
         }
@@ -508,9 +596,6 @@ impl Machine<'_, '_> {
 
     /// `\unvbox` of box `b`, which dies.
     fn unvbox(&mut self, b: u32) {
-        if b == 0 {
-            return;
-        }
         let r = self.e.nodes.boxes[b as usize];
         self.cur.extend_from_slice(self.e.nodes.get(r.list));
         self.e.nodes.free_block(r.list);
@@ -518,8 +603,8 @@ impl Machine<'_, '_> {
     }
 
     /// An integer parameter by name.
-    pub(super) fn int_named(&self, name: &str) -> i32 {
-        super::super::engine_names::param(name).map_or(0, |r| self.e.eqtb.word(r))
+    pub(super) fn int_named(&self, r: Reg) -> i32 {
+        self.e.eqtb.word(r)
     }
 
     /// `\@setfloattypecounts`: (`\@currtype`, `\@fpstype`).
@@ -585,11 +670,11 @@ impl Machine<'_, '_> {
                                     ops.push(Op::Penalty(10000));
                                     self.set_everypar(0);
                                 } else {
-                                    let p = self.int_named("interlinepenalty");
+                                    let p = self.int_named(param!("interlinepenalty"));
                                     self.add_penalty(p, ops);
                                 }
                                 let g = self.rg(R_INTEXTSEP);
-                                let p = self.int_named("interlinepenalty");
+                                let p = self.int_named(param!("interlinepenalty"));
                                 ops.push(Op::Vskip(g));
                                 ops.push(Op::Call(|m| m.mid_box()));
                                 ops.push(Op::Penalty(p));
@@ -597,7 +682,8 @@ impl Machine<'_, '_> {
                                 if self.output_penalty() < -10002 {
                                     ops.push(Op::Vskip(super::neg(self.glue_param(PAR_SKIP))));
                                 }
-                                if let Some(r) = super::super::engine_names::param("outputpenalty") {
+                                {
+            let r = param!("outputpenalty");
                                     self.e.eqtb.set_word(r, 0, false);
                                 }
                                 insert = true;
@@ -797,9 +883,19 @@ impl Machine<'_, '_> {
         if self.e.eqtb.box_reg(FOOTINS).is_some() {
             return self.not_native("\\clearpage with footnotes waiting");
         }
+        // `\setbox\@tempboxa\vsplit\@cclv to\z@ \unvbox\@tempboxa \setbox\@tempboxa\box\@cclv`:
+        // what comes before the first breakpoint (`\clearpage`'s `\write`) stays, the rest goes.
         if let Some(b) = self.e.eqtb.box_reg(255) {
             self.e.eqtb.replace_box(255, None);
-            self.e.nodes.flush_box(b);
+            let start = self.cur.len();
+            self.unvbox(b);
+            let keep = self.cur[start..].iter().take_while(|n| n.kind == Kind::Whatsit).count();
+            if self.cur.get(start + keep).is_some_and(|n| n.kind != Kind::Glue) {
+                return self.not_native("\\clearpage with material before its first breakpoint");
+            }
+            for n in self.cur.split_off(start + keep) {
+                self.e.nodes.flush_node(n);
+            }
         }
         let colht = self.flr().colht;
         let f = self.fl();
@@ -821,7 +917,7 @@ impl Machine<'_, '_> {
     /// The end of `\output`: `\vsize` for the next page from `\@colroom` (`\@emptycol` when
     /// floats leave no room), or `\maxdimen` while a page is held.
     pub(super) fn output_tail(&mut self) {
-        let Some(r) = super::super::engine_names::param("vsize") else { return };
+        let r = param!("vsize");
         if self.output_penalty() <= -10004 {
             return self.e.eqtb.set_word(r, MAX_DIMEN, true);
         }

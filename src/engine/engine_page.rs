@@ -44,7 +44,7 @@ const HSIZE: u32 = 3;
 const VSIZE: u32 = 4;
 pub(super) const MAX_DEPTH: u32 = 5;
 const SPLIT_MAX_DEPTH: u32 = 6;
-const TOP_SKIP: u32 = 9;
+pub(super) const TOP_SKIP: u32 = 9;
 const SPLIT_TOP_SKIP: u32 = 10;
 const OUTPUT_ROUTINE: u32 = 0;
 
@@ -103,6 +103,8 @@ pub(super) struct Page {
     pub font_used: Vec<[u64; 4]>,
     pub font_pk: Vec<i64>,
     pub map_names: Option<Vec<u64>>,
+    /// The word entries as the ship writes them (`engine_ship::WordShip`).
+    pub word_ship: super::engine_ship::WordShip,
 }
 
 impl Page {

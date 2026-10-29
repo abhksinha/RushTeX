@@ -214,8 +214,17 @@ pub fn article() -> Option<&'static ClassTable<'static>> {
 
 /// `article` at size option `i` of [`CLASS_SIZES`].
 pub fn article_size(i: usize) -> Option<&'static ClassTable<'static>> {
-    static TABLES: [std::sync::OnceLock<Option<ClassTable<'static>>>; 3] = [const { std::sync::OnceLock::new() }; 3];
-    TABLES.get(i)?.get_or_init(|| Blob::new(ARTICLE_BLOBS[i]).and_then(|b| ClassTable::from_blob(&b))).as_ref()
+    class_size(false, i)
+}
+
+static REPORT_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-report.rtdb"), include_bytes!("../../assets/tables/class-report-11pt.rtdb"), include_bytes!("../../assets/tables/class-report-12pt.rtdb")];
+
+/// `article`, or `report` when `report`, at size option `i` of [`CLASS_SIZES`]
+/// (`rushtex-gen class --class report`).
+pub fn class_size(report: bool, i: usize) -> Option<&'static ClassTable<'static>> {
+    static TABLES: [[std::sync::OnceLock<Option<ClassTable<'static>>>; 3]; 2] = [const { [const { std::sync::OnceLock::new() }; 3] }; 2];
+    let blobs = if report { &REPORT_BLOBS } else { &ARTICLE_BLOBS };
+    TABLES[report as usize].get(i)?.get_or_init(|| Blob::new(blobs[i]).and_then(|b| ClassTable::from_blob(&b))).as_ref()
 }
 
 // ---- Generation -------------------------------------------------------------------------

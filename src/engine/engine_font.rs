@@ -393,6 +393,16 @@ impl Fonts {
         self.by_key.get(&(name_key(name), size)).copied().filter(|&f| self.list[f as usize].name == name)
     }
 
+    /// pdftex.ch's §1260: the first font loaded as `name` at `size` that `\pdffontexpand` has
+    /// not set up; an expandable font is never loaded again under a new name.
+    pub(super) fn find_reusable(&self, name: &str, size: i32) -> Option<u16> {
+        let f = self.find(name, size)?;
+        if self.micro.expand(f).step == 0 {
+            return Some(f);
+        }
+        (f as usize + 1..self.list.len()).find(|&k| self.list[k].name == name && self.list[k].size == size && self.micro.expand(k as u16).step == 0).map(|k| k as u16)
+    }
+
     /// Font `f`'s parameters.
     #[inline]
     pub fn params(&self, f: u16) -> &[i32] {
@@ -478,13 +488,14 @@ impl Machine<'_, '_> {
         let pinned = data_tfm::fonts().and_then(|t| t.lookup(key).map(|id| (t.view(id), id)));
         let design = pinned.as_ref().map(|(v, _)| v.design);
         // §1260: a font already loaded with this name and size. The size of a `scaled` font
-        // depends on the design size, known for a pinned font without loading it.
+        // depends on the design size, known for a pinned font without loading it. A font
+        // `\pdffontexpand` has set up is passed over (pdftex.ch).
         if let Some(d) = design {
             let size = if s > 0 { s } else { xn_over_d(d, -s, 1000) };
-            if let Some(f) = self.e.fonts.find(name, size) {
+            if let Some(f) = self.e.fonts.find_reusable(name, size) {
                 return f;
             }
-        } else if let Some(f) = self.e.fonts.list.iter().enumerate().skip(1).find(|(_, font)| font.name == name && font.size == if s > 0 { s } else { xn_over_d(font.design, -s, 1000) }).map(|(f, _)| f as u16) {
+        } else if let Some(f) = self.e.fonts.list.iter().enumerate().skip(1).find(|&(k, font)| font.name == name && font.size == if s > 0 { s } else { xn_over_d(font.design, -s, 1000) } && self.e.fonts.micro.expand(k as u16).step == 0).map(|(f, _)| f as u16) {
             return f;
         }
         let (design, metrics) = match pinned {

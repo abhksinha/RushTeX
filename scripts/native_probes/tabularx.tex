@@ -1,0 +1,26 @@
+\documentclass[11pt]{article}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\begin{document}
+\noindent\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Item & Description that is long enough to wrap onto a second line in the X column of this table \\
+\midrule
+Two & Short \\
+\bottomrule
+\end{tabularx}
+
+\begin{tabularx}{0.8\linewidth}{|X|>{\centering\arraybackslash}X|r|}
+\hline
+A & B centred & 1 \\
+\hline
+Longer text in the first X column that wraps & x & 22 \\
+\hline
+\end{tabularx}
+
+Text after.
+\begin{tabularx}{\textwidth}{p{2.8cm}X}
+Label & \textbf{Bold} value with \emph{emphasis} \\
+\multicolumn{2}{c}{Spanning} \\
+\end{tabularx}
+\end{document}

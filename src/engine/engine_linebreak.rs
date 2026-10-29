@@ -16,6 +16,25 @@ use super::engine_node::{Kind, Node, Nodes};
 use super::engine_pack::badness;
 use super::engine_run::Machine;
 use super::engine_whatsit::sized;
+use super::engine_words::BreakRow;
+
+/// A break inside a word node: its index in the paragraph, with its break row's place
+/// plus one above this bit.
+const IN_WORD: u32 = 1 << 24;
+
+/// The active and passive lists, kept by the machine between paragraphs.
+#[derive(Default)]
+pub(super) struct BreakPool(Vec<Active>, Vec<Passive>);
+
+/// The discretionary of a break row, for §840 (`break_width`).
+#[derive(Clone, Copy)]
+struct Inner {
+    rep: i32,
+    post: i32,
+    flags: u8,
+    /// The word node's index in the paragraph.
+    word: usize,
+}
 
 const INF_BAD: i32 = 10_000;
 const INF_PENALTY: i32 = 10_000;
@@ -25,15 +44,15 @@ const AWFUL_BAD: i32 = 0o7777777777;
 
 // Parameter slots (tex.web §236, §247, §224).
 const PRETOLERANCE: u32 = 0;
-const TOLERANCE: u32 = 1;
+pub(super) const TOLERANCE: u32 = 1;
 const LINE_PENALTY: u32 = 2;
 const HYPHEN_PENALTY: u32 = 3;
 const EX_HYPHEN_PENALTY: u32 = 4;
-const CLUB_PENALTY: u32 = 5;
-const WIDOW_PENALTY: u32 = 6;
+pub(super) const CLUB_PENALTY: u32 = 5;
+pub(super) const WIDOW_PENALTY: u32 = 6;
 const DISPLAY_WIDOW_PENALTY: u32 = 7;
 const BROKEN_PENALTY: u32 = 8;
-const INTER_LINE_PENALTY: u32 = 13;
+pub(super) const INTER_LINE_PENALTY: u32 = 13;
 const DOUBLE_HYPHEN_DEMERITS: u32 = 14;
 const FINAL_HYPHEN_DEMERITS: u32 = 15;
 const ADJ_DEMERITS: u32 = 16;
@@ -44,10 +63,10 @@ const LOOSENESS: u32 = 19;
 const HANG_AFTER: u32 = 41;
 const HSIZE: u32 = 3;
 const HANG_INDENT: u32 = 17;
-const EMERGENCY_STRETCH: u32 = 20;
-const LEFT_SKIP: u32 = 7;
-const RIGHT_SKIP: u32 = 8;
-const PAR_FILL_SKIP: u32 = 14;
+pub(super) const EMERGENCY_STRETCH: u32 = 20;
+pub(super) const LEFT_SKIP: u32 = 7;
+pub(super) const RIGHT_SKIP: u32 = 8;
+pub(super) const PAR_FILL_SKIP: u32 = 14;
 
 /// Widths in TeX's six components (§823): natural width, stretch of order normal, fil,
 /// fill, filll, and shrink; then pdfTeX's font stretch and shrink (`\pdfadjustspacing > 1`).
@@ -126,6 +145,8 @@ struct Breaker<'p> {
     expand: Option<[i32; 3]>,
     /// §839 `disc_width`: the pre-break text of the discretionary being tried.
     disc_width: Widths,
+    /// The discretionary of a word's break row being tried, which is not a node of `par`.
+    inner: Option<Inner>,
     actives: Vec<Active>,
     passives: Vec<Passive>,
     /// §823 `background` and the running total of widths before the current node.
@@ -272,7 +293,7 @@ impl Breaker<'_> {
             };
             if self.trace {
                 // §856
-                let kind = match at.map(|a| self.par[a].kind) {
+                let kind = match at.map(|a| if self.inner.is_some() { Kind::Disc } else { self.par[a].kind }) {
                     None => "\\par",
                     Some(Kind::Glue) => "",
                     Some(Kind::Penalty) => "\\penalty",
@@ -303,6 +324,28 @@ impl Breaker<'_> {
 
     /// pdftex.web `total_pw`: the protrusion at both ends of the line from active node
     /// `passive`'s break to a break at `at`.
+    /// No break of a word's `rows` can matter: from every active node, even the widest of
+    /// them leaves a line too loose for the pass. Such a break is underfull, so §851–§855
+    /// give `b <= INF_BAD`, neither feasible nor deactivating (the `continue` above), and a
+    /// narrower one only looser (`badness` does not fall as the shortfall grows, and a word
+    /// adds no stretch). Not with a forced break (`pi <= EJECT_PENALTY`), infinite stretch,
+    /// protrusion or font expansion.
+    fn out_of_reach(&self, rows: &[BreakRow], least_pi: i32) -> bool {
+        if least_pi <= EJECT_PENALTY || self.protrude || self.expand.is_some() {
+            return false;
+        }
+        let widest = rows.iter().map(|r| r.before + if r.flags & BreakRow::PRE_EMPTY != 0 { 0 } else { r.pre }).max().unwrap_or(0);
+        self.actives.iter().all(|a| {
+            let w = diff(self.total, a.origin);
+            if w[2] != 0 || w[3] != 0 || w[4] != 0 {
+                return false;
+            }
+            let line_width = if a.line > self.shape.easy_line { self.shape.second_width } else { self.shape.line(a.line).1 };
+            let shortfall = line_width - (w[0] + widest);
+            shortfall > 0 && (if shortfall > 7_230_584 && w[1] < 1_663_497 { INF_BAD } else { badness(shortfall, w[1]) }) > self.threshold
+        })
+    }
+
     fn total_pw(&self, passive: Option<u32>, at: Option<usize>) -> i32 {
         let (par, nodes) = (self.par, self.nodes);
         let l = passive.map_or(0, |p| self.passives[p as usize].at.map_or(par.len(), |a| a as usize));
@@ -332,9 +375,20 @@ impl Breaker<'_> {
     fn break_width(&self, widths: &impl Fn(&[Node], usize) -> Widths, hyphenated: bool, at: Option<usize>) -> Widths {
         let mut bw = self.background;
         let Some(mut s) = at else { return bw };
+        // §840 for a word's discretionary: what follows the replaced nodes is the word's
+        // (a character, ligature, font kern or discretionary, which ends the discarding)
+        // unless they reach its end.
+        if let Some(inner) = self.inner {
+            bw[0] += inner.post - inner.rep;
+            bw = sum(bw, self.disc_width);
+            if inner.flags & BreakRow::POST_EMPTY == 0 || inner.flags & BreakRow::ENDS_WORD == 0 {
+                return bw;
+            }
+            s = inner.word + 1;
+        }
         // §840: at a discretionary, the replaced text goes and the post-break text comes;
         // only an empty post-break text lets what follows be discarded too.
-        if hyphenated && self.par[s].kind == Kind::Disc {
+        if self.inner.is_none() && hyphenated && self.par[s].kind == Kind::Disc {
             let d = self.par[s];
             let t = d.sub as usize;
             for i in s + 1..s + 1 + t {
@@ -467,8 +521,28 @@ impl Machine<'_, '_> {
                 // §894 reads a word's characters: words it could read beyond are expanded.
                 self.expand_words_near(&mut par);
                 self.hyphenate_par(&mut par, par_hyph);
-                self.passes(&par, &shape, background, prev_graf, true).expect("the final pass always succeeds")
+                // A hyphenated word stays one node (its entry's break rows give the second
+                // pass its discretionaries); a paragraph too long for a break's packed
+                // index is expanded instead.
+                if par.len() >= IN_WORD as usize {
+                    self.e.nodes.expand_words_if(&mut par, true);
+                }
+                let found = self.passes(&par, &shape, background, prev_graf, true).expect("the final pass always succeeds");
+                if self.words_checked() {
+                    self.check_in_word_breaks(&par, &found, &shape, background, prev_graf);
+                }
+                found
             }
+        };
+        // The words a chosen break falls inside are expanded; every break moves with them.
+        let breaks = if breaks.iter().flatten().any(|&b| b >= IN_WORD) {
+            let which: Vec<usize> = breaks.iter().flatten().filter(|&&b| b >= IN_WORD).map(|&b| (b & (IN_WORD - 1)) as usize).collect();
+            let (expanded, map) = self.expand_at(&par, &which);
+            let breaks = self.map_breaks(&par, &breaks, &map);
+            par = expanded;
+            breaks
+        } else {
+            breaks
         };
         self.post_line_break(&par, &breaks, &shape, left, prev_graf, display);
         self.prev_graf = last_line - 1;
@@ -522,6 +596,7 @@ impl Machine<'_, '_> {
             w
         };
 
+        let pool = self.break_pool.take();
         let mut br = Breaker {
             par,
             nodes,
@@ -529,8 +604,9 @@ impl Machine<'_, '_> {
             protrude: self.ip(PDF_PROTRUDE_CHARS) > 1,
             expand,
             disc_width: [0; 8],
-            actives: Vec::new(),
-            passives: Vec::new(),
+            // The machine's lists, lent for the paragraph so they keep their room.
+            actives: pool.0,
+            passives: pool.1,
             background,
             total: [0; 8],
             threshold: 0,
@@ -545,6 +621,7 @@ impl Machine<'_, '_> {
             double_hyphen: self.ip(DOUBLE_HYPHEN_DEMERITS),
             final_hyphen: self.ip(FINAL_HYPHEN_DEMERITS),
             trace: self.ip(TRACING_PARAGRAPHS) > 0,
+            inner: None,
         };
         // §863: the passes.
         let (hyphen_penalty, ex_hyphen_penalty) = (self.ip(HYPHEN_PENALTY), self.ip(EX_HYPHEN_PENALTY));
@@ -593,6 +670,31 @@ impl Machine<'_, '_> {
                     // A word ends in a character, ligature or font kern: glue after it is a
                     // legal break, as after a character (§868).
                     Kind::Word => {
+                        // §869 for each discretionary of a hyphenated form, from its break
+                        // rows: the word holds no glue, so only the natural width moves.
+                        let rows = nodes.words.rows(n.a as u32);
+                        if !rows.is_empty() && !br.out_of_reach(rows, hyphen_penalty.min(ex_hyphen_penalty)) {
+                            let base = br.total;
+                            for (j, row) in rows.iter().enumerate() {
+                                br.total = base;
+                                br.total[0] += row.before;
+                                br.disc_width = [0; 8];
+                                br.disc_width[0] = row.pre;
+                                br.inner = Some(Inner { rep: row.rep, post: row.post, flags: row.flags, word: k });
+                                let at = k | (j + 1) << IN_WORD.trailing_zeros();
+                                if row.flags & BreakRow::PRE_EMPTY != 0 {
+                                    br.try_break(&widths, ex_hyphen_penalty, true, Some(at));
+                                } else {
+                                    br.total[0] += row.pre;
+                                    br.try_break(&widths, hyphen_penalty, true, Some(at));
+                                }
+                                br.inner = None;
+                                if br.actives.is_empty() {
+                                    break;
+                                }
+                            }
+                            br.total = base;
+                        }
                         br.total[0] += nodes.words.rec(n.a as u32).width;
                         prev = Some(Kind::Char);
                         prev_explicit_kern = false;
@@ -699,6 +801,7 @@ impl Machine<'_, '_> {
             }
             // §873: if at first you don't succeed ...
             if !second {
+                self.break_pool.set(BreakPool(br.actives, br.passives));
                 return None;
             } else {
                 br.background[1] += emergency;
@@ -714,7 +817,66 @@ impl Machine<'_, '_> {
             p = br.passives[i as usize].prev;
         }
         breaks.reverse();
+        self.break_pool.set(BreakPool(br.actives, br.passives));
         Some((breaks, best.line))
+    }
+
+    /// `par` with the word nodes at `which` (increasing, repeats allowed) replaced by their
+    /// nodes, and where each node of `par` (and its end) lands.
+    fn expand_at(&mut self, par: &[Node], which: &[usize]) -> (Vec<Node>, Vec<u32>) {
+        let mut out = Vec::with_capacity(par.len() + 16 * which.len());
+        let mut map = Vec::with_capacity(par.len() + 1);
+        let mut w = which.iter().peekable();
+        for (i, n) in par.iter().enumerate() {
+            map.push(out.len() as u32);
+            while w.peek().is_some_and(|&&x| x < i) {
+                w.next();
+            }
+            if w.peek() == Some(&&i) {
+                let (s, e) = self.e.nodes.words.range(n.a as u32);
+                self.e.nodes.make_items(s as u32, e as u32, &mut out);
+            } else {
+                out.push(*n);
+            }
+        }
+        map.push(out.len() as u32);
+        (out, map)
+    }
+
+    /// Breaks of `par` (some inside word nodes) as indices of its expansion `map`.
+    fn map_breaks(&self, par: &[Node], breaks: &[Option<u32>], map: &[u32]) -> Vec<Option<u32>> {
+        let words = &self.e.nodes.words;
+        breaks
+            .iter()
+            .map(|b| {
+                b.map(|b| {
+                    if b >= IN_WORD {
+                        let k = (b & (IN_WORD - 1)) as usize;
+                        map[k] + words.rows(par[k].a as u32)[(b >> IN_WORD.trailing_zeros()) as usize - 1].at as u32
+                    } else {
+                        map[b as usize]
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// `RT_WORD_CHECK=1`: the second pass over `par`'s hyphenated words kept whole chose
+    /// the breaks it chooses over the same paragraph with them expanded.
+    fn check_in_word_breaks(&mut self, par: &[Node], found: &(Vec<Option<u32>>, i32), shape: &Shape, background: Widths, prev_graf: i32) {
+        let which: Vec<usize> = (0..par.len()).filter(|&i| par[i].kind == Kind::Word && !self.e.nodes.words.rows(par[i].a as u32).is_empty()).collect();
+        if which.is_empty() {
+            return;
+        }
+        let (full, map) = self.expand_at(par, &which);
+        let expect = self.passes(&full, shape, background, prev_graf, true).expect("the final pass always succeeds");
+        let got = self.map_breaks(par, &found.0, &map);
+        assert!(got == expect.0 && found.1 == expect.1, "RT_WORD_CHECK: the breaks inside hyphenated word nodes differ from those of their expanded nodes");
+        for &i in &which {
+            for &n in &full[map[i] as usize..map[i + 1] as usize] {
+                self.e.nodes.flush_node(n);
+            }
+        }
     }
 
     /// §877–§890 `post_line_break`: each line packaged to its width, with `\leftskip`,

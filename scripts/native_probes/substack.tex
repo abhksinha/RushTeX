@@ -1,0 +1,20 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+Inline $\sum_{\substack{0 \le i \le m \\ 0 < j < n}} P(i,j)$ and
+$\prod_{\substack{p\ \text{prime}}} p$ with a single row.
+\[
+  \sum_{\substack{1 \le i < j \le n\\ i + j \text{ odd} \\ k}} a_{ij}
+  \qquad \max_{\substack{x \in X\\[2pt]y\in Y\\*z}} f(x,y)
+\]
+Arrows: $A \xrightarrow{f} B \xleftarrow{g} C$, $A \xrightarrow[\text{below}]{\text{above}} B$,
+$X \xrightarrow[u]{} Y$, $X \xleftarrow[{v}]{w} Y$ and a long label
+$M \xrightarrow{\phi \circ \psi \circ \chi} N$.
+\begin{equation}
+  0 \xrightarrow{} A \xrightarrow{\alpha} B \xrightarrow{\beta} C \xrightarrow{} 0
+\end{equation}
+\begin{align}
+  \boldsymbol{x} &\xrightarrow{f} \boldsymbol{y} \\
+  S &= \sum_{\substack{i < n\\ j < m}} \boldsymbol{\alpha}_{ij} \xleftarrow[u]{v} T
+\end{align}
+\end{document}

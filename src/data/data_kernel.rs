@@ -61,6 +61,11 @@ pub enum MathFont<S> {
     Alphabet { name: S, same: bool, normal: S, bold: S },
 }
 
+/// Natives of the native job that are exact ports of a kernel macro (`\smash`, the
+/// phantoms): the harvest takes a macro whose body reaches one (`\relbar` is
+/// `\mathrel{\smash-}`, `\mathstrut` is `\vphantom(`).
+pub const HARVEST_NATIVES: [&str; 25] = ["textbackslash", "textbar", "textbardbl", "textbraceleft", "textbraceright", "textbullet", "textdagger", "textdaggerdbl", "textparagraph", "textsection", "textperiodcentered", "mathsm@sh", "smash", "phantom", "vphantom", "hphantom", ",", "!", ":", ";", "thinspace", "negthinspace", "medspace", "thickspace", "negthickspace"];
+
 /// Primitives a harvested kernel macro may use: math lists and horizontal material the
 /// engine builds by itself, grouping, and the tests of mode. Nothing that touches what the
 /// native job keeps (`\par`, vertical glue and penalties, marks, inserts, files, fonts,
@@ -218,12 +223,16 @@ pub fn kernel() -> Option<&'static KernelTable<'static>> {
 }
 
 /// The packages with a native table (`rushtex-gen natpkg`), by name.
-static PACKAGES: [(&str, &[u8]); 7] = [("amsbsy", include_bytes!("../../assets/tables/pkg-amsbsy.rtdb")), ("amsfonts", include_bytes!("../../assets/tables/pkg-amsfonts.rtdb")), ("amsgen", include_bytes!("../../assets/tables/pkg-amsgen.rtdb")), ("amsmath", include_bytes!("../../assets/tables/pkg-amsmath.rtdb")), ("amsopn", include_bytes!("../../assets/tables/pkg-amsopn.rtdb")), ("amssymb", include_bytes!("../../assets/tables/pkg-amssymb.rtdb")), ("amstext", include_bytes!("../../assets/tables/pkg-amstext.rtdb"))];
+static PACKAGES: [(&str, &[u8]); 19] = [("amsbsy", include_bytes!("../../assets/tables/pkg-amsbsy.rtdb")), ("amsfonts", include_bytes!("../../assets/tables/pkg-amsfonts.rtdb")), ("amsgen", include_bytes!("../../assets/tables/pkg-amsgen.rtdb")), ("amsmath", include_bytes!("../../assets/tables/pkg-amsmath.rtdb")), ("amsopn", include_bytes!("../../assets/tables/pkg-amsopn.rtdb")), ("amssymb", include_bytes!("../../assets/tables/pkg-amssymb.rtdb")), ("amstext", include_bytes!("../../assets/tables/pkg-amstext.rtdb")), ("mathrsfs", include_bytes!("../../assets/tables/pkg-mathrsfs.rtdb")), ("bm", include_bytes!("../../assets/tables/pkg-bm.rtdb")), ("textcomp", include_bytes!("../../assets/tables/pkg-textcomp.rtdb")), ("dcolumn", include_bytes!("../../assets/tables/pkg-dcolumn.rtdb")), ("float", include_bytes!("../../assets/tables/pkg-float.rtdb")), ("enumitem", include_bytes!("../../assets/tables/pkg-enumitem.rtdb")), ("keyval", include_bytes!("../../assets/tables/pkg-keyval.rtdb")), ("calc", include_bytes!("../../assets/tables/pkg-calc.rtdb")), ("mhsetup", include_bytes!("../../assets/tables/pkg-mhsetup.rtdb")), ("mathtools", include_bytes!("../../assets/tables/pkg-mathtools.rtdb")), ("enumerate", include_bytes!("../../assets/tables/pkg-enumerate.rtdb")), ("lmodern", include_bytes!("../../assets/tables/pkg-lmodern.rtdb"))];
 
 /// The native table of package `name`, checked on first use; `None` when it has none.
 pub fn package(name: &str) -> Option<&'static KernelTable<'static>> {
+    package_at(PACKAGES.iter().position(|p| p.0 == name)?)
+}
+
+/// The table of `PACKAGES[i]`, loaded on first use.
+fn package_at(i: usize) -> Option<&'static KernelTable<'static>> {
     static TABLES: [std::sync::OnceLock<Option<KernelTable<'static>>>; PACKAGES.len()] = [const { std::sync::OnceLock::new() }; PACKAGES.len()];
-    let i = PACKAGES.iter().position(|p| p.0 == name)?;
     TABLES[i].get_or_init(|| Blob::new(PACKAGES[i].1).and_then(|b| KernelTable::from_blob(&b)).filter(|t| t.package().is_some())).as_ref()
 }
 
@@ -236,7 +245,7 @@ pub fn package_shapes(name: &str) -> Option<&'static super::data_nfss::NfssTable
 
 /// Every package with a native table.
 pub fn packages() -> impl Iterator<Item = (&'static str, &'static KernelTable<'static>)> {
-    PACKAGES.iter().filter_map(|p| package(p.0).map(|t| (p.0, t)))
+    PACKAGES.iter().enumerate().filter_map(|(i, p)| package_at(i).map(|t| (p.0, t)))
 }
 
 #[cfg(any(test, feature = "gen"))]

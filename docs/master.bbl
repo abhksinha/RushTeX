@@ -1,0 +1,36 @@
+\begin{thebibliography}{9}
+\bibitem{knuth81}
+  Donald E.~Knuth and Michael F.~Plass.
+  \emph{Breaking paragraphs into lines}.
+  Software: Practice and Experience, 11(11), 1981.
+
+\bibitem{knuth86}
+  Donald E.~Knuth.
+  \emph{The \TeX book}.
+  Addison-Wesley, 1986.
+
+\bibitem{knuth86b}
+  Donald E.~Knuth.
+  \emph{\TeX: The Program}.
+  Addison-Wesley, 1986.
+
+\bibitem{liang83}
+  Franklin M.~Liang.
+  \emph{Word Hy-phen-a-tion by Com-put-er}.
+  PhD thesis, Stanford University, 1983.
+
+\bibitem{lamport94}
+  Leslie Lamport.
+  \emph{\LaTeX: A Document Preparation System}.
+  Addison-Wesley, second edition, 1994.
+
+\bibitem{deutsch96}
+  L.~Peter Deutsch.
+  \emph{DEFLATE Compressed Data Format Specification version 1.3}.
+  RFC 1951, 1996.
+
+\bibitem{aho06}
+  Alfred V.~Aho, Monica S.~Lam, Ravi Sethi and Jeffrey D.~Ullman.
+  \emph{Compilers: Principles, Techniques, and Tools}.
+  Addison-Wesley, second edition, 2006.
+\end{thebibliography}

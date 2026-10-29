@@ -29,6 +29,7 @@ pub mod engine_macro;
 pub mod engine_md5;
 pub mod engine_mlist;
 pub mod engine_doc;
+pub mod engine_geometry;
 pub mod engine_kernel;
 #[cfg(feature = "mprof")]
 pub mod engine_mprof;

@@ -17,7 +17,8 @@ use super::super::engine_prim::Meaning;
 use super::super::engine_run::{Machine, Mode, SEMI_SIMPLE_GROUP};
 use super::super::engine_token::Token;
 use super::super::engine_value::MAX_DIMEN;
-use super::{Op, CAPTION_END, CAPTION_MID, FOOTINS, MINIPAGE, NEWLINE, NORMALSIZE, R_ABOVECAPTIONSKIP, R_BELOWCAPTIONSKIP, R_BOTTOMNUMBER, R_FIGURE, R_FLOATSEP, R_FPBOT, R_FPSEP, R_FPTOP, R_INTEXTSEP, R_TEXTFLOATSEP, R_TOPNUMBER, R_TOTALNUMBER, TEMP_BOX};
+use super::super::engine_node::RUNNING;
+use super::{Op, COLUMN_WIDTH, COLUMNSEP, COLUMNSEPRULE, DEFAULT_COLOR, R_DBLFLOATSEP, R_DBLTEXTFLOATSEP, R_DBLTOPNUMBER, CAPTION_END, CAPTION_MID, FOOTINS, MINIPAGE, NEWLINE, NORMALSIZE, R_ABOVECAPTIONSKIP, R_BELOWCAPTIONSKIP, R_BOTTOMNUMBER, R_FIGURE, R_FLOATSEP, R_FPBOT, R_FPSEP, R_FPTOP, R_INTEXTSEP, R_TEXTFLOATSEP, R_TOPNUMBER, R_TOTALNUMBER, TEMP_BOX};
 
 /// LaTeX's insertion boxes for floats (`\bx@A` to `\bx@R`).
 pub(super) const SLOTS: usize = 18;
@@ -26,7 +27,7 @@ const FLOAT_BOX: u32 = 32702;
 
 /// A float list (`\@currlist`, `\@toplist` …): slot numbers in order, `\@cons` at the end,
 /// `\@next` from the front. The slots are distinct, so no list overflows.
-#[derive(Clone, Copy, Default)]
+#[derive(PartialEq, Clone, Copy, Default)]
 pub(super) struct Queue {
     n: u8,
     s: [u8; SLOTS],
@@ -64,6 +65,7 @@ impl Queue {
 }
 
 /// The float state: the arena, the lists, LaTeX's placement registers, the float open now.
+#[derive(PartialEq, Clone)]
 pub(super) struct Floats {
     boxes: [u32; SLOTS],
     count: [i32; SLOTS],
@@ -76,8 +78,8 @@ pub(super) struct Floats {
     /// `\@holdpg`.
     hold: Option<u32>,
     /// `\@colht`, `\@colroom`, `\@toproom`, `\@botroom`, `\@textfloatsheight`.
-    colht: i32,
-    colroom: i32,
+    pub(super) colht: i32,
+    pub(super) colroom: i32,
     toproom: i32,
     botroom: i32,
     textfloatsheight: i32,
@@ -106,6 +108,14 @@ pub(super) struct Floats {
     here: bool,
     /// The `[H]` box, between `\@endfloatbox` and `\float@endH`'s skips.
     here_box: u32,
+    /// `\if@twocolumn`, `\if@firstcolumn`, `\@leftcolumn` (the first column made, while the
+    /// second is collected), `\@dbltoplist` (only `\@topnewpage`'s box: its slot and box)
+    /// and `\@dbltopnum`.
+    pub(super) twocol: bool,
+    first: bool,
+    left: Option<u32>,
+    dbltop: Option<(u8, u32)>,
+    pub(super) dbltopnum: i32,
 }
 
 impl Default for Floats {
@@ -114,7 +124,7 @@ impl Default for Floats {
         for k in 0..SLOTS as u8 {
             free.push(k);
         }
-        Floats { boxes: [0; SLOTS], count: [0; SLOTS], free, cur: Queue::default(), top: Queue::default(), bot: Queue::default(), mid: Queue::default(), defer: Queue::default(), hold: None, colht: 0, colroom: 0, toproom: 0, botroom: 0, textfloatsheight: 0, topnum: 0, botnum: 0, colnum: 0, penalty: 0, open: 0, captype: 0, savsk: 0, savsf: 0, ignore: false, saved: (false, false, 0), minipage: false, clearing: false, caption: Vec::new(), here: false, here_box: 0 }
+        Floats { boxes: [0; SLOTS], count: [0; SLOTS], free, cur: Queue::default(), top: Queue::default(), bot: Queue::default(), mid: Queue::default(), defer: Queue::default(), hold: None, colht: 0, colroom: 0, toproom: 0, botroom: 0, textfloatsheight: 0, topnum: 0, botnum: 0, colnum: 0, penalty: 0, open: 0, captype: 0, savsk: 0, savsf: 0, ignore: false, saved: (false, false, 0), minipage: false, clearing: false, caption: Vec::new(), here: false, here_box: 0, twocol: false, first: true, left: None, dbltop: None, dbltopnum: 0 }
     }
 }
 
@@ -122,6 +132,11 @@ impl Floats {
     /// Whether any float is waiting (`\clearpage` has work).
     pub(super) fn pending(&self) -> bool {
         !(self.cur.is_empty() && self.top.is_empty() && self.bot.is_empty() && self.defer.is_empty())
+    }
+
+    /// `\@colroom`.
+    pub(super) fn colroom(&self) -> i32 {
+        self.colroom
     }
 
     /// The top and bottom lists of the column being made.
@@ -274,12 +289,17 @@ impl Machine<'_, '_> {
         self.open_box(VBOX_GROUP, Ctx::Shift(0), false, 0, false);
         // `\hsize\columnwidth \@parboxrestore \@floatboxreset` (`\reset@font \normalsize
         // \@setminipage`).
-        let w = self.doc.as_ref().map_or(0, |d| d.class.dimen("textwidth"));
+        let w = self.e.eqtb.word(COLUMN_WIDTH);
         self.set_dimen_named(param!("hsize"), w);
         self.par_box_restore();
         self.normal_font();
         self.size_command(NORMALSIZE);
         self.set_minipage();
+        // setspace.sty's `\@xfloat`: `\def\baselinestretch{\setspace@singlespace}\normalsize`.
+        if self.setspace() {
+            self.setspace_single();
+            self.size_command(NORMALSIZE);
+        }
     }
 
     /// float.sty's `\@float@HH#1[H]` in vertical mode, for an unstyled type: `\@captype`,
@@ -301,7 +321,7 @@ impl Machine<'_, '_> {
             self.color_stack(Some(super::DEFAULT_COLOR));
         }
         self.open_box(VBOX_GROUP, Ctx::Shift(0), false, 0, false);
-        let w = self.doc.as_ref().map_or(0, |d| d.class.dimen("textwidth"));
+        let w = self.e.eqtb.word(COLUMN_WIDTH);
         self.set_dimen_named(param!("hsize"), w);
         self.par_box_restore();
         self.normal_font();
@@ -401,6 +421,14 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// hyperref's anchor of caption `n` of float type `t`: `figure.\theHfigure`, which is
+    /// `\the\value{figure}`, or under report (`\@addtoreset{figure}{chapter}`, latex.ltx)
+    /// `\theHchapter.\the\value{figure}`.
+    pub(super) fn float_href(&self, t: u8, n: i32) -> String {
+        let within = self.doc.as_ref().filter(|d| d.report).map_or(String::new(), |d| format!(".{}", super::hyperref::the_h_top(d.counters[0], d.appendix)));
+        format!("{}{within}.{n}", ["figure", "table"][t as usize - 1])
+    }
+
     /// `\caption`: `\refstepcounter\@captype`, `\@dblarg{\@caption\@captype}`, and
     /// `\@caption`'s `\par`.
     pub(super) fn caption(&mut self) {
@@ -413,11 +441,12 @@ impl Machine<'_, '_> {
         self.set_rw(r, n, true);
         // hyperref: `\H@refstepcounter` (no anchor here) and `\hyper@makecurrent{figure}`;
         // the anchor goes in the caption text (`caption_tokens`).
-        // hyperref names the anchor by `\theHfigure`, `\arabic{figure}`: no prefix.
+        // hyperref names the anchor by `\theHfigure` (`float_href`), not `\thefigure`.
         let prefix = self.doc.as_ref().map_or(String::new(), |d| d.the_prefix[t as usize - 1].clone());
         if self.hyper() {
             self.store_current_label(&format!("{prefix}{n}"));
-            self.set_current_href(&format!("{}.{n}", ["figure", "table"][t as usize - 1]));
+            let name = self.float_href(t, n);
+            self.set_current_href(&name);
         } else {
             self.set_current_label(&format!("{prefix}{n}"));
         }
@@ -448,7 +477,8 @@ impl Machine<'_, '_> {
         out.extend([Token::char(super::Cat::Other, ':'), Token::char(super::Cat::Space, ' '), self.named_cs(named!("ignorespaces"))]);
         // hyperref's `\@caption`: `\Hy@raisedlink{\hyper@@anchor{figure.N}{\relax}}` first.
         if self.hyper() {
-            let t = self.text_raised_link(format!("{}.{n}", ["figure", "table"][t as usize - 1]));
+            let name = self.float_href(t, n);
+            let t = self.text_raised_link(name);
             out.extend(t);
         }
         out.extend_from_slice(&self.flr().caption);
@@ -869,10 +899,15 @@ impl Machine<'_, '_> {
         self.float_placement();
         let made = if self.flr().clearing { self.try_fcolumn(false, -MAX_DIMEN) } else { self.start_column() };
         if made {
-            return self.start_foot();
+            return self.opcol();
         }
-        if std::mem::take(&mut self.fl().clearing) && !self.flr().defer.is_empty() {
-            return self.not_native("floats left after \\clearpage");
+        if std::mem::take(&mut self.fl().clearing) {
+            if self.flr().twocol {
+                return self.clear_two_columns();
+            }
+            if !self.flr().defer.is_empty() {
+                return self.not_native("floats left after \\clearpage");
+            }
         }
         self.output_tail();
     }
@@ -908,15 +943,22 @@ impl Machine<'_, '_> {
         (f.defer, f.top, f.bot, f.colroom) = (defer, Queue::default(), Queue::default(), colht);
         f.clearing = true;
         if self.try_fcolumn(false, -MAX_DIMEN) {
-            return self.start_foot();
+            return self.opcol();
         }
         self.fl().clearing = false;
+        if self.flr().twocol {
+            return self.clear_two_columns();
+        }
         self.output_tail();
     }
 
     /// The end of `\output`: `\vsize` for the next page from `\@colroom` (`\@emptycol` when
     /// floats leave no room), or `\maxdimen` while a page is held.
     pub(super) fn output_tail(&mut self) {
+        // `\multi@column@out`'s end.
+        if self.doc.as_ref().is_some_and(|d| d.multicol.is_some()) {
+            return self.multicols_tail();
+        }
         let r = param!("vsize");
         if self.output_penalty() <= -10004 {
             return self.e.eqtb.set_word(r, MAX_DIMEN, true);
@@ -988,5 +1030,223 @@ impl Machine<'_, '_> {
         self.cur.extend_from_slice(self.e.nodes.get(a.list));
         self.e.nodes.free_block(a.list);
         a.depth
+    }
+
+    // Two columns.
+
+    /// `\@opcol` after `\@makecol` or a float column (in `doc.column`): `\@outputpage` in
+    /// one column, `\@outputdblcol` in two.
+    pub(super) fn opcol(&mut self) {
+        if !self.flr().twocol {
+            return self.start_foot();
+        }
+        let Some(column) = self.doc.as_mut().and_then(|d| d.column.take()) else { return };
+        // `\@outputdblcol`'s first branch: `\global\@firstcolumnfalse \global\setbox
+        // \@leftcolumn\copy\@outputbox`; then the rest of `\@opcol` and `\@startcolumn`.
+        if std::mem::replace(&mut self.fl().first, false) {
+            self.fl().left = Some(column);
+            return self.after_opcol();
+        }
+        self.fl().first = true;
+        let Some(left) = self.fl().left.take() else { return self.not_native("a second column with no first") };
+        // `\setbox\@outputbox\vbox{\hb@xt@\textwidth{\hb@xt@\columnwidth{\box\@leftcolumn
+        // \hss}\hfil{\normalcolor\vrule\@width\columnseprule}\hfil\hb@xt@\columnwidth{\box
+        // \@outputbox\hss}}}`.
+        let cw = self.e.eqtb.word(COLUMN_WIDTH);
+        let width = self.doc.as_ref().map_or(0, |d| d.class.dimen("textwidth"));
+        let rule = self.e.eqtb.word(COLUMNSEPRULE);
+        let hss = Glue { stretch: 65536, stretch_order: 1, shrink: 65536, shrink_order: 1, ..Glue::default() };
+        let hfil = Glue { stretch: 65536, stretch_order: 1, ..Glue::default() };
+        let colored = self.colored();
+        let start = self.cur.len();
+        let mut lr = [0u32; 2];
+        for (k, b) in [left, column].into_iter().enumerate() {
+            let s = self.cur.len();
+            self.cur.push(Node::new(Kind::Box, b as i32));
+            let g = self.e.nodes.glue_node(hss, 0);
+            self.cur.push(g);
+            let h = self.hpack(s, cw, true);
+            lr[k] = self.e.nodes.add_box(h);
+        }
+        self.cur.push(Node::new(Kind::Box, lr[0] as i32));
+        let g = self.e.nodes.glue_node(hfil, 0);
+        self.cur.push(g);
+        if colored {
+            self.color_stack(Some(DEFAULT_COLOR));
+        }
+        let r = self.e.nodes.rule_node([rule, RUNNING, RUNNING]);
+        self.cur.push(r);
+        if colored {
+            self.color_stack(None);
+        }
+        let g = self.e.nodes.glue_node(hfil, 0);
+        self.cur.push(g);
+        self.cur.push(Node::new(Kind::Box, lr[1] as i32));
+        let row = self.hpack(start, width, true);
+        let row = self.e.nodes.add_box(row);
+        let d = self.dimen_param(BOX_MAX_DEPTH);
+        // `\@combinedblfloats`: `\vbox to\textheight{\unvbox\@tempboxa \vskip-\dblfloatsep
+        // \vskip\dbltextfloatsep \unvbox\@outputbox}`, `\@tempboxa` each box of `\@dbltoplist`
+        // and `\vskip\dblfloatsep` (`\dblfigrule` only when `\@dbltopnum>\m@ne`, and
+        // `\@topnewpage` made it `\m@ne`).
+        let column = if let Some((k, top)) = self.fl().dbltop.take() {
+            let (fs, tfs) = (self.rg(R_DBLFLOATSEP), self.rg(R_DBLTEXTFLOATSEP));
+            self.cur.push(Node::new(Kind::Box, top as i32));
+            let n = self.e.nodes.glue_node(fs, 0);
+            self.cur.push(n);
+            let n = self.e.nodes.glue_node(super::neg(fs), 0);
+            self.cur.push(n);
+            let n = self.e.nodes.glue_node(tfs, 0);
+            self.cur.push(n);
+            self.cur.push(Node::new(Kind::Box, row as i32));
+            self.fl().free.push(k);
+            let height = self.doc.as_ref().map_or(0, |d| d.class.dimen("textheight"));
+            self.vpack(start, height, true, d)
+        } else {
+            self.cur.push(Node::new(Kind::Box, row as i32));
+            self.vpack(start, 0, false, d)
+        };
+        let column = self.e.nodes.add_box(BoxRec { vertical: true, ..column });
+        if let Some(doc) = self.doc.as_mut() {
+            doc.column = Some(column);
+        }
+        self.start_foot();
+    }
+
+    /// The end of `\@outputpage` (`\global\@colht\textheight`), then `\@outputdblcol`'s
+    /// `\@dblfloatplacement` (`\global\@dbltopnum\c@dbltopnumber`) and `\@startdblcolumn`,
+    /// which with no double-column float changes nothing: `\@tryfcolumn` finds every
+    /// single-column float of the wrong width (`\f@depth` 1sp), and `\@addtodblcol` puts each
+    /// back on `\@deferlist` in order.
+    pub(super) fn page_done(&mut self) {
+        if !self.flr().twocol {
+            return;
+        }
+        let height = self.doc.as_ref().map_or(0, |d| d.class.dimen("textheight"));
+        let top = self.rw(R_DBLTOPNUMBER);
+        let f = self.fl();
+        f.colht = height;
+        f.dbltopnum = top;
+    }
+
+    /// `\@doclearpage` after its float columns, in two columns: in the first column
+    /// `\global\@colht\textheight` and `\@dblfloatplacement\@makefcolumn\@deferlist` (no
+    /// double-column float, so no page); in the second `\vbox{}\clearpage`, which ends the
+    /// column (an empty one) and clears again.
+    fn clear_two_columns(&mut self) {
+        if !self.flr().defer.is_empty() {
+            return self.not_native("floats left after \\clearpage");
+        }
+        if self.flr().first {
+            if self.flr().dbltop.is_some() {
+                return self.not_native("a two-column top at \\clearpage");
+            }
+            self.page_done();
+            return self.output_tail();
+        }
+        // `\vbox{}`, then `\clearpage`: `\ifnum\@dbltopnum=\m@ne \ifdim\pagetotal<\topskip
+        // \hbox{}`, `\newpage` (`\if@nobreak\@nobreakfalse\fi \par \vfil \penalty-\@M`),
+        // `\@@write\m@ne{}\vbox{}\penalty-\@Mi`.
+        let topskip = self.e.eqtb.glue(param!("topskip")).width;
+        if self.flr().dbltopnum == -1 && self.page.so_far[1] < topskip {
+            return self.not_native("\\clearpage on an empty column under a two-column top");
+        }
+        self.empty_vbox(false);
+        if let Some(doc) = self.doc.as_mut() {
+            doc.nobreak = false;
+        }
+        let n = self.e.nodes.glue_node(Glue { stretch: 65536, stretch_order: 1, ..Glue::default() }, 0);
+        self.cur.push(n);
+        self.cur.push(Node::new(Kind::Penalty, -10000));
+        self.cur.push(Node { kind: Kind::Whatsit, sub: super::super::engine_whatsit::WRITE, font: super::super::engine_whatsit::NULL_STREAM, a: 0, b: 0 });
+        self.empty_vbox(false);
+        self.cur.push(Node::new(Kind::Penalty, -10001));
+        self.output_tail();
+    }
+
+    /// `\begin{document}` in two columns: `\columnwidth` is `(\textwidth-\columnsep)/2`
+    /// (`\divide` truncates), and `\hsize` and `\linewidth` follow; `\@firstcolumntrue`, and
+    /// `\@dblfloatplacement`'s `\global\@dbltopnum\c@dbltopnumber`. The width.
+    pub(super) fn two_columns_begin(&mut self, width: i32) -> i32 {
+        let cw = (width - self.e.eqtb.word(COLUMNSEP)) / 2;
+        self.e.eqtb.set_word(COLUMN_WIDTH, cw, true);
+        let top = self.rw(R_DBLTOPNUMBER);
+        let f = self.fl();
+        (f.twocol, f.first, f.dbltopnum) = (true, true, top);
+        cw
+    }
+
+    /// `\twocolumn[` after its `\clearpage` (article's `\maketitle` in two columns): the
+    /// globals of `\twocolumn`, then `\@topnewpage`'s `\@next\@currbox\@freelist` and
+    /// `\global\setbox\@currbox\color@vbox\normalcolor\vbox{\hsize\textwidth\@parboxrestore`.
+    pub(super) fn top_new_page_open(&mut self) {
+        if self.mode != Mode::Vertical || self.inner {
+            return self.not_native("\\twocolumn[...] in a box or a paragraph");
+        }
+        let width = self.doc.as_ref().map_or(0, |d| d.class.dimen("textwidth"));
+        let cw = (width - self.e.eqtb.word(COLUMNSEP)) / 2;
+        self.e.eqtb.set_word(COLUMN_WIDTH, cw, true);
+        self.e.eqtb.set_word(param!("hsize"), cw, true);
+        self.set_rw(super::R_LINEWIDTH, cw, true);
+        self.fl().first = true;
+        let Some(k) = self.fl().free.pop_front() else { return self.not_native("too many unprocessed floats") };
+        let doc = self.doc.as_mut().expect("a native document");
+        let saved = (doc.nobreak, doc.noskipsec, doc.cr_base);
+        (doc.nobreak, doc.noskipsec, doc.cr_base) = (false, false, doc.lists.len());
+        let f = &mut doc.floats;
+        (f.open, f.saved) = (k, saved);
+        self.open_box(VBOX_GROUP, Ctx::Set { n: FLOAT_BOX, global: true }, false, 0, false);
+        self.begin_group(SEMI_SIMPLE_GROUP);
+        if self.colored() {
+            self.e.eqtb.set_word(super::CURRENT_COLOR, 0, false);
+            self.color_stack(Some(super::DEFAULT_COLOR));
+        }
+        self.open_box(VBOX_GROUP, Ctx::Shift(0), false, 0, false);
+        self.set_dimen_named(param!("hsize"), width);
+        self.par_box_restore();
+    }
+
+    /// `\@topnewpage`'s end after the title's material: `\vskip-\dbltextfloatsep}\color@endbox`,
+    /// the box no taller than `\textheight`, `\global\advance\@colht-(\ht+\dbltextfloatsep)`,
+    /// the box as `\@dbltoplist`, `\global\@dbltopnum\m@ne`, then `\global\vsize\@colht
+    /// \global\@colroom\@colht\@floatplacement` (`\@emptycol` below `2.5\baselineskip` is
+    /// refused). And article's `\thispagestyle{plain}`.
+    pub(super) fn top_new_page_close(&mut self) {
+        if self.mode != Mode::Vertical {
+            return self.run_ops(vec![Op::Par, Op::Call(|m| m.top_new_page_close())]);
+        }
+        let tfs = self.rg(R_DBLTEXTFLOATSEP);
+        self.build_glue(super::neg(tfs), false);
+        self.package();
+        self.end_group(SEMI_SIMPLE_GROUP);
+        if self.colored() {
+            self.color_stack(None);
+        }
+        self.package();
+        let b = self.e.eqtb.box_reg(FLOAT_BOX).unwrap_or(0);
+        self.e.eqtb.replace_box(FLOAT_BOX, None);
+        let height = self.doc.as_ref().map_or(0, |d| d.class.dimen("textheight"));
+        if self.ht(b) > height {
+            self.e.nodes.boxes[b as usize].height = height;
+        }
+        let ht = self.ht(b);
+        let baseline = self.glue_param(BASELINE_SKIP).width;
+        let doc = self.doc.as_mut().expect("a native document");
+        (doc.nobreak, doc.noskipsec, doc.cr_base) = doc.floats.saved;
+        doc.special = Some(false);
+        let f = &mut doc.floats;
+        if f.dbltop.is_some() {
+            return self.not_native("Float(s) lost");
+        }
+        f.colht -= ht + tfs.width;
+        f.dbltop = Some((f.open, b));
+        f.dbltopnum = -1;
+        let colht = f.colht;
+        if colht < 2 * baseline + (baseline as i64 * 32768 / 65536) as i32 {
+            return self.not_native("\\twocolumn[...] too tall");
+        }
+        self.e.eqtb.set_word(param!("vsize"), colht, true);
+        self.fl().colroom = colht;
+        self.float_placement();
     }
 }

@@ -259,7 +259,9 @@ impl Machine<'_, '_> {
             }
             Kind::Whatsit => {
                 Self::line(depth, out);
-                out.push_str(&format!("\\whatsit{}", n.sub));
+                // A pgf path literal is a `\pdfliteral` to TeX.
+                let sub = if n.sub == super::engine_whatsit::PGF_POINT { super::engine_whatsit::LITERAL } else { n.sub };
+                out.push_str(&format!("\\whatsit{sub}"));
             }
             Kind::Noad => {}
         }

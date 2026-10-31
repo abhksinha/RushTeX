@@ -52,7 +52,7 @@ const OUTPUT_ROUTINE: u32 = 0;
 pub(super) type Marks = [Option<Span>; 5];
 
 /// §981: a page-insertion record for box `n`.
-#[derive(Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 struct PageIns {
     n: u8,
     split_up: bool,
@@ -67,9 +67,9 @@ struct PageIns {
 }
 
 /// §980–§982: the current page and the page builder's state.
-#[derive(Debug, Default)]
+#[derive(PartialEq, Clone, Debug, Default)]
 pub(super) struct Page {
-    list: Vec<Node>,
+    pub(super) list: Vec<Node>,
     contents: u8,
     /// §982 `page_so_far`: goal, total, stretch by order (2–5), shrink, depth.
     pub so_far: [i32; 8],
@@ -105,6 +105,12 @@ pub(super) struct Page {
     pub map_names: Option<Vec<u64>>,
     /// The word entries as the ship writes them (`engine_ship::WordShip`).
     pub word_ship: super::engine_ship::WordShip,
+    /// Whether a `\pdfliteral shipout` whatsit was ever made (or came with the format's
+    /// nodes): until one is, `out_whats`' walk before the ship has nothing to do.
+    pub late_literals: bool,
+    /// The fonts hashed so far for a session's shipped-page keys, and their running hash
+    /// (`engine_ship::ship_key`): fonts are only added, so each is hashed once.
+    pub ship_fonts: (usize, u128),
 }
 
 impl Page {
@@ -850,7 +856,10 @@ impl Machine<'_, '_> {
             self.kernel_state(&format!("shipout {}", self.page.pages + 1));
         }
         page_hash(self, b);
-        self.out_whats(b, true, &mut [].iter());
+        // The walk before the ship only turns `\pdfliteral shipout`s into literals.
+        if self.page.late_literals {
+            self.out_whats(b, true, &mut [].iter());
+        }
         let positions = self.ship_page(b);
         self.out_whats(b, false, &mut positions.iter());
         self.page.dead_cycles = 0;

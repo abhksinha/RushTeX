@@ -245,14 +245,10 @@ impl TextState {
         self.lost = false;
     }
 
-    /// `pdf_begin_string` for a character at (h, v): moves there by a `TJ` displacement or
-    /// a new text position, and leaves a string open. Call [`Self::set_font`] first.
-    pub fn begin_string(&mut self, out: &mut Vec<u8>, h: i64, v: i64) {
-        self.begin_string_ex(out, h, v, 0);
-    }
-
-    /// [`Self::begin_string`] for a character of a font automatically expanded by `ea`
-    /// thousandths (pdfTeX's `get_font_auto_expand_ratio`).
+    /// `pdf_begin_string` for a character at (h, v) of a font automatically expanded by `ea`
+    /// thousandths (0: not expanded): moves there by a `TJ` displacement or a new text
+    /// position, and leaves a string open (pdfTeX's `get_font_auto_expand_ratio` gives `ea`).
+    /// Call [`Self::set_font`] first.
     pub fn begin_string_ex(&mut self, out: &mut Vec<u8>, h: i64, v: i64, ea: i64) {
         let mut must_set = false;
         if !self.doing_text {
@@ -296,13 +292,8 @@ impl TextState {
         self.doing_string = true;
     }
 
-    /// `output_one_char`: character `c` of TeX width `w` at (h, v).
-    #[inline]
-    pub fn char(&mut self, out: &mut Vec<u8>, c: u8, w: i64, h: i64, v: i64) {
-        self.char_ex(out, c, w, h, v, 0);
-    }
-
-    /// [`Self::char`] in a font automatically expanded by `ea` thousandths.
+    /// `output_one_char`: character `c` of TeX width `w` at (h, v), in a font automatically
+    /// expanded by `ea` thousandths (0: not expanded).
     #[inline]
     pub fn char_ex(&mut self, out: &mut Vec<u8>, c: u8, w: i64, h: i64, v: i64, ea: i64) {
         // The next character of an open string, on its baseline, in an unexpanded scalable
@@ -360,13 +351,6 @@ impl TextState {
             let s = divide_scaled(rxd(w, 1000, a), self.font_size, 4).0;
             self.delta_h += rxd(rxd(self.font_size, s.abs(), 10000), a, 1000) * s.signum();
         }
-    }
-
-    /// Text of unknown advance was written into the open string: the next character must
-    /// set a new text position.
-    #[inline]
-    pub fn lose_position(&mut self) {
-        self.lost = true;
     }
 
     /// `pdf_set_origin(h, v)`: a lasting move of the origin to TeX's (h, v), `v` downward on

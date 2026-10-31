@@ -20,6 +20,8 @@ use super::data_blob::{Blob, U32s};
 const TRIE: [&str; 3] = ["tlo", "thi", "tpool"];
 
 pub struct HyphTable<'a> {
+    /// The language's `\l@<name>` number (0 for language 0's table, which has no `lang`).
+    pub number: u8,
     pub patterns: &'a [u8],
     except: &'a [u8],
     pub trie: Option<[U32s<'a>; 3]>,
@@ -28,7 +30,8 @@ pub struct HyphTable<'a> {
 impl<'a> HyphTable<'a> {
     pub fn from_blob(b: &Blob<'a>) -> Option<HyphTable<'a>> {
         let trie = TRIE.iter().map(|n| b.u32s(n)).collect::<Option<Vec<_>>>().and_then(|v| v.try_into().ok());
-        let t = HyphTable { patterns: b.section("patterns")?, except: b.section("except")?, trie };
+        let number = b.u32s("lang").map_or(Some(0), |v| v.iter().next()).filter(|&n| n < 256)? as u8;
+        let t = HyphTable { number, patterns: b.section("patterns")?, except: b.section("except")?, trie };
         // Every entry in bounds, once, so `exceptions` never stops early.
         let mut rest = t.except;
         while !rest.is_empty() {
@@ -58,6 +61,18 @@ static ENGLISH_BLOB: &[u8] = include_bytes!("../../assets/tables/hyph-en.rtdb");
 pub fn english() -> Option<&'static HyphTable<'static>> {
     static TABLE: std::sync::OnceLock<Option<HyphTable<'static>>> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| Blob::new(ENGLISH_BLOB).and_then(|b| HyphTable::from_blob(&b))).as_ref()
+}
+
+/// The other languages babel selects natively (`engine_babel`), each `hyph-<name>.rtdb`
+/// (`rushtex-gen hyph`), with its number from the format's `\l@<name>` in section `lang`.
+pub const LANGUAGES: [&str; 3] = ["ukenglish", "portuguese", "spanish"];
+
+static LANGUAGE_BLOBS: [&[u8]; LANGUAGES.len()] = [include_bytes!("../../assets/tables/hyph-ukenglish.rtdb"), include_bytes!("../../assets/tables/hyph-portuguese.rtdb"), include_bytes!("../../assets/tables/hyph-spanish.rtdb")];
+
+/// [`LANGUAGES`]`[k]`'s table, checked on first use; `None` if it is not a table of this build.
+pub fn language(k: usize) -> Option<&'static HyphTable<'static>> {
+    static TABLES: [std::sync::OnceLock<Option<HyphTable<'static>>>; LANGUAGES.len()] = [const { std::sync::OnceLock::new() }; LANGUAGES.len()];
+    TABLES.get(k)?.get_or_init(|| Blob::new(LANGUAGE_BLOBS[k]).and_then(|b| HyphTable::from_blob(&b))).as_ref()
 }
 
 #[cfg(any(test, feature = "gen"))]

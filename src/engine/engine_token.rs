@@ -91,12 +91,14 @@ impl Token {
 /// Control-sequence names, interned once: the name bytes in one string, a span per id, and
 /// an open-addressing table of ids keyed by the name's hash (§259 `id_lookup`, with our
 /// hash and no fixed `hash_size`).
-#[derive(Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct CsTable {
     text: String,
-    spans: Vec<(u32, u32)>,
+    spans: super::engine_chunk::Chunked<(u32, u32)>,
     /// Power-of-two table of `id + 1`; 0 is empty.
-    slots: Vec<u32>,
+    slots: super::engine_chunk::Chunked<u32>,
+    /// `\par`'s id once [`CsTable::par`] has looked it up (ids never change).
+    par: Option<u32>,
 }
 
 /// FNV-1a over the name's bytes.
@@ -110,6 +112,16 @@ fn hash(name: &str) -> u64 {
 }
 
 impl CsTable {
+    /// A checkpoint's copy, sharing what did not change since the last one, and a live copy
+    /// of one (`engine_chunk`).
+    pub fn freeze(&mut self) -> CsTable {
+        CsTable { text: self.text.clone(), spans: self.spans.freeze(), slots: self.slots.freeze(), par: self.par }
+    }
+
+    pub fn thaw(&self) -> CsTable {
+        CsTable { text: self.text.clone(), spans: self.spans.thaw(), slots: self.slots.thaw(), par: self.par }
+    }
+
     /// The names and their spans; the hash table is rebuilt on load.
     #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut super::engine_snapshot::Writer) {
@@ -133,8 +145,8 @@ impl CsTable {
             }
             spans.push((a, b));
         }
-        let mut t = CsTable { text, spans, slots: Vec::new() };
-        t.slots = vec![0; (t.spans.len() * 2).next_power_of_two().max(64)];
+        let mut t = CsTable { text, spans: spans.into(), slots: Default::default(), par: None };
+        t.slots = vec![0; (t.spans.len() * 2).next_power_of_two().max(64)].into();
         for id in 0..t.spans.len() as u32 {
             let i = t.probe(t.name(id));
             t.slots[i] = id + 1;
@@ -180,6 +192,20 @@ impl CsTable {
         }
     }
 
+    /// `\par`'s id (§333 `par_token`), interned on first use; every macro call with
+    /// arguments needs it (§392), so it is looked up once.
+    #[inline]
+    pub fn par(&mut self) -> u32 {
+        match self.par {
+            Some(id) => id,
+            None => {
+                let id = self.intern("par");
+                self.par = Some(id);
+                id
+            }
+        }
+    }
+
     /// The id of `name`, interning it on first sight.
     pub fn intern(&mut self, name: &str) -> u32 {
         if let Some(id) = self.get(name) {
@@ -200,7 +226,7 @@ impl CsTable {
 
     fn grow(&mut self) {
         let n = (self.slots.len() * 2).max(64);
-        self.slots = vec![0; n];
+        self.slots.replace(vec![0; n]);
         for id in 0..self.spans.len() as u32 {
             let i = self.probe(self.name(id));
             self.slots[i] = id + 1;
@@ -226,12 +252,22 @@ impl Span {
 }
 
 /// Every stored token list, back to back.
-#[derive(Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Tokens {
-    toks: Vec<Token>,
+    toks: super::engine_chunk::Chunked<Token>,
 }
 
 impl Tokens {
+    /// A checkpoint's copy, sharing what did not change since the last one, and a live copy
+    /// of one (`engine_chunk`).
+    pub fn freeze(&mut self) -> Tokens {
+        Tokens { toks: self.toks.freeze() }
+    }
+
+    pub fn thaw(&self) -> Tokens {
+        Tokens { toks: self.toks.thaw() }
+    }
+
     #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut super::engine_snapshot::Writer) {
         w.all(&self.toks);
@@ -239,7 +275,7 @@ impl Tokens {
 
     #[cfg(feature = "oracle")]
     pub(super) fn undump(r: &mut super::engine_snapshot::Reader) -> Option<Tokens> {
-        Some(Tokens { toks: r.all()? })
+        Some(Tokens { toks: r.all()?.into() })
     }
 
     /// Stores `list` and returns its span.
@@ -247,6 +283,11 @@ impl Tokens {
         let start = self.toks.len() as u32;
         self.toks.extend_from_slice(list);
         Span { start, end: self.toks.len() as u32 }
+    }
+
+    /// The tokens of `span`, live or frozen.
+    pub fn span_of(&self, span: Span) -> Option<Vec<Token>> {
+        (span.start..span.end).map(|i| self.toks.at(i as usize).copied()).collect()
     }
 
     /// The token at index `i`.

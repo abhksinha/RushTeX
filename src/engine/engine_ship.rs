@@ -140,7 +140,7 @@ struct Walk<'a> {
 /// moves the viewer after a space; the rest are bytes ready to copy when
 /// `TextState::run` finds they would all take `char_ex`'s fast path. Made the first time
 /// an entry is shipped in a font at a size; entries never change, so it holds.
-#[derive(Debug, Default)]
+#[derive(PartialEq, Clone, Debug, Default)]
 pub struct WordShip {
     /// Per entry id: its record, or none yet.
     recs: Vec<ShipRec>,
@@ -151,11 +151,14 @@ pub struct WordShip {
     /// Per entry id: the virtual font it was asked for and [`Walk::direct_font`]'s answer
     /// (0 not asked yet, 1 none, else the real font plus 2).
     direct: Vec<(u16, u16)>,
+    /// Per entry id: the hash of its items for a session's shipped-page keys
+    /// (`Machine::ship_key`), 0 not made yet.
+    keys: Vec<u128>,
 }
 
 /// An entry's runs, `runs[start..end]`, made for font `font` at `pdf_font_size` `size`,
 /// and the characters it uses (`pdf_char_marked`).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(PartialEq, Debug, Clone, Copy, Default)]
 struct ShipRec {
     font: u16,
     made: bool,
@@ -166,7 +169,7 @@ struct ShipRec {
 }
 
 /// One run, read whole.
-#[derive(Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 struct Run {
     shift: i32,
     first: u8,
@@ -322,6 +325,7 @@ impl Walk<'_> {
         let lit = match n.sub {
             // `pdf_out_literal`; a `shipout` literal's text is written as stored.
             what::LITERAL | what::LATE_LITERAL => Some((n.font as u8, text(self))),
+            what::PGF_POINT => Some((SET_ORIGIN, what::pgf_point_text(n, h, (self.page_height - v as i64) as i32))),
             // `literal(s, scan_special)`: only `PDF:` (or `pdf:`) specials, `direct:` and
             // `page:` choosing the mode.
             what::SPECIAL => {
@@ -898,9 +902,48 @@ impl Machine<'_, '_> {
             h => h,
         };
         self.check_virtual_fonts(b);
+        // A session's cache (`backend_cache`) keys the page by everything its walk reads; a
+        // page whose walk would touch the document's objects (links, destinations, images,
+        // forms, `\pdfrefobj`, `\pdfsavepos`) has no key.
+        let key = self.pdf_cache.and_then(|_| {
+            self.classify_fonts();
+            self.ship_key(&bx, [width, height, h_offset, v_offset])
+        });
         // `pdf_last_page`: the page's object, made now unless a `goto page` asked for it.
         let page_obj = self.pdf_doc.page_obj(self.page.pdf.len() as i32 + 1);
+        if let (Some(c), Some(k)) = (self.pdf_cache, key) {
+            if let Some(d) = c.page(k) {
+                let used = &mut self.page.font_used;
+                if used.len() < d.used.len() {
+                    used.resize(d.used.len(), [0; 4]);
+                }
+                for (u, o) in used.iter_mut().zip(&d.used) {
+                    u.iter_mut().zip(o).for_each(|(u, o)| *u |= o);
+                }
+                self.page.font_base.clone_from(&d.base);
+                self.colors = d.colors.clone();
+                self.page.pdf.push(ShippedPage { id: page_obj, width, height, content: d.content.clone(), ..Default::default() });
+                return Vec::new();
+            }
+        }
+        // With a key, the walk marks the characters it uses in an empty table, kept as the
+        // page's own and added to the document's.
+        let live = key.map(|_| {
+            let n = self.page.font_used.len();
+            std::mem::replace(&mut self.page.font_used, vec![[0; 4]; n])
+        });
         let w = self.walk_box(bx, Some(page_obj), height, h_offset, bx.height + v_offset);
+        if let (Some(mut live), Some(c), Some(k)) = (live, self.pdf_cache, key) {
+            let own = std::mem::take(&mut self.page.font_used);
+            if live.len() < own.len() {
+                live.resize(own.len(), [0; 4]);
+            }
+            for (u, o) in live.iter_mut().zip(&own) {
+                u.iter_mut().zip(o).for_each(|(u, o)| *u |= o);
+            }
+            self.page.font_used = live;
+            c.put_page(k, crate::backend::backend_cache::ShippedDone { content: w.content.clone(), used: own, base: self.page.font_base.clone(), colors: self.colors.clone() });
+        }
         for &(obj, link, rect) in &w.annots {
             self.pdf_doc.write_link(link, obj, rect, height);
         }
@@ -908,6 +951,143 @@ impl Machine<'_, '_> {
         let annots = w.annots.iter().map(|a| a.0).collect();
         self.page.pdf.push(ShippedPage { id: page_obj, width, height, content: w.content, annots, group: w.group, images: w.images, forms: w.forms });
         w.positions
+    }
+
+    /// A session's key of shipping box `bx` as a page `dims` (width, height, and the two
+    /// offsets): a hash of everything the walk reads, by content, never by arena index. The
+    /// fonts (name, sizes, expansion, every character's dimensions, once per font), the
+    /// sharing of PDF fonts so far, PK scales, virtual fonts, the colour stacks, and the
+    /// box's whole tree with its whatsits' texts. `None` when the walk would touch the
+    /// document's objects or positions.
+    fn ship_key(&mut self, bx: &BoxRec, dims: [i32; 4]) -> Option<u128> {
+        use crate::backend::backend_hash::ContentHasher;
+        let fonts = &self.e.fonts;
+        let (mut n, mut fp) = self.page.ship_fonts;
+        while n < fonts.list.len() {
+            let f = &fonts.list[n];
+            let mut h = ContentHasher::new();
+            h.u64(fp as u64);
+            h.u64((fp >> 64) as u64);
+            h.bytes(f.name.as_bytes());
+            h.u64(((f.size as u32 as u64) << 32) | f.design as u32 as u64);
+            h.u64(f.expand as u16 as u64);
+            for c in 0..=255u8 {
+                match f.dims(c, &fonts.info) {
+                    Some([w, ht, d, i]) => {
+                        h.u64(((w as u32 as u64) << 32) | ht as u32 as u64);
+                        h.u64(((d as u32 as u64) << 32) | i as u32 as u64);
+                    }
+                    None => h.u64(u64::MAX),
+                }
+            }
+            fp = h.finish();
+            n += 1;
+        }
+        self.page.ship_fonts = (n, fp);
+        let mut h = ContentHasher::new();
+        h.u64(5);
+        h.u64(fp as u64);
+        h.u64((fp >> 64) as u64);
+        h.u64(n as u64);
+        for i in 0..n {
+            let e = fonts.micro.expand(i as u16);
+            let base = self.page.font_base.get(i).copied().unwrap_or(NOT_USED);
+            h.u64(((base as u64) << 32) | ((e.blink as u64) << 1) | e.auto as u64);
+            h.u64(self.page.font_pk.get(i).copied().unwrap_or(-1) as u64);
+            match self.vf.get(i as u16) {
+                Some(v) => {
+                    h.u64(v.digest as u64);
+                    h.u64((v.digest >> 64) as u64);
+                }
+                None => h.u64(0),
+            }
+        }
+        h.u64(self.page.font_base.len() as u64);
+        h.u64(self.page.font_used.len() as u64);
+        self.colors.digest(&mut h);
+        dims.iter().for_each(|&d| h.u64(d as u32 as u64));
+        let mut keys = std::mem::take(&mut self.page.word_ship.keys);
+        let ok = self.hash_box(bx, &mut h, &mut keys);
+        self.page.word_ship.keys = keys;
+        ok.then(|| h.finish())
+    }
+
+    /// Box `bx`'s tree into `h` as the walk reads it (`ship_key`); false at a whatsit that
+    /// touches the document's objects or positions.
+    /// A word entry's items are hashed once (`keys`, by entry id; entries never change).
+    fn hash_box(&self, bx: &BoxRec, h: &mut crate::backend::backend_hash::ContentHasher, keys: &mut Vec<u128>) -> bool {
+        let nodes = &self.e.nodes;
+        h.u64(((bx.vertical as u64) << 16) | ((bx.glue_sign as u64) << 8) | bx.glue_order as u64);
+        h.u64(((bx.width as u32 as u64) << 32) | bx.height as u32 as u64);
+        h.u64(((bx.depth as u32 as u64) << 32) | bx.shift as u32 as u64);
+        h.u64(bx.glue_set.to_bits());
+        let list = nodes.get(bx.list);
+        h.u64(list.len() as u64);
+        let mut text = String::new();
+        for n in list {
+            let head = ((n.kind as u64) << 56) | ((n.sub as u64) << 48) | ((n.font as u64) << 32);
+            match n.kind {
+                Kind::Char | Kind::Lig | Kind::Kern | Kind::Math => h.u64(head | n.a as u32 as u64),
+                Kind::Box => {
+                    h.u64(head);
+                    if !self.hash_box(&nodes.boxes[n.a as usize], h, keys) {
+                        return false;
+                    }
+                }
+                Kind::Rule => {
+                    let r = nodes.rules[n.a as usize];
+                    h.u64(head | r[0] as u32 as u64);
+                    h.u64(((r[1] as u32 as u64) << 32) | r[2] as u32 as u64);
+                }
+                Kind::Glue => {
+                    let g = nodes.glue(n);
+                    h.u64(head | g.width as u32 as u64);
+                    h.u64(((g.stretch as u32 as u64) << 32) | g.shrink as u32 as u64);
+                    h.u64(((g.stretch_order as u64) << 8) | g.shrink_order as u64);
+                    if n.sub >= 110 {
+                        let r = nodes.rules[n.b as usize];
+                        h.u64(((r[0] as u32 as u64) << 32) | r[1] as u32 as u64);
+                        h.u64(r[2] as u32 as u64);
+                    } else if n.sub >= 100 && !self.hash_box(&nodes.boxes[n.b as usize], h, keys) {
+                        return false;
+                    }
+                }
+                Kind::Word => {
+                    let id = n.a as usize;
+                    if keys.len() <= id {
+                        keys.resize(id + 1, 0);
+                    }
+                    if keys[id] == 0 {
+                        let items = nodes.words.items(id as u32);
+                        let mut w = crate::backend::backend_hash::ContentHasher::new();
+                        w.u64(items.len() as u64);
+                        for m in items {
+                            w.u64(((m.kind as u64) << 56) | ((m.font as u64) << 32) | m.a as u32 as u64);
+                        }
+                        keys[id] = w.finish() | 1;
+                    }
+                    h.u64(head);
+                    h.u64(keys[id] as u64);
+                    h.u64((keys[id] >> 64) as u64);
+                }
+                Kind::Whatsit => {
+                    if matches!(n.sub, what::XIMAGE | what::XFORM | doc::START_LINK | doc::END_LINK | doc::DEST | doc::REF_OBJ | what::SAVE_POS) {
+                        return false;
+                    }
+                    h.u64(head);
+                    // The whatsits whose text the walk writes (`Walk::whatsit`).
+                    if matches!(n.sub, what::LITERAL | what::LATE_LITERAL | what::SPECIAL | what::COLOR_SET | what::COLOR_PUSH | what::SET_MATRIX) {
+                        text.clear();
+                        self.show(self.e.toks.get(super::engine_token::Span { start: n.a as u32, end: n.b as u32 }), &mut text);
+                        h.bytes(text.as_bytes());
+                    }
+                }
+                // Penalties, discretionaries, marks, insertions and adjustments are passed
+                // over by the walk.
+                _ => h.u64(head & (0xff << 56)),
+            }
+        }
+        true
     }
 
     /// The forms a page or form showed that are not shipped yet (pdfTeX's `Write out
@@ -1007,7 +1187,7 @@ impl Machine<'_, '_> {
                 continue;
             }
             let f = if f.expand != 0 && blink != 0 { &self.e.fonts.list[blink as usize] } else { f };
-            let mapped = names.binary_search(&crate::backend::backend_ship::fnv(f.name.as_bytes())).is_ok() || crate::backend::backend_optical::program_by_name(&f.name).is_some();
+            let mapped = names.binary_search(&crate::backend::backend_ship::fnv(f.name.as_bytes())).is_ok() || crate::backend::backend_cm_fonts::program_by_name(&f.name).is_some();
             let size = crate::backend::backend_pdftex::pdf_font_size(f.size as i64);
             self.page.font_pk.push(if mapped || f.name.is_empty() { 0 } else { crate::backend::backend_pk::pk_font_scale(size, res, dd) });
         }
@@ -1022,6 +1202,13 @@ impl Machine<'_, '_> {
 
     /// The document so far as a PDF: the shipped pages and the fonts they use.
     pub fn pdf(&self) -> Vec<u8> {
+        self.pdf_cached(None)
+    }
+
+    /// [`pdf`](Self::pdf) through a `--watch` session's caches of fonts, streams and images
+    /// (`backend_cache`): the same bytes, with the work an earlier recompile did from the
+    /// same inputs taken from the cache.
+    pub fn pdf_cached(&self, cache: Option<&crate::backend::backend_cache::PdfCache>) -> Vec<u8> {
         let fonts: Vec<Option<crate::backend::backend_ship::DocFont>> = self
             .e
             .fonts
@@ -1055,9 +1242,9 @@ impl Machine<'_, '_> {
         let to_unicode: crate::backend::backend_ship::ToUnicode = if gen && !self.e.glyph_unicode.is_empty() { Some(&self.e.glyph_unicode) } else { None };
         let minor = self.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot: PDF_MINOR_VERSION });
         let first_page = self.page.pdf.first().map_or(0, |p| p.id);
-        let (objects, catalog, base) = self.pdf_doc.finish(first_page, files, self.image_hicolor());
+        let (objects, catalog, base) = self.pdf_doc.finish(first_page, files, self.image_hicolor(), cache);
         let objcompress = self.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot: PDF_OBJ_COMPRESS_LEVEL });
         let meta = crate::backend::backend_ship::DocMeta { minor, objcompress, info: &self.pdf_doc.info, catalog: &catalog, objects: &objects, base: base as usize, forms: &self.pdf_doc.shipped_forms };
-        crate::backend::backend_ship::write(&self.page.pdf, &fonts, files, to_unicode, &meta)
+        crate::backend::backend_ship::write(&self.page.pdf, &fonts, files, to_unicode, &meta, cache)
     }
 }

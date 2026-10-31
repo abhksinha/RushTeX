@@ -70,7 +70,7 @@ impl<'a> Blob<'a> {
 }
 
 /// A column of `u16` read in place.
-#[derive(Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 pub struct U16s<'a>(&'a [[u8; 2]]);
 
 impl U16s<'_> {
@@ -90,7 +90,7 @@ impl U16s<'_> {
 
 /// A column of `u32` read in place: little-endian quads, from a blob or an owned buffer of
 /// the same layout.
-#[derive(Clone, Copy, Default)]
+#[derive(PartialEq, Clone, Copy, Default)]
 pub struct U32s<'a>(&'a [[u8; 4]]);
 
 impl<'a> U32s<'a> {

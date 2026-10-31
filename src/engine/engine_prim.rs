@@ -571,11 +571,13 @@ pub const OR_CODE: u8 = 4;
 
 impl Prim {
     /// §366: whether the primitive acts during expansion (rather than in the main loop).
+    #[inline(always)]
     pub const fn expandable(self) -> bool {
         matches!(self, Prim::TopMark | Prim::FirstMark | Prim::BotMark | Prim::SplitFirstMark | Prim::SplitBotMark | Prim::TopMarks | Prim::FirstMarks | Prim::BotMarks | Prim::SplitFirstMarks | Prim::SplitBotMarks | Prim::FontName | Prim::Meaning | Prim::Detokenize | Prim::Expanded | Prim::ETeXRevision | Prim::PdfStrcmp | Prim::Unexpanded | Prim::Input | Prim::ScanTokens | Prim::EndInput | Prim::JobName | Prim::Csname | Prim::ExpandAfter | Prim::NoExpand | Prim::String | Prim::Number | Prim::RomanNumeral | Prim::The | Prim::Unless | Prim::Else | Prim::Fi | Prim::Or) || self.is_if()
     }
 
     /// §487 `if_test`.
+    #[inline]
     pub const fn is_if(self) -> bool {
         matches!(
             self,
@@ -584,6 +586,7 @@ impl Prim {
     }
 
     /// §489 `fi_or_else`: the code of `\fi`, `\else` or `\or`.
+    #[inline]
     pub const fn fi_or_else(self) -> Option<u8> {
         match self {
             Prim::Fi => Some(FI_CODE),

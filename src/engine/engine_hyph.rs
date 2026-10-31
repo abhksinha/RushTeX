@@ -12,6 +12,7 @@
 //! letters and the language to the hyphen positions; a later `\hyphenation` of the same
 //! word replaces the earlier one, as in TeX Live's TeX.
 
+use std::sync::Arc;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::engine_catcode::Cat;
@@ -30,20 +31,23 @@ const UC_HYPH: u32 = 38;
 /// A language's exceptions: each word's letters and its hyphen positions.
 pub type Exceptions<'a> = Vec<(&'a [u8], &'a [u8])>;
 
+/// §934's exception table: a word's letters and language, to its hyphen positions.
+type ExceptionTable = HashMap<Box<[u8]>, Box<[u8]>>;
+
 /// The hyphenation tables (§920–§941), kept in a format.
-#[derive(Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct Hyph {
     /// Per language: records of `k`, the `k` letters, then the `k+1` digits (§961–§965)
     /// two to a byte, the first in the low nibble.
-    patterns: Vec<Vec<u8>>,
+    patterns: Arc<Vec<Vec<u8>>>,
     /// §934: the letters and the language, to the positions of the hyphens.
-    exceptions: HashMap<Box<[u8]>, Box<[u8]>>,
+    exceptions: Arc<ExceptionTable>,
     /// The negation of §891's `trie_not_ready`: `\patterns` is too late once set.
     pub ready: bool,
     /// §963's duplicate check, while patterns are entered.
-    seen: HashSet<Box<[u8]>>,
-    /// Built tries, per language.
-    tries: Vec<Option<Trie>>,
+    seen: Arc<HashSet<Box<[u8]>>>,
+    /// Built tries, per language (shared by a checkpoint's copy: fixed once built).
+    tries: Vec<Option<Arc<Trie>>>,
     /// Each word hyphenated so far, as its §923–§934 result: the key is the lowercase
     /// letters `hc[1..=hn]`, the language, `\lefthyphenmin` and `\righthyphenmin`; the value
     /// bit `j` is an odd `hyf[j]` after the minima are applied. Those are all §923 and §934
@@ -58,6 +62,12 @@ pub struct Hyph {
 }
 
 impl Hyph {
+    /// A copy without the memo of words hyphenated (a cache that refills), for a checkpoint.
+    pub fn without_memo(&self) -> Hyph {
+        let Hyph { patterns, exceptions, ready, seen, tries, memo: _, memo_key: _, spare: _ } = self;
+        Hyph { patterns: patterns.clone(), exceptions: exceptions.clone(), ready: *ready, seen: seen.clone(), tries: tries.clone(), memo: HashMap::default(), memo_key: Vec::new(), spare: Word::default() }
+    }
+
     /// A word's replacement list, once read, back to make the next one in.
     pub(super) fn give_back(&mut self, out: Vec<Node>) {
         if out.capacity() > self.spare.out.capacity() {
@@ -114,7 +124,7 @@ struct Tree {
 /// free slot). The root is slot 0. Every base is used by one node only, so a slot holding
 /// `c` at `base(z) + c` is `z`'s child: another node's child there would have the same
 /// base. A node without children has base 0, whose slots `c` hold other characters.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone)]
 struct Trie {
     slots: Vec<u64>,
     pool: Vec<u16>,
@@ -294,9 +304,9 @@ impl Hyph {
             self.tries.resize_with(lang + 1, || None);
         }
         if self.tries[lang].is_none() {
-            self.tries[lang] = Some(Trie::build(records));
+            self.tries[lang] = Some(Arc::new(Trie::build(records)));
         }
-        self.tries[lang].as_ref()
+        self.tries[lang].as_deref()
     }
 
     /// Language `lang`'s trie as `data_hyph` stores it ([`Trie::parts`]), built from its
@@ -315,14 +325,14 @@ impl Hyph {
         if self.tries.len() <= l {
             self.tries.resize_with(l + 1, || None);
         }
-        self.tries[l] = Some(t);
+        self.tries[l] = Some(Arc::new(t));
         true
     }
 
     /// Whether language `lang`'s stored trie is the one its patterns build (`rushtex-gen`).
     pub fn trie_matches(&self, lang: u8) -> bool {
         let l = lang as usize;
-        match (self.tries.get(l).and_then(Option::as_ref), self.patterns.get(l)) {
+        match (self.tries.get(l).and_then(|t| t.as_deref()), self.patterns.get(l)) {
             (Some(t), Some(p)) => *t == Trie::build(p),
             _ => false,
         }
@@ -342,17 +352,18 @@ impl Hyph {
     pub fn set_language<'e>(&mut self, lang: u8, patterns: &[u8], exceptions: impl Iterator<Item = (&'e [u8], &'e [u8])>) {
         let l = lang as usize;
         self.memo.clear();
-        if self.patterns.len() <= l {
-            self.patterns.resize_with(l + 1, Vec::new);
+        let pats = Arc::make_mut(&mut self.patterns);
+        if pats.len() <= l {
+            pats.resize_with(l + 1, Vec::new);
         }
-        self.patterns[l] = patterns.to_vec();
+        pats[l] = patterns.to_vec();
         if let Some(t) = self.tries.get_mut(l) {
             *t = None;
         }
         for (k, v) in exceptions {
             let mut key = k.to_vec();
             key.push(lang);
-            self.exceptions.insert(key.into_boxed_slice(), v.into());
+            Arc::make_mut(&mut self.exceptions).insert(key.into_boxed_slice(), v.into());
         }
         self.ready = true;
     }
@@ -360,7 +371,7 @@ impl Hyph {
     #[cfg(feature = "oracle")]
     pub(super) fn dump(&self, w: &mut Writer) {
         w.count(self.patterns.len());
-        for p in &self.patterns {
+        for p in self.patterns.iter() {
             w.raw(p);
         }
         let mut ex: Vec<_> = self.exceptions.iter().collect();
@@ -387,11 +398,12 @@ impl Hyph {
             exceptions.insert(k.into_boxed_slice(), v.into_boxed_slice());
         }
         // §1325: a format's trie is always ready.
-        Some(Hyph { patterns, exceptions, ready: true, seen: HashSet::new(), tries: Vec::new(), memo: HashMap::default(), memo_key: Vec::new(), spare: Word::default() })
+        Some(Hyph { patterns: Arc::new(patterns), exceptions: Arc::new(exceptions), ready: true, seen: Default::default(), tries: Vec::new(), memo: HashMap::default(), memo_key: Vec::new(), spare: Word::default() })
     }
 }
 
 /// A word to hyphenate: §892's `hc`, `hu`, `hn`, `hf`, `hyf`, and the boundary state of §903.
+#[derive(PartialEq, Clone)]
 struct Word {
     hu: [u16; 66],
     hyf: [u8; 66],
@@ -437,7 +449,7 @@ impl Word {
 }
 
 /// A `lig_stack` entry (§907): a pending character and the original it replaces, if any.
-#[derive(Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 struct Item {
     c: u16,
     ptr: Option<u16>,
@@ -522,7 +534,7 @@ impl Machine<'_, '_> {
                         // §939
                         let mut key: Vec<u8> = hc[1..=k].iter().map(|&c| c as u8).collect();
                         key.push(lang as u8);
-                        self.e.hyph.exceptions.insert(key.into_boxed_slice(), std::mem::take(&mut pos).into_boxed_slice());
+                        Arc::make_mut(&mut self.e.hyph.exceptions).insert(key.into_boxed_slice(), std::mem::take(&mut pos).into_boxed_slice());
                         self.e.hyph.memo.clear();
                     }
                     if end_group {
@@ -552,14 +564,15 @@ impl Machine<'_, '_> {
         let mut key: Vec<u8> = Vec::with_capacity(k + 1);
         key.push(lang as u8);
         key.extend(hc.iter().map(|&c| c as u8));
-        if !self.e.hyph.seen.insert(key.into_boxed_slice()) {
+        if !Arc::make_mut(&mut self.e.hyph.seen).insert(key.into_boxed_slice()) {
             self.error("Duplicate pattern");
         }
         let h = &mut self.e.hyph;
-        if h.patterns.len() <= lang {
-            h.patterns.resize_with(lang + 1, Vec::new);
+        let pats = Arc::make_mut(&mut h.patterns);
+        if pats.len() <= lang {
+            pats.resize_with(lang + 1, Vec::new);
         }
-        let rec = &mut h.patterns[lang];
+        let rec = &mut pats[lang];
         rec.push(k as u8);
         rec.extend(hc.iter().map(|&c| c as u8));
         rec.extend(hyf.chunks(2).map(|d| d[0] | d.get(1).map_or(0, |&e| e << 4)));

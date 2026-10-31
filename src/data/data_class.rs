@@ -40,7 +40,7 @@ pub const CLASS_DIMENS: [&str; 9] = ["textwidth", "textheight", "oddsidemargin",
 /// LaTeX's registers the native commands use, by name: `\name`'s register, or for `count
 /// x`, `dimen x` and `skip x` that register of the insertion class `\x`. The native job
 /// keeps them at their LaTeX register numbers, so grouping restores them as in LaTeX.
-pub const CLASS_REGS: [&str; 57] = [
+pub const CLASS_REGS: [&str; 62] = [
     "footnotesep", "leftmargini", "leftmarginii", "leftmarginiii", "leftmarginiv", "leftmarginv", "leftmarginvi",
     "labelsep", "labelwidth", "leftmargin", "rightmargin", "listparindent", "itemindent", "@totalleftmargin", "linewidth",
     "@beginparpenalty", "@endparpenalty", "@itempenalty", "@clubpenalty", "@lowpenalty", "interfootnotelinepenalty",
@@ -50,6 +50,8 @@ pub const CLASS_REGS: [&str; 57] = [
     "arraycolsep", "arrayrulewidth", "doublerulesep",
     "floatsep", "textfloatsep", "intextsep", "@fptop", "@fpsep", "@fpbot", "abovecaptionskip", "belowcaptionskip",
     "c@topnumber", "c@bottomnumber", "c@totalnumber", "c@figure", "c@table",
+    "dblfloatsep", "dbltextfloatsep", "c@dbltopnumber",
+    "marginparsep", "marginparwidth",
 ];
 
 /// Switches of the class, each 1 or 0: `\raggedbottom` (`\@textbottom` is a skip) and
@@ -85,14 +87,19 @@ pub struct SizeRow<'a> {
 pub const PAPERS: [&str; 6] = ["letterpaper", "legalpaper", "executivepaper", "a4paper", "a5paper", "b5paper"];
 
 /// A combination of the parameter-only options: the paper's index in [`PAPERS`] (bits
-/// 0–2), `landscape` (bit 3), `twoside` (bit 4), `draft` (bit 5).
+/// 0–2), `landscape` (bit 3), `twoside` (bit 4), `draft` (bit 5); `twocolumn` is bit 6
+/// ([`TWOCOLUMN`]), added to a key.
 pub fn option_key(paper: usize, landscape: bool, twoside: bool, draft: bool) -> u32 {
     paper as u32 | (landscape as u32) << 3 | (twoside as u32) << 4 | (draft as u32) << 5
 }
 
-/// Every combination [`option_key`] makes.
+/// The `twocolumn` option's bit in an [`option_key`]: the class's `\twocolumn \sloppy
+/// \flushbottom` and the sizes' two-column values (`\textwidth`, `\parindent`, …).
+pub const TWOCOLUMN: u32 = 64;
+
+/// Every combination [`option_key`] makes, each also with [`TWOCOLUMN`].
 pub fn option_keys() -> impl Iterator<Item = u32> {
-    (0..PAPERS.len()).flat_map(|p| (0..8u32).map(move |b| option_key(p, b & 1 != 0, b & 2 != 0, b & 4 != 0)))
+    (0..PAPERS.len()).flat_map(|p| (0..16u32).map(move |b| option_key(p, b & 1 != 0, b & 2 != 0, b & 4 != 0) | (b & 8) << 3))
 }
 
 /// A loaded font of the table.
@@ -106,6 +113,7 @@ pub struct ClassFont<'a> {
     pub current: bool,
 }
 
+#[derive(PartialEq)]
 pub struct ClassTable<'a> {
     pub ints: U32s<'a>,
     pub dimens: U32s<'a>,
@@ -214,17 +222,40 @@ pub fn article() -> Option<&'static ClassTable<'static>> {
 
 /// `article` at size option `i` of [`CLASS_SIZES`].
 pub fn article_size(i: usize) -> Option<&'static ClassTable<'static>> {
-    class_size(false, i)
+    class_size(0, i)
 }
 
 static REPORT_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-report.rtdb"), include_bytes!("../../assets/tables/class-report-11pt.rtdb"), include_bytes!("../../assets/tables/class-report-12pt.rtdb")];
+static BOOK_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-book.rtdb"), include_bytes!("../../assets/tables/class-book-11pt.rtdb"), include_bytes!("../../assets/tables/class-book-12pt.rtdb")];
 
-/// `article`, or `report` when `report`, at size option `i` of [`CLASS_SIZES`]
-/// (`rushtex-gen class --class report`).
-pub fn class_size(report: bool, i: usize) -> Option<&'static ClassTable<'static>> {
-    static TABLES: [[std::sync::OnceLock<Option<ClassTable<'static>>>; 3]; 2] = [const { [const { std::sync::OnceLock::new() }; 3] }; 2];
-    let blobs = if report { &REPORT_BLOBS } else { &ARTICLE_BLOBS };
-    TABLES[report as usize].get(i)?.get_or_init(|| Blob::new(blobs[i]).and_then(|b| ClassTable::from_blob(&b))).as_ref()
+static LETTER_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-letter.rtdb"), include_bytes!("../../assets/tables/class-letter-11pt.rtdb"), include_bytes!("../../assets/tables/class-letter-12pt.rtdb")];
+
+/// KOMA-Script's `scrartcl` (`rushtex-gen class --class scrartcl`): the type area typearea.sty
+/// computes at the class load (`DIV`, `BCOR`, `\textwidth`, `\textheight`, the margins) for
+/// each paper and size, read from the oracle, as every other word.
+static SCRARTCL_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-scrartcl.rtdb"), include_bytes!("../../assets/tables/class-scrartcl-11pt.rtdb"), include_bytes!("../../assets/tables/class-scrartcl-12pt.rtdb")];
+
+static AMSART_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-amsart.rtdb"), include_bytes!("../../assets/tables/class-amsart-11pt.rtdb"), include_bytes!("../../assets/tables/class-amsart-12pt.rtdb")];
+static MEMOIR_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-memoir.rtdb"), include_bytes!("../../assets/tables/class-memoir-11pt.rtdb"), include_bytes!("../../assets/tables/class-memoir-12pt.rtdb")];
+
+/// The classes with a table, by [`class_size`]'s index: `article`, `report`
+/// (`rushtex-gen class --class report`), `letter` (`--class letter`), `book`
+/// (`--class book`), `scrartcl` (`--class scrartcl`), `amsart` (`--class amsart`), `memoir` (`--class memoir`).
+pub const CLASSES: [&str; 7] = ["article", "report", "letter", "book", "scrartcl", "amsart", "memoir"];
+/// [`CLASSES`]'s index of scrartcl.
+pub const SCRARTCL: usize = 4;
+/// [`CLASSES`]'s index of amsart.
+pub const AMSART: usize = 5;
+/// [`CLASSES`]'s index of memoir.
+pub const MEMOIR: usize = 6;
+
+/// Class `cls` of [`CLASSES`] at size option `i` of [`CLASS_SIZES`]. A register letter.cls
+/// does not allocate (the float counters and skips) has region 3 in [`ClassTable::reg`].
+pub fn class_size(cls: usize, i: usize) -> Option<&'static ClassTable<'static>> {
+    static TABLES: [[std::sync::OnceLock<Option<ClassTable<'static>>>; 3]; CLASSES.len()] = [const { [const { std::sync::OnceLock::new() }; 3] }; CLASSES.len()];
+    static BLOBS: [&[&[u8]; 3]; CLASSES.len()] = [&ARTICLE_BLOBS, &REPORT_BLOBS, &LETTER_BLOBS, &BOOK_BLOBS, &SCRARTCL_BLOBS, &AMSART_BLOBS, &MEMOIR_BLOBS];
+    let blobs = BLOBS.get(cls)?;
+    TABLES.get(cls)?.get(i)?.get_or_init(|| Blob::new(blobs[i]).and_then(|b| ClassTable::from_blob(&b))).as_ref()
 }
 
 // ---- Generation -------------------------------------------------------------------------
@@ -295,5 +326,31 @@ mod tests {
         assert_eq!(reg("skip footins").2[..3], [9 * pt, 4 * pt, 2 * pt]);
         assert_eq!(reg("count footins").2[0], 1000);
         assert_eq!(reg("footnotesep").2[0], 435814);
+    }
+
+    /// letter.cls's own values, and the registers it does not allocate.
+    #[test]
+    fn letter_registers() {
+        let t = class_size(2, 0).expect("the letter table reads back");
+        let reg = |name: &str| t.reg(CLASS_REGS.iter().position(|n| *n == name).unwrap());
+        let pt = 65536;
+        assert_eq!(reg("c@figure").0, 3);
+        assert_eq!(reg("abovecaptionskip").0, 3);
+        assert_eq!(reg("labelsep").2[0], 5 * pt);
+        // `\@listI`: `\topsep` and `\itemsep` .4em, `\parsep` 0.
+        assert_eq!(reg("parsep").2[0], 0);
+        assert_eq!(t.dimen("headsep"), 45 * pt);
+        assert!(t.flag("raggedbottom"));
+    }
+
+    /// amsart.cls's own values: `\calclayout`'s page, `\@listI`, its head.
+    #[test]
+    fn amsart_registers() {
+        let t = class_size(AMSART, 0).expect("the amsart table reads back");
+        let pt = 65536;
+        assert_eq!(t.dimen("textwidth"), 360 * pt);
+        assert_eq!(t.dimen("headheight"), 8 * pt);
+        assert_eq!(t.dimen("headsep"), 14 * pt);
+        assert!(t.flag("twoside"));
     }
 }

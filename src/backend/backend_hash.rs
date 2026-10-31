@@ -1,13 +1,8 @@
-//! 128-bit content hashing for the recompile caches.
-//!
-//! A cache entry is reused when the hash of its inputs matches, so the hash stands in for
-//! comparing the inputs themselves. Two independent 64-bit lanes, each mixed with a folded
+//! 128-bit content hashing: the content ids of the generated tables and font packs, so a
+//! table is known by what it holds. Two independent 64-bit lanes, each mixed with a folded
 //! 64×64→128 multiply (as wyhash does), make an accidental collision between two different
 //! paragraphs or pages about as likely as a 2^-128 event. It is not meant to resist inputs
 //! crafted to collide.
-
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 
 const K_A: u64 = 0xa076_1d64_78bd_642f;
 const K_B: u64 = 0xe703_7ed1_a0b4_28db;
@@ -70,11 +65,6 @@ impl ContentHasher {
         self.u64(v as u64);
     }
 
-    #[inline(always)]
-    pub fn f32(&mut self, v: f32) {
-        self.u64(v.to_bits() as u64);
-    }
-
     /// Hashes `bytes` with their length, so consecutive strings cannot run together.
     #[inline]
     pub fn bytes(&mut self, bytes: &[u8]) {
@@ -96,82 +86,6 @@ impl ContentHasher {
     }
 }
 
-/// Hasher for maps keyed by a [`ContentHasher`] result: the key is already uniformly
-/// distributed, so its low half is used as it is.
-#[derive(Default)]
-pub struct KeyHasher(u64);
-
-impl Hasher for KeyHasher {
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    #[inline]
-    fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.0 = (self.0 << 8) | b as u64;
-        }
-    }
-
-    #[inline]
-    fn write_u128(&mut self, v: u128) {
-        self.0 = v as u64;
-    }
-}
-
-/// A map from content hashes to cached results.
-pub type ContentMap<V> = HashMap<u128, V, BuildHasherDefault<KeyHasher>>;
-
-/// Entries of one compile generation. A recompile marks the entries it reuses or adds;
-/// [`GenerationCache::sweep`] then drops the rest, so the cache holds what the current
-/// document needs and no more.
-pub struct GenerationCache<V> {
-    map: ContentMap<(u32, V)>,
-    generation: u32,
-}
-
-impl<V> Default for GenerationCache<V> {
-    fn default() -> Self {
-        Self { map: ContentMap::default(), generation: 0 }
-    }
-}
-
-impl<V> GenerationCache<V> {
-    /// Starts a compile.
-    pub fn begin(&mut self) {
-        self.generation = self.generation.wrapping_add(1);
-    }
-
-    #[inline]
-    pub fn get(&mut self, key: u128) -> Option<&V> {
-        let generation = self.generation;
-        self.map.get_mut(&key).map(|e| {
-            e.0 = generation;
-            &e.1
-        })
-    }
-
-    #[inline]
-    pub fn insert(&mut self, key: u128, value: V) {
-        self.map.insert(key, (self.generation, value));
-    }
-
-    /// Drops the entries the compile just finished did not use.
-    pub fn sweep(&mut self) {
-        let generation = self.generation;
-        self.map.retain(|_, e| e.0 == generation);
-    }
-
-    pub fn len(&self) -> usize {
-        self.map.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,19 +99,5 @@ mod tests {
         b.bytes(b"a");
         b.bytes(b"bc");
         assert_ne!(a.finish(), b.finish());
-    }
-
-    #[test]
-    fn sweep_keeps_only_this_generation() {
-        let mut c = GenerationCache::default();
-        c.begin();
-        c.insert(1, "one");
-        c.insert(2, "two");
-        c.sweep();
-        c.begin();
-        assert_eq!(c.get(1), Some(&"one"));
-        c.sweep();
-        assert_eq!(c.len(), 1);
-        assert_eq!(c.get(2), None);
     }
 }

@@ -91,7 +91,7 @@ const DEFAULTS_HOOK: [&str; 3] = ["__hook expand@font@defaults", "__hook_topleve
 /// A switch's macro read at binding: the default it requests (`\itdefault`; for a series
 /// switch `\bfseries@rm`, `@sf`, `@tt` and `\bfdefault`, by family), its `\…default@previous`,
 /// and the text after its native part (`\selectfont`, or `\UseHook{bfseries}\selectfont`).
-#[derive(Default)]
+#[derive(PartialEq, Clone, Default)]
 struct Switch {
     pick: [u32; 4],
     previous: u32,
@@ -116,6 +116,7 @@ const SCRATCH: [&str; 24] = [
 
 /// A watched name and the meaning it had when the job started (with a macro's text, to
 /// recognise it after the collector moves it).
+#[derive(PartialEq, Clone)]
 struct Watch {
     id: u32,
     m: Meaning,
@@ -137,7 +138,7 @@ impl Watch {
 }
 
 /// The per-job state of the native commands.
-#[derive(Default)]
+#[derive(PartialEq, Clone, Default)]
 pub(super) struct Kernel {
     /// The names bound, by `KERNEL` index, and the IDs their macros are kept under.
     bound: Vec<(u16, u32)>,

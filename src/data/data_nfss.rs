@@ -322,6 +322,20 @@ impl<'a> NfssTable<'a> {
         (plain && le_i32(e, 8) == 0).then(|| self.run(shape, e, size, 0)).flatten()
     }
 
+    /// `\try@size@substitution`'s `\best@size` for `size` (which no entry holds): the text of
+    /// the single size nearest to it, strictly nearer than any before it.
+    pub fn nearest(&self, shape: u32, size: &str) -> Option<&'a str> {
+        let sp = decimal_sp(size)?;
+        let mut best: Option<(i32, u32)> = None;
+        for e in self.entries(shape).iter().filter(|e| e[15] == SINGLE) {
+            let d = (le_i32(e, 0) - sp).abs();
+            if best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, le_i32(e, 4) as u32));
+            }
+        }
+        Some(self.string(best?.1))
+    }
+
     fn external_at(&self, shape: u32, size: &'a str, depth: u32) -> Option<External<'a>> {
         const DEPTH: u32 = 16;
         if depth > DEPTH || shape as usize >= self.shapes.len() {

@@ -450,7 +450,7 @@ fn undump_nodes(r: &mut Reader) -> Option<Nodes> {
         let split_top = Glue::take(r)?;
         inserts.push(super::engine_node::InsRec { n, height, depth, split_top, float_cost, list: (r.u32()?, r.u32()?) });
     }
-    let n = Nodes { list, boxes, glues, rules, lig_chars, discs, inserts, ..Default::default() };
+    let n = Nodes { list: list.into(), boxes: boxes.into(), glues: glues.into(), rules: rules.into(), lig_chars: lig_chars.into(), discs: discs.into(), inserts: inserts.into(), ..Default::default() };
     let span_ok = |s: &(u32, u32)| s.0 <= s.1 && s.1 as usize <= n.list.len();
     let in_list = |b: &BoxRec| b.list.0 <= b.list.1 && b.list.1 as usize <= n.list.len();
     let node_ok = |x: &Node| match x.kind {

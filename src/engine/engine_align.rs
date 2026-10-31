@@ -39,7 +39,7 @@ pub(super) const UNSET_ROW: u8 = 2;
 const TAB_SKIP_SUB: u8 = 12;
 
 /// §769: a column of the preamble.
-#[derive(Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 struct Column {
     u: Span,
     v: Span,
@@ -54,7 +54,7 @@ struct Column {
 
 /// §159: the stretch and shrink of an unset entry, and how many columns it spans beyond
 /// its own.
-#[derive(Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 struct Unset {
     span: u16,
     stretch: i32,
@@ -64,7 +64,7 @@ struct Unset {
 }
 
 /// §770: one alignment in progress.
-#[derive(Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub(super) struct Align {
     cols: Vec<Column>,
     /// The tabskip glue before column 0, between the columns, and after the last.

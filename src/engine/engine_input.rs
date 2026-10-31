@@ -24,7 +24,7 @@ enum Arena {
 }
 
 /// A token-list frame (§307 `token_list` state).
-#[derive(Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 struct Frame {
     arena: Arena,
     pos: u32,
@@ -39,7 +39,7 @@ struct Frame {
 }
 
 /// The input stack.
-#[derive(Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct Input<'a> {
     /// The document, then each file `\input` opened, innermost last (§304 `in_open`).
     files: Vec<Lexer<'a>>,
@@ -59,6 +59,29 @@ const NONE: u32 = u32::MAX;
 impl<'a> Input<'a> {
     pub fn new(src: &'a str) -> Self {
         Input { files: vec![Lexer::new(src)], frames: Vec::new(), scratch: Vec::new(), params: Vec::new(), align_state: super::engine_align::ALIGN_IDLE, #[cfg(feature = "mprof")] doc_files: Vec::new() }
+    }
+
+    /// The input stack as owned data when the document is the only file open, its text left
+    /// out (`engine_resume`); with [`Input::over`] it reads on over a new text.
+    pub fn detach(&self) -> Option<Input<'static>> {
+        let [base] = &self.files[..] else { return None };
+        Some(Input { files: vec![base.over("")], frames: self.frames.clone(), scratch: self.scratch.clone(), params: self.params.clone(), align_state: self.align_state, #[cfg(feature = "mprof")] doc_files: self.doc_files.clone() })
+    }
+
+    /// A detached input stack reading on over `src`, the document's text.
+    pub fn over<'b>(&self, src: &'b str) -> Input<'b> {
+        Input { files: self.files.iter().map(|l| l.over(src)).collect(), frames: self.frames.clone(), scratch: self.scratch.clone(), params: self.params.clone(), align_state: self.align_state, #[cfg(feature = "mprof")] doc_files: self.doc_files.clone() }
+    }
+
+    /// Byte offset in the document of its next unread line.
+    pub fn base_read_to(&self) -> usize {
+        self.files.first().map_or(0, |l| l.read_to())
+    }
+
+    /// Whether only the document is being read: no file `\input` and no token list open.
+    pub fn at_base(&mut self) -> bool {
+        self.trim();
+        self.files.len() == 1 && self.frames.is_empty()
     }
 
     /// §324 `end_token_list`: drops the top frame and what it alone used.
@@ -92,6 +115,18 @@ impl<'a> Input<'a> {
         self.frames.push(Frame { arena: Arena::File, pos: i, end: i + 1, params: NONE, scratch_mark: NONE, u_template: false });
     }
 
+    /// The document's text.
+    pub fn base_text(&self) -> &'a str {
+        self.files.first().map_or("", |l| l.text())
+    }
+
+    /// Moves the document's read offset by `d` (the text before it grew by `d` bytes).
+    pub fn shift(&mut self, d: isize, lines: i32) {
+        if let Some(l) = self.files.first_mut() {
+            l.shift(d, lines);
+        }
+    }
+
     /// §1131 `\endinput`: the innermost file ends after its current line.
     pub fn end_input(&mut self) {
         if let Some(l) = self.files.last_mut() {
@@ -113,8 +148,8 @@ impl<'a> Input<'a> {
     /// body reads its argument (§357 `out_param`). Explicit braces move `align_state`
     /// (§347, §357).
     #[inline]
-    pub fn next(&mut self, defs: &Tokens, eqtb: &Eqtb, names: &mut CsTable, end_line_char: i32) -> Option<Token> {
-        let t = self.next_token(defs, eqtb, names, end_line_char)?;
+    pub fn next(&mut self, defs: &Tokens, eqtb: &Eqtb, names: &mut CsTable) -> Option<Token> {
+        let t = self.next_token(defs, eqtb, names)?;
         if t.cs_id().is_none() {
             match t.cat() {
                 Some(Cat::BeginGroup) => self.align_state += 1,
@@ -125,7 +160,30 @@ impl<'a> Input<'a> {
         Some(t)
     }
 
-    fn next_token(&mut self, defs: &Tokens, eqtb: &Eqtb, names: &mut CsTable, end_line_char: i32) -> Option<Token> {
+    /// The common case inline: the top frame a token list with a token left that is not a
+    /// macro body's `#n`; the rest in [`Input::next_token_slow`], which does the same first.
+    #[inline(always)]
+    fn next_token(&mut self, defs: &Tokens, eqtb: &Eqtb, names: &mut CsTable) -> Option<Token> {
+        if let Some(f) = self.frames.last_mut() {
+            if f.arena != Arena::File && f.pos < f.end {
+                let t = match f.arena {
+                    Arena::Defs => defs.at(f.pos),
+                    _ => self.scratch[f.pos as usize],
+                };
+                if f.params == NONE || t.cs_id().is_some() || t.cat() != Some(Cat::EndLine) {
+                    f.pos += 1;
+                    return Some(t);
+                }
+            }
+        }
+        self.next_token_slow(defs, eqtb, names)
+    }
+
+    /// The rest of §343 `get_next`: files (the lexer reads `\endlinechar` now), ended
+    /// lists, and `#n` in a macro body.
+    #[inline(never)]
+    fn next_token_slow(&mut self, defs: &Tokens, eqtb: &Eqtb, names: &mut CsTable) -> Option<Token> {
+        let end_line_char = eqtb.word(Reg { region: Region::Int, slot: super::engine_names::END_LINE_CHAR });
         let cats = eqtb.cats();
         loop {
             let Some(f) = self.frames.last_mut() else {

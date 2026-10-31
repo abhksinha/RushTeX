@@ -41,6 +41,26 @@ pub(super) const XFORM: u8 = 19;
 /// pdfTeX's `pdf_save_pos_node`: the walk that ships the page records where it is, and the
 /// `\write`s after it read the position with `\pdflastxpos` and `\pdflastypos`.
 pub(super) const SAVE_POS: u8 = 20;
+/// A `\pdfliteral` of pgf's path at a position known only when the page ships out
+/// (`engine_tikz`): `font` the operator (`m`, `l`), `a`, `b` the point's page coordinates in
+/// sp. The ship walk writes `x y op ` with the point less the literal's own position, as pgf
+/// computes it from the position `\pdfsavepos` saved (`\pgf@shape@interpictureshift`). To
+/// TeX it is a literal: `\showbox` prints `\whatsit5`.
+pub(super) const PGF_POINT: u8 = 21;
+
+/// pgfsys.code.tex `\pgf@sys@bp`: `\pgf@x=0.99627\pgf@x` (TeX's `xn_over_d(x, 65292, 2^16)`,
+/// §455) printed by `\the` without `pt` (§103).
+pub(super) fn pgf_bp(sp: i32) -> String {
+    let mut s = String::new();
+    super::engine_value::print_scaled(crate::backend::backend_scaled::xn_over_d(sp, 65292, 65536), &mut s);
+    s
+}
+
+/// A [`PGF_POINT`]'s text at (`h`, `y`), `y` measured up from the page's foot as pdfTeX's
+/// positions are.
+pub(super) fn pgf_point_text(n: &Node, h: i32, y: i32) -> String {
+    format!("{} {} {} ", pgf_bp(n.a - h), pgf_bp(n.b - y), n.font as u8 as char)
+}
 
 /// Whether a whatsit keeps a token list as its span `a..b` (for `engine_gc`).
 #[inline]
@@ -82,6 +102,19 @@ impl Machine<'_, '_> {
             None => Span::default(),
         };
         self.whatsit(if push.is_some() { COLOR_PUSH } else { COLOR_POP }, 0, span);
+    }
+
+    /// `\pdfliteral{text}` (mode `set_origin`) on the current list.
+    pub(super) fn pdf_literal(&mut self, text: &str) {
+        let mut toks = Vec::with_capacity(text.len());
+        super::engine_value::str_toks(text, &mut toks);
+        let span = self.e.toks.store(&toks);
+        self.whatsit(LITERAL, 0, span);
+    }
+
+    /// A [`PGF_POINT`] literal of operator `op` at the page point (`x`, `y`).
+    pub(super) fn pgf_point(&mut self, op: u8, x: i32, y: i32) {
+        self.cur.push(Node { kind: Kind::Whatsit, sub: PGF_POINT, font: op as u16, a: x, b: y });
     }
 
     fn whatsit(&mut self, sub: u8, font: u16, span: Span) {
@@ -144,6 +177,7 @@ impl Machine<'_, '_> {
                     0
                 };
                 let span = self.scan_braced_text(!late);
+                self.page.late_literals |= late;
                 self.whatsit(if late { LATE_LITERAL } else { LITERAL }, mode, span);
             }
             Prim::PdfColorStack => {

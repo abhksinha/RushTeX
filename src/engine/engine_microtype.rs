@@ -11,6 +11,7 @@ use super::engine_whatsit::sized;
 use crate::backend::scaled::round_xn_over_d;
 
 /// One font's codes (pdftex.web `pdf_font_lp_base`, `rp_base`, `ef_base`).
+#[derive(PartialEq, Clone)]
 pub struct Codes {
     pub lp: [i16; 256],
     pub rp: [i16; 256],
@@ -19,7 +20,7 @@ pub struct Codes {
 
 /// A font's expansion links (pdftex.web `pdf_font_blink`, `elink`, `stretch`, `shrink`,
 /// `step`, `auto_expand`); font 0 (`null_font`) means none.
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(PartialEq, Clone, Copy, Default, Debug)]
 pub struct Expand {
     /// The base of an expanded copy.
     pub blink: u16,
@@ -33,7 +34,7 @@ pub struct Expand {
 }
 
 /// The side table, indexed by font.
-#[derive(Default)]
+#[derive(PartialEq, Default, Clone)]
 pub struct Micro {
     codes: Vec<Option<Box<Codes>>>,
     expand: Vec<Expand>,

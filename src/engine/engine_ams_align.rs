@@ -60,6 +60,7 @@ pub(super) enum AmsKind {
 }
 
 /// One `align`, `gather` or `multline` being read.
+#[derive(PartialEq, Clone)]
 pub(super) struct AmsAlign {
     starred: bool,
     kind: AmsKind,
@@ -85,6 +86,7 @@ pub(super) struct AmsAlign {
 }
 
 /// One `aligned` or `gathered` being read (`\start@aligned`, `gathered`).
+#[derive(PartialEq, Clone)]
 pub(super) struct AmsAligned {
     kind: AlignedKind,
     /// amsmath's `\column@`: the fields begun since the alignment opened.
@@ -105,7 +107,7 @@ enum AlignedKind {
 
 /// What a row gives the measuring pass: its field widths (`\field@lengths`), the depth of
 /// its deepest field (`\lineht@`) and its tag's width (`\tag@lengths`, 0 for none).
-#[derive(Default)]
+#[derive(PartialEq, Clone, Default)]
 struct Row {
     fields: Vec<i32>,
     lineht: i32,

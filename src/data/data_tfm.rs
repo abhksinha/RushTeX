@@ -25,7 +25,7 @@ pub const POOLS: [&str; 9] = ["ci", "wd", "ht", "dp", "ic", "lk", "kn", "ex", "p
 
 /// One font's metrics: §539's arrays, borrowed. `info[c - bc]` is the `char_info` word of
 /// `c`; `param[0]` is `\fontdimen1`. Fix_words are stored as `u32` and read back with `as i32`.
-#[derive(Clone, Copy, Default)]
+#[derive(PartialEq, Clone, Copy, Default)]
 pub struct TfmView<'a> {
     pub bc: u8,
     /// The design size, a fix_word shifted right by 4 (§568).

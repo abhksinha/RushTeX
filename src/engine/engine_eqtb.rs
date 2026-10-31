@@ -7,6 +7,7 @@
 /// The number of integer, dimension, glue and token-list parameters (tex.web §236, §247,
 /// §224, §230, with e-TeX's and pdfTeX's), from the generated table.
 pub use super::engine_tables::{DIMEN_PARAMS, GLUE_PARAMS, INT_PARAMS, TOKS_PARAMS};
+use super::engine_chunk::Chunked;
 use super::engine_token::Span;
 
 /// The deepest grouping allowed (TeX stops at 255 save levels; e-TeX at 65535).
@@ -71,10 +72,10 @@ pub struct Glue {
 
 /// One kind's values and their group levels (a level of 0 means "never assigned", read as
 /// `level_one`).
-#[derive(Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 struct Table<T> {
-    vals: Vec<T>,
-    levels: Vec<u16>,
+    vals: Chunked<T>,
+    levels: Chunked<u16>,
 }
 
 #[cfg(feature = "oracle")]
@@ -87,8 +88,19 @@ impl<T: Copy + Default + super::engine_snapshot::Codec> Table<T> {
 
     #[cfg(feature = "oracle")]
     fn undump(r: &mut super::engine_snapshot::Reader) -> Option<Self> {
-        let t = Table { vals: r.all()?, levels: r.all()? };
+        let t = Table { vals: r.all()?.into(), levels: r.all()?.into() };
         (t.vals.len() == t.levels.len()).then_some(t)
+    }
+}
+
+impl<T: Clone> Table<T> {
+    /// A frozen copy for a checkpoint (`engine_chunk`), and a live table of one.
+    fn freeze(&mut self) -> Self {
+        Table { vals: self.vals.freeze(), levels: self.levels.freeze() }
+    }
+
+    fn thaw(&self) -> Self {
+        Table { vals: self.vals.thaw(), levels: self.levels.thaw() }
     }
 }
 
@@ -109,8 +121,8 @@ impl<T: Copy + Default> Table<T> {
             self.vals.resize(i + 1, T::default());
             self.levels.resize(i + 1, 0);
         }
-        self.vals[i] = v;
-        self.levels[i] = level;
+        self.vals.set(i, v);
+        self.levels.set(i, level);
     }
 }
 
@@ -161,7 +173,7 @@ impl Code {
 
 /// A save-stack entry (§268): an old value to restore at the end of its group, or the
 /// boundary that opens a group.
-#[derive(Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 enum Saved {
     Boundary,
     Word { region: Region, level: u16, slot: u32, val: i32 },
@@ -175,7 +187,7 @@ enum Saved {
 }
 
 /// The equivalents and the save stack.
-#[derive(Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Eqtb {
     ints: Table<i32>,
     dimens: Table<i32>,
@@ -220,6 +232,19 @@ impl Default for Eqtb {
 pub struct GroupOverflow;
 
 impl Eqtb {
+    /// A checkpoint's copy (`engine_checkpoint`): the tables frozen, sharing what did not
+    /// change since the last checkpoint.
+    pub fn freeze(&mut self) -> Eqtb {
+        let Eqtb { ints, dimens, glues, mus, toks, codes, cats, cat_levels, boxes, dead_boxes, par_shape, par_shape_level, shapes, meanings, save, level } = self;
+        Eqtb { ints: ints.freeze(), dimens: dimens.freeze(), glues: glues.freeze(), mus: mus.freeze(), toks: toks.freeze(), codes: [0, 1, 2, 3, 4].map(|k| codes[k].freeze()), cats: *cats, cat_levels: *cat_levels, boxes: boxes.freeze(), dead_boxes: dead_boxes.clone(), par_shape: *par_shape, par_shape_level: *par_shape_level, shapes: shapes.clone(), meanings: meanings.freeze(), save: save.clone(), level: *level }
+    }
+
+    /// A live copy of a frozen one.
+    pub fn thaw(&self) -> Eqtb {
+        let Eqtb { ints, dimens, glues, mus, toks, codes, cats, cat_levels, boxes, dead_boxes, par_shape, par_shape_level, shapes, meanings, save, level } = self;
+        Eqtb { ints: ints.thaw(), dimens: dimens.thaw(), glues: glues.thaw(), mus: mus.thaw(), toks: toks.thaw(), codes: [0, 1, 2, 3, 4].map(|k| codes[k].thaw()), cats: *cats, cat_levels: *cat_levels, boxes: boxes.thaw(), dead_boxes: dead_boxes.clone(), par_shape: *par_shape, par_shape_level: *par_shape_level, shapes: shapes.clone(), meanings: meanings.thaw(), save: save.clone(), level: *level }
+    }
+
     /// The integer (`Int`) or scaled-point (`Dimen`) value of `reg`; a glue's width.
     #[inline]
     pub fn word(&self, reg: Reg) -> i32 {
@@ -436,7 +461,7 @@ impl Eqtb {
     #[cfg(all(test, feature = "oracle"))]
     pub fn for_each_box(&mut self, mut f: impl FnMut(&mut u32)) {
         let saved = self.save.iter_mut().filter_map(|s| if let Saved::Box { b, .. } = s { Some(b) } else { None });
-        for v in self.boxes.vals.iter_mut().chain(saved) {
+        for v in self.boxes.vals.as_mut_slice().iter_mut().chain(saved) {
             if *v > 0 {
                 let mut b = *v - 1;
                 f(&mut b);
@@ -460,12 +485,12 @@ impl Eqtb {
     }
 
     pub fn for_each_span(&mut self, mut f: impl FnMut(&mut Span)) {
-        for m in &mut self.meanings.vals {
+        for m in self.meanings.vals.as_mut_slice() {
             if let Meaning::Macro(mac) = m {
                 f(&mut mac.text);
             }
         }
-        for s in &mut self.toks.vals {
+        for s in self.toks.vals.as_mut_slice() {
             f(s);
         }
         for s in &mut self.save {

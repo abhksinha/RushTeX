@@ -21,36 +21,41 @@
 
 use super::super::engine_catcode::Cat;
 use super::super::engine_node::{Kind, Node};
-use super::super::engine_run::Machine;
+use super::super::engine_run::{Machine, Mode};
 use super::super::engine_token::Token;
 use super::heading_number;
 
 /// The head line built by the head's tokens, a hidden box register.
 pub(super) const HEAD_BOX: u32 = 32705;
 
-/// fancyhdr's state: the odd slots `\f@nch@olh`, `och`, `orh`, `olf`, `ocf`, `orf` (`None`
-/// for the package's `\rightmark`/`\leftmark` heads), whether `\pagestyle{fancy}` is on,
+/// fancyhdr's state: the odd slots `\f@nch@olh`, `och`, `orh`, `olf`, `ocf`, `orf`, then the
+/// even ones `elh` … `erf` (`None` for the package's `\rightmark`/`\leftmark` heads),
+/// whether `\pagestyle{fancy}` is on,
 /// `\g__mark_int`, the last heading's title for its mark, whether the page being output
-/// is fancy, and whether `\thispagestyle{fancy}` asked for it.
+/// is fancy, whether `\thispagestyle{fancy}` asked for it, and the `\@mkboth` titlesec holds
+/// back until the heading's end (`\ttl@mk`).
+#[derive(PartialEq, Clone)]
 pub(super) struct Fancy {
-    pub slots: [Option<Vec<Token>>; 6],
+    pub slots: [Option<Vec<Token>>; 12],
     pub on: bool,
     pub marks: u32,
     pub title: Vec<Token>,
     pub page: bool,
     pub this: bool,
+    pub mkboth: Option<Vec<Token>>,
 }
 
 impl Machine<'_, '_> {
-    /// `\usepackage{fancyhdr}`: `\f@nch@initialise` (one-sided: `\fancyhf{}`, the two
-    /// mark heads, `\fancyfoot[c]{\rmfamily\thepage}`), `\headrulewidth` 0.4pt and
-    /// `\footrulewidth` 0pt as macros.
+    /// `\usepackage{fancyhdr}`: `\f@nch@initialise` (`\fancyhf{}`, the two mark heads at
+    /// the left and right of both sides, `\fancyfoot[c]{\rmfamily\thepage}`),
+    /// `\headrulewidth` 0.4pt and `\footrulewidth` 0pt as macros.
     pub(super) fn fancy_load(&mut self) {
         let mut foot = self.tex_tokens("\\rmfamily\\thepage");
         foot.push(self.strut_cs());
-        let slots = [None, Some(Vec::new()), None, Some(Vec::new()), Some(foot), Some(Vec::new())];
+        let side = [None, Some(Vec::new()), None, Some(Vec::new()), Some(foot), Some(Vec::new())];
+        let slots = std::array::from_fn(|k| side[k % 6].clone());
         if let Some(doc) = self.doc.as_mut() {
-            doc.fancy = Some(Box::new(Fancy { slots, on: false, marks: 0, title: Vec::new(), page: false, this: false }));
+            doc.fancy = Some(Box::new(Fancy { slots, on: false, marks: 0, title: Vec::new(), page: false, this: false, mkboth: None }));
         }
         let t = self.tex_tokens("\\def\\headrulewidth{0.4pt}\\def\\footrulewidth{0pt}");
         self.back_list(&t);
@@ -70,7 +75,7 @@ impl Machine<'_, '_> {
 
     /// `\fancyhf`, `\fancyhead`, `\fancyfoot` (`which` "", "h", "f") with their optional
     /// `[keys]`: each comma-separated key's `e`/`o`, `l`/`c`/`r` and `h`/`f` letters, all of
-    /// a kind when it names none (`\f@nch@default`); the even slots are not used one-sided.
+    /// a kind when it names none (`\f@nch@default`); the even slots are used two-sided.
     pub(super) fn fancy_hf(&mut self, which: &str) {
         let keys = match self.next_unblank() {
             Some(t) if t == Token::char(Cat::Other, '[') => self.bracket_arg(),
@@ -86,7 +91,7 @@ impl Machine<'_, '_> {
             return self.not_native("fancyhdr's head and foot set in the document body");
         }
         let keys: String = keys.iter().map(|t| t.chr().to_ascii_lowercase()).collect();
-        let mut set = [false; 6];
+        let mut set = [false; 12];
         for key in keys.split(',') {
             let key = key.trim();
             if key.chars().any(|c| !"eolcrhf".contains(c)) {
@@ -97,13 +102,15 @@ impl Machine<'_, '_> {
                 if s.is_empty() { all.into() } else { s }
             };
             let hf = pick(if which.is_empty() { "hf" } else { which });
-            if !pick("eo").contains('o') {
-                continue;
-            }
-            for (k, lcr) in "lcr".chars().enumerate() {
-                if pick("lcr").contains(lcr) {
-                    for (j, c) in "hf".chars().enumerate() {
-                        set[3 * j + k] |= hf.contains(c) && (which.is_empty() || which.contains(c));
+            for (side, eo) in "oe".chars().enumerate() {
+                if !pick("eo").contains(eo) {
+                    continue;
+                }
+                for (k, lcr) in "lcr".chars().enumerate() {
+                    if pick("lcr").contains(lcr) {
+                        for (j, c) in "hf".chars().enumerate() {
+                            set[6 * side + 3 * j + k] |= hf.contains(c) && (which.is_empty() || which.contains(c));
+                        }
                     }
                 }
             }
@@ -111,11 +118,14 @@ impl Machine<'_, '_> {
         self.fancy_set(set, text);
     }
 
-    /// `\lhead[even]{odd}` and its five kin (`k` 0 to 5): the odd slot.
+    /// `\lhead[even]{odd}` and its five kin (`k` 0 to 5): `\f@nch@def\f@nch@olh{odd}
+    /// \f@nch@def\f@nch@elh{even}`, the even text by default `\f@nch@olh` itself, so the
+    /// even slot is the odd one and one more `\strut`.
     pub(super) fn fancy_slot(&mut self, k: usize) {
+        let mut even = None;
         if let Some(t) = self.next_unblank() {
             if t == Token::char(Cat::Other, '[') {
-                self.bracket_arg();
+                even = Some(self.bracket_arg());
             } else {
                 self.input.back(t);
             }
@@ -125,13 +135,27 @@ impl Machine<'_, '_> {
         if self.doc.as_ref().is_some_and(|d| d.body) {
             return self.not_native("fancyhdr's head and foot set in the document body");
         }
-        let mut set = [false; 6];
+        let mut set = [false; 12];
         set[k] = true;
         self.fancy_set(set, text);
+        let mut set = [false; 12];
+        set[6 + k] = true;
+        match even {
+            Some(e) => self.fancy_set(set, e),
+            None => {
+                // `\f@nch@olh\strut`: never empty.
+                let strut = self.strut_cs();
+                if let Some(f) = self.doc.as_mut().and_then(|d| d.fancy.as_mut()) {
+                    let mut e = f.slots[k].clone().unwrap_or_default();
+                    e.push(strut);
+                    f.slots[6 + k] = Some(e);
+                }
+            }
+        }
     }
 
     /// `\f@nch@def`: nothing for an empty text, else the text then `\strut`.
-    fn fancy_set(&mut self, set: [bool; 6], mut text: Vec<Token>) {
+    fn fancy_set(&mut self, set: [bool; 12], mut text: Vec<Token>) {
         if !text.is_empty() {
             text.push(self.strut_cs());
         }
@@ -141,13 +165,20 @@ impl Machine<'_, '_> {
         }
     }
 
-    /// Whether the page being output has fancyhdr's head and foot (`\pagestyle{fancy}` with
-    /// no `\thispagestyle`, or `\thispagestyle{fancy}`), declining when a slot still reads
-    /// marks back.
-    pub(super) fn fancy_page(&mut self, this: bool) -> bool {
+    /// The first slot of page `page`'s side: `\@outputpage` takes `\@evenhead` and
+    /// `\@evenfoot` on an even page of a two-sided document.
+    fn fancy_side(&self, page: i32) -> usize {
+        if self.doc.as_ref().is_some_and(|d| d.class.flag("twoside")) && page % 2 == 0 { 6 } else { 0 }
+    }
+
+    /// Whether page `page` being output has fancyhdr's head and foot (`\pagestyle{fancy}`
+    /// with no `\thispagestyle`, or `\thispagestyle{fancy}`), declining when a slot of its
+    /// side still reads marks back.
+    pub(super) fn fancy_page(&mut self, this: bool, page: i32) -> bool {
+        let side = self.fancy_side(page);
         let Some(doc) = self.doc.as_ref() else { return false };
         let Some(f) = doc.fancy.as_ref().filter(|f| f.on || this) else { return false };
-        if f.slots.iter().any(Option::is_none) {
+        if f.slots[side..side + 6].iter().any(Option::is_none) {
             self.not_native("fancyhdr's \\leftmark and \\rightmark heads");
             return false;
         }
@@ -159,11 +190,14 @@ impl Machine<'_, '_> {
 
     /// The head into [`HEAD_BOX`] and the foot into the output nest, as tokens:
     /// `\begingroup\normalfont\normalsize` (`\@outputpage`'s `\reset@font\normalsize`), `\thepage` as
-    /// the page's digits, then `\rt@outputfoot`.
+    /// the page's digits, then `\rt@outputfoot`. The `\hss` after each line (`\f@nch@Oorh`,
+    /// `\f@nch@Oorf`) comes before it on an even side (`\f@nch@Oelh`, `\f@nch@Oelf`).
     pub(super) fn fancy_tokens(&mut self, page: i32) -> Vec<Token> {
+        let side = self.fancy_side(page);
         let Some(doc) = self.doc.as_ref() else { return Vec::new() };
         let class = doc.class;
-        let slots: Vec<Vec<Token>> = doc.fancy.as_ref().map(|f| f.slots.iter().map(|s| s.clone().unwrap_or_default()).collect()).unwrap_or_default();
+        let slots: Vec<Vec<Token>> = doc.fancy.as_ref().map(|f| f.slots[side..side + 6].iter().map(|s| s.clone().unwrap_or_default()).collect()).unwrap_or_default();
+        let (pre, post) = if side == 6 { ("\\hss", "") } else { ("", "\\hss") };
         let dim = |sp: i32| {
             let mut s = String::new();
             super::super::engine_value::print_scaled(sp, &mut s);
@@ -187,18 +221,18 @@ impl Machine<'_, '_> {
             }
             t
         };
-        let mut t = self.tex_tokens(&format!("\\begingroup\\normalfont\\normalsize\\global\\setbox{HEAD_BOX}\\hbox to{}{{\\hbox to{w}{{\\setbox0\\vbox{{", dim(class.dimen("textwidth"))));
+        let mut t = self.tex_tokens(&format!("\\begingroup\\normalfont\\normalsize\\global\\setbox{HEAD_BOX}\\hbox to{}{{{pre}\\hbox to{w}{{\\setbox0\\vbox{{", dim(class.dimen("textwidth"))));
         let head = row(self, 0);
         t.extend(head);
         t.extend(self.tex_tokens(&format!("\\vskip0pt\\relax{{\\hrule height\\headrulewidth width{w}\\vskip-\\headrulewidth}}}}")));
         t.push(self.doc_id(doc!("rt@fancyclip")));
-        t.extend(self.tex_tokens(&format!("0\\box0}}\\hss}}\\hbox to{w}{{\\setbox0\\vbox{{\\setbox0\\vbox{{{{\\hrule width{w} height\\footrulewidth}}}}\\unvbox0")));
+        t.extend(self.tex_tokens(&format!("0\\box0}}{post}}}{pre}\\hbox to{w}{{\\setbox0\\vbox{{\\setbox0\\vbox{{{{\\hrule width{w} height\\footrulewidth}}}}\\unvbox0")));
         t.push(self.doc_id(doc!("rt@fancyskip")));
         let foot = row(self, 3);
         t.extend(foot);
         t.extend(self.tex_tokens("}"));
         t.push(self.doc_id(doc!("rt@fancyclip")));
-        t.extend(self.tex_tokens("1\\box0}\\hss\\endgroup"));
+        t.extend(self.tex_tokens(&format!("1\\box0}}{post}\\endgroup")));
         t
     }
 
@@ -223,25 +257,79 @@ impl Machine<'_, '_> {
         }
     }
 
-    /// Under `\pagestyle{fancy}`, `\@mkboth` is `\markboth`: `\tableofcontents` and
-    /// `thebibliography` put marks the native job does not make yet, so they decline.
-    pub(super) fn fancy_mkboth(&mut self) -> bool {
-        let on = self.doc.as_ref().and_then(|d| d.fancy.as_ref()).is_some_and(|f| f.on);
-        if on {
-            self.not_native("fancyhdr: the marks of \\tableofcontents or thebibliography");
+    /// Under `\pagestyle{fancy}`, `\@mkboth` is `\markboth`. report's `\tableofcontents`
+    /// puts it in its `\chapter*` title (`fancy_toc_marks`), report's `thebibliography` after
+    /// it (`bib_marks`); article's decline. With titlesec, `\tableofcontents`'s `\@mkboth` in
+    /// its `\section*` title is held by `\ttl@select` (`\ttl@gmk`) and put after the heading
+    /// (`fancy_finmarks`).
+    pub(super) fn fancy_mkboth(&mut self, toc: bool) -> bool {
+        let (titlesec, report) = self.doc.as_ref().map_or((false, false), |d| (d.titlesec.is_some(), d.report));
+        let Some(f) = self.doc.as_mut().and_then(|d| d.fancy.as_mut()).filter(|f| f.on) else { return false };
+        if toc && titlesec {
+            f.mkboth = Some(Vec::new());
+            return false;
         }
-        on
+        if toc && report {
+            return false;
+        }
+        self.not_native("fancyhdr: the marks of \\tableofcontents or thebibliography");
+        true
+    }
+
+    /// Whether `\pagestyle{fancy}` is on (`\@mkboth` is `\markboth`).
+    pub(super) fn fancy_on_now(&self) -> bool {
+        self.doc.as_ref().and_then(|d| d.fancy.as_ref()).is_some_and(|f| f.on)
+    }
+
+    /// `\markboth{\MakeUppercase\name}{\MakeUppercase\name}` under fancyhdr: both texts
+    /// (classes 1, 2 and 3), `\name` expanded by the mark's `\protected@edef`.
+    fn fancy_mkboth_upper(&mut self, name: &str) {
+        let mut upper = vec![Token::cs(self.e.cs.intern("MakeUppercase   "))];
+        upper.extend(self.tex_tokens(&format!("[]{{{name}}}")));
+        let nobreak = self.doc.as_ref().is_some_and(|d| d.nobreak);
+        self.fancy_push(vec![(1, upper.clone()), (2, upper.clone()), (3, upper)], nobreak);
+    }
+
+    /// `\ttl@finmarks`'s `\ttl@mk`: the held `\@mkboth{\MakeUppercase\contentsname}
+    /// {\MakeUppercase\contentsname}`, a `\markboth` with both texts (classes 1, 2 and 3).
+    pub(super) fn fancy_finmarks(&mut self) {
+        if self.doc.as_mut().and_then(|d| d.fancy.as_mut()).and_then(|f| f.mkboth.take()).is_none() {
+            return;
+        }
+        self.fancy_mkboth_upper("Contents");
+    }
+
+    /// report's `\tableofcontents` under fancyhdr: `\chapter*{\contentsname \@mkboth
+    /// {\MakeUppercase\contentsname}{\MakeUppercase\contentsname}}`, the marks in the
+    /// title's paragraph (they migrate out of its line, §655), no `\nobreak` there (`\ifvmode`).
+    pub(super) fn fancy_toc_marks(&mut self) {
+        self.fancy_mkboth_upper("Contents");
+    }
+
+    /// report's and book's `thebibliography` after `\chapter*{\bibname}`: `\@mkboth
+    /// {\MakeUppercase\bibname}{\MakeUppercase\bibname}`, under `\pagestyle{fancy}` a
+    /// `\markboth` with both texts (classes 1, 2 and 3), under book's `headings` the same
+    /// marks, under `plain` and `empty` nothing (`\@gobbletwo`).
+    pub(super) fn bib_marks(&mut self) {
+        if self.fancy_on_now() {
+            return self.fancy_mkboth_upper("Bibliography");
+        }
+        self.mkboth_upper("Bibliography");
     }
 
     /// `\sectionmark` and `\subsectionmark` as fancyhdr defines them, at an unstarred
     /// heading: `\markboth{\MakeUppercase{\thesection\hskip 1em\relax title}}{}` and
-    /// `\markright{\thesubsection\hskip 1em\relax title}`. Each `\mark_insert:nn` steps
+    /// `\markright{\thesubsection\hskip 1em\relax title}`; under report (`\f@nch@initialise`
+    /// with `\chapter` defined) `\chaptermark`, `\markboth{\MakeUppercase{\@chapapp\
+    /// \thechapter. \ title}}{}`, and `\sectionmark`, `\markright{\MakeUppercase{\thesection.
+    /// \ title}}` (report's `\subsectionmark` gobbles). Each `\mark_insert:nn` steps
     /// `\g__mark_int` and puts `\marks<class>{\__mark_value:nn{n}{text}}` (classes 1
     /// `2e-left`, 2 `2e-right`, 3 `2e-right-nonempty` when the text is not empty), then
     /// `\nobreak` when `\if@nobreak`.
     pub(super) fn fancy_marks(&mut self) {
         let Some(doc) = self.doc.as_mut() else { return };
         let level = doc.level;
+        let report = doc.report;
         let Some(f) = doc.fancy.as_mut().filter(|_| level < 2) else { return };
         let title = std::mem::take(&mut f.title);
         // A UTF-8 character is its active bytes.
@@ -249,19 +337,44 @@ impl Machine<'_, '_> {
             return self.not_native("fancyhdr: a heading whose mark is not plain text");
         }
         let number = heading_number(&doc.counters, level, doc.appendix);
-        let nobreak = doc.nobreak;
-        let mut text = self.tex_tokens(&number);
-        text.extend(self.tex_tokens("\\hskip 1em\\relax "));
+        let (nobreak, appendix) = (doc.nobreak, doc.appendix);
+        let mut text = Vec::new();
+        if report {
+            // `\@chapapp` is `\chaptername`, after report's `\appendix` `\appendixname`; `\ `
+            // a control space.
+            let space = Token::cs(self.e.cs.intern(" "));
+            if level == 0 {
+                text.extend(self.tex_tokens(if appendix { "Appendix" } else { "Chapter" }));
+                text.push(space);
+            }
+            text.extend(self.tex_tokens(&format!("{number}. ")));
+            text.push(space);
+        } else {
+            text.extend(self.tex_tokens(&number));
+            text.extend(self.tex_tokens("\\hskip 1em\\relax "));
+        }
         text.extend(title);
-        let marks: Vec<(u16, Vec<Token>)> = if level == 0 {
-            let mut upper = vec![Token::cs(self.e.cs.intern("MakeUppercase   "))];
-            upper.extend(self.tex_tokens("[]{"));
+        let upper = |m: &mut Self, text: Vec<Token>| {
+            let mut upper = vec![Token::cs(m.e.cs.intern("MakeUppercase   "))];
+            upper.extend(m.tex_tokens("[]{"));
             upper.extend(text);
-            upper.extend(self.tex_tokens("}"));
-            vec![(1, upper), (2, Vec::new())]
+            upper.extend(m.tex_tokens("}"));
+            upper
+        };
+        let marks: Vec<(u16, Vec<Token>)> = if level == 0 {
+            vec![(1, upper(self, text)), (2, Vec::new())]
+        } else if report {
+            let text = upper(self, text);
+            vec![(2, text.clone()), (3, text)]
         } else {
             vec![(2, text.clone()), (3, text)]
         };
+        self.fancy_push(marks, nobreak);
+    }
+
+    /// Each mark as `\mark_insert:nn` puts it: `\g__mark_int` stepped, `\marks<class>
+    /// {\__mark_value:nn{n}{text}}`, then `\nobreak` when `\if@nobreak`.
+    fn fancy_push(&mut self, marks: Vec<(u16, Vec<Token>)>, nobreak: bool) {
         let value = Token::cs(self.e.cs.intern("__mark_value:nn"));
         for (class, text) in marks {
             let Some(f) = self.doc.as_mut().and_then(|d| d.fancy.as_mut()) else { return };
@@ -273,7 +386,8 @@ impl Machine<'_, '_> {
             list.extend(self.tex_tokens("}"));
             let span = self.e.toks.store(&list);
             self.cur.push(Node { kind: Kind::Mark, sub: 0, font: class, a: span.start as i32, b: span.end as i32 });
-            if nobreak {
+            // `\if@nobreak\ifvmode\nobreak\fi\fi`.
+            if nobreak && self.mode == Mode::Vertical {
                 self.cur.push(Node::new(Kind::Penalty, 10000));
             }
         }

@@ -14,6 +14,7 @@
 use super::data_blob::{Blob, U32s};
 use super::data_phf::Phf;
 
+#[derive(PartialEq)]
 pub struct GlyphTable<'a> {
     names: Phf<'a>,
     hex: &'a str,

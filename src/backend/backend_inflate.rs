@@ -140,13 +140,9 @@ const DIST_EXTRA: [u8; 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7,
 /// The order of the code-length code lengths in a dynamic block header.
 const CL_ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
 
-/// Raw DEFLATE data, appended to `out`; `None` when it is malformed.
-pub fn inflate(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
-    inflate_to(data, out, usize::MAX)
-}
-
-/// [`inflate`], stopping once `out` holds at least `limit` bytes (it may hold a little
-/// more): a prefix of the data, without decoding the rest.
+/// Raw DEFLATE data, appended to `out`, stopping once `out` holds at least `limit` bytes (it
+/// may hold a little more): a prefix of the data, without decoding the rest. `None` when it
+/// is malformed.
 pub fn inflate_to(data: &[u8], out: &mut Vec<u8>, limit: usize) -> Option<()> {
     let mut b = Bits { data, pos: 0, buf: 0, count: 0 };
     loop {
@@ -282,7 +278,7 @@ mod tests {
     fn stored_and_fixed_blocks() {
         // "abc" stored, then a fixed block with "abcabc" written as a back reference.
         let mut out = Vec::new();
-        inflate(&[0x01, 0x03, 0x00, 0xFC, 0xFF, b'a', b'b', b'c'], &mut out).expect("stored");
+        inflate_to(&[0x01, 0x03, 0x00, 0xFC, 0xFF, b'a', b'b', b'c'], &mut out, usize::MAX).expect("stored");
         assert_eq!(out, b"abc");
     }
 }

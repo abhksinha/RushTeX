@@ -12,8 +12,11 @@ pub mod engine_build;
 pub mod engine_words;
 pub mod engine_catcode;
 pub mod engine_chars;
+pub mod engine_checkpoint;
+pub mod engine_chunk;
 pub mod engine_cond;
 pub mod engine_eqtb;
+pub mod engine_explain;
 pub mod engine_expr;
 pub mod engine_font;
 pub mod engine_gc;
@@ -52,6 +55,8 @@ pub mod engine_graphics;
 pub mod engine_xform;
 pub mod engine_microtype;
 pub mod engine_regex;
+#[cfg(feature = "oracle")]
+pub mod engine_resume;
 pub mod engine_ship;
 pub mod engine_showbox;
 pub mod engine_vf;
@@ -73,7 +78,7 @@ pub use engine_token::{CsTable, Span, Token, Tokens};
 
 /// The engine's state: the equivalents, the names that reach them, control-sequence names
 /// and the stored token lists (macro texts).
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Engine {
     pub eqtb: Eqtb,
     pub names: Names,
@@ -86,6 +91,28 @@ pub struct Engine {
     pub hyph: engine_hyph::Hyph,
     /// `\pdfglyphtounicode`'s table (pdfTeX's tounicode.c).
     pub glyph_unicode: engine_tounicode::GlyphUnicode,
+}
+
+impl Engine {
+    /// A checkpoint's copy of the engine (`engine_checkpoint`): its big arrays frozen, each
+    /// sharing the chunks that did not change since the last checkpoint (`engine_chunk`);
+    /// the hyphenation memo (a cache) left out.
+    pub fn freeze(&mut self) -> Engine {
+        let Engine { eqtb, names, cs, toks, fonts, nodes, hyph, glyph_unicode } = self;
+        Engine { eqtb: eqtb.freeze(), names: names.clone(), cs: cs.freeze(), toks: toks.freeze(), fonts: fonts.freeze(), nodes: nodes.freeze(), hyph: hyph.without_memo(), glyph_unicode: glyph_unicode.clone() }
+    }
+
+    /// Whether two frozen copies are equal but for their node arenas.
+    pub fn same_but_nodes(&self, other: &Engine) -> bool {
+        let Engine { eqtb, names, cs, toks, fonts, nodes: _, hyph, glyph_unicode } = self;
+        *eqtb == other.eqtb && *names == other.names && *cs == other.cs && *toks == other.toks && *fonts == other.fonts && *hyph == other.hyph && *glyph_unicode == other.glyph_unicode
+    }
+
+    /// A live engine of a frozen copy.
+    pub fn thaw(&self) -> Engine {
+        let Engine { eqtb, names, cs, toks, fonts, nodes, hyph, glyph_unicode } = self;
+        Engine { eqtb: eqtb.thaw(), names: names.clone(), cs: cs.thaw(), toks: toks.thaw(), fonts: fonts.thaw(), nodes: nodes.thaw(), hyph: hyph.clone(), glyph_unicode: glyph_unicode.clone() }
+    }
 }
 
 /// Control-sequence ids fixed at startup: active character `c` is id `c` (§222

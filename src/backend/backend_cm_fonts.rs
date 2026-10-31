@@ -540,29 +540,7 @@ pub static CMSSBX10_PROGRAM: CmFontProgram = CmFontProgram {
     compressed_stream: include_bytes!("../../assets/cm_fonts/cmssbx10.flate"),
 };
 
-
-
-
-
-
-
-
 // ---- END GENERATED ----
-
-/// Embedded program and `/Widths` of the faces added for optical sizes and math alphabets
-/// (everything past `Face::AmsB`, plus `Face::Mono`/`MonoBold` = cmtt10 under Computer Modern).
-/// `None` for the faces handled by the original per-face dispatch in `backend_pdf`.
-pub fn extra_cm_program(
-    face: crate::backend::fonts::Face,
-    family: crate::backend::fonts::FontFamily,
-) -> Option<(&'static CmFontProgram, &'static [u16; 128])> {
-    use crate::backend::fonts::{Face, FontFamily, CMTT10_WIDTHS, EXTRA_FACE_WIDTHS};
-    if matches!(face, Face::Mono | Face::MonoBold) && family == FontFamily::ComputerModern {
-        return Some((&CMTT10_PROGRAM, &CMTT10_WIDTHS.0));
-    }
-    let row = crate::backend::fonts::EXTRA_FACES.get((face as usize).checked_sub(18)?)?;
-    Some((row.program, &EXTRA_FACE_WIDTHS[face as usize - 18].0))
-}
 
 // =========================================================================
 // Compile-time /ToUnicode CMap Translation Tables (128 entries x 2 bytes = 256 bytes)
@@ -940,4 +918,410 @@ pub static CMEX_TO_UNICODE: [u16; 128] = make_cmex_to_unicode();
 pub static MSAM_TO_UNICODE: [u16; 128] = make_msam_to_unicode();
 pub static MSBM_TO_UNICODE: [u16; 128] = make_msbm_to_unicode();
 
+// The design-size masters LaTeX's font definition files select (`ot1cmr.fd`): cmr, cmbx,
+// cmti and cmtt at the sizes the base faces above do not cover.
 
+pub static CMR6_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMR6",
+    flags: 32,
+    bbox: [-20, -250, 1193, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: 0,
+    stem_v: 83,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmr6.flate"),
+};
+
+pub static CMR8_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMR8",
+    flags: 32,
+    bbox: [-36, -250, 1070, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: 0,
+    stem_v: 76,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmr8.flate"),
+};
+
+pub static CMR9_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMR9",
+    flags: 32,
+    bbox: [-39, -250, 1036, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: 0,
+    stem_v: 74,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmr9.flate"),
+};
+
+pub static CMR12_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMR12",
+    flags: 32,
+    bbox: [-34, -251, 988, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: 0,
+    stem_v: 65,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmr12.flate"),
+};
+
+pub static CMR17_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMR17",
+    flags: 32,
+    bbox: [-33, -250, 945, 749],
+    ascent: 749,
+    descent: -249,
+    cap_height: 683,
+    italic_angle: 0,
+    stem_v: 53,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmr17.flate"),
+};
+
+pub static CMBX5_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMBX5",
+    flags: 32,
+    bbox: [-40, -250, 1483, 756],
+    ascent: 750,
+    descent: -250,
+    cap_height: 686,
+    italic_angle: 0,
+    stem_v: 133,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmbx5.flate"),
+};
+
+pub static CMBX6_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMBX6",
+    flags: 32,
+    bbox: [-49, -250, 1367, 753],
+    ascent: 750,
+    descent: -250,
+    cap_height: 686,
+    italic_angle: 0,
+    stem_v: 130,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmbx6.flate"),
+};
+
+pub static CMBX7_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMBX7",
+    flags: 32,
+    bbox: [-55, -250, 1289, 751],
+    ascent: 750,
+    descent: -250,
+    cap_height: 686,
+    italic_angle: 0,
+    stem_v: 127,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmbx7.flate"),
+};
+
+pub static CMBX8_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMBX8",
+    flags: 32,
+    bbox: [-59, -250, 1235, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 686,
+    italic_angle: 0,
+    stem_v: 122,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmbx8.flate"),
+};
+
+pub static CMBX9_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMBX9",
+    flags: 32,
+    bbox: [-58, -250, 1195, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 686,
+    italic_angle: 0,
+    stem_v: 117,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmbx9.flate"),
+};
+
+pub static CMBX12_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMBX12",
+    flags: 32,
+    bbox: [-53, -251, 1139, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 686,
+    italic_angle: 0,
+    stem_v: 109,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmbx12.flate"),
+};
+
+pub static CMTI7_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMTI7",
+    flags: 96,
+    bbox: [-27, -250, 1268, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 678,
+    italic_angle: -14,
+    stem_v: 76,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /sterling /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmti7.flate"),
+};
+
+pub static CMTI8_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMTI8",
+    flags: 96,
+    bbox: [-35, -250, 1190, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 73,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /sterling /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmti8.flate"),
+};
+
+pub static CMTI9_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMTI9",
+    flags: 96,
+    bbox: [-35, -250, 1148, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 70,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /sterling /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmti9.flate"),
+};
+
+pub static CMTI12_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMTI12",
+    flags: 96,
+    bbox: [-36, -251, 1103, 750],
+    ascent: 750,
+    descent: -250,
+    cap_height: 683,
+    italic_angle: -14,
+    stem_v: 63,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /ff /fi /fl /ffi /ffl /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /suppress /exclam /quotedblright /numbersign /sterling /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /exclamdown /equal /questiondown /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /quotedblleft /bracketright /circumflex /dotaccent /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /endash /emdash /hungarumlaut /tilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmti12.flate"),
+};
+
+pub static CMTT9_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMTT9",
+    flags: 33,
+    bbox: [-6, -233, 542, 698],
+    ascent: 694,
+    descent: -222,
+    cap_height: 611,
+    italic_angle: 0,
+    stem_v: 74,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /arrowup /arrowdown /quotesingle /exclamdown /questiondown /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /visiblespace /exclam /quotedbl /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /less /equal /greater /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /backslash /bracketright /asciicircum /underscore /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /braceleft /bar /braceright /asciitilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmtt9.flate"),
+};
+
+pub static CMTT12_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "CMTT12",
+    flags: 33,
+    bbox: [-1, -234, 524, 695],
+    ascent: 694,
+    descent: -222,
+    cap_height: 611,
+    italic_angle: 0,
+    stem_v: 65,
+    diff_encoding: "0 /Gamma /Delta /Theta /Lambda /Xi /Pi /Sigma /Upsilon /Phi /Psi /Omega /arrowup /arrowdown /quotesingle /exclamdown /questiondown /dotlessi /dotlessj /grave /acute /caron /breve /macron /ring /cedilla /germandbls /ae /oe /oslash /AE /OE /Oslash /visiblespace /exclam /quotedbl /numbersign /dollar /percent /ampersand /quoteright /parenleft /parenright /asterisk /plus /comma /hyphen /period /slash /zero /one /two /three /four /five /six /seven /eight /nine /colon /semicolon /less /equal /greater /question /at /A /B /C /D /E /F /G /H /I /J /K /L /M /N /O /P /Q /R /S /T /U /V /W /X /Y /Z /bracketleft /backslash /bracketright /asciicircum /underscore /quoteleft /a /b /c /d /e /f /g /h /i /j /k /l /m /n /o /p /q /r /s /t /u /v /w /x /y /z /braceleft /bar /braceright /asciitilde /dieresis",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/cmtt12.flate"),
+};
+
+// The TS1 text-symbol masters (`ts1cmr.fd`, tcrm), which carry their own ToUnicode map.
+
+pub static TCRM0500_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM0500",
+    flags: 32,
+    bbox: [-211, -338, 1855, 946],
+    ascent: 946,
+    descent: -250,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm0500.flate"),
+};
+
+pub static TCRM0600_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM0600",
+    flags: 32,
+    bbox: [-210, -320, 1719, 944],
+    ascent: 944,
+    descent: -250,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm0600.flate"),
+};
+
+pub static TCRM0700_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM0700",
+    flags: 32,
+    bbox: [-203, -320, 1628, 942],
+    ascent: 942,
+    descent: -250,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm0700.flate"),
+};
+
+pub static TCRM0800_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM0800",
+    flags: 32,
+    bbox: [-203, -320, 1554, 938],
+    ascent: 938,
+    descent: -250,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm0800.flate"),
+};
+
+pub static TCRM0900_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM0900",
+    flags: 32,
+    bbox: [-196, -322, 1502, 937],
+    ascent: 937,
+    descent: -250,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm0900.flate"),
+};
+
+pub static TCRM1095_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM1095",
+    flags: 32,
+    bbox: [-188, -320, 1445, 942],
+    ascent: 942,
+    descent: -250,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm1095.flate"),
+};
+
+pub static TCRM1200_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM1200",
+    flags: 32,
+    bbox: [-185, -320, 1420, 942],
+    ascent: 942,
+    descent: -250,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm1200.flate"),
+};
+
+pub static TCRM1440_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM1440",
+    flags: 32,
+    bbox: [-178, -319, 1370, 944],
+    ascent: 944,
+    descent: -249,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm1440.flate"),
+};
+
+pub static TCRM1728_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM1728",
+    flags: 32,
+    bbox: [-174, -318, 1347, 949],
+    ascent: 947,
+    descent: -249,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm1728.flate"),
+};
+
+pub static TCRM2074_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM2074",
+    flags: 32,
+    bbox: [-170, -318, 1322, 952],
+    ascent: 947,
+    descent: -249,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm2074.flate"),
+};
+
+pub static TCRM2488_PROGRAM: CmFontProgram = CmFontProgram {
+    name: "SFRM2488",
+    flags: 32,
+    bbox: [-167, -317, 1298, 954],
+    ascent: 947,
+    descent: -249,
+    cap_height: 947,
+    italic_angle: 0,
+    stem_v: 50,
+    diff_encoding: "0 /Grave /Acute /Circumflex /Tilde /Dieresis /Hungarumlaut /Ring /Caron /Breve /Macron /Dotaccent /cedilla /ogonek /quotesinglbase.ts1 /quotedblbase.ts1 /twelveudash /threequartersemdash /afii61664.cap /arrowleft /arrowright /tieaccentlowercase /tieaccentcapital /tieaccentlowercase.new /tieaccentcapital.new /afii61664.asc /uni2422 /dollar /quotesingle /asteriskmath /comma /hyphendbl /period /fraction /zerooldstyle /oneoldstyle /twooldstyle /threeoldstyle /fouroldstyle /fiveoldstyle /sixoldstyle /sevenoldstyle /eightoldstyle /nineoldstyle /angleleft /minus /angleright /uni2127 /circle /Omega /uni301A /uni301B /arrowup /arrowdown /grave.ts1 /born /divorced /died /leaf /married /musicalnote /tildelow /hyphendbl.alt /breve.ts1 /caron.ts1 /hungarumlaut.ts1 /dblgrave.ts1 /dagger /daggerdbl /uni2016 /perthousand /bullet /uni2103 /dollaroldstyle /centoldstyle /florin /colonmonetary /uni20A9 /uni20A6 /guarani /peso /lira /recipe /uni203D /gnaborretni /dong /trademark /uni2031 /paragraph.alt /uni0E3F /afii61352 /discount /estimated /openbullet /uni2120 /uni2045 /uni2046 /cent /sterling /currency /yen /brokenbar /section /dieresis.ts1 /copyright /ordfeminine /copyleft /logicalnot /uni2117 /registered /macron.ts1 /degree /plusminus /twosuperior /threesuperior /acute.ts1 /mu /paragraph /periodcentered /uni203B /onesuperior /ordmasculine /radical /onequarter /onehalf /threequarters /Euro /multiply /divide",
+    compressed_stream: include_bytes!("../../assets/cm_fonts/tcrm2488.flate"),
+};
+
+/// TS1 ToUnicode by code.
+pub static TS1_TOUNICODE: [u16; 128] = [0xF6CE, 0xF6C9, 0x0000, 0x0000, 0xF6CB, 0xF6CF, 0x0000, 0xF6CA, 0x0000, 0xF6D0, 0x0000, 0x00B8, 0x02DB, 0x201A, 0x201E, 0x0000, 0xF6DE, 0x200C, 0x2190, 0x2192, 0x0000, 0x0000, 0x0000, 0x0000, 0x200C, 0x2422, 0x0024, 0x0027, 0x2217, 0x002C, 0x0000, 0x002E, 0x2044, 0xF730, 0xF731, 0xF732, 0xF733, 0xF734, 0xF735, 0xF736, 0xF737, 0xF738, 0xF739, 0x2329, 0x2212, 0x232A, 0x2127, 0x25CB, 0x2126, 0x301A, 0x301B, 0x2191, 0x2193, 0x0060, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x266A, 0x0000, 0x0000, 0x02D8, 0x02C7, 0x02DD, 0xF6D6, 0x2020, 0x2021, 0x2016, 0x2030, 0x2022, 0x2103, 0xF724, 0xF7A2, 0x0192, 0x20A1, 0x20A9, 0x20A6, 0x0000, 0x0000, 0x20A4, 0x0000, 0x203D, 0x0000, 0x20AB, 0x2122, 0x2031, 0x00B6, 0x0E3F, 0x2116, 0x0000, 0x212E, 0x25E6, 0x2120, 0x2045, 0x2046, 0x00A2, 0x00A3, 0x00A4, 0x00A5, 0x00A6, 0x00A7, 0x00A8, 0x00A9, 0x00AA, 0x0000, 0x00AC, 0x2117, 0x00AE, 0x00AF, 0x00B0, 0x00B1, 0x00B2, 0x00B3, 0x00B4, 0x00B5, 0x00B6, 0x00B7, 0x203B, 0x00B9, 0x00BA, 0x221A, 0x00BC, 0x00BD, 0x00BE, 0x20AC, 0x00D7, 0x00F7];
+
+/// The embedded program of the font file `name` (`cmr10`, `tcrm1095`): a base face or a
+/// design-size master; `None` for a font that is not embedded.
+pub fn program_by_name(name: &str) -> Option<&'static CmFontProgram> {
+    static ALL: [&CmFontProgram; 66] = [
+        &CMR10_PROGRAM, &CMMI10_PROGRAM, &CMSY10_PROGRAM, &CMEX10_PROGRAM, &CMBX10_PROGRAM, &CMTI10_PROGRAM, &CMR5_PROGRAM,
+        &MSAM10_PROGRAM, &MSBM10_PROGRAM, &CMR7_PROGRAM, &CMMI7_PROGRAM, &CMMI5_PROGRAM, &CMSY7_PROGRAM, &CMMI6_PROGRAM,
+        &CMMI8_PROGRAM, &CMMI9_PROGRAM, &CMMI12_PROGRAM, &CMSY6_PROGRAM, &CMSY8_PROGRAM, &CMSY9_PROGRAM, &CMSY5_PROGRAM,
+        &CMTT10_PROGRAM, &CMTT8_PROGRAM, &CMSS10_PROGRAM, &CMSS8_PROGRAM, &EUFM10_PROGRAM, &EUFM7_PROGRAM, &EUFM5_PROGRAM,
+        &CMMIB10_PROGRAM, &CMMIB7_PROGRAM, &CMMIB5_PROGRAM, &CMBSY10_PROGRAM, &CMBSY7_PROGRAM, &CMBSY5_PROGRAM,
+        &CMEX7_PROGRAM, &CMCSC10_PROGRAM, &CMSL10_PROGRAM, &CMSSBX10_PROGRAM,
+        &CMR6_PROGRAM, &CMR8_PROGRAM, &CMR9_PROGRAM, &CMR12_PROGRAM, &CMR17_PROGRAM, &CMBX5_PROGRAM, &CMBX6_PROGRAM,
+        &CMBX7_PROGRAM, &CMBX8_PROGRAM, &CMBX9_PROGRAM, &CMBX12_PROGRAM, &CMTI7_PROGRAM, &CMTI8_PROGRAM, &CMTI9_PROGRAM,
+        &CMTI12_PROGRAM, &CMTT9_PROGRAM, &CMTT12_PROGRAM,
+        &TCRM0500_PROGRAM, &TCRM0600_PROGRAM, &TCRM0700_PROGRAM, &TCRM0800_PROGRAM, &TCRM0900_PROGRAM, &TCRM1095_PROGRAM,
+        &TCRM1200_PROGRAM, &TCRM1440_PROGRAM, &TCRM1728_PROGRAM, &TCRM2074_PROGRAM, &TCRM2488_PROGRAM,
+    ];
+    ALL.iter().copied().find(|p| p.name.eq_ignore_ascii_case(name))
+}
+
+/// The ToUnicode map of the font file `name`, by its encoding: OT1 text, typewriter, OML,
+/// OMS, OMX, the AMS symbol fonts, or the TS1 masters' own.
+pub fn tounicode_by_name(name: &str) -> Option<&'static [u16; 128]> {
+    let n = name.to_ascii_lowercase();
+    let n = n.trim_end_matches(|c: char| c.is_ascii_digit());
+    Some(match n {
+        "cmtt" => &CMTT_TO_UNICODE,
+        "cmmi" | "cmmib" => &CMMI_TO_UNICODE,
+        "cmsy" | "cmbsy" => &CMSY_TO_UNICODE,
+        "cmex" => &CMEX_TO_UNICODE,
+        "msam" => &MSAM_TO_UNICODE,
+        "msbm" => &MSBM_TO_UNICODE,
+        "cmr" | "cmbx" | "cmti" | "cmsl" | "cmss" | "cmssbx" | "cmcsc" | "cmbxti" | "cmssi" => &CMR_TO_UNICODE,
+        _ => return program_by_name(name).filter(|p| p.name.starts_with("SFRM")).map(|_| &TS1_TOUNICODE),
+    })
+}

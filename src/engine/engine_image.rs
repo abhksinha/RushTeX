@@ -29,7 +29,7 @@ const ONE_INCH: f64 = 226.0;
 
 /// One `\pdfximage`: its object, file, size, `attr` text, the transparency group
 /// of the pages that show it (0 for none), and whether a shipped page showed it.
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct XImage {
     pub obj: i32,
     file: String,
@@ -43,7 +43,7 @@ pub struct XImage {
 
 /// An included PDF page: its number, the page box (0 media to 4 art), its size and the
 /// box's lower left corner in sp (writeimg.c `bp2int`), and `/Rotate`.
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct PdfPage {
     page: i64,
     page_box: usize,
@@ -202,8 +202,10 @@ impl Machine<'_, '_> {
 
 impl PdfDoc {
     /// The images shown, as `write_png` writes them: the image, then its soft mask, numbered
-    /// from `*next`; and the transparency group.
-    pub fn write_images(&self, read: &dyn Fn(&str) -> Option<Vec<u8>>, hicolor: bool, objs: &mut Vec<(i32, Vec<u8>)>, next: &mut i32) {
+    /// from `*next`; and the transparency group. With a `--watch` session's `cache`, a PNG
+    /// whose file bytes (and `\pdfimagehicolor`) an earlier recompile wrote is not decoded and
+    /// compressed again; the file is still read, so it stays one the session watches.
+    pub fn write_images(&self, read: &dyn Fn(&str) -> Option<Vec<u8>>, hicolor: bool, objs: &mut Vec<(i32, Vec<u8>)>, next: &mut i32, cache: Option<&crate::backend::backend_cache::PdfCache>) {
         let mut deflate = DeflateCompressor::new();
         for im in self.images.iter().filter(|i| i.wanted) {
             if let Some(p) = &im.pdf {
@@ -213,28 +215,70 @@ impl PdfDoc {
                 write_form(&f, &spec, im.obj, objs, next);
                 continue;
             }
-            let Some(img) = read(&im.file).and_then(|b| png_to_pdf(&b, hicolor)) else { continue };
-            let smask = img.smask.as_ref().map(|_| {
+            let Some(bytes) = read(&im.file) else { continue };
+            let key = cache.map(|_| {
+                let mut h = crate::backend::backend_hash::ContentHasher::new();
+                h.u64(3);
+                h.u64(hicolor as u64);
+                h.bytes(&bytes);
+                h.finish()
+            });
+            let hit = match (cache, key) {
+                (Some(c), Some(k)) => c.image(k),
+                _ => None,
+            };
+            let made = match hit {
+                Some(made) => made,
+                None => {
+                    let Some(img) = png_to_pdf(&bytes, hicolor) else { continue };
+                    let pack = |deflate: &mut DeflateCompressor, data: &[u8]| {
+                        let mut packed = Vec::new();
+                        deflate.compress_zlib(data, &mut packed);
+                        packed
+                    };
+                    let space: Vec<u8> = match &img.space {
+                        ColorSpace::Gray => b"/DeviceGray".to_vec(),
+                        ColorSpace::Rgb => b"/DeviceRGB".to_vec(),
+                        ColorSpace::Indexed(pal) => {
+                            let mut s = b"[/Indexed /DeviceRGB ".to_vec();
+                            print_int(&mut s, pal.len() as i64 / 3 - 1);
+                            s.extend_from_slice(b" <");
+                            for b in pal {
+                                s.extend_from_slice(format!("{b:02X}").as_bytes());
+                            }
+                            s.extend_from_slice(b">]");
+                            s
+                        }
+                    };
+                    let data = pack(&mut deflate, &img.data);
+                    let mask = img.smask.as_ref().map(|m| pack(&mut deflate, m));
+                    let made = std::rc::Rc::new((img.width, img.height, img.bits, space, data, mask));
+                    if let (Some(c), Some(k)) = (cache, key) {
+                        c.put_image(k, made.clone());
+                    }
+                    made
+                }
+            };
+            let (width, height, bits, ref space, ref data, ref mask) = *made;
+            let smask = mask.as_ref().map(|_| {
                 *next += 1;
                 *next - 1
             });
-            let stream = |deflate: &mut DeflateCompressor, extra: &[u8], space: &[u8], data: &[u8]| {
-                let mut packed = Vec::new();
-                deflate.compress_zlib(data, &mut packed);
+            let stream = |extra: &[u8], space: &[u8], packed: &[u8]| {
                 let mut out = b"<<\n".to_vec();
                 out.extend_from_slice(extra);
                 out.extend_from_slice(b"/Type /XObject\n/Subtype /Image\n/Width ");
-                print_int(&mut out, img.width as i64);
+                print_int(&mut out, width as i64);
                 out.extend_from_slice(b"\n/Height ");
-                print_int(&mut out, img.height as i64);
+                print_int(&mut out, height as i64);
                 out.extend_from_slice(b"\n/BitsPerComponent ");
-                print_int(&mut out, img.bits as i64);
+                print_int(&mut out, bits as i64);
                 out.extend_from_slice(b"\n/ColorSpace ");
                 out.extend_from_slice(space);
                 out.extend_from_slice(b"\n/Length ");
                 print_int(&mut out, packed.len() as i64);
                 out.extend_from_slice(b"\n/Filter /FlateDecode\n>>\nstream\n");
-                out.extend_from_slice(&packed);
+                out.extend_from_slice(packed);
                 out.extend_from_slice(b"\nendstream\n");
                 out
             };
@@ -248,23 +292,9 @@ impl PdfDoc {
                 print_int(&mut extra, m as i64);
                 extra.extend_from_slice(b" 0 R\n");
             }
-            let space: Vec<u8> = match &img.space {
-                ColorSpace::Gray => b"/DeviceGray".to_vec(),
-                ColorSpace::Rgb => b"/DeviceRGB".to_vec(),
-                ColorSpace::Indexed(pal) => {
-                    let mut s = b"[/Indexed /DeviceRGB ".to_vec();
-                    print_int(&mut s, pal.len() as i64 / 3 - 1);
-                    s.extend_from_slice(b" <");
-                    for b in pal {
-                        s.extend_from_slice(format!("{b:02X}").as_bytes());
-                    }
-                    s.extend_from_slice(b">]");
-                    s
-                }
-            };
-            objs.push((im.obj, stream(&mut deflate, &extra, &space, &img.data)));
-            if let (Some(m), Some(mask)) = (smask, &img.smask) {
-                objs.push((m, stream(&mut deflate, b"", b"/DeviceGray", mask)));
+            objs.push((im.obj, stream(&extra, space, data)));
+            if let (Some(m), Some(mask)) = (smask, mask) {
+                objs.push((m, stream(b"", b"/DeviceGray", mask)));
             }
         }
         if self.group_obj != 0 && self.images.iter().any(|i| i.wanted && i.group != 0) {

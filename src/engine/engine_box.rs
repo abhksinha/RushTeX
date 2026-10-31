@@ -34,7 +34,7 @@ pub(super) enum Ctx {
 }
 
 /// An open box: its context, its `to`/`spread` size (§645 `scan_spec`), and its group.
-#[derive(Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub(super) struct BoxFrame {
     ctx: Ctx,
     exact: bool,

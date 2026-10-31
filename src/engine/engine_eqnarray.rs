@@ -25,6 +25,7 @@ const JOT: i32 = 3 * 65536;
 const CENTERING: Glue = Glue { width: 0, stretch: 1000 << 16, shrink: 0, stretch_order: 0, shrink_order: 0 };
 
 /// One `eqnarray` being read.
+#[derive(PartialEq, Clone)]
 pub(super) struct EqnArray {
     /// `eqnarray*`: `\@eqncr` and `\endeqnarray` begin with `\nonumber`.
     starred: bool,

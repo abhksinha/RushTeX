@@ -18,6 +18,7 @@ pub const DIRECT_ALWAYS: u8 = 2;
 /// utils.c `COLOR_DEFAULT`.
 const DEFAULT: &str = "0 g 0 G";
 
+#[derive(PartialEq, Clone)]
 pub struct ColorStack {
     pub mode: u8,
     page_start: bool,
@@ -33,6 +34,7 @@ impl ColorStack {
     }
 }
 
+#[derive(PartialEq, Clone)]
 pub struct ColorStacks(pub Vec<ColorStack>);
 
 impl Default for ColorStacks {
@@ -47,6 +49,27 @@ fn some(s: String) -> Option<String> {
 }
 
 impl ColorStacks {
+    /// Every stack's whole state, into `h` (a session's shipped-page key, `engine_ship`).
+    pub fn digest(&self, h: &mut crate::backend::backend_hash::ContentHasher) {
+        let opt = |h: &mut crate::backend::backend_hash::ContentHasher, s: &Option<String>| match s {
+            Some(s) => {
+                h.u64(1);
+                h.bytes(s.as_bytes());
+            }
+            None => h.u64(0),
+        };
+        h.u64(self.0.len() as u64);
+        for st in &self.0 {
+            h.u64(((st.mode as u64) << 1) | st.page_start as u64);
+            opt(h, &st.current);
+            opt(h, &st.form_current);
+            h.u64(st.saved.len() as u64);
+            st.saved.iter().for_each(|s| opt(h, s));
+            h.u64(st.form_saved.len() as u64);
+            st.form_saved.iter().for_each(|s| opt(h, s));
+        }
+    }
+
     /// `colorstackset`: the stack's mode, the literal to write.
     pub fn set(&mut self, n: usize, s: String) -> Option<(u8, String)> {
         let st = self.0.get_mut(n)?;

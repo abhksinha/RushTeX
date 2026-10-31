@@ -230,7 +230,12 @@ impl Index {
 
     /// kpathsea's disk search of a `//` element (elt-dirs.c `do_subdir`): the directory and
     /// every directory under it, in `readdir` order, each before its subdirectories.
-    fn walk(&mut self, dir: &Path) {
+    fn walk(&mut self, dir: &Path, seen: &mut Walked) {
+        // Each directory's time stamp is taken before it is listed, so a change made while
+        // or after it is listed moves the stamp ([`Walked::unchanged`]).
+        let stamp = std::fs::metadata(dir).ok().and_then(|m| m.modified().ok());
+        seen.racy |= stamp.is_some_and(|t| t.elapsed().map_or(true, |age| age < RACY));
+        seen.dirs.push((dir.to_path_buf(), stamp));
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         self.dir(dir.as_os_str().as_encoded_bytes());
         let mut subs = Vec::new();
@@ -244,7 +249,7 @@ impl Index {
             }
         }
         for s in subs {
-            self.walk(&s);
+            self.walk(&s, seen);
         }
     }
 }
@@ -291,6 +296,30 @@ fn match_at(f: &[u8], start: usize, elt: &[u8], j: usize) -> bool {
     (i == start || f[i - 1] == b'/') && !f[i..].contains(&b'/')
 }
 
+/// The directories a disk index was made from ([`Index::walk`]), each with its modification
+/// time then (`None`: it was not there). A directory's time changes whenever an entry is
+/// added to it, removed or renamed, so while every one is unchanged the walk would list the
+/// same names: the index is kept between compiles (`--watch`, [`Kpse::renew`]).
+#[derive(Default)]
+struct Walked {
+    dirs: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+    /// A directory changed within [`RACY`] of its listing: a change in the same tick of the
+    /// clock after the listing would leave its time as it was, so the index is not kept.
+    racy: bool,
+}
+
+/// The coarsest granularity of a directory's time stamp in use (FAT 2 s; HFS+ 1 s; APFS,
+/// ext4 1 ns): a time this close to now may not show a change made after it was read.
+const RACY: std::time::Duration = std::time::Duration::from_secs(2);
+
+impl Walked {
+    /// Whether a walk now would list the same names: every directory it listed has the time
+    /// stamp it had then (or is still absent), and none had just changed.
+    fn unchanged(&self) -> bool {
+        !self.racy && self.dirs.iter().all(|(d, t)| std::fs::metadata(d).ok().and_then(|m| m.modified().ok()) == *t)
+    }
+}
+
 /// One search path element: its text with `!!` removed and whether it may search the disk.
 struct Elt {
     path: Vec<u8>,
@@ -302,13 +331,17 @@ pub struct Kpse {
     paths: [Vec<Elt>; 9],
     db_roots: Vec<Vec<u8>>,
     db: Index,
-    /// Disk indexes of the `//` elements no database covers, made when first searched.
-    disk: RefCell<HashMap<Vec<u8>, Index>>,
+    /// Disk indexes of the `//` elements no database covers, made when first searched, with
+    /// the directories they were made from.
+    disk: RefCell<HashMap<Vec<u8>, (Index, Walked)>>,
     /// The document's own directory, searched first: pdfLaTeX runs in it.
     doc_dir: Option<PathBuf>,
     /// Where each name was found, so a name is searched once; the file itself is read
     /// again when asked for (from the OS cache), never kept here.
     found: RefCell<HashMap<String, Option<PathBuf>>>,
+    /// The `ls-R` roots and their sizes and modification times when indexed ([`Kpse::renew`]).
+    roots: Vec<String>,
+    stamp: Vec<u8>,
 }
 
 /// The TeX Live the zero-shift references, the generated tables and CI are pinned to
@@ -389,7 +422,18 @@ impl Kpse {
                 (db, db_roots)
             }
         };
-        Some(Kpse { paths, db_roots, db, disk: Default::default(), doc_dir, found: Default::default() })
+        let roots = roots.iter().map(|r| r.to_string()).collect();
+        Some(Kpse { paths, db_roots, db, disk: Default::default(), doc_dir, found: Default::default(), roots, stamp })
+    }
+
+    /// For a search kept between compiles (`--watch`): forgets where names were found and
+    /// each disk index one of whose directories changed, so the next compile finds files as a
+    /// new search would (one added beside the document, one removed); `false` when an `ls-R`
+    /// database changed since it was indexed, and a new search must be made.
+    pub fn renew(&self) -> bool {
+        self.found.borrow_mut().clear();
+        self.disk.borrow_mut().retain(|_, (_, walked)| walked.unchanged());
+        Index::stamp(&self.roots.iter().map(String::as_str).collect::<Vec<_>>()) == self.stamp
     }
 
     /// The file `name`, as the engine names it (`\input`, `\font`, the font map), read
@@ -429,8 +473,24 @@ impl Kpse {
         v.map(|v| v.1)
     }
 
+    /// Where [`Kpse::read`] would find `name` on disk, the search made again by the files'
+    /// presence alone (nothing read, nothing remembered): `None` when it would not, or would
+    /// take it from the binary (`--watch` key checks, `engine_resume::hash_stamped`). A file
+    /// that is there but cannot be read is named too; reading it then fails.
+    pub fn locate(&self, name: &str) -> Option<PathBuf> {
+        if STORED_FORMS.iter().any(|f| name.ends_with(f)) || std::env::var_os("RT_EMBED_FIRST").is_some() {
+            return None;
+        }
+        self.find_with(name, &mut |p| std::fs::metadata(p).ok().filter(|m| !m.is_dir()).map(|_| p.to_path_buf()))
+    }
+
     fn find(&self, name: &str) -> Option<(PathBuf, Vec<u8>)> {
-        if let Some(b) = self.doc_dir.as_ref().and_then(|d| read_at(&d.join(name))) {
+        self.find_with(name, &mut read_at)
+    }
+
+    /// The search of [`Kpse::find`], each candidate path tried with `probe`.
+    fn find_with<T>(&self, name: &str, probe: &mut dyn FnMut(&Path) -> Option<T>) -> Option<T> {
+        if let Some(b) = self.doc_dir.as_ref().and_then(|d| probe(&d.join(name))) {
             return Some(b);
         }
         let format = format_of(name);
@@ -440,12 +500,12 @@ impl Kpse {
         // An absolute or explicitly relative name is read as written (kpathsea
         // `kpathsea_absolute_p`).
         if name.starts_with('/') || name.starts_with("./") || name.starts_with("../") {
-            return targets.iter().find_map(|t| read_at(Path::new(t)));
+            return targets.iter().find_map(|t| probe(Path::new(t)));
         }
         // pathsearch.c `search_list`: each element in turn, every target name in it.
         for elt in &self.paths[format] {
             for t in targets {
-                if let Some(b) = self.search(elt, t) {
+                if let Some(b) = self.search(elt, t, probe) {
                     return Some(b);
                 }
             }
@@ -455,7 +515,7 @@ impl Kpse {
 
     /// pathsearch.c `path_search` of one element: the database when one covers the
     /// element, else the disk when the element allows it.
-    fn search(&self, elt: &Elt, name: &str) -> Option<(PathBuf, Vec<u8>)> {
+    fn search<T>(&self, elt: &Elt, name: &str, probe: &mut dyn FnMut(&Path) -> Option<T>) -> Option<T> {
         // db.c: a name with directories (`sub/file.tex`) is its last part, looked up in
         // the element extended by the directories.
         let (dirs, base) = name.rsplit_once('/').map_or(("", name), |(d, b)| (d, b));
@@ -466,7 +526,7 @@ impl Kpse {
         }
         let mut got = None;
         let mut read = |f: &[u8]| -> bool {
-            got = std::str::from_utf8(f).ok().and_then(|f| read_at(Path::new(f)));
+            got = std::str::from_utf8(f).ok().and_then(|f| probe(Path::new(f)));
             got.is_some()
         };
         if self.db_roots.iter().any(|r| path.starts_with(r) && path.get(r.len()).is_none_or(|&c| c == b'/')) {
@@ -484,17 +544,18 @@ impl Kpse {
                 f.push(b'/');
             }
             f.extend_from_slice(name.as_bytes());
-            return std::str::from_utf8(&f).ok().and_then(|f| read_at(Path::new(f)));
+            return std::str::from_utf8(&f).ok().and_then(|f| probe(Path::new(f)));
         };
         let root = elt.path[..cut].to_vec();
         let mut disk = self.disk.borrow_mut();
-        let ix = disk.entry(root).or_insert_with_key(|root| {
+        let (ix, _) = disk.entry(root).or_insert_with_key(|root| {
             let mut ix = Index::default();
+            let mut walked = Walked::default();
             if let Ok(r) = std::str::from_utf8(root) {
-                ix.walk(Path::new(r));
+                ix.walk(Path::new(r), &mut walked);
             }
             ix.seal();
-            ix
+            (ix, walked)
         });
         ix.each(base.as_bytes(), &path, &mut read);
         got
@@ -528,11 +589,6 @@ fn ask_kpsewhich(progname: &str) -> Option<Vec<String>> {
     kids.into_iter().map(|k| k.wait_with_output().ok().and_then(|o| String::from_utf8(o.stdout).ok()).map(|s| s.trim().to_string())).collect()
 }
 
-/// The run's date: `SOURCE_DATE_EPOCH` when `FORCE_SOURCE_DATE` is 1, as web2c, else now.
-pub fn run_date() -> i64 {
-    let forced = std::env::var("FORCE_SOURCE_DATE").is_ok_and(|v| v == "1");
-    std::env::var("SOURCE_DATE_EPOCH").ok().filter(|_| forced).and_then(|s| s.trim().parse::<i64>().ok()).unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64))
-}
 
 #[cfg(test)]
 mod tests {

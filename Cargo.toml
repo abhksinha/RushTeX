@@ -2,7 +2,7 @@
 name = "rushtex"
 version = "0.1.0"
 edition = "2021"
-description = "Zero-dependency TeX subset → PDF compilation engine"
+description = "LaTeX to PDF, identical to pdfLaTeX, in pure safe Rust"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -18,12 +18,11 @@ required-features = ["gen"]
 [lib]
 name = "rushtex"
 path = "src/lib.rs"
-crate-type = ["rlib", "cdylib"]
 
 [features]
-# The TeX engine as exactness oracle (native-architecture.md §2 layer 7): the LaTeX format's
-# build and load, kpathsea lookup and the multi-run job. Default until P7, when native output
-# becomes the default and releases build without it.
+# The TeX engine (native-architecture.md §2 layer 7): the LaTeX format's build and load,
+# kpathsea lookup and the multi-run job. It compiles every document the native job declines;
+# a build without it (`--no-default-features`) has the native job alone.
 default = ["oracle", "fonts-core"]
 oracle = []
 # D2b tier 1: the font programs most documents use, carried in the binary

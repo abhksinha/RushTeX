@@ -91,7 +91,7 @@ pub(super) enum Field {
 /// §681–§688: one noad. A fraction keeps its numerator in `supscr` and denominator in
 /// `subscr` (as TeX does); a choice keeps its four lists in `nucleus`, `supscr`, `subscr`
 /// and `extra`; an accent keeps its accent character in `extra`.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(PartialEq, Clone, Copy, Debug, Default)]
 pub(super) struct Noad {
     pub kind: u8,
     pub sub: u8,
@@ -115,7 +115,7 @@ impl Noad {
 }
 
 /// §703 `cur_style`, `cur_size` and `cur_mu`.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(PartialEq, Clone, Copy, Debug, Default)]
 pub(super) struct MathState {
     pub style: u8,
     pub size: u32,

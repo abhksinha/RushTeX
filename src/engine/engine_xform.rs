@@ -14,7 +14,7 @@ use super::engine_whatsit::XFORM;
 
 /// One `\pdfxform`: its object, box, size, `attr` and `resources` text, and whether it was
 /// shipped.
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct XForm {
     pub obj: i32,
     pub box_rec: u32,

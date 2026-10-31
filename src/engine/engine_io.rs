@@ -14,7 +14,7 @@ use super::engine_run::Machine;
 use super::engine_token::{Span, Token};
 
 /// An open `\read` stream (§480): the file's text and where the next line starts.
-#[derive(Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct ReadStream {
     text: String,
     pos: usize,
@@ -37,7 +37,7 @@ impl ReadStream {
 }
 
 /// An `\openout` stream: its file name and what was written to it.
-#[derive(Debug, Default, Clone)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct WriteStream {
     pub name: String,
     pub text: String,

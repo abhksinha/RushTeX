@@ -4,18 +4,17 @@
 //! extracts text with MuPDF's `mutool` (the same MuPDF, 1.28.5, as the Python tools it replaced,
 //! `parity.py` and `pdfexact.py`).
 //!
-//!   parity-testing score [DOC..|--all] [--build] [--dx PAGE:DX] [--save-baseline] [--engine] [--tol T]
-//!   parity-testing zero [DOC..|--all] [--engine] [--pixels] [--dpi N] [--cached] [--why PAGE] [--build]
+//!   parity-testing score [DOC..|--all] [--build] [--dx PAGE:DX] [--save-baseline] [--tol T]
+//!   parity-testing zero [DOC..|--all] [--pixels] [--dpi N] [--cached] [--why PAGE] [--build]
 //!   parity-testing exact [DOC..|--all] [-v] [--build]
-//!   parity-testing gaps [DOC..] [-n N]
 //!   parity-testing rank DOC [-n N]
 //!   parity-testing lines DOC PAGE [--all] [--cached]
 //!   parity-testing miss DOC PAGE [--dx DX]
 //!   parity-testing boxes DOC PAGE [--all]
 //!   parity-testing repro DOC A B | --body TEX [--name N] [--trace pages|lists] [--all] [--build]
 //!   parity-testing tj DOC PAGE [--width W]
-//!   parity-testing hlist DOC PATTERN
 //!   parity-testing glyphs PDF                 (the extracted glyphs, to check against pymupdf)
+//!   parity-testing incr DOC.. [--edits N] [--seed S] [-v]   (the watch session against fresh compiles, after random edits)
 //!   parity-testing bench [FILE.tex [N] | docs | templates | compare OLD_BIN | all | check [BASE]]   (`cargo benchmark`)
 //!   common: [-j N] parallel jobs (default: every core)
 //!
@@ -2234,40 +2233,6 @@ fn ref_pdf(tex: &Path) -> Result<PathBuf, String> {
     run_pdflatex(tex, &out_dir().join("ref"), 5, true)
 }
 
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::new();
-    let mut it = s.chars().peekable();
-    while let Some(c) = it.next() {
-        if c == '\x1b' && it.peek() == Some(&'[') {
-            for d in it.by_ref() {
-                if d.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-            continue;
-        }
-        out.push(c);
-    }
-    out
-}
-
-/// The native pipeline's PDF (`rushtex --native`); its output text.
-fn run_rushtex(tex: &Path, pdf: &Path, env: &[(&str, &str)]) -> Result<String, String> {
-    if !rushtex().exists() {
-        build()?;
-    }
-    let _ = std::fs::create_dir_all(pdf.parent().unwrap());
-    let _ = std::fs::remove_file(pdf);
-    let r = Command::new(rushtex()).arg("--native").arg(tex).arg("-o").arg(pdf).envs(env.iter().copied()).output().map_err(|e| e.to_string())?;
-    let out = String::from_utf8_lossy(&r.stdout).into_owned() + &String::from_utf8_lossy(&r.stderr);
-    if !r.status.success() || out.contains("[ERROR]") || !pdf.exists() {
-        let err: Vec<String> = out.lines().filter(|l| l.contains("ERROR")).map(strip_ansi).take(3).collect();
-        let msg = if err.is_empty() { format!("exit {}", r.status.code().unwrap_or(-1)) } else { err.join(" | ") };
-        return Err(format!("rushtex failed on {}: {msg}", tex.display()));
-    }
-    Ok(out)
-}
-
 /// pdfTeX's errors in the reference log, as `line message`, counted.
 fn reference_errors(tex: &Path) -> Result<HashMap<String, u32>, String> {
     ref_pdf(tex)?;
@@ -2283,9 +2248,10 @@ fn reference_errors(tex: &Path) -> Result<HashMap<String, u32>, String> {
     Ok(out)
 }
 
-/// The document through the `rushtex` command on the TeX engine, from the format in
-/// `target/parity`. Errors pass only when they are exactly pdfTeX's.
-fn run_engine(tex: &Path, pdf: &Path) -> Result<(), String> {
+/// The document through the `rushtex` command as users run it: the native (GDL) job where
+/// its pre-scan accepts the document, else the TeX engine on the format in `target/parity`.
+/// The engine's errors pass only when they are exactly pdfTeX's.
+fn run_rushtex(tex: &Path, pdf: &Path) -> Result<(), String> {
     build()?;
     let _ = std::fs::create_dir_all(pdf.parent().unwrap());
     let _ = std::fs::remove_file(pdf);
@@ -2298,6 +2264,8 @@ fn run_engine(tex: &Path, pdf: &Path) -> Result<(), String> {
         .current_dir(root())
         .envs(FIXED_DATE)
         .env("RUSHTEX_CACHE", out_dir())
+        // The errors in TeX's words, not explained for beginners (`engine_explain`).
+        .env("RT_TEX_LOG", "1")
         .output()
         .map_err(|e| e.to_string())?;
     let stderr = String::from_utf8_lossy(&r.stderr);
@@ -2312,7 +2280,7 @@ fn run_engine(tex: &Path, pdf: &Path) -> Result<(), String> {
         .collect();
     if !pdf.exists() || (!r.status.success() && errs.is_empty()) {
         let tail: String = stderr.chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect();
-        return Err(format!("engine failed on {}: exit {} {tail}", tex.display(), r.status.code().unwrap_or(-1)));
+        return Err(format!("rushtex failed on {}: exit {} {tail}", tex.display(), r.status.code().unwrap_or(-1)));
     }
     if !errs.is_empty() {
         let mut ours: HashMap<String, u32> = HashMap::new();
@@ -2323,23 +2291,19 @@ fn run_engine(tex: &Path, pdf: &Path) -> Result<(), String> {
             *ours.entry(format!("{n} {msg}")).or_insert(0) += 1;
         }
         if ours != reference_errors(tex)? {
-            return Err(format!("engine errors on {}: {}", tex.display(), errs.iter().take(3).cloned().collect::<Vec<_>>().join(" | ")));
+            return Err(format!("rushtex errors on {}: {}", tex.display(), errs.iter().take(3).cloned().collect::<Vec<_>>().join(" | ")));
         }
     }
     Ok(())
 }
 
-fn ours_path(tex: &Path, engine: bool) -> PathBuf {
-    out_dir().join(if engine { "engine" } else { "ours" }).join(format!("{}.pdf", stem(tex)))
+fn ours_path(tex: &Path) -> PathBuf {
+    out_dir().join("rushtex").join(format!("{}.pdf", stem(tex)))
 }
 
-fn ours_pdf(tex: &Path, engine: bool) -> Result<PathBuf, String> {
-    let pdf = ours_path(tex, engine);
-    if engine {
-        run_engine(tex, &pdf)?;
-    } else {
-        run_rushtex(tex, &pdf, &[])?;
-    }
+fn ours_pdf(tex: &Path) -> Result<PathBuf, String> {
+    let pdf = ours_path(tex);
+    run_rushtex(tex, &pdf)?;
     Ok(pdf)
 }
 
@@ -2391,7 +2355,6 @@ struct Opts {
     docs: Vec<String>,
     all: bool,
     build: bool,
-    engine: bool,
     cached: bool,
     pixels: bool,
     dpi: u32,
@@ -2440,7 +2403,7 @@ fn cmd_zero(o: &Opts) {
 /// whether it is zero (`None` for a `--why` answer).
 fn zero_each(o: &Opts, mut each: impl FnMut(&str, Option<bool>) + Send) {
     let docs = o.docs();
-    let kind = if o.engine { "engine" } else { "ours" };
+    let kind = "rushtex";
     par_ordered(
         &docs,
         o.jobs,
@@ -2449,9 +2412,9 @@ fn zero_each(o: &Opts, mut each: impl FnMut(&str, Option<bool>) + Send) {
                 let tex = source(d)?;
                 let s = stem(&tex);
                 let refp = ref_pdf(&tex)?;
-                let mut ours = ours_path(&tex, o.engine);
+                let mut ours = ours_path(&tex);
                 if !(o.cached && ours.exists()) {
-                    ours = ours_pdf(&tex, o.engine)?;
+                    ours = ours_pdf(&tex)?;
                 }
                 let (a, b) = (Pdf::open(&refp)?, Pdf::open(&ours)?);
                 if let Some(p) = o.why {
@@ -2629,7 +2592,7 @@ fn cmd_exact(o: &Opts) {
         |d| {
             let r = guarded(|| {
                 let tex = source(d)?;
-                let (a, b) = (doc_glyphs(&ref_pdf(&tex)?)?, doc_glyphs(&ours_pdf(&tex, o.engine)?)?);
+                let (a, b) = (doc_glyphs(&ref_pdf(&tex)?)?, doc_glyphs(&ours_pdf(&tex)?)?);
                 let mut counts = [0usize; BUCKETS.len() + 1];
                 let (mut font_bad, mut tot, mut text_only) = (0, 0, 0);
                 let mut worst: (f64, usize, Option<Glyph>) = (0.0, 0, None);
@@ -2869,9 +2832,8 @@ fn write_scores(p: &Path, m: &BTreeMap<String, ScoreEntry>, indent0: bool) {
 }
 
 fn cmd_score(o: &Opts) {
-    let engine = o.engine;
     let tol = o.get("tol").and_then(|t| t.parse().ok());
-    let save_baseline = o.has("save-baseline") && !engine && tol.is_none();
+    let save_baseline = o.has("save-baseline") && tol.is_none();
     if o.build {
         if let Err(e) = build() {
             die(&e);
@@ -2879,7 +2841,7 @@ fn cmd_score(o: &Opts) {
     }
     let dx = o.get("dx").and_then(|s| s.split_once(':')).and_then(|(p, d)| Some((p.parse::<usize>().ok()?, d.parse::<f64>().ok()?)));
     let docs = o.docs();
-    let last_path = out_dir().join(if engine { "last_score_engine.json" } else { "last_score.json" });
+    let last_path = out_dir().join("last_score.json");
     let baseline_path = root().join("scripts/parity/baseline.json");
     let last = if dx.is_none() { read_scores(&last_path) } else { BTreeMap::new() };
     let base = read_scores(&baseline_path);
@@ -2890,7 +2852,7 @@ fn cmd_score(o: &Opts) {
         |d| {
             let r = guarded(|| {
                 let tex = source(d)?;
-                let (rows, na, nb) = page_scores(&ref_pdf(&tex)?, &ours_pdf(&tex, engine)?, dx, tol.unwrap_or(0.1))?;
+                let (rows, na, nb) = page_scores(&ref_pdf(&tex)?, &ours_pdf(&tex)?, dx, tol.unwrap_or(0.1))?;
                 Ok((stem(&tex), rows, na, nb))
             });
             (d.clone(), r)
@@ -2948,7 +2910,7 @@ fn cmd_rank(o: &Opts) {
     let n: usize = o.get("n").and_then(|x| x.parse().ok()).unwrap_or(15);
     let r = guarded(|| {
         let tex = source(&doc)?;
-        let (refp, ours) = (ref_pdf(&tex)?, ours_pdf(&tex, o.engine)?);
+        let (refp, ours) = (ref_pdf(&tex)?, ours_pdf(&tex)?);
         let (rows, _, _) = page_scores(&refp, &ours, None, 0.1)?;
         let (a, b) = (doc_glyphs(&refp)?, doc_glyphs(&ours)?);
         let mut order: Vec<usize> = (0..rows.len()).collect();
@@ -2982,7 +2944,7 @@ fn cmd_miss(o: &Opts) {
     let dx: f64 = o.get("dx").and_then(|x| x.parse().ok()).unwrap_or(0.0);
     let r = guarded(|| {
         let tex = source(&doc)?;
-        let (a, b) = (doc_glyphs(&ref_pdf(&tex)?)?, doc_glyphs(&ours_pdf(&tex, o.engine)?)?);
+        let (a, b) = (doc_glyphs(&ref_pdf(&tex)?)?, doc_glyphs(&ours_pdf(&tex)?)?);
         let (ga, gb) = (a.get(page - 1).cloned().unwrap_or_default(), b.get(page - 1).cloned().unwrap_or_default());
         let mut miss: Vec<&Glyph> = match_missing(&ga, &gb, dx, 0.1).into_iter().map(|i| &ga[i]).collect();
         let r1 = |y: f64| py_round(y, 1);
@@ -3023,16 +2985,16 @@ fn baselines(page: &[Glyph], min_size: f64) -> Vec<(f64, f64, String)> {
 
 // ---- command line ----------------------------------------------------------------------------------
 
-const USAGE: &str = "usage: parity-testing COMMAND [DOC..] [--all] [--engine] [--build] [--cached] [--pixels] [--dpi N] [--why N] [-j N]
-commands: zero [--why PAGE], score [--save-baseline] [--tol T] [--dx PAGE:DX], exact [-v], gaps [-n N],
+const USAGE: &str = "usage: parity-testing COMMAND [DOC..] [--all] [--build] [--cached] [--pixels] [--dpi N] [--why N] [-j N]
+commands: zero [--why PAGE], score [--save-baseline] [--tol T] [--dx PAGE:DX], exact [-v],
   rank DOC [-n N], lines DOC PAGE [--all] [--cached], miss DOC PAGE [--dx DX], boxes DOC PAGE [--all],
-  tj DOC PAGE [--width N], hlist DOC PATTERN, repro DOC [A B] [--body TEXT] [--name N] [--trace pages|lists] [--all],
-  glyphs PDF, bench (bench -h)";
+  tj DOC PAGE [--width N], repro DOC [A B] [--body TEXT] [--name N] [--trace pages|lists] [--all],
+  glyphs PDF, bench (bench -h), incr DOC.. [--edits N] [--seed S] [-v]";
 
 fn main() {
     let mut args = std::env::args().skip(1);
     let cmd = args.next().unwrap_or_else(|| die(USAGE));
-    let mut o = Opts { docs: Vec::new(), all: false, build: false, engine: false, cached: false, pixels: false, dpi: 300, why: None, jobs: std::thread::available_parallelism().map_or(4, |n| n.get()), flags: HashMap::new() };
+    let mut o = Opts { docs: Vec::new(), all: false, build: false, cached: false, pixels: false, dpi: 300, why: None, jobs: std::thread::available_parallelism().map_or(4, |n| n.get()), flags: HashMap::new() };
     let rest: Vec<String> = args.collect();
     let mut i = 0;
     while i < rest.len() {
@@ -3044,13 +3006,12 @@ fn main() {
         match a {
             "--all" => o.all = true,
             "--build" => o.build = true,
-            "--engine" => o.engine = true,
             "--cached" => o.cached = true,
             "--pixels" => o.pixels = true,
             "--dpi" => o.dpi = value().parse().unwrap_or_else(|_| die("--dpi N")),
             "--why" => o.why = Some(value().parse().unwrap_or_else(|_| die("--why N"))),
             "-j" | "--jobs" => o.jobs = value().parse::<usize>().unwrap_or_else(|_| die("-j N")).max(1),
-            "--tol" | "--dx" | "--n" | "-n" | "--width" | "--body" | "--name" | "--trace" | "--timeout" => {
+            "--tol" | "--dx" | "--n" | "-n" | "--width" | "--body" | "--name" | "--trace" | "--timeout" | "--edits" | "--seed" => {
                 let v = value();
                 o.flags.insert(a.trim_start_matches('-').into(), v);
             }
@@ -3066,7 +3027,7 @@ fn main() {
         i += 1;
     }
     // Documents run in parallel; a single document splits its own work instead.
-    let many = matches!(cmd.as_str(), "zero" | "score" | "exact" | "gaps") && o.docs().len() > 1;
+    let many = matches!(cmd.as_str(), "zero" | "score" | "exact") && o.docs().len() > 1;
     JOBS.store(if many { 1 } else { o.jobs }, Ordering::Relaxed);
     match cmd.as_str() {
         "zero" => cmd_zero(&o),
@@ -3075,13 +3036,12 @@ fn main() {
         "rank" => cmd_rank(&o),
         "miss" => cmd_miss(&o),
         "glyphs" => cmd_glyphs(&o),
-        "gaps" => cmd_gaps(&o),
         "lines" => cmd_lines(&o),
         "boxes" => cmd_boxes(&o),
         "repro" => cmd_repro(&o),
         "tj" => cmd_tj(&o),
-        "hlist" => cmd_hlist(&o),
         "bench" => cmd_bench(&o),
+        "incr" => cmd_incr(&o),
         _ => die(USAGE),
     }
 }
@@ -3305,7 +3265,9 @@ const BENCH_USAGE: &str = "usage: cargo benchmark [FILE.tex [N] | docs [N] | tem
 /// `bench …`: the benchmark of rushtex against pdfLaTeX (instructions retired, CPU and wall
 /// time, peak RAM), and the contributor's check.
 fn cmd_bench(o: &Opts) {
+    // Absolute: the documents run in their copies' folders, where a relative path finds nothing.
     let rush = std::env::var_os("RUSHTEX_BIN").map_or_else(rushtex, PathBuf::from);
+    let rush = std::fs::canonicalize(&rush).unwrap_or(rush);
     // No arguments at a terminal: the menu, which answers with the arguments it stands for.
     use std::io::IsTerminal as _;
     // Without a terminal (CI, scripts) a mode or a file must be named.
@@ -3861,10 +3823,10 @@ fn bench_report_in(tex: &Path, runs: usize, rush: &Path, work: &Path) -> Result<
     let (r_slope, r_icpt) = line(&fit.iter().map(|f| f.0).collect::<Vec<_>>(), &fit.iter().map(|f| f.1).collect::<Vec<_>>());
     let (p_slope, p_icpt) = line(&fit.iter().map(|f| f.2).collect::<Vec<_>>(), &fit.iter().map(|f| f.3).collect::<Vec<_>>());
 
-    // The output against pdfLaTeX's, `zero --engine --pixels` (the `rushtex` command as users
-    // run it: glyphs, paths, links, pixels at 300 dpi), its line for the document.
+    // The output against pdfLaTeX's, `zero --pixels` (glyphs, paths, links, pixels at 300
+    // dpi), its line for the document.
     let mut parity = String::from("no result");
-    let zo = Opts { docs: vec![tex.display().to_string()], all: false, build: false, engine: true, cached: false, pixels: true, dpi: 300, why: None, jobs: JOBS.load(Ordering::Relaxed).max(1), flags: HashMap::new() };
+    let zo = Opts { docs: vec![tex.display().to_string()], all: false, build: false, cached: false, pixels: true, dpi: 300, why: None, jobs: JOBS.load(Ordering::Relaxed).max(1), flags: HashMap::new() };
     zero_each(&zo, |l, _| parity = l.trim().to_string());
 
     let mac = cfg!(target_os = "macos");
@@ -3942,7 +3904,7 @@ fn bench_check(o: &Opts, rush: &Path, base: Option<&str>) {
             die(&format!("{t} not found on PATH (needed: Rust, TeX Live, MuPDF's mutool, zsh, git)"));
         }
     }
-    println!("1/5 Building rushtex");
+    println!("1/6 Building rushtex");
     if !Command::new("cargo").args(["build", "--release", "--quiet"]).current_dir(&root).status().is_ok_and(|s| s.success()) {
         println!("  FAIL  build");
         std::process::exit(1);
@@ -3951,11 +3913,11 @@ fn bench_check(o: &Opts, rush: &Path, base: Option<&str>) {
     if !root.join("target/parity/pdflatex.rfmt").exists() {
         let _ = Command::new(rush).arg("scripts/native_probes/title.tex").args(["-o", "target/parity/format-check.pdf"]).current_dir(&root).env("RT_ENGINE", "1").env("RUSHTEX_CACHE", root.join("target/parity")).output();
     }
-    println!("2/5 Unit tests");
+    println!("2/6 Unit tests");
     let out = Command::new("cargo").args(["test", "--release", "--lib", "--quiet"]).current_dir(&root).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)).unwrap_or_default();
     let result = out.lines().find(|l| l.starts_with("test result")).unwrap_or("did not run").to_string();
     verdict(result.contains(" 0 failed"), format!("unit tests ({})", result.trim_start_matches("test result: ")));
-    println!("3/5 Native job against the engine, page box by page box (scripts/native_probes.sh)");
+    println!("3/6 Native job against the engine, page box by page box (scripts/native_probes.sh)");
     let probes = Command::new("zsh").arg("scripts/native_probes.sh").args(["-n", "6"]).current_dir(&root).env("RT_BIN", rush).output();
     let text = probes.as_ref().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
     let ok = probes.is_ok_and(|o| o.status.success());
@@ -3965,14 +3927,12 @@ fn bench_check(o: &Opts, rush: &Path, base: Option<&str>) {
         }
     }
     verdict(ok, if ok { format!("{} documents identical", text.lines().filter(|l| l.ends_with("identical")).count()) } else { "native probes".into() });
-    println!("4/5 Against pdfLaTeX: glyphs, paths, links, pixels at 300 dpi (parity-testing zero)");
+    println!("4/6 Against pdfLaTeX: glyphs, paths, links, pixels at 300 dpi (parity-testing zero)");
     let mut docs = vec![root.join("docs/master.tex").display().to_string()];
     let mut bench: Vec<String> = std::fs::read_dir(root.join("scripts/bench")).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "tex")).map(|p| p.display().to_string()).collect()).unwrap_or_default();
     bench.sort();
     docs.extend(bench);
-    // `engine: true`: the `rushtex` command as users run it (the native job where it accepts
-    // the document, else the engine on the format); without it the framework runs `--native`.
-    let zo = Opts { docs: docs.clone(), all: false, build: false, engine: true, cached: false, pixels: true, dpi: 300, why: None, jobs: o.jobs, flags: HashMap::new() };
+    let zo = Opts { docs: docs.clone(), all: false, build: false, cached: false, pixels: true, dpi: 300, why: None, jobs: o.jobs, flags: HashMap::new() };
     JOBS.store(1, Ordering::Relaxed);
     let mut zero = 0;
     zero_each(&zo, |l, ok| {
@@ -3980,7 +3940,20 @@ fn bench_check(o: &Opts, rush: &Path, base: Option<&str>) {
         zero += usize::from(ok == Some(true));
     });
     verdict(zero == docs.len(), if zero == docs.len() { format!("{zero} documents identical to pdfLaTeX") } else { format!("{} of {} documents differ from pdfLaTeX", docs.len() - zero, docs.len()) });
-    println!("5/5 Byte-identical to {}", base.unwrap_or("BASE (none given: cargo benchmark check origin/master)"));
+    println!("5/6 The watch session after random edits, byte for byte against fresh compiles (parity-testing incr)");
+    // master.tex on the native job, bare_jrnl (IEEEtran) on the engine: a few seconds each.
+    for (doc, edits) in [(root.join("docs/master.tex"), 20), (corpus().join("bare_jrnl.tex"), 6)] {
+        match incr_doc(rush, &doc, edits, 1, false) {
+            Ok(line) => verdict(true, line.trim_start_matches("PASS ").to_string()),
+            Err(report) => {
+                for l in report.lines().skip(1) {
+                    println!("        {l}");
+                }
+                verdict(false, report.lines().next().unwrap_or_default().trim_start_matches("FAIL ").to_string());
+            }
+        }
+    }
+    println!("6/6 Byte-identical to {}", base.unwrap_or("BASE (none given: cargo benchmark check origin/master)"));
     let Some(base) = base else {
         println!("  SKIP  no BASE given");
         return finish_check(fails);
@@ -4214,30 +4187,6 @@ fn py_round(x: f64, n: usize) -> f64 {
     format!("{x:.n$}").parse().unwrap_or(x)
 }
 
-/// Python's `repr` of a string.
-fn py_repr(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let mut o = String::from(q);
-    for c in s.chars() {
-        match c {
-            '\\' => o.push_str("\\\\"),
-            '\n' => o.push_str("\\n"),
-            '\r' => o.push_str("\\r"),
-            '\t' => o.push_str("\\t"),
-            c if c == q => {
-                o.push('\\');
-                o.push(c);
-            }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f || (0x80..0xa0).contains(&(c as u32)) => {
-                let _ = write!(o, "\\x{:02x}", c as u32);
-            }
-            c => o.push(c),
-        }
-    }
-    o.push(q);
-    o
-}
-
 /// `{x:+7.2f}`, with Python's `+nan`.
 fn signed(x: f64, width: usize) -> String {
     if x.is_nan() {
@@ -4256,18 +4205,6 @@ fn run_of<'s>(s: &'s str, set: &str) -> (&'s str, &'s str) {
 const NUM: &str = "-0123456789.";
 const UNUM: &str = "0123456789.";
 
-/// `-?[\d.]+` at the start of `s`.
-fn signed_num(s: &str) -> Option<(&str, &str)> {
-    let neg = usize::from(s.starts_with('-'));
-    let (n, rest) = run_of(&s[neg..], UNUM);
-    (!n.is_empty()).then(|| (&s[..neg + n.len()], rest))
-}
-
-/// The first `-?[\d.]+` anywhere in `s` (`re.search`), and what follows it.
-fn find_num(s: &str) -> Option<(&str, &str)> {
-    s.char_indices().find_map(|(i, _)| signed_num(&s[i..]))
-}
-
 /// `fil*` (`plus`) or `fil+` (`strict`) at the start of `s`.
 fn fil(s: &str, strict: bool) -> (&str, &str) {
     let pre = if strict { "fil" } else { "fi" };
@@ -4280,53 +4217,6 @@ fn fil(s: &str, strict: bool) -> (&str, &str) {
 
 fn f(s: &str) -> Option<f64> {
     s.parse().ok()
-}
-
-// ---- gaps ------------------------------------------------------------------------------------------
-
-fn cmd_gaps(o: &Opts) {
-    if !rushtex().exists() {
-        if let Err(e) = build() {
-            die(&e);
-        }
-    }
-    let docs = if o.docs.is_empty() { corpus_docs() } else { o.docs.clone() };
-    let n: usize = o.get("n").and_then(|x| x.parse().ok()).unwrap_or(40);
-    let mut items: BTreeMap<(String, String), BTreeMap<String, i64>> = BTreeMap::new();
-    par_ordered(
-        &docs,
-        o.jobs,
-        |d| -> Result<(String, String), String> {
-            let tex = source(d)?;
-            let r = Command::new(rushtex()).arg("--gaps").arg(&tex).current_dir(tex.parent().unwrap()).output().map_err(|e| e.to_string())?;
-            Ok((stem(&tex), String::from_utf8_lossy(&r.stdout).into_owned()))
-        },
-        |r| {
-            let (s, out) = r.unwrap_or_else(|e| die(&e));
-            for line in py_splitlines(&out) {
-                let fl: Vec<&str> = line.split('\t').collect();
-                if fl.len() >= 3 && fl[0] != "class" && fl[0] != "package" {
-                    if let Ok(c) = fl[2].parse() {
-                        items.entry((fl[0].into(), fl[1].into())).or_default().insert(s.clone(), c);
-                    }
-                } else if fl.len() >= 2 {
-                    items.entry((fl[0].into(), fl[1].into())).or_default().insert(s.clone(), 1);
-                }
-            }
-        },
-    );
-    for kind in ["class", "package", "environment", "command", "error"] {
-        let mut rows: Vec<(&String, &BTreeMap<String, i64>)> = items.iter().filter(|(k, _)| k.0 == kind).map(|(k, v)| (&k.1, v)).collect();
-        if rows.is_empty() {
-            continue;
-        }
-        rows.sort_by_key(|(name, per)| (std::cmp::Reverse(per.len()), std::cmp::Reverse(per.values().sum::<i64>()), *name));
-        println!("== {kind} ({})", rows.len());
-        for (name, per) in rows.iter().take(n) {
-            let docs: Vec<&str> = per.keys().map(String::as_str).collect();
-            println!("  {:2} docs {:6}x  {:<70}  {}", per.len(), per.values().sum::<i64>(), head(name, 70), docs.join(" "));
-        }
-    }
 }
 
 // ---- lines -----------------------------------------------------------------------------------------
@@ -4390,7 +4280,7 @@ fn cmd_lines(o: &Opts) {
     let (tex, page) = doc_page(o, "lines");
     let r = guarded(|| {
         let refp = ref_pdf(&tex)?;
-        let ours = if o.cached { ours_path(&tex, o.engine) } else { ours_pdf(&tex, o.engine)? };
+        let ours = if o.cached { ours_path(&tex) } else { ours_pdf(&tex)? };
         let (a, b) = both_glyphs(&refp, &ours)?;
         print_page_lines(&a, &b, page, o.all)
     });
@@ -4701,7 +4591,7 @@ fn cmd_boxes(o: &Opts) {
         }
         let mut tex_lines = Vec::new();
         box_lines(&pages[page - 1], 0.0, &mut tex_lines, &mut Vec::new());
-        let (a, b) = both_glyphs(&ref_pdf(&tex)?, &ours_pdf(&tex, o.engine)?)?;
+        let (a, b) = both_glyphs(&ref_pdf(&tex)?, &ours_pdf(&tex)?)?;
         let ref_lines = baselines(a.get(page - 1).map(Vec::as_slice).unwrap_or(&[]), 0.0);
         let ours_y: Vec<f64> = baselines(b.get(page - 1).map(Vec::as_slice).unwrap_or(&[]), 0.0).iter().map(|l| l.0).collect();
         let mut shown = 0;
@@ -4767,7 +4657,6 @@ fn cmd_repro(o: &Opts) {
     };
     let _ = std::fs::write(&src, doc_of("\\begin{document}", &body));
     let trace = o.get("trace");
-    let mut env: Vec<(&str, &str)> = Vec::new();
     let mut tex_src = src.clone();
     if let Some(tr) = trace {
         // TeX-only tracing goes in a copy, so rushtex never sees the primitives.
@@ -4782,15 +4671,12 @@ fn cmd_repro(o: &Opts) {
         }
         tex_src = d.join(format!("{name}_trace.tex"));
         let _ = std::fs::write(&tex_src, doc_of(&format!("\\begin{{document}}{hook}"), &body_t));
-        if tr == "pages" {
-            env.push(("RUSHTEX_TRACE_PAGES", "1"));
-        }
     }
     let r = guarded(|| {
         // `\showlists` stops as an error: let TeX go on past it.
         let refp = run_pdflatex(&tex_src, &d, 1, trace != Some("lists"))?;
         let ours = d.join(format!("{name}_ours.pdf"));
-        let out = run_rushtex(&src, &ours, &env)?;
+        run_rushtex(&src, &ours)?;
         let (ga, gb) = both_glyphs(&refp, &ours)?;
         println!("{}  pages ref {} ours {}", src.display(), ga.len(), gb.len());
         for p in 1..=ga.len().min(gb.len()) {
@@ -4801,7 +4687,6 @@ fn cmd_repro(o: &Opts) {
             let log = py_splitlines(&String::from_utf8_lossy(&std::fs::read(d.join(format!("{}.log", stem(&tex_src)))).unwrap_or_default()));
             if tr == "pages" {
                 println!("-- TeX\n{}", log.iter().filter(|l| l.starts_with('%')).cloned().collect::<Vec<_>>().join("\n"));
-                println!("-- rushtex\n{}", py_splitlines(&out).into_iter().filter(|l| l.starts_with('%')).collect::<Vec<_>>().join("\n"));
             } else if let Some(s) = log.iter().position(|l| l.starts_with("### vertical mode entered at line 0")) {
                 let e = (s..log.len()).find(|&i| log[i].starts_with("prevdepth")).unwrap_or(log.len() - 1);
                 println!("{}", log[s..=e].join("\n"));
@@ -4881,7 +4766,7 @@ fn cmd_tj(o: &Opts) {
     let (tex, page) = doc_page(o, "tj");
     let width: usize = o.get("width").and_then(|w| w.parse().ok()).unwrap_or(700);
     let r = guarded(|| {
-        let (a, b) = (text_ops(&ref_pdf(&tex)?, page)?, text_ops(&ours_pdf(&tex, o.engine)?, page)?);
+        let (a, b) = (text_ops(&ref_pdf(&tex)?, page)?, text_ops(&ours_pdf(&tex)?, page)?);
         for (tag, i1, i2, j1, j2) in SequenceMatcher::new(&a, &b).opcodes() {
             if tag != Tag::Equal {
                 println!("ref  {}", head(&a[i1..i2].join(" | "), width));
@@ -4897,351 +4782,6 @@ fn cmd_tj(o: &Opts) {
 }
 
 // ---- hlist: tex.web §619 `hlist_out` replayed on the box log ---------------------------------------
-
-/// Box-log font identifiers to TFM names: (family, series, shape), and the fd design sizes.
-fn nfss_tfm(fam: &str, ser: &str, shp: &str) -> Option<&'static str> {
-    Some(match (fam, ser, shp) {
-        ("cmr", "m", "n") => "cmr",
-        ("cmr", "bx", "n") => "cmbx",
-        ("cmr", "m", "it") => "cmti",
-        ("cmr", "m", "sl") => "cmsl",
-        ("cmr", "m", "sc") => "cmcsc",
-        ("cmr", "bx", "it") => "cmbxti",
-        ("cmtt", "m", "n") => "cmtt",
-        ("cmss", "m", "n") => "cmss",
-        ("cmss", "bx", "n") => "cmssbx",
-        ("cmm", "m", "it") => "cmmi",
-        ("cmsy", "m", "n") => "cmsy",
-        ("cmex", "m", "n") => "cmex",
-        ("cmm", "b", "it") => "cmmib",
-        ("cmsy", "b", "n") => "cmbsy",
-        ("msa", "m", "n") => "msam",
-        ("msb", "m", "n") => "msbm",
-        _ => return None,
-    })
-}
-
-fn design_sizes(base: &str) -> &'static [u32] {
-    match base {
-        "cmr" => &[5, 6, 7, 8, 9, 10, 12, 17],
-        "cmbx" | "cmmi" => &[5, 6, 7, 8, 9, 10, 12],
-        "cmti" => &[7, 8, 9, 10, 12],
-        "cmsl" | "cmtt" => &[8, 9, 10, 12],
-        "cmss" => &[8, 9, 10, 12, 17],
-        "cmsy" | "cmmib" | "cmbsy" | "msam" | "msbm" => &[5, 6, 7, 8, 9, 10],
-        "cmex" => &[7, 8, 9, 10],
-        _ => &[10],
-    }
-}
-
-type Widths = std::rc::Rc<HashMap<u32, i64>>;
-
-/// Character widths of `name`.tfm at `z` sp, scaled as tex.web §571 `store_scaled`.
-fn tfm_widths(name: &str, z: i64) -> Option<HashMap<u32, i64>> {
-    let out = Command::new("kpsewhich").arg(format!("{name}.tfm")).output().ok()?;
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let d = std::fs::read(path).ok()?;
-    let h = |o: usize| Some(u16::from_be_bytes([*d.get(o)?, *d.get(o + 1)?]) as usize);
-    let (lh, bc, ec) = (h(2)?, h(4)?, h(6)?);
-    let ci = 24 + lh * 4;
-    let wb = ci + (ec + 1).checked_sub(bc)? * 4;
-    let (mut z, mut alpha) = (z, 16i64);
-    while z >= 0o40000000 {
-        z /= 2;
-        alpha += alpha;
-    }
-    let beta = 256 / alpha;
-    alpha *= z;
-    let mut m = HashMap::new();
-    for c in bc..=ec {
-        let wi = *d.get(ci + (c - bc) * 4)? as usize;
-        if wi == 0 {
-            continue;
-        }
-        let o = wb + wi * 4;
-        let [a, b, cc, e] = [*d.get(o)?, *d.get(o + 1)?, *d.get(o + 2)?, *d.get(o + 3)?].map(i64::from);
-        let sw = (((e * z) / 256 + cc * z) / 256 + b * z) / beta;
-        m.insert(c as u32, if a == 0 { sw } else { sw - alpha });
-    }
-    Some(m)
-}
-
-#[derive(Default)]
-struct FontWidths(HashMap<String, Option<Widths>>);
-
-impl FontWidths {
-    fn get(&mut self, ident: &str) -> Option<Widths> {
-        if let Some(w) = self.0.get(ident) {
-            return w.clone();
-        }
-        let w = (|| {
-            let [_, fam, ser, shp, size]: [&str; 5] = ident.split('/').collect::<Vec<_>>().try_into().ok()?;
-            let base = nfss_tfm(fam, ser, shp)?;
-            let sizes = design_sizes(base);
-            let pt: f64 = size.parse().ok()?;
-            let design = sizes.iter().copied().filter(|&s| s as f64 <= pt + 0.01).max().unwrap_or(sizes[0]);
-            let (whole, frac) = size.split_once('.').unwrap_or((size, ""));
-            let mut a = 0i64;
-            for ch in frac.chars().take(17).collect::<Vec<_>>().into_iter().rev() {
-                a = (a + i64::from(ch.to_digit(10)?) * 0x20000) / 10;
-            }
-            let z = whole.parse::<i64>().ok()? * 65536 + (a + 1) / 2;
-            match tfm_widths(&format!("{base}{design}"), z) {
-                Some(m) => Some(std::rc::Rc::new(m)),
-                None => die(&format!("no TFM {base}{design}")),
-            }
-        })();
-        self.0.insert(ident.to_string(), w.clone());
-        w
-    }
-}
-
-enum Item {
-    Char(String, u32),
-    Kern(i64),
-    /// natural, stretch, stretch order, shrink
-    Glue(i64, i64, String, i64),
-    /// width, glue-set order, contents
-    Box(i64, String, Vec<Item>),
-}
-
-fn sp(x: &str) -> Option<i64> {
-    Some((x.parse::<f64>().ok()? * 65536.0).round_ties_even() as i64)
-}
-
-/// `\\hbox.*?x(-?[\d.]+)(?:, glue set (- ?)?([\d.]+)(fil+)?)?`: the width and the glue
-/// order of an hbox line.
-fn hbox_head(t: &str) -> Option<(&str, &str)> {
-    let t = t.strip_prefix("\\hbox")?;
-    for (i, _) in t.match_indices('x') {
-        if let Some((w, rest)) = signed_num(&t[i + 1..]) {
-            let order = (|| {
-                let g = rest.strip_prefix(", glue set ")?;
-                let g = g.strip_prefix('-').map(|g| g.strip_prefix(' ').unwrap_or(g)).unwrap_or(g);
-                let (r, g) = run_of(g, UNUM);
-                (!r.is_empty()).then(|| fil(g, true).0)
-            })();
-            return Some((w, order.unwrap_or("")));
-        }
-    }
-    None
-}
-
-/// The items of the box-log hbox at line `n` (`depth` dots): characters, kerns, glue and
-/// nested hboxes with their own items, so `hlist_replay` reaches every character.
-fn hlist_items(log: &[String], n: usize, depth: usize) -> Vec<Item> {
-    let dots = ".".repeat(depth + 1);
-    let mut items = Vec::new();
-    let mut k = n + 1;
-    while k < log.len() && log[k].starts_with(&dots) {
-        let t = &log[k][depth + 1..];
-        k += 1;
-        if t.starts_with('.') {
-            continue;
-        }
-        if let Some(item) = char_item(t) {
-            items.push(item);
-        } else if t.starts_with("\\kern") {
-            if let Some(v) = find_num(t).and_then(|x| sp(x.0)) {
-                items.push(Item::Kern(v));
-            }
-        } else if let Some(g) = t.strip_prefix("\\glue") {
-            let body = match g.strip_prefix('(') {
-                Some(r) => r.find(')').map_or("", |p| &r[p + 1..]),
-                None => g,
-            };
-            // `re.findall(r"(-?[\d.]+)(fil+)?", body)`
-            let mut g: Vec<(&str, &str)> = Vec::new();
-            let mut rest = body;
-            while let Some((num, after)) = find_num(rest) {
-                let (o, after) = fil(after, true);
-                g.push((num, o));
-                rest = after;
-            }
-            if g.is_empty() {
-                items.push(Item::Glue(0, 0, String::new(), 0));
-                continue;
-            }
-            let plus = body.contains("plus");
-            let st = if plus { g.get(1).and_then(|x| sp(x.0)).unwrap_or(0) } else { 0 };
-            let order = if plus { g.get(1).map_or("", |x| x.1) } else { "" };
-            let sh = if body.contains("minus") { sp(g[g.len() - 1].0).unwrap_or(0) } else { 0 };
-            items.push(Item::Glue(sp(g[0].0).unwrap_or(0), st, order.to_string(), sh));
-        } else if t.starts_with("\\hbox") {
-            if let Some((w, order)) = hbox_head(t) {
-                items.push(Item::Box(sp(w).unwrap_or(0), order.to_string(), hlist_items(log, k - 1, depth + 1)));
-            }
-        } else if t.starts_with("\\vbox") || t.starts_with("\\rule") {
-            let w = t.match_indices('x').find_map(|(i, _)| {
-                let s = &t[i + 1..];
-                let neg = usize::from(s.starts_with('-'));
-                let (r, _) = run_of(&s[neg..], "0123456789.*");
-                (!r.is_empty()).then(|| &s[..neg + r.len()])
-            });
-            if let Some(w) = w {
-                items.push(Item::Kern(if w == "*" { 0 } else { sp(w).unwrap_or(0) }));
-            }
-        } else if t.starts_with("\\mathon") || t.starts_with("\\mathoff") {
-            let s = t.find(", surrounded ").and_then(|p| signed_num(&t[p + 13..])).and_then(|x| sp(x.0));
-            items.push(Item::Kern(s.unwrap_or(0)));
-        }
-    }
-    items
-}
-
-/// `\\(\S+/\S+/\S+/\S+/\S+) (\S+)`: a character of the box log and its code.
-fn char_item(t: &str) -> Option<Item> {
-    let t = t.strip_prefix('\\')?;
-    let end = t.find(|c: char| py_space(c)).unwrap_or(t.len());
-    let (ident, rest) = t.split_at(end);
-    if ident.matches('/').count() < 4 || ident.split('/').any(str::is_empty) {
-        return None;
-    }
-    let rest = rest.strip_prefix(' ')?;
-    let ch: Vec<char> = rest.chars().take_while(|c| !py_space(*c)).collect();
-    let first = *ch.first()?;
-    let code = if ch.len() == 4 && ch[0] == '^' && ch[1] == '^' {
-        u32::from_str_radix(&ch[2..].iter().collect::<String>(), 16).ok()?
-    } else if ch.len() >= 3 && ch[0] == '^' && ch[1] == '^' {
-        let c = ch[2] as u32;
-        if c >= 64 { c - 64 } else { c + 64 }
-    } else {
-        first as u32
-    };
-    Some(Item::Char(ident.to_string(), code))
-}
-
-fn hlist_width(items: &[Item], fw: &mut FontWidths) -> Option<i64> {
-    let mut w = 0;
-    for i in items {
-        w += match i {
-            Item::Char(f, c) => *fw.get(f)?.get(c)?,
-            Item::Kern(k) => *k,
-            Item::Glue(n, ..) => *n,
-            Item::Box(b, ..) => *b,
-        };
-    }
-    Some(w)
-}
-
-/// web2c `zround` (texmfmp.c): halves away from zero.
-fn zround(r: f64) -> i64 {
-    if r >= 0.0 {
-        (r + 0.5).floor() as i64
-    } else {
-        (r - 0.5).ceil() as i64
-    }
-}
-
-/// tex.web §619 `hlist_out` over `items` of a box `width` wide starting at `h`: appends
-/// (char, h) for every character, nested boxes included, and returns the glue set.
-fn hlist_replay(items: &[Item], width: i64, order: &str, mut h: i64, out: &mut Vec<(char, i64)>, fw: &mut FontWidths) -> Option<f64> {
-    let x = width - hlist_width(items, fw)?;
-    let pick = |st: i64, sh: i64| if x > 0 { st } else { sh };
-    let tot: i64 = items
-        .iter()
-        .filter_map(|i| match i {
-            Item::Glue(_, st, o, sh) if x < 0 || o == order => Some(pick(*st, *sh)),
-            _ => None,
-        })
-        .sum();
-    let ratio = if tot != 0 { (x as f64 / tot as f64).max(-1.0) } else { 0.0 };
-    let (mut cg, mut cur_g) = (0i64, 0i64);
-    for i in items {
-        match i {
-            Item::Char(f, c) => {
-                out.push((char::from_u32(*c).unwrap_or('\u{fffd}'), h));
-                h += *fw.get(f)?.get(c)?;
-            }
-            Item::Kern(k) => h += k,
-            Item::Box(w, o, sub) => {
-                hlist_replay(sub, *w, o, h, out, fw)?;
-                h += w;
-            }
-            Item::Glue(n, st, o, sh) => {
-                if x < 0 || o == order {
-                    cg += pick(*st, *sh);
-                }
-                let g = zround(ratio * cg as f64);
-                h += n + g - cur_g;
-                cur_g = g;
-            }
-        }
-    }
-    Some(ratio)
-}
-
-fn find_chars(s: &[char], p: &[char], from: usize) -> Option<usize> {
-    if p.is_empty() {
-        return (from <= s.len()).then_some(from);
-    }
-    (from..s.len().saturating_sub(p.len() - 1)).find(|&i| s[i..i + p.len()] == *p)
-}
-
-/// Replays tex.web §619 `hlist_out` on the box-log hbox whose text contains PATTERN and
-/// prints, per character, ours minus TeX in sp (ours from `RUSHTEX_TRACE_H`).
-fn cmd_hlist(o: &Opts) {
-    let doc = o.docs.first().unwrap_or_else(|| die("hlist needs DOC PATTERN"));
-    let pattern = o.docs.get(1).unwrap_or_else(|| die("hlist needs DOC PATTERN"));
-    let tex = source(doc).unwrap_or_else(|e| die(&e));
-    let log = py_splitlines(&box_log(&tex).unwrap_or_else(|e| die(&e)));
-    let mut fw = FontWidths::default();
-    let pat: Vec<char> = pattern.chars().collect();
-    let mut found = None;
-    for (n, l) in log.iter().enumerate() {
-        let dots = l.len() - l.trim_start_matches('.').len();
-        if dots == 0 {
-            continue;
-        }
-        let Some((w, order)) = hbox_head(&l[dots..]) else { continue };
-        let items = hlist_items(&log, n, dots);
-        let mut out = Vec::new();
-        let width = sp(w).unwrap_or(0);
-        // A font without a TFM mapping, or another encoding (TS1): the next box.
-        let Some(ratio) = hlist_replay(&items, width, order, 0, &mut out, &mut fw) else { continue };
-        let text: Vec<char> = out.iter().map(|c| c.0).collect();
-        if find_chars(&text, &pat, 0).is_some() {
-            found = Some((ratio, width, out));
-            break;
-        }
-    }
-    let Some((ratio, width, out)) = found else { die(&format!("no hbox with {} in the box log", py_repr(pattern))) };
-    let trace = run_rushtex(&tex, &out_dir().join("ours").join(format!("{}.pdf", stem(&tex))), &[("RUSHTEX_TRACE_H", "1")]).unwrap_or_else(|e| die(&e));
-    let seq: Vec<(char, i64)> = py_splitlines(&trace)
-        .iter()
-        .filter(|l| l.starts_with("H "))
-        .filter_map(|l| {
-            let r: Vec<&str> = l.split_whitespace().collect();
-            Some((char::from_u32(r.get(1)?.parse().ok()?)?, r.get(2)?.parse().ok()?))
-        })
-        .collect();
-    let s: Vec<char> = seq.iter().map(|c| c.0).collect();
-    let t: Vec<char> = out.iter().map(|c| c.0).collect();
-    let j = find_chars(&t, &pat, 0).unwrap();
-    let Some(mut k) = find_chars(&s, &pat, 0) else { die(&format!("ours has no {}", py_repr(pattern))) };
-    let tail = &t[j..];
-    while s[k..(k + tail.len()).min(s.len())] != *tail {
-        match find_chars(&s, &pat, k + 1) {
-            Some(n) => k = n,
-            None => break,
-        }
-    }
-    let d0 = seq[k].1 - out[j].1;
-    println!("glue_set {ratio:.10}  width {width}sp  box left at {d0}sp in ours (offset at {})", py_repr(pattern));
-    // Pair each TeX character with ours by character within a short window: math is drawn in
-    // its own order, so a plain zip loses step after the first formula.
-    let mut res = Vec::new();
-    for &(c, h) in &out[j..] {
-        match (k..(k + 12).min(seq.len())).find(|&q| seq[q].0 == c) {
-            None => res.push(format!("{c}?")),
-            Some(hit) => {
-                res.push(format!("{c}{:+}", seq[hit].1 - h - d0));
-                k = hit + 1;
-            }
-        }
-    }
-    println!("{}", res.join(" "));
-}
 
 #[cfg(test)]
 mod tests {
@@ -5290,4 +4830,685 @@ mod tests {
         assert_eq!(hbox_head(r"\hbox(6.94+0.0)x20.0, glue set 0.5fil"), Some(("20.0", "fil")));
         assert_eq!(rule_dims(r"\rule(0.4+*)x345.0"), Some(0.4));
     }
+}
+
+// ---- incr: the edit-fuzz test of the watch session ------------------------------------------
+//
+// `incr DOC.. [--edits N] [--seed S] [-v]`: the document's folder is copied to
+// `target/parity/incr/<name>`, a watch session is started on it (`rushtex --watch-replay`,
+// the compile `--watch` makes, with the state it keeps between compiles), and N random but
+// realistic edits are made, one save each; after each save the session's PDF is compared byte
+// for byte with a fresh one-shot compile of the same files. The edits are drawn from the seed,
+// so a run is reproduced exactly; the first difference stops the run with the edit, its
+// source lines, where the PDFs first differ and whether a two-save history reproduces it.
+
+/// splitmix64: deterministic for a seed, and no dependency.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+    fn word(&mut self) -> &'static str {
+        INCR_WORDS[self.below(INCR_WORDS.len())]
+    }
+}
+
+/// The words the edits type: plain, of various lengths, so lines break and hyphenate anew.
+const INCR_WORDS: [&str; 24] = [
+    "river", "garden", "theory", "measure", "silver", "window", "pattern", "careful", "number", "evening", "distant", "paper", "quietly", "structure", "an", "of", "independently", "results", "simple", "argument", "considerable", "light", "table", "nevertheless",
+];
+
+/// Environments whose text the edits leave alone: pictures, displayed mathematics and the
+/// bibliography, where a word or a paragraph is not running text.
+const INCR_SKIP_ENVS: [&str; 16] = ["tikzpicture", "picture", "equation", "align", "gather", "multline", "flalign", "alignat", "eqnarray", "displaymath", "math", "thebibliography", "filecontents", "comment", "array", "verbatim"];
+
+/// What a removed paragraph may not hold: structure, definitions and labels, whose removal
+/// is not an edit a writer makes in passing.
+const INCR_KEEP: [&str; 21] = [
+    "\\begin", "\\end", "\\item", "section", "\\chapter", "\\part", "\\label", "\\caption", "\\maketitle", "\\bibliograph", "\\appendix", "\\def", "command", "\\input", "\\include", "\\tableofcontents", "\\new", "\\let", "\\make", "matter", "\\use",
+];
+
+/// The places an edit can touch in one file's text: words of running text, the starts of
+/// paragraphs (just after a blank line) and whole paragraphs that can go.
+#[derive(Default)]
+struct Spots {
+    words: Vec<(usize, usize)>,
+    breaks: Vec<usize>,
+    paras: Vec<(usize, usize)>,
+}
+
+fn find_from(t: &[u8], pat: &[u8], from: usize) -> Option<usize> {
+    t.get(from..)?.windows(pat.len()).position(|w| w == pat).map(|p| p + from)
+}
+
+/// The part of a file the edits touch: the main file's body, or all of an `\input` file.
+fn body_of(t: &[u8], main: bool) -> (usize, usize) {
+    if !main {
+        return (0, t.len());
+    }
+    let s = find_from(t, b"\\begin{document}", 0).map_or(0, |p| p + 16);
+    let e = t.windows(14).rposition(|w| w == b"\\end{document}").filter(|&e| e >= s).unwrap_or(t.len());
+    (s, e)
+}
+
+/// Words at brace depth 0, outside brackets, mathematics, comments and the environments of
+/// [`INCR_SKIP_ENVS`]; blank lines in the same state; and the paragraphs between two such
+/// blank lines that hold none of [`INCR_KEEP`].
+fn spots(t: &[u8], (s, e): (usize, usize)) -> Spots {
+    let mut sp = Spots::default();
+    let (mut depth, mut bracket, mut math, mut skip) = (0usize, 0usize, false, 0usize);
+    let mut i = s;
+    let mut last_break: Option<usize> = None;
+    while i < e {
+        match t[i] {
+            b'%' => {
+                while i < e && t[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'\\' => {
+                let n = t[i + 1..e].iter().take_while(|c| c.is_ascii_alphabetic()).count();
+                if n == 0 {
+                    match t.get(i + 1) {
+                        Some(b'(' | b'[') => math = true,
+                        Some(b')' | b']') => math = false,
+                        _ => {}
+                    }
+                    i += 2;
+                    continue;
+                }
+                let name = &t[i + 1..i + 1 + n];
+                i += 1 + n;
+                if (name == b"begin" || name == b"end") && t.get(i) == Some(&b'{') {
+                    let close = find_from(t, b"}", i).unwrap_or(e).min(e);
+                    let env = String::from_utf8_lossy(&t[i + 1..close]).trim_end_matches('*').to_string();
+                    if INCR_SKIP_ENVS.contains(&env.as_str()) {
+                        skip = if name == b"begin" { skip + 1 } else { skip.saturating_sub(1) };
+                    }
+                    i = close + 1;
+                }
+                continue;
+            }
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            b'[' => bracket += 1,
+            b']' => bracket = bracket.saturating_sub(1),
+            b'$' => {
+                math = !math;
+                if t.get(i + 1) == Some(&b'$') {
+                    i += 1;
+                }
+            }
+            b'\n' => {
+                bracket = 0;
+                if t.get(i + 1) == Some(&b'\n') && i + 2 <= e {
+                    let ok = depth == 0 && !math && skip == 0;
+                    let p = i + 2;
+                    if ok {
+                        if let Some(b) = last_break {
+                            let para = &t[b..p];
+                            if para.iter().any(u8::is_ascii_alphabetic) && !INCR_KEEP.iter().any(|k| para.windows(k.len()).any(|w| w == k.as_bytes())) {
+                                sp.paras.push((b, p));
+                            }
+                        }
+                        sp.breaks.push(p);
+                    }
+                    last_break = ok.then_some(p);
+                }
+            }
+            c if c.is_ascii_alphabetic() => {
+                let n = t[i..e].iter().take_while(|c| c.is_ascii_alphabetic()).count();
+                if n >= 3 && depth == 0 && bracket == 0 && !math && skip == 0 {
+                    sp.words.push((i, i + n));
+                }
+                i += n;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    sp
+}
+
+/// The document's files as the edits change them: the main file first, then the files its
+/// body reads by `\input{..}` or `\include{..}` that are found beside it.
+struct IncrTree {
+    names: Vec<String>,
+    texts: Vec<Vec<u8>>,
+    /// The first compile ran natively: a label edit then refers back to its label from a
+    /// later page (a `\pageref` to a page not yet shipped sends the native job to the engine).
+    native: bool,
+}
+
+impl IncrTree {
+    fn load(dir: &Path, main: &str) -> Result<IncrTree, String> {
+        let text = std::fs::read(dir.join(main)).map_err(|e| format!("{main}: {e}"))?;
+        let mut tree = IncrTree { names: vec![main.to_string()], texts: vec![text], native: false };
+        let (s, e) = body_of(&tree.texts[0], true);
+        let body = tree.texts[0][s..e].to_vec();
+        for pat in [&b"\\input{"[..], b"\\include{"] {
+            let mut at = 0;
+            while let Some(p) = find_from(&body, pat, at) {
+                at = p + pat.len();
+                let Some(close) = find_from(&body, b"}", at) else { break };
+                let name = String::from_utf8_lossy(&body[at..close]).trim().to_string();
+                let file = if name.ends_with(".tex") { name } else { format!("{name}.tex") };
+                if !tree.names.contains(&file) {
+                    if let Ok(t) = std::fs::read(dir.join(&file)) {
+                        tree.names.push(file);
+                        tree.texts.push(t);
+                    }
+                }
+            }
+        }
+        Ok(tree)
+    }
+}
+
+/// The line of byte `at`, from 1.
+fn line_at(t: &[u8], at: usize) -> usize {
+    1 + t[..at.min(t.len())].iter().filter(|&&c| c == b'\n').count()
+}
+
+/// A paragraph of `sentences` sentences of [`INCR_WORDS`], then a blank line.
+fn incr_paragraph(rng: &mut Rng, sentences: usize) -> Vec<u8> {
+    let mut p = String::new();
+    for _ in 0..sentences {
+        let n = 6 + rng.below(9);
+        let words: Vec<&str> = (0..n).map(|_| rng.word()).collect();
+        let s = words.join(" ");
+        let _ = write!(p, "{}{}. ", s[..1].to_ascii_uppercase(), &s[1..]);
+    }
+    let mut v = p.trim_end().as_bytes().to_vec();
+    v.extend_from_slice(b"\n\n");
+    v
+}
+
+/// The kinds of edit, each with its weight in the draw.
+const INCR_KINDS: [(&str, usize); 13] = [("insert word", 10), ("delete word", 8), ("replace word", 10), ("add paragraph", 8), ("remove paragraph", 6), ("section title", 7), ("input file", 10), ("several spots", 10), ("page", 8), ("title", 4), ("label", 8), ("undo", 6), ("save unchanged", 3)];
+
+/// The edits a save in several spots, or in an `\input` file, is made of.
+const INCR_SMALL: [&str; 4] = ["insert word", "delete word", "replace word", "add paragraph"];
+
+/// One edit of kind `kind` in file `f`: what it did, or `None` when the file has no place
+/// for it.
+fn incr_edit(tree: &mut IncrTree, f: usize, kind: &str, rng: &mut Rng) -> Option<String> {
+    let native = tree.native;
+    let t = &mut tree.texts[f];
+    let name = &tree.names[f];
+    let range = body_of(t, f == 0);
+    let sp = spots(t, range);
+    fn pick<T: Copy>(v: &[T], rng: &mut Rng) -> Option<T> {
+        (!v.is_empty()).then(|| v[rng.below(v.len())])
+    }
+    match kind {
+        "insert word" => {
+            let (_, e) = pick(&sp.words, rng)?;
+            let w = rng.word();
+            t.splice(e..e, format!(" {w}").bytes());
+            Some(format!("insert word '{w}' at {name}:{}", line_at(t, e)))
+        }
+        "delete word" => {
+            let (s, mut e) = pick(&sp.words, rng)?;
+            let w = latin1(&t[s..e]);
+            if t.get(e) == Some(&b' ') {
+                e += 1;
+            }
+            t.drain(s..e);
+            Some(format!("delete word '{w}' at {name}:{}", line_at(t, s)))
+        }
+        "replace word" => {
+            let (s, e) = pick(&sp.words, rng)?;
+            let old = latin1(&t[s..e]);
+            let w = rng.word();
+            t.splice(s..e, w.bytes());
+            Some(format!("replace '{old}' by '{w}' at {name}:{}", line_at(t, s)))
+        }
+        "add paragraph" => {
+            let p = pick(&sp.breaks, rng)?;
+            let n = 2 + rng.below(5);
+            t.splice(p..p, incr_paragraph(rng, n));
+            Some(format!("add a paragraph of {n} sentences at {name}:{}", line_at(t, p)))
+        }
+        "remove paragraph" => {
+            let (s, e) = pick(&sp.paras, rng)?;
+            let (at, lines) = (line_at(t, s), line_at(t, e) - line_at(t, s));
+            t.drain(s..e);
+            Some(format!("remove the paragraph of {lines} lines at {name}:{at}"))
+        }
+        "section title" | "title" => {
+            let heads: &[&str] = if kind == "title" { &["\\title{", "\\author{", "\\date{"] } else { &["\\section{", "\\section*{", "\\subsection{", "\\subsection*{", "\\subsubsection{", "\\chapter{", "\\chapter*{", "\\paragraph{"] };
+            let (from, to) = if kind == "title" { (0, t.len()) } else { range };
+            let mut at = Vec::new();
+            for h in heads {
+                let mut i = from;
+                while let Some(p) = find_from(&t[..to], h.as_bytes(), i) {
+                    at.push(p + h.len());
+                    i = p + h.len();
+                }
+            }
+            at.sort_unstable();
+            let p = pick(&at, rng)?;
+            // A word this test put in is taken out again half of the time.
+            if let Some(w) = INCR_WORDS.iter().find(|w| t[p..].starts_with(format!("{w} ").as_bytes())).filter(|_| rng.below(2) == 0) {
+                t.drain(p..p + w.len() + 1);
+                return Some(format!("take '{w}' out of the heading at {name}:{}", line_at(t, p)));
+            }
+            let w = rng.word();
+            t.splice(p..p, format!("{w} ").bytes());
+            Some(format!("put '{w}' into the heading at {name}:{}", line_at(t, p)))
+        }
+        "label" => {
+            // A section with a label and a reference to it (the `.aux` changes: a resumed
+            // run must read the new one), or one this test put in taken out again with its
+            // reference. In a native document the reference is a paragraph of its own some
+            // pages on (a backward reference); else it follows the label (forward to the
+            // label's page, which the engine path resolves from the `.aux`).
+            const HEAD: &[u8] = b"\\section{Labelled ";
+            let added: Vec<usize> = sp.breaks.iter().copied().filter(|&b| t[b..].starts_with(HEAD)).collect();
+            if !added.is_empty() && rng.below(2) == 0 {
+                let p = pick(&added, rng)?;
+                let e = find_from(t, b"\n\n", p)? + 2;
+                let key = find_from(&t[..e], b"\\label{", p).map(|l| t[l + 7..].iter().take_while(|&&c| c != b'}').copied().collect::<Vec<u8>>());
+                t.drain(p..e);
+                if let Some(r) = key.and_then(|k| find_from(t, &[&b"See Section~\\ref{"[..], &k, b"}"].concat(), 0)) {
+                    let e = find_from(t, b"\n\n", r).map_or(t.len(), |e| e + 2);
+                    t.drain(r..e);
+                }
+                return Some(format!("remove a labelled section at {name}:{}", line_at(t, p)));
+            }
+            let p = pick(&sp.breaks, rng)?;
+            let (w, k) = (rng.word(), rng.below(1_000_000));
+            let refer = format!("See Section~\\ref{{incr-{k}}} on page~\\pageref{{incr-{k}}}.\n\n");
+            // About three pages of source past the label, so its page has shipped.
+            let later = sp.breaks.iter().copied().find(|&b| b >= p + 12_000).filter(|_| native);
+            if let Some(q) = later {
+                t.splice(q..q, refer.bytes());
+                t.splice(p..p, format!("\\section{{Labelled {w}}}\\label{{incr-{k}}}\n\n").bytes());
+                return Some(format!("add a labelled section incr-{k} at {name}:{} and a reference back to it", line_at(t, p)));
+            }
+            if native {
+                t.splice(p..p, format!("\\section{{Labelled {w}}}\\label{{incr-{k}}}\nSee Section~\\ref{{incr-{k}}}.\n\n").bytes());
+            } else {
+                t.splice(p..p, format!("\\section{{Labelled {w}}}\\label{{incr-{k}}}\n{refer}").bytes());
+            }
+            Some(format!("add a labelled section incr-{k} at {name}:{}", line_at(t, p)))
+        }
+        "page" => {
+            const MARK: &[u8] = b"\\clearpage\n\n";
+            let marks: Vec<usize> = sp.breaks.iter().copied().filter(|&b| t[b..].starts_with(MARK)).collect();
+            if !marks.is_empty() && rng.below(2) == 0 {
+                let p = pick(&marks, rng)?;
+                t.drain(p..p + MARK.len());
+                return Some(format!("remove a \\clearpage at {name}:{}", line_at(t, p)));
+            }
+            let p = pick(&sp.breaks, rng)?;
+            if rng.below(3) == 0 {
+                // A long paragraph: more than half a page.
+                t.splice(p..p, incr_paragraph(rng, 24));
+                return Some(format!("add a long paragraph (24 sentences) at {name}:{}", line_at(t, p)));
+            }
+            t.splice(p..p, MARK.iter().copied());
+            Some(format!("add a \\clearpage at {name}:{}", line_at(t, p)))
+        }
+        _ => None,
+    }
+}
+
+/// The watch session: `rushtex --watch-replay` on the copied folder, a line per save.
+struct ReplaySession {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+}
+
+impl ReplaySession {
+    fn start(rush: &Path, work: &Path, main: &str, log: &Path) -> Result<ReplaySession, String> {
+        let log = std::fs::File::create(log).map_err(|e| format!("{}: {e}", log.display()))?;
+        let mut child = Command::new(rush).arg("--watch-replay").arg(main).args(["-o", INCR_WATCH_PDF]).current_dir(work).envs(FIXED_DATE).env("RT_NATIVE_WHY", "1").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(log).spawn().map_err(|e| format!("{}: {e}", rush.display()))?;
+        let stdin = child.stdin.take().ok_or("no stdin")?;
+        let stdout = std::io::BufReader::new(child.stdout.take().ok_or("no stdout")?);
+        Ok(ReplaySession { child, stdin, stdout })
+    }
+    /// One save, compiled by the session.
+    fn save(&mut self) -> Result<(), String> {
+        use std::io::{BufRead as _, Write as _};
+        writeln!(self.stdin, "save").and_then(|()| self.stdin.flush()).map_err(|e| format!("the watch session ended: {e}"))?;
+        let mut line = String::new();
+        self.stdout.read_line(&mut line).map_err(|e| e.to_string())?;
+        if line.trim() != "compiled" {
+            return Err("the watch session ended (see its log)".into());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ReplaySession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+const INCR_WATCH_PDF: &str = "incr-watch.pdf";
+const INCR_FRESH_PDF: &str = "incr-fresh.pdf";
+
+/// The files of `tree` written to `dir`: those that differ from `old`, or all.
+fn write_tree(dir: &Path, tree: &IncrTree, old: Option<&[Vec<u8>]>) {
+    for (i, (n, t)) in tree.names.iter().zip(&tree.texts).enumerate() {
+        if old.is_none_or(|o| o[i] != *t) {
+            let _ = std::fs::write(dir.join(n), t);
+        }
+    }
+}
+
+/// A fresh one-shot compile of `main` in `work`: its PDF, or `None` when it wrote none.
+fn incr_fresh(rush: &Path, work: &Path, main: &str) -> Option<Vec<u8>> {
+    let _ = std::fs::remove_file(work.join(INCR_FRESH_PDF));
+    let _ = Command::new(rush).arg(main).args(["-o", INCR_FRESH_PDF]).current_dir(work).envs(FIXED_DATE).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    std::fs::read(work.join(INCR_FRESH_PDF)).ok()
+}
+
+fn cmd_incr(o: &Opts) {
+    let rush = std::env::var_os("RUSHTEX_BIN").map_or_else(rushtex, PathBuf::from);
+    if o.build {
+        build().unwrap_or_else(|e| die(&e));
+    }
+    if o.docs.is_empty() {
+        die("usage: parity-testing incr DOC.. [--edits N] [--seed S] [-v]");
+    }
+    let edits: usize = o.get("edits").map_or(20, |v| v.parse().unwrap_or_else(|_| die("--edits N")));
+    let seed: u64 = o.get("seed").map_or(1, |v| v.parse().unwrap_or_else(|_| die("--seed S")));
+    let mut failed = 0;
+    for d in &o.docs {
+        let tex = source(d).unwrap_or_else(|e| die(&e));
+        match incr_doc(&rush, &tex, edits, seed, o.has("v")) {
+            Ok(line) => println!("{line}"),
+            Err(report) => {
+                println!("{report}");
+                failed += 1;
+            }
+        }
+    }
+    if failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+/// One document through `edits` saves: a line saying all were identical, or the report of
+/// the first that was not.
+fn incr_doc(rush: &Path, tex: &Path, edits: usize, seed: u64, verbose: bool) -> Result<String, String> {
+    // The compiles run in the copied folder.
+    let rush = &std::fs::canonicalize(rush).unwrap_or_else(|_| rush.to_path_buf());
+    let main = tex.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let dir = tex.parent().unwrap_or(Path::new("."));
+    // A template's file is `main.tex`: its folder names it.
+    let name = if main == "main.tex" { dir.file_name().map_or_else(|| stem(tex), |d| d.to_string_lossy().into_owned()) } else { stem(tex) };
+    let base = out_dir().join("incr");
+    let work = base.join(&name);
+    if base.starts_with(dir) {
+        return Err(format!("FAIL {name}: its folder {} holds the test's own folder; give a document in a folder of its own", dir.display()));
+    }
+    let _ = std::fs::remove_dir_all(&work);
+    copy_tree(dir, &work).map_err(|e| format!("FAIL {name}: copying {}: {e}", dir.display()))?;
+    let mut tree = IncrTree::load(&work, &main)?;
+    let log = base.join(format!("{name}.log"));
+    // A binary just linked takes a few hundred ms more on its first start (the system checks
+    // it): one compile first, so the session's first save is not charged for it.
+    let _ = incr_fresh(rush, &work, &main);
+    let mut session = ReplaySession::start(rush, &work, &main, &log)?;
+    let mut rng = Rng(seed ^ 0x5eed_0000_0000_0000);
+    let mut history: Vec<Vec<Vec<u8>>> = Vec::new();
+    // Wall time of the saves after the first compile, and of the first compile.
+    let (mut watch_s, mut fresh_s) = (0f64, 0f64);
+    let (mut first_w, mut first_f) = (0f64, 0f64);
+    let total: usize = INCR_KINDS.iter().map(|k| k.1).sum();
+    for step in 0..=edits {
+        let before = tree.texts.clone();
+        // Save 0 is the first compile; each later one follows an edit.
+        let mut what = None;
+        for _ in 0..32 {
+            if step == 0 {
+                what = Some("the first compile".to_string());
+                break;
+            }
+            let mut r = rng.below(total);
+            let kind = INCR_KINDS.iter().find(|k| r < k.1 || { r -= k.1; false }).map_or("insert word", |k| k.0);
+            what = match kind {
+                "undo" if history.len() > 1 => {
+                    let back = 1 + rng.below(3.min(history.len() - 1));
+                    tree.texts = history[history.len() - 1 - back].clone();
+                    Some(format!("undo the last {back} saves"))
+                }
+                "save unchanged" => Some("save with nothing changed".to_string()),
+                "input file" if tree.names.len() > 1 => {
+                    let f = 1 + rng.below(tree.names.len() - 1);
+                    let k = INCR_SMALL[rng.below(INCR_SMALL.len())];
+                    incr_edit(&mut tree, f, k, &mut rng)
+                }
+                "several spots" => {
+                    let n = 2 + rng.below(3);
+                    let done: Vec<String> = (0..n)
+                        .filter_map(|_| {
+                            let f = rng.below(tree.names.len());
+                            let k = INCR_SMALL[rng.below(INCR_SMALL.len())];
+                            incr_edit(&mut tree, f, k, &mut rng)
+                        })
+                        .collect();
+                    (!done.is_empty()).then(|| format!("{} spot{} in one save: {}", done.len(), if done.len() == 1 { "" } else { "s" }, done.join("; ")))
+                }
+                "undo" | "input file" => None,
+                k => incr_edit(&mut tree, 0, k, &mut rng),
+            };
+            if what.is_some() {
+                break;
+            }
+        }
+        let what = what.unwrap_or_else(|| "save with nothing changed".to_string());
+        write_tree(&work, &tree, Some(&before));
+        if what.starts_with("save with nothing") {
+            let _ = std::fs::write(work.join(&main), &tree.texts[0]);
+        }
+        let _ = std::fs::remove_file(work.join(INCR_WATCH_PDF));
+        let t0 = std::time::Instant::now();
+        session.save().map_err(|e| format!("FAIL {name}: save {step}: {e} ({})", log.display()))?;
+        watch_s += t0.elapsed().as_secs_f64();
+        if step == 0 {
+            tree.native = std::fs::read_to_string(&log).is_ok_and(|l| l.contains("native job accepted"));
+        }
+        let watch = std::fs::read(work.join(INCR_WATCH_PDF)).ok();
+        let t1 = std::time::Instant::now();
+        let fresh = incr_fresh(rush, &work, &main);
+        fresh_s += t1.elapsed().as_secs_f64();
+        if step == 0 {
+            (first_w, first_f, watch_s, fresh_s) = (watch_s, fresh_s, 0.0, 0.0);
+        }
+        if verbose {
+            println!("  {name} save {step}: {what}: {}", if watch == fresh { "identical" } else { "DIFFERS" });
+        }
+        if watch != fresh {
+            drop(session);
+            return Err(incr_report(rush, &work, &main, &tree, &before, step, edits, seed, &what));
+        }
+        history.push(tree.texts.clone());
+    }
+    drop(session);
+    let pages = Pdf::open(&work.join(INCR_FRESH_PDF)).map_or(0, |p| p.pages.len());
+    let saves = edits.max(1) as f64;
+    // Which path each save ran (`RT_NATIVE_WHY=1` in the session's log).
+    let native = std::fs::read_to_string(&log).map_or(0, |l| l.matches("native job accepted").count());
+    Ok(format!("PASS {name}: {edits} edits, every save identical to a fresh compile (seed {seed}; {native} of {} saves native, {pages} pages at the end; first compile {:.0} ms in the session, {:.0} ms fresh; then {:.0} ms a save, {:.0} ms fresh)", edits + 1, 1e3 * first_w, 1e3 * first_f, 1e3 * watch_s / saves, 1e3 * fresh_s / saves))
+}
+
+/// The report of the first save whose PDF differs: the edit, the source lines it changed,
+/// where the PDFs first differ, and whether two saves in a new session (the files before the
+/// edit, then after) reproduce it. The PDFs and both sources are kept in
+/// `target/parity/incr/<name>-fail/`.
+#[allow(clippy::too_many_arguments)]
+fn incr_report(rush: &Path, work: &Path, main: &str, tree: &IncrTree, before: &[Vec<u8>], step: usize, edits: usize, seed: u64, what: &str) -> String {
+    let name = work.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let mut r = format!("FAIL {name}: save {step} of {edits} (seed {seed}) differs from a fresh compile\n  edit: {what}\n");
+    // The changed lines, the common lines before and after left out.
+    for (i, n) in tree.names.iter().enumerate() {
+        let (a, b) = (&before[i], &tree.texts[i]);
+        if a == b {
+            continue;
+        }
+        for (line, gone, new) in line_hunks(a, b).into_iter().take(4) {
+            let _ = writeln!(r, "  {n}, line {line}:");
+            for (sign, ls) in [('-', gone), ('+', new)] {
+                for l in ls.iter().take(4) {
+                    let _ = writeln!(r, "    {sign} {}", latin1(l).chars().take(150).collect::<String>());
+                }
+                if ls.len() > 4 {
+                    let _ = writeln!(r, "    {sign} ({} more lines)", ls.len() - 4);
+                }
+            }
+        }
+    }
+    let _ = writeln!(r, "  PDF: {}", pdf_difference(&work.join(INCR_WATCH_PDF), &work.join(INCR_FRESH_PDF)));
+    let keep = work.with_file_name(format!("{name}-fail"));
+    let _ = std::fs::remove_dir_all(&keep);
+    let _ = std::fs::create_dir_all(keep.join("before"));
+    let _ = std::fs::create_dir_all(keep.join("after"));
+    let _ = std::fs::copy(work.join(INCR_WATCH_PDF), keep.join("watch.pdf"));
+    let _ = std::fs::copy(work.join(INCR_FRESH_PDF), keep.join("fresh.pdf"));
+    for (i, n) in tree.names.iter().enumerate() {
+        let flat = n.replace('/', "_");
+        let _ = std::fs::write(keep.join("before").join(&flat), &before[i]);
+        let _ = std::fs::write(keep.join("after").join(&flat), &tree.texts[i]);
+    }
+    // The shortest history: the files before the edit, then after, in a new session.
+    let short = work.with_file_name(format!("{name}-short"));
+    let _ = std::fs::remove_dir_all(&short);
+    let fresh = std::fs::read(work.join(INCR_FRESH_PDF)).ok();
+    let two = copy_tree(work, &short).ok().and_then(|()| {
+        write_tree(&short, &IncrTree { names: tree.names.clone(), texts: before.to_vec(), native: tree.native }, None);
+        let mut s = ReplaySession::start(rush, &short, main, &short.with_extension("log")).ok()?;
+        s.save().ok()?;
+        write_tree(&short, tree, None);
+        let _ = std::fs::remove_file(short.join(INCR_WATCH_PDF));
+        s.save().ok()?;
+        Some(std::fs::read(short.join(INCR_WATCH_PDF)).ok() != fresh)
+    });
+    let _ = std::fs::remove_dir_all(&short);
+    let _ = writeln!(
+        r,
+        "  {}",
+        match (step, two) {
+            (0, _) => "the first compile already differs: no history is needed".to_string(),
+            (_, Some(true)) => "reproduces with two saves in a new session: the files before the edit, then after".to_string(),
+            (_, Some(false)) => format!("needs the longer history: two saves (before, after) do not reproduce it; rerun with --edits {step} --seed {seed}"),
+            (_, None) => "the two-save session could not run".to_string(),
+        }
+    );
+    let _ = write!(r, "  kept: {} (watch.pdf, fresh.pdf, before/, after/); session log: {}", keep.display(), work.with_file_name(format!("{name}.log")).display());
+    r
+}
+
+/// A changed place: its line, the lines gone and the lines new.
+type Hunk<'a> = (usize, Vec<&'a [u8]>, Vec<&'a [u8]>);
+
+/// The changed lines of `a` into `b`, hunk by hunk: the line (in `b`) where each starts, the
+/// lines gone and the lines new (a longest common subsequence of the lines between the common
+/// first and last lines).
+fn line_hunks<'a>(a: &'a [u8], b: &'a [u8]) -> Vec<Hunk<'a>> {
+    let (la, lb): (Vec<&[u8]>, Vec<&[u8]>) = (a.split(|&c| c == b'\n').collect(), b.split(|&c| c == b'\n').collect());
+    let pre = la.iter().zip(&lb).take_while(|(x, y)| x == y).count();
+    let suf = la[pre..].iter().rev().zip(lb[pre..].iter().rev()).take_while(|(x, y)| x == y).count();
+    let (x, y) = (&la[pre..la.len() - suf], &lb[pre..lb.len() - suf]);
+    // lcs[i][j]: the longest common subsequence of x[i..] and y[j..].
+    let w = y.len() + 1;
+    let mut lcs = vec![0u32; (x.len() + 1) * w];
+    for i in (0..x.len()).rev() {
+        for j in (0..y.len()).rev() {
+            lcs[i * w + j] = if x[i] == y[j] { lcs[(i + 1) * w + j + 1] + 1 } else { lcs[(i + 1) * w + j].max(lcs[i * w + j + 1]) };
+        }
+    }
+    let (mut i, mut j, mut out) = (0, 0, Vec::new());
+    let mut hunk: Option<Hunk> = None;
+    while i < x.len() || j < y.len() {
+        if i < x.len() && j < y.len() && x[i] == y[j] {
+            out.extend(hunk.take());
+            i += 1;
+            j += 1;
+        } else if j < y.len() && (i == x.len() || lcs[i * w + j + 1] >= lcs[(i + 1) * w + j]) {
+            hunk.get_or_insert_with(|| (pre + j + 1, Vec::new(), Vec::new())).2.push(y[j]);
+            j += 1;
+        } else {
+            hunk.get_or_insert_with(|| (pre + j + 1, Vec::new(), Vec::new())).1.push(x[i]);
+            i += 1;
+        }
+    }
+    out.extend(hunk);
+    out
+}
+
+/// Where two PDFs first differ: the page count, then the first object (by number) whose
+/// value or decoded stream differs, with the first differing line of the stream; else the
+/// byte where the files differ.
+fn pdf_difference(a: &Path, b: &Path) -> String {
+    let (pa, pb) = match (Pdf::open(a), Pdf::open(b)) {
+        (Ok(x), Ok(y)) => (x, y),
+        (x, y) => return format!("watch PDF: {}; fresh PDF: {}", x.map_or_else(|e| e, |_| "read".into()), y.map_or_else(|e| e, |_| "read".into())),
+    };
+    let mut r = String::new();
+    if pa.pages.len() != pb.pages.len() {
+        let _ = write!(r, "{} pages in the watch PDF, {} in the fresh one; ", pa.pages.len(), pb.pages.len());
+    }
+    let mut ids: Vec<u32> = pa.xref.keys().chain(pb.xref.keys()).copied().collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let dict = |o: &Obj| match o {
+        Obj::Stream(d, _) => Obj::Dict(d.clone()),
+        o => o.clone(),
+    };
+    for id in ids {
+        let (oa, ob) = (pa.get(id), pb.get(id));
+        let (sa, sb) = (pa.stream_bytes(&oa), pb.stream_bytes(&ob));
+        if dict(&oa) == dict(&ob) && sa == sb {
+            continue;
+        }
+        let page = pa.pages.iter().position(|&p| match pa.get(p).get("Contents") {
+            Some(Obj::Ref(n, _)) => *n == id,
+            Some(Obj::Arr(a)) => a.iter().any(|x| matches!(x, Obj::Ref(n, _) if *n == id)),
+            _ => false,
+        });
+        let kind = match (page, pa.key(&dict(&oa), "Type").name()) {
+            (Some(p), _) => format!("the content stream of page {}", p + 1),
+            (None, Some(t)) => format!("/{}", latin1(t)),
+            _ if matches!(*oa, Obj::Stream(..)) => "a stream".into(),
+            _ => "an object".into(),
+        };
+        let _ = write!(r, "object {id} ({kind}) differs first");
+        if sa != sb {
+            let at = sa.iter().zip(&sb).position(|(x, y)| x != y).unwrap_or(sa.len().min(sb.len()));
+            // The line holding it, cut to 60 bytes before and 100 after.
+            let line = |s: &[u8]| {
+                let k = at.min(s.len());
+                let from = s[..k].iter().rposition(|&c| c == b'\n').map_or(0, |p| p + 1).max(k.saturating_sub(60));
+                let to = s[k..].iter().position(|&c| c == b'\n').map_or(s.len(), |p| k + p).min(k + 100);
+                latin1(&s[from..to])
+            };
+            let _ = write!(r, ", at byte {at} of its stream:\n    watch: {}\n    fresh: {}", line(&sa), line(&sb));
+        } else {
+            let show = |o: &Obj| format!("{:?}", dict(o)).chars().take(200).collect::<String>();
+            let _ = write!(r, ":\n    watch: {}\n    fresh: {}", show(&oa), show(&ob));
+        }
+        return r;
+    }
+    let (da, db) = (&pa.data, &pb.data);
+    let at = da.iter().zip(db).position(|(x, y)| x != y).unwrap_or(da.len().min(db.len()));
+    let _ = write!(r, "every object equal; the files first differ at byte {at} (layout, cross-reference table or compression)");
+    r
 }

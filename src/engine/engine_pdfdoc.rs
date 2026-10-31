@@ -36,7 +36,7 @@ const FITBV: u8 = 6;
 const FITR: u8 = 7;
 
 /// What a `goto` or `thread` action points at.
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 enum Target {
     Page(i32, String),
     Name(String),
@@ -44,14 +44,14 @@ enum Target {
 }
 
 /// `scan_action`'s result.
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 enum Action {
     User(String),
     Go { thread: bool, file: Option<String>, new_window: u8, target: Target },
 }
 
 /// A `\pdfstartlink`'s box dimensions (`None` running), attributes, action and object.
-#[derive(Debug)]
+#[derive(PartialEq, Clone, Debug)]
 struct Link {
     dims: [Option<i32>; 3],
     attr: String,
@@ -66,7 +66,7 @@ enum DestId {
     Num(i32),
 }
 
-#[derive(Debug)]
+#[derive(PartialEq, Clone, Debug)]
 struct Dest {
     id: DestId,
     view: u8,
@@ -76,7 +76,7 @@ struct Dest {
 
 /// `\pdfobj`: its text, stream attributes when it is a stream, whether the text names a
 /// file, and whether it is to be written.
-#[derive(Debug)]
+#[derive(PartialEq, Clone, Debug)]
 struct RawObj {
     obj: i32,
     data: String,
@@ -86,7 +86,7 @@ struct RawObj {
 }
 
 /// `\pdfoutline`, linked as pdfTeX links it (indices into `outlines`, `usize::MAX` none).
-#[derive(Debug)]
+#[derive(PartialEq, Clone, Debug)]
 struct Outline {
     obj: i32,
     title: String,
@@ -106,7 +106,7 @@ const NONE: usize = usize::MAX;
 pub type Objects = Vec<(i32, Vec<u8>)>;
 
 /// The document-level state of pdfTeX's extensions.
-#[derive(Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct PdfDoc {
     /// `\pdfinfo` and `\pdfcatalog` text, in the order given.
     pub info: String,
@@ -436,10 +436,11 @@ impl PdfDoc {
     /// raw objects, destinations referred to but never placed (`pdf_fix_dest`), the outline
     /// tree and the name tree, numbered from `self.objects + 1`; with the catalog's extra
     /// entries and the next free object number.
-    pub fn finish(&self, first_page: i32, read: &dyn Fn(&str) -> Option<Vec<u8>>, hicolor: bool) -> (Objects, Vec<u8>, i32) {
+    /// `cache`: a `--watch` session's, for the images (`write_images`).
+    pub fn finish(&self, first_page: i32, read: &dyn Fn(&str) -> Option<Vec<u8>>, hicolor: bool, cache: Option<&crate::backend::backend_cache::PdfCache>) -> (Objects, Vec<u8>, i32) {
         let mut objs: Vec<(i32, Vec<u8>)> = self.done.clone();
         let mut next = self.objects + 1;
-        self.write_images(read, hicolor, &mut objs, &mut next);
+        self.write_images(read, hicolor, &mut objs, &mut next, cache);
         for r in self.raw.iter().filter(|r| r.wanted) {
             let data = if r.file { read(&r.data).unwrap_or_default() } else { r.data.chars().map(|c| c as u32 as u8).collect() };
             let mut out = Vec::new();

@@ -30,7 +30,6 @@ pub static LIT_LEN_BITS: [u8; 288] = generate_lit_len_bits();
 
 /// Precomputed compile-time Fixed Huffman codes and bit-lengths for Distances (0..=31).
 pub static DIST_CODES: [u8; 32] = generate_dist_codes();
-pub static DIST_BITS: [u8; 32] = [5u8; 32];
 
 const fn bit_reverse_8(mut byte_value: u8) -> u8 {
     byte_value = (byte_value & 0xF0) >> 4 | (byte_value & 0x0F) << 4;

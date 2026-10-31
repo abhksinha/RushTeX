@@ -41,7 +41,7 @@ fn slot(h: u64, pilot: u16, slots: u32) -> u32 {
     range((mix64(h, pilot as u64) >> 16) as u32, slots)
 }
 
-#[derive(Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 pub struct Phf<'a> {
     seed: u64,
     buckets: u32,

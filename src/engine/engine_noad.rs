@@ -353,6 +353,15 @@ impl Machine<'_, '_> {
                 Meaning::Prim(Prim::MathChar) => break self.scan_fifteen_bit(),
                 Meaning::MathCharDef(n) => break n,
                 Meaning::Prim(Prim::Delimiter) => break self.scan_twenty_seven_bit() / 0o10000,
+                // A math alphabet (`x_\mathrm{a}`): `\use@mathgroup`'s `\relax` is passed over and
+                // its `\math@bgroup` (`\bgroup`) opens this field's group.
+                m if self.math_alphabet_index(m).is_some() => {
+                    self.math_saved.push(slot);
+                    self.push_math(MATH_GROUP, false);
+                    let k = self.math_alphabet_index(m).unwrap_or(0);
+                    self.math_alphabet(k, true);
+                    return;
+                }
                 _ => {
                     // §1153
                     self.input.back(x.t);
@@ -612,6 +621,32 @@ impl Machine<'_, '_> {
         let i = self.append_noad(Noad { sub, ..Noad::new(kind) });
         self.math_saved.push(i * 4);
         self.push_math(MATH_GROUP, false);
+    }
+
+    /// `{` in a formula (§1153) for a builder that closes it itself with
+    /// [`Self::end_math_group`]: an ordinary noad whose nucleus is the group. No brace token
+    /// stands for it, so `align_state` stays.
+    pub(super) fn open_ord_group(&mut self) {
+        let i = self.append_noad(Noad::new(ORD));
+        self.math_saved.push(i * 4);
+        self.push_math(MATH_GROUP, false);
+    }
+
+    /// `^{` (§1176, §1153) for a builder that closes it with [`Self::end_math_group`]: the
+    /// superscript of the noad at the list's end, or of a new ordinary noad when there is
+    /// none or its superscript is taken.
+    pub(super) fn open_sup_group(&mut self) {
+        let slot = match self.tail_noad().filter(|&q| self.noads[q].kind < LEFT && self.noads[q].supscr == Field::Empty) {
+            Some(q) => q as u32 * 4 + 1,
+            None => self.append_noad(Noad::new(ORD)) * 4 + 1,
+        };
+        self.math_saved.push(slot);
+        self.push_math(MATH_GROUP, false);
+    }
+
+    /// `\fam`.
+    pub(super) fn cur_fam(&self) -> i32 {
+        self.int_slot(CUR_FAM)
     }
 
     /// `\mathaccent c{` (§1165): the accent noad, its nucleus a formula group opened here

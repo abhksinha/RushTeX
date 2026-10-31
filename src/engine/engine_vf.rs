@@ -40,6 +40,7 @@ const MAX_RECURSION: u8 = 10;
 
 /// One virtual font: its local fonts (the VF's number and the engine font; the first is the
 /// default) and each character's packet, a range of `code`.
+#[derive(PartialEq, Clone)]
 pub struct Vf {
     locals: Vec<(u32, u16)>,
     /// Shared with the font's expanded copies (pdftex.web `auto_expand_vf`).
@@ -48,13 +49,26 @@ pub struct Vf {
     /// Per character, made on first use: the local font and code of a packet that only
     /// selects a font and sets one character (`(font << 8) | code`), else `NOT_DIRECT`.
     direct: std::cell::OnceCell<Box<[u32; 256]>>,
+    /// A hash of the local fonts and packets (a session's shipped-page key, `engine_ship`).
+    pub digest: u128,
+}
+
+/// [`Vf::digest`].
+fn vf_digest(locals: &[(u32, u16)], packets: &[(u32, u32)], code: &[u8]) -> u128 {
+    let mut h = crate::backend::backend_hash::ContentHasher::new();
+    h.u64(locals.len() as u64);
+    locals.iter().for_each(|&(a, f)| h.u64(((a as u64) << 16) | f as u64));
+    h.u64(packets.len() as u64);
+    packets.iter().for_each(|&(a, n)| h.u64(((a as u64) << 32) | n as u64));
+    h.bytes(code);
+    h.finish()
 }
 
 /// A character whose packet does more than set one character of a local font.
 const NOT_DIRECT: u32 = u32::MAX;
 
 /// Which fonts are virtual: per font, 0 not yet checked, 1 real, `n + 2` virtual font `n`.
-#[derive(Default)]
+#[derive(PartialEq, Clone, Default)]
 pub struct VfTable {
     state: Vec<u32>,
     vfs: Vec<Vf>,
@@ -344,7 +358,8 @@ impl Machine<'_, '_> {
             }
             at += len;
         }
-        self.vf.vfs.push(Vf { locals, packets: packets.into(), code: code.into(), direct: Default::default() });
+        let digest = vf_digest(&locals, &packets, &code);
+        self.vf.vfs.push(Vf { locals, packets: packets.into(), code: code.into(), direct: Default::default(), digest });
         let n = self.vf.vfs.len() as u32 + 1;
         self.vf.set(f, n);
     }
@@ -367,7 +382,8 @@ impl Machine<'_, '_> {
                 todo.push(l.1);
             }
         }
-        self.vf.vfs.push(Vf { locals, packets, code, direct: Default::default() });
+        let digest = vf_digest(&locals, &packets, &code);
+        self.vf.vfs.push(Vf { locals, packets, code, direct: Default::default(), digest });
         let n = self.vf.vfs.len() as u32 + 1;
         self.vf.set(f, n);
         true

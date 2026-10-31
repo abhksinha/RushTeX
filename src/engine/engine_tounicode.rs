@@ -8,7 +8,7 @@ use super::engine_run::Machine;
 #[cfg(feature = "oracle")]
 use super::engine_snapshot::{Reader, Writer};
 
-#[derive(Default)]
+#[derive(PartialEq, Default, Clone)]
 pub struct GlyphUnicode {
     pairs: Vec<(Box<str>, Box<str>)>,
     /// The format's table carried in the binary (`data_glyphs`), under `pairs`: the native
@@ -81,6 +81,17 @@ impl GlyphUnicode {
     /// The format's table from the binary, for a job that loads no format.
     pub fn carry(&mut self) {
         self.carried = crate::data::data_glyphs::carried();
+    }
+
+    /// Everything a ToUnicode map is made from, into `h`: the defined pairs and whether the
+    /// carried table is under them (a session's font cache key, `backend_cache`).
+    pub fn digest(&self, h: &mut crate::backend::backend_hash::ContentHasher) {
+        h.u64(1 + self.carried.is_some() as u64);
+        h.u64(self.pairs.len() as u64);
+        for (n, x) in &self.pairs {
+            h.bytes(n.as_bytes());
+            h.bytes(x.as_bytes());
+        }
     }
 
     /// The pairs the format defined, sorted by name (for `rushtex-gen glyphs`).

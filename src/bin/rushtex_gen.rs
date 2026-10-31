@@ -1136,6 +1136,13 @@ const SAME_EFFECT: [(&str, &str, &str); 6] = [
     ("amstext", "GenericWarning", "messages only"),
 ];
 
+/// Packages whose code reads another package's without loading it, with that package: pgfsys
+/// (pgfutil-latex.def's `\pgfutil@guessdriver` reads graphics' `\Gin@driver`; pgfcore.sty
+/// loads graphicx first) and pgfcomp-version-0-65 (pgfcore's `\pgfdefobject`; pgf.sty loads
+/// pgfcore first).
+#[cfg(feature = "oracle")]
+const LOAD_AFTER: [(&str, &str); 2] = [("pgfsys", "graphicx"), ("pgfcomp-version-0-65", "pgfcore")];
+
 /// `rushtex-gen natpkg NAME… [--out-dir DIR]`: each package's table for the native job
 /// (`DIR/pkg-NAME.rtdb`, the `data_kernel` format plus `pkg`). The package is loaded by LaTeX
 /// on `article` after the packages it loads (the registry's load graph, `pkgs.rtdb`), and
@@ -1244,10 +1251,22 @@ fn natpkg(args: &[String]) -> Result<String, String> {
                 }
             }
         }
+        // A package whose code reads another's without loading it is evaluated after that
+        // one, which always comes first where it is used, and loads after it natively.
+        for &(_, first) in LOAD_AFTER.iter().filter(|q| q.0 == base) {
+            let f = reg.file(&format!("{first}.sty")).ok_or_else(|| format!("{first}.sty is not registered"))?;
+            visit(reg, f, &mut deps);
+            if !deps.iter().any(|x| x == first) {
+                deps.push(first.to_string());
+            }
+            direct.push(first.to_string());
+        }
         visit(reg, id, &mut deps);
         for d in reg.loads(id).iter() {
             if let Some(n) = reg.file_name(d).strip_suffix(".sty") {
-                direct.push(n.to_string());
+                if !direct.iter().any(|x| x == n) {
+                    direct.push(n.to_string());
+                }
             }
         }
         let (before, before_words, before_m, _, before_lets, before_accents) = probe(&deps)?;
@@ -1443,11 +1462,16 @@ fn class(args: &[String]) -> Result<String, String> {
             if key & 7 != 0 {
                 opts = format!(",{}", data_class::PAPERS[(key & 7) as usize]);
             }
-            for (bit, name) in [(8, "landscape"), (16, "twoside"), (32, "draft")] {
+            for (bit, name) in [(8, "landscape"), (16, "twoside"), (32, "draft"), (data_class::TWOCOLUMN, "twocolumn")] {
                 if key & bit != 0 {
                     opts.push(',');
                     opts.push_str(name);
                 }
+            }
+            // book.cls's and memoir.cls's `\ExecuteOptions{...,twoside,...}`: bit 4 off is
+            // `oneside` there.
+            if matches!(cls.as_str(), "book" | "memoir") && key & 16 == 0 {
+                opts.push_str(",oneside");
             }
             let mut g = GenClass::default();
             let mut err = None;
@@ -1507,6 +1531,12 @@ fn class(args: &[String]) -> Result<String, String> {
                         },
                     };
                     let Some(r) = r else {
+                        // letter.cls allocates no float counters, skips or caption skips
+                        // (`\c@figure`, `\floatsep`, `\abovecaptionskip`): region 3, absent.
+                        if cls == "letter" && e.cs.get(name).is_none_or(|id| matches!(e.eqtb.meaning(id), Meaning::Undefined)) {
+                            g.regs.push([3, 0, 0, 0, 0, 0, 0]);
+                            continue;
+                        }
                         err = Some(format!("{name}: not a count, dimen or skip register"));
                         return;
                     };
@@ -1669,7 +1699,7 @@ fn class(args: &[String]) -> Result<String, String> {
                 }
             };
             let regs = if *key == 0 { &g.regs } else { &c.regs };
-            let bad: Vec<&str> = regs.iter().zip(data_class::CLASS_REGS).filter(|(r, _)| read_reg(&n.e.eqtb, r) != [r[2], r[3], r[4], r[5], r[6]]).map(|(_, name)| name).collect();
+            let bad: Vec<&str> = regs.iter().zip(data_class::CLASS_REGS).filter(|(r, _)| r[0] < 3 && read_reg(&n.e.eqtb, r) != [r[2], r[3], r[4], r[5], r[6]]).map(|(_, name)| name).collect();
             if !bad.is_empty() {
                 diffs.push(format!("registers {bad:?}"));
             }
@@ -1835,6 +1865,62 @@ fn microtype(args: &[String]) -> Result<String, String> {
     Ok(format!("wrote {out_path}: {} fonts, {} substitutions listed, {} bytes", fonts.len(), listed.len(), text.len()))
 }
 
+/// `hyph`: the hyphenation of each of `data_hyph::LANGUAGES` (babel's languages other than
+/// language 0, which `class` writes), as the format loads it from `language.dat`: its
+/// `\l@<name>` number, patterns, exceptions and packed trie, one `hyph-<name>.rtdb` each,
+/// checked to read back.
+#[cfg(feature = "oracle")]
+fn hyph(args: &[String]) -> Result<String, String> {
+    use rushtex::engine::engine_prim::Meaning;
+    let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
+    let engine = Engine::new(arg("--format"))?;
+    let read = |name: &str| engine.kpse.read(name);
+    let dir = arg("--out-dir").unwrap_or_else(|| "assets/tables".into());
+    let mut out: Vec<(String, Vec<u8>, String)> = Vec::new();
+    let mut err = None;
+    rushtex::engine::engine_job::run(&|| Some(engine.fmt.clone()), "\\documentclass{article}\\begin{document}\\end{document}", &rushtex::engine::engine_job::Opts { job_name: "rtgen", now: 0, max_runs: 1 }, &read, &mut |_| {}, &mut |m| {
+        let e = &*m.e;
+        for name in rushtex::data::data_hyph::LANGUAGES {
+            let n = match e.cs.get(&format!("l@{name}")).map(|id| e.eqtb.meaning(id)) {
+                Some(Meaning::CharDef(n)) => n as u8,
+                _ => {
+                    err = Some(format!("\\l@{name} is not a \\chardef in the format"));
+                    return;
+                }
+            };
+            let Some(trie) = e.hyph.trie_parts(n) else {
+                err = Some(format!("language {name} ({n}) has no patterns"));
+                return;
+            };
+            let (patterns, ex) = e.hyph.language(n);
+            let mut w = rushtex::data::data_blob::BlobWriter::default();
+            rushtex::data::data_hyph::write(&mut w, patterns, ex.iter().copied(), &trie);
+            w.u32s("lang", &[n as u32]);
+            let bytes = w.finish();
+            let back = rushtex::data::data_blob::Blob::new(&bytes).and_then(|b| rushtex::data::data_hyph::HyphTable::from_blob(&b));
+            match back {
+                Some(t) if t.number == n && t.patterns == patterns && t.exceptions().eq(ex.iter().copied()) && t.trie.as_ref().is_some_and(|s| s.iter().zip(&trie).all(|(s, v)| s.len() == v.len() && (0..v.len()).all(|i| s.get(i) == v[i]))) => {
+                    out.push((format!("{dir}/hyph-{name}.rtdb"), bytes, format!("{name} ({n}): {} pattern bytes, {} exceptions", patterns.len(), ex.len())));
+                }
+                _ => {
+                    err = Some(format!("the {name} table does not read back"));
+                    return;
+                }
+            }
+        }
+    })
+    .ok_or("the format is not one of this build")?;
+    if let Some(x) = err {
+        return Err(x);
+    }
+    let mut notes = Vec::new();
+    for (path, bytes, note) in out {
+        std::fs::write(&path, &bytes).map_err(|x| format!("{path}: {x}"))?;
+        notes.push(format!("{path}: {note}, {} bytes", bytes.len()));
+    }
+    Ok(notes.join("\n"))
+}
+
 /// `glyphs`: the format's `\pdfglyphtounicode` table (`glyphtounicode.tex`) as
 /// `data_glyphs`, for the native job's ToUnicode maps; checked to read back.
 #[cfg(feature = "oracle")]
@@ -1883,8 +1969,10 @@ fn main() -> ExitCode {
         #[cfg(feature = "oracle")]
         Some("glyphs") => glyphs(&args[1..]),
         #[cfg(feature = "oracle")]
+        Some("hyph") => hyph(&args[1..]),
+        #[cfg(feature = "oracle")]
         Some("microtype") => microtype(&args[1..]),
-        _ => Err("usage: rushtex-gen fonts --list FILE --use USE [--out PATH] [--check] | nfss --list FILE [--format FMT] [--out PATH] [--dump] | pkgs --list FILE [--format FMT] [--out PATH] | embed --list FILE [--set PATH] [--out PATH] | class [--format FMT] [--out-dir DIR] [--hyph-out PATH] [--kernel-out PATH] | measure --pkgs FILE --corpus DIR [--format FMT] [--top N] | natpkg NAME.. [--format FMT] [--out-dir DIR] | names [--out PATH] | glyphs [--format FMT] [--out PATH] | microtype [--format FMT] [--out PATH]".into()),
+        _ => Err("usage: rushtex-gen fonts --list FILE --use USE [--out PATH] [--check] | nfss --list FILE [--format FMT] [--out PATH] [--dump] | pkgs --list FILE [--format FMT] [--out PATH] | embed --list FILE [--set PATH] [--out PATH] | class [--format FMT] [--out-dir DIR] [--hyph-out PATH] [--kernel-out PATH] | measure --pkgs FILE --corpus DIR [--format FMT] [--top N] | natpkg NAME.. [--format FMT] [--out-dir DIR] | names [--out PATH] | glyphs [--format FMT] [--out PATH] | hyph [--format FMT] [--out-dir DIR] | microtype [--format FMT] [--out PATH]".into()),
     };
     match result {
         Ok(msg) => {

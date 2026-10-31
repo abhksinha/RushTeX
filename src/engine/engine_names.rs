@@ -45,7 +45,7 @@ pub const fn param_const(name: &str) -> Reg {
 }
 
 /// The registers a document has named, and the next free register of each kind.
-#[derive(Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Names {
     user: HashMap<Box<str>, Reg>,
     /// Next register number per region (`Int`, `Dimen`, `Glue`): LaTeX's `ltalloc`

@@ -25,63 +25,56 @@
 \newpage
 
 \section{Introduction and Architecture Overview}
-The \textbf{rushtex} engine is an ultra-fast, zero-dependency TeX and LaTeX subset compiler written entirely from scratch in pure safe Rust. Designed for modern high-concurrency environments, cloud microservices, and client-side web applications, \texttt{rushtex} replaces legacy macro-expansion machinery with a direct, single-pass vector typesetting pipeline.
+The \textbf{rushtex} engine is a LaTeX-to-PDF compiler written entirely from scratch in pure safe Rust whose output is identical to pdfLaTeX's. It compiles a document on one of two paths: the native job, which typesets every construct as ported Rust in one pass when its pre-scan accepts the whole document, and the TeX engine (\texttt{tex.web} and pdfTeX ported to Rust), run on the LaTeX format as \texttt{pdflatex} runs it, for every document the native job declines.
 
 \subsection{Core Design Principles}
 \begin{itemize}
 \item \textbf{100\% Pure Safe Rust}: Enforced at crate root via \texttt{\#![forbid(unsafe\_code)]}. Zero raw pointer dereferences, zero FFI, zero undefined behavior.
 \item \textbf{Zero Dependencies}: Compiles using exclusively the Rust standard library. No third-party crates, no \texttt{libc}, and no external compression libraries.
 \item \textbf{Hardware-Constrained Efficiency}: Strict cache-conscious data structures engineered to maximize L1, L2, and L3 CPU cache locality.
-\item \textbf{Sub-Millisecond Compilation}: Capable of processing over 65,000 documents per second (under 16 microseconds per typical document).
-\item \textbf{High-Volume Scalability}: Compiles a 100,000-word document across 295 pages in under 20 milliseconds (over 5.3 million words per second).
-\item \textbf{WebAssembly Ready}: Compiles to a lean standalone \texttt{wasm32-unknown-unknown} binary for direct in-browser typesetting.
+\item \textbf{One Pass for Native Documents}: The native job reads the source once and needs no format, no TeX files and no auxiliary-file reruns; cross-references are resolved in memory.
+\item \textbf{Exact Fallback}: A document that uses any command the native job has not ported runs whole on the TeX engine, so no document is typeset approximately.
+\item \textbf{Builds Without the Engine}: Without the default \texttt{oracle} feature the crate builds the native job alone; a document it declines is then reported as needing TeX Live.
 \end{itemize}
 
-\subsection{L1 Cache-Line Alignment (32-Byte AST Nodes)}
-Modern CPU cores spend significant time waiting on DRAM latency. To maintain maximum memory throughput, \texttt{rushtex} optimizes data representation around the 64-byte L1 data cache line. Every variant of the \texttt{Block} and \texttt{Inline} enums is strictly bounded to at most 32 bytes:
+\subsection{L1 Cache-Line Alignment (12-Byte Nodes)}
+Modern CPU cores spend significant time waiting on DRAM latency. To maintain maximum memory throughput, \texttt{rushtex} optimizes data representation around the 64-byte L1 data cache line. A node of a box's list (\texttt{tex.web} \S133--\S161) is 12 bytes, and the meaning of a control sequence is at most 16 bytes:
 
 \begin{lstlisting}[language=Rust, numbers=left]
-// size_of::<Block>() <= 32 bytes
-// size_of::<Inline>() <= 32 bytes
-// Exactly TWO AST nodes fit per 64-byte L1 cache line
-assert!(std::mem::size_of::<Block>() <= 32);
-assert!(std::mem::size_of::<Inline>() <= 32);
+// A node: a kind, a subtype, a font and two words (12 bytes)
+// A control sequence's meaning: at most 16 bytes
+// Four meanings fit per 64-byte L1 cache line
+assert!(std::mem::size_of::<Meaning>() <= 16);
 \end{lstlisting}
 
-Heavier structures (such as table rows, figure metadata, title blocks, and code listings) are heap-boxed behind pointers, ensuring linear traversal of sequential blocks causes zero CPU pipeline stalls.
+What does not fit in a node (a box's dimensions and glue setting, a glue specification, a rule's three dimensions) lives in a side table the node indexes. A finished list is a span of the node arena and never changes, so \verb|\copy| shares a box instead of copying its list.
 
-\subsection{Zero-Copy Borrowed Slices}
-Rather than allocating owned heap strings during tokenization, all AST text nodes borrow directly from the input buffer via lifetime \texttt{\&'a str}. Lexical analysis, grouping, and block construction occur without a single string reallocation.
+\subsection{Direct Lowering Without Tokens}
+The native job's direct compiler turns source bytes into typed operations (text runs, command identifiers with parsed arguments, and math atoms) without building tokens, interning known names or expanding macros. Only what a document defines itself (\verb|\newcommand|, \verb|\def|) runs on TeX's token machine, feeding the same node builders.
 
-\subsection{SIMD Word-Level SWAR Frontend Lexer Acceleration}
-To accelerate syntax analysis and parsing across high-volume documents, \texttt{rushtex} applies pure safe Rust 64-bit SIMD Within A Register (SWAR) techniques to tokenization and text run extraction:
+\subsection{The Pre-Scan: Choosing the Path}
+Before typesetting, \texttt{rushtex} reads the source once to decide which of its two paths compiles the document:
 \begin{itemize}
-\item \textbf{8-Byte Parallel Prose Scanning}: Standard text runs scan 8 bytes simultaneously using 64-bit word operations. A single SWAR check verifies that all 8 bytes fall strictly within printable ASCII ($[32, 122]$) and contain no command prefixes (\texttt{\textbackslash}), math delimiters (\texttt{\$}), group delimiters (\texttt{\{}, \texttt{\}}), comments (\texttt{\%}), or table tabs (\texttt{\&}). Contiguous text is advanced 8 bytes per step without per-character branches, increasing parsing throughput to over 50 million words per second.
-\item \textbf{Dual-Word SWAR Delimiter Search}: Unescaped character scanning in inline math (\texttt{find\_unescaped\_char}) verifies 8-byte blocks against target delimiters and backslashes in parallel using borrow-underflow bitmasks.
-\item \textbf{Branch-Predictor Optimized Paragraph Dispatch}: Paragraph terminators are dispatched using a single-byte command prefix switch table, eliminating 19 sequential string comparisons on every inline command.
-\item \textbf{64-Bit Word Space Skipping}: Contiguous whitespace runs advance 8 spaces at a time via single 64-bit word comparisons (\texttt{chunk == 0x2020202020202020}).
+\item \textbf{Whole-Document Proof}: The pre-scan proves that the document uses only the commands, environments, packages and options the native job implements exactly. One unported construct sends the whole document to the TeX engine.
+\item \textbf{Reported Reason}: With \texttt{RT\_NATIVE\_WHY=1} the compiler prints why the native job declined; for this manual it is the \texttt{listings} package.
+\item \textbf{Blocker List}: \texttt{rushtex document.tex --native-gaps} lists everything in a document the native job does not take yet.
+\item \textbf{No Mixed Pages}: The decision covers the whole document, so no page is part native and part engine.
 \end{itemize}
 
-\subsection{\texttt{ParagraphSoA} and L1 Cache Budgeting}
-To maximize CPU cache residency during paragraph layout and line breaking, \texttt{rushtex} organizes paragraph data into a Structure-of-Arrays (\texttt{ParagraphSoA}):
+\subsection{Paragraphs: \texttt{tex.web}'s Line Breaking}
+Paragraphs are broken and hyphenated on both paths exactly as \texttt{tex.web} computes them:
 \begin{itemize}
-\item \textbf{Dense 4-Byte Width Streaming}: During line breaking, the CPU streams exclusively over contiguous \texttt{widths: Vec<f32>} and \texttt{kinds: Vec<WordKind>}. Exactly 16 word widths and 64 word kinds fit per 64-byte L1 CPU cache line with 100\% cache line utilization.
-\item \textbf{Zero Cache Waste for Slices}: Untouched fields (like \texttt{texts: Vec<\&'a str>} and \texttt{faces: Vec<Face>}) are never loaded into L1 cache during line breaking calculations, eliminating wasted memory traffic.
-\item \textbf{64-Bit SWAR Word Splitting}: Inline text tokenization in \texttt{explode\_inlines\_into\_family} skips 8 contiguous non-space ASCII prose characters simultaneously in 2 instructions using borrow-underflow bitmask arithmetic: \texttt{(chunk.wrapping\_sub(0x2121\_2121\_2121\_2121) \& !chunk \& 0x8080\_8080\_8080\_8080)}. Word boundaries are located instantly with single-cycle trailing zeros count (\texttt{tzcnt}), eliminating per-character branching.
-\item \textbf{Vectorized Line Batch Emission}: Formatted glyph runs in \texttt{flush\_line\_descriptor} are emitted to \texttt{Page::text\_pool} via vectorized slice extensions (\texttt{extend\_from\_slice}), eliminating per-word vector capacity checks. Redundant floating-point horizontal coordinate accumulation is skipped for uniform single-face lines, saving instructions on over 98\% of document lines.
-\item \textbf{8-Way 64-Bit SWAR Metric Lookups}: Word width summation processes 8 ASCII characters per iteration using a single 64-bit mask: \texttt{(chunk \& 0x8080\_8080\_8080\_8080) == 0}. Bit-masked indices (\texttt{\& 0x7F}) eliminate bounds checking on the 256-byte L1-pinned width table, dispatching lookups across 4 independent register accumulators.
-\item \textbf{Direct Contiguous XRef Serialization}: Cross-reference table entries are formatted directly into a pre-sized contiguous memory buffer via chunked mutable slices (\texttt{chunk\_slice.split\_at\_mut(20)}), eliminating vector resizing and per-entry capacity checks.
-\item \textbf{Single-Pass Inline Word Explosion}: The AST is traversed in a single pass directly into \texttt{ParagraphSoA}, eliminating intermediate run arrays and reducing memory bandwidth.
-\item \textbf{Power-of-Two 16-Byte Line Descriptors}: Formatted lines are captured in compact 16-byte \texttt{LineDescriptor} structs (exactly 4 descriptors per 64-byte L1 cache line).
-\item \textbf{Bit-Packed Data Structures}: \texttt{ColSpec} is packed into a 1-byte struct, \texttt{ListOptions} into 32 bytes (saving 43\% memory), and \texttt{ListingOptions} into 24 bytes (saving 40\% memory) with zero padding bytes.
+\item \textbf{Knuth--Plass Line Breaking}: Paragraphs are broken by the algorithm of \texttt{tex.web} \S813--\S890, with the same badness, demerits and passes, so every line ends where pdfLaTeX ends it.
+\item \textbf{Liang Hyphenation}: Hyphenation uses the LaTeX format's English patterns, carried as a generated table (\texttt{assets/tables/hyph-en.rtdb}).
+\item \textbf{Exact Arithmetic}: Widths, glue and penalties are scaled integers (1/65536 pt), as in TeX, never floating point.
 \end{itemize}
 
-\subsection{Single-Pass Mathematical Typesetting and L1 Cache Optimization}
-To maximize throughput during mathematical equation typesetting, \texttt{rushtex} replaces legacy multi-pass recursive dry runs with a single-pass layout architecture:
+\subsection{Mathematical Typesetting: TeX Appendix G}
+Formulas are converted from math lists to boxes by \texttt{tex.web}'s \texttt{mlist\_to\_hlist} (Appendix G of \emph{The TeXbook}), on both paths:
 \begin{itemize}
-\item \textbf{Single-Pass Compound Coordinate Shifting}: Complex mathematical structures---including fractions (\texttt{\textbackslash frac}), radicals (\texttt{\textbackslash sqrt}), subscripts/superscripts, delimiters, large operators with limits (\texttt{\textbackslash sum}, \texttt{\textbackslash int}), and over/underbraces---are laid out in a single sequential forward pass. Children are formatted directly into the output vector, after which relative offsets are adjusted in-place via \texttt{shift\_ops\_range()}. This completely eliminates $O(2^d)$ exponential tree traversals and duplicate layout passes.
-\item \textbf{Stack-Resident SoA Atom Layout}: In horizontal formula rows (\texttt{MathNode::Row}), atom classes, bounding widths, and kerns are organized in a compact Structure-of-Arrays (SoA) layout. The temporary atom buffer is halved to a single 128-byte cache-resident slice, and italic corrections are propagated forward directly in CPU registers without reverse AST scanning.
-\item \textbf{64-Byte Cache-Line Aligned Spacing and Kerning Tables}: Static lookup tables (\texttt{MATH\_SPACING\_TABLE}, \texttt{KernPairLut}, \texttt{AsciiMathFastPath}, and \texttt{ATOM\_SPACING\_LUT}) are explicitly constrained to \texttt{\#[repr(C, align(64))]}. Compile-time static assertions verify alignment and exact size, guaranteeing that every table fits within exactly one or two 64-byte L1 data cache lines with zero cache boundary straddling.
+\item \textbf{Appendix G Rules}: Fractions (\texttt{\textbackslash frac}), radicals (\texttt{\textbackslash sqrt}), subscripts/superscripts, delimiters, large operators with limits (\texttt{\textbackslash sum}, \texttt{\textbackslash int}), and over/underbraces are built by the rules of Appendix G from the math fonts' parameters, as pdfTeX builds them.
+\item \textbf{Two Passes, as in TeX}: The first pass builds each atom's box; the second inserts the spacing and penalties between atoms (\texttt{tex.web} \S760--\S767).
+\item \textbf{Native Math}: In the native job, math atoms come straight from the source and feed the same Appendix G core; no macro expansion runs for the commands it knows.
 \end{itemize}
 
 \subsection{Hardware-Grade DEFLATE Engine and L1 Cache Residency}
@@ -93,47 +86,41 @@ To compress PDF page streams at over 12,000 pages per second on a single CPU cor
 \item \textbf{Unified 32-Bit Packed Huffman Tables}: Literal, length, and distance tables (\texttt{LIT\_TABLE}, \texttt{LENGTH\_TABLE}, \texttt{DIST\_TABLE\_2048}) are packed into contiguous 32-bit quadwords (\texttt{code | (bits << 16)}). Exactly 16 entries fit per 64-byte cache line (10 KB total table state), guaranteeing zero L1 cache evictions.
 \item \textbf{Single-Call 64-Bit Length+Distance Emission}: \texttt{BitWriter::write\_bits} takes 64-bit inputs. Length and distance Huffman codes are merged into a single word (\texttt{len\_bits | (dist\_bits << len\_count)}) and emitted in one call, cutting bitwriter invocation frequency by 50\%.
 \item \textbf{Dual-Literal Batching}: Uncompressible literal sequences are emitted 2 bytes at a time in a single bitwriter transaction.
-\item \textbf{Unified Single-Pass Document Metadata Gathering}: Page font face bitmasks and OpenType math CID glyph identifiers are collected in a single contiguous pass over page display operations, eliminating redundant display list sweeps.
+\item \textbf{Reusable Compressor}: One compressor and its match table serve every stream of the document, so the table is allocated once per job.
 \end{itemize}
 
 \subsection{Modular Subsystem Architecture}
-The codebase is structured into decoupled domain modules enabling multiple developers to work concurrently on distinct aspects of the compilation pipeline:
+The codebase is structured into a few domain modules enabling multiple developers to work concurrently on distinct aspects of the compiler:
 \begin{itemize}
-\item \textbf{Frontend (\texttt{src/frontend/})}: Houses the zero-allocation lexer, recursive descent parser, and 32-byte cache-aligned Abstract Syntax Tree (\texttt{ast.rs}). Focuses strictly on syntax analysis and token interpretation.
-\item \textbf{Layout (\texttt{src/layout/})}: Typesetting core containing paragraph line breaking, pagination, table column balancing (\texttt{engine.rs}), Knuth-Plass breaking with hz-algorithm microtypography (\texttt{hz.rs}), and code listing formatters (\texttt{listing.rs}).
-\item \textbf{Tables (\texttt{src/tables/})}: Dedicated modular subsystem managing table AST models (\texttt{model.rs}), 1-byte bit-packed column specifications (\texttt{spec.rs}), parsers for standard, professional, and streaming environments (\texttt{parser.rs}), and multi-page vector layout with repeated headers (\texttt{layout.rs}).
-\item \textbf{Index (\texttt{src/index/})}: Dedicated modular subsystem managing document structural indexing, including AST pre-scanning of headings, figures, and tables (\texttt{model.rs}), Table of Contents layout with hierarchical indentation and dotted leaders (\texttt{toc.rs}), and List of Figures and Tables (\texttt{lof\_lot.rs}).
-\item \textbf{Backend (\texttt{src/backend/})}: PDF 1.4 serialization (\texttt{pdf.rs}), compile-time Adobe Font Metrics tables (\texttt{fonts/}), and streaming RFC 1951 DEFLATE compression (\texttt{deflate.rs}).
-\item \textbf{Config (\texttt{src/config/})}: Document classes, paper geometry calculation, and preamble package option management.
-\item \textbf{Diagnostic (\texttt{src/diagnostic/})}: Lazy error analysis, ANSI yellow source highlighting, contextual notes, and typo suggestions.
+\item \textbf{Native job (\texttt{src/engine/engine\_doc.rs})}: The pre-scan, the direct compiler and the typed node builders of guarded direct lowering, for the documents whose every construct is ported.
+\item \textbf{TeX engine (\texttt{src/engine/})}: \texttt{tex.web} and pdfTeX ported: the lexer and macro expansion, line breaking (\texttt{engine\_linebreak.rs}), math (\texttt{engine\_mlist.rs}), alignment, the page builder (\texttt{engine\_page.rs}), and the LaTeX format's build and load.
+\item \textbf{Data (\texttt{src/data/})}: The generated tables both paths read (fonts, hyphenation, the kernel's and classes' macros, in \texttt{assets/tables/}), built by \texttt{rushtex-gen}.
+\item \textbf{Backend (\texttt{src/backend/})}: PDF writing (\texttt{backend\_ship.rs}), Type 1 font subsetting (\texttt{backend\_type1.rs}), PNG and PDF images, and streaming RFC 1951 DEFLATE compression (\texttt{backend\_deflate.rs}).
+\item \textbf{Command line (\texttt{src/main.rs})}: The two-path driver: the native job first, the TeX engine when it declines, and \texttt{--watch}.
+\item \textbf{Testing framework (\texttt{testing/})}: \texttt{parity-testing} compares every glyph, rule and pixel with pdfLaTeX's output.
 \end{itemize}
 
-\section{Diagnostic Error Reporting System}
-When a compilation error occurs, \texttt{rushtex} enters a dedicated lazy error-finding mode. It computes 1-based line numbers and character columns in an $O(K)$ single pass, emitting actionable, human-friendly compiler diagnostics:
+\section{Diagnostics: Which Path Ran}
+With \texttt{RT\_NATIVE\_WHY=1}, \texttt{rushtex} reports which path compiled the document and, when the native job declined, why:
 
 \begin{verbatim}
-==========================================
-RUSHTEX - THE ULTRA FAST TEX FILE COMPILER
-==========================================
-[ERROR] Line 7 from character 1: unclosed \begin{enumerate}
- NOTE: reached end of file at line 31 without finding matching '\end{enumerate}'
- HELP: did you forget to add '\end{enumerate}'?
-==========END OF COMPILER LOGS============
+$ RT_NATIVE_WHY=1 rushtex manual.tex
+native job declined: the pre-scan: listings
+engine job: 3 runs
+[COMPILED] Output file is in manual.pdf, 24 pages in 1.187 seconds
 \end{verbatim}
 
 \subsection{Diagnostic Features}
 \begin{itemize}
-\item \textbf{Origin Tracking}: Unclosed blocks point directly to where the environment was opened rather than to EOF whitespace.
-\item \textbf{First-Line Yellow Highlighting}: Offending syntax spans are highlighted directly in the first line in ANSI yellow (\texttt{\textbackslash x1b[43;30m}), eliminating redundant line references and multi-line visual clutter.
-\item \textbf{Contextual Notes and Fix Suggestions}: Notes detail where termination occurred, and help lines provide copy-pasteable solutions.
-\item \textbf{Typo Detection}: Unknown commands execute Levenshtein edit-distance checks against known commands to suggest typos (e.g. \verb|\textbff| suggests \verb|\textbf|).
-\item \textbf{Zero Fast-Path Overhead}: Line and column calculations run only on the failure path; successful compiles incur zero tracking overhead.
+\item \textbf{Decline Reason}: The first construct the native job does not take, as the pre-scan or the running job found it.
+\item \textbf{Blocker List}: \texttt{--native-gaps} lists every such construct of a document at once.
+\item \textbf{No Silent Third Path}: When the native job declines and no TeX Live installation or cache folder is found, the compiler stops with an error naming the decline reason instead of typesetting approximately.
 \end{itemize}
 
 \newpage
 
 \section{List and Enumeration Geometry}
-The \texttt{rushtex} layout engine implements standard LaTeX list geometry with mathematical guarantees against margin overflow and page-break orphan markers.
+List geometry is LaTeX's own: the class sets the list dimensions, \texttt{enumitem} changes them, and both paths compute them as pdfLaTeX does.
 
 \subsection{Mathematical Model of List Geometry}
 A list environment is governed by six horizontal dimensions:
@@ -207,9 +194,9 @@ Supported formats include Arabic with period (\verb|\arabic*|), parenthesized Ar
 The \texttt{description} environment typesets terms and definitions with hanging indentation. Each item specifies a term via \verb|\item[Term]|:
 
 \begin{description}
-\item[Parser] Zero-allocation lexical analyzer and recursive descent parser.
-\item[Layouter] Knuth-Plass line breaker with optical margin protrusions.
-\item[Backend] Streaming PDF emitter with Huffman DEFLATE compression.
+\item[Native job] Pre-scan and direct lowering of the documents it accepts.
+\item[TeX engine] \texttt{tex.web} and pdfTeX, run on the LaTeX format for every other document.
+\item[Backend] PDF writer with Type 1 font subsetting and DEFLATE compression.
 \end{description}
 
 Custom markers can also override default numbering or bullets on single items in standard lists:
@@ -238,40 +225,40 @@ A good programmer will not be lulled into complacency by such reasoning, he will
 \newpage
 
 \section{Typography and Inline Formatting}
-Standard Adobe Type 1 vector typefaces and mathematical symbols are built into the engine and measured at compile time:
+Fonts are selected by LaTeX's font selection scheme, and their Type 1 programs are embedded as pdfTeX embeds them:
 
 \begin{itemize}
-\item \textbf{Default Body Font (Times-Roman)}: Classical, sharp serif typeface adhering to IEEE/ACM publishing standards.
-\item \textbf{Bold Face}: Produced using \verb|\textbf{...}| (Times-Bold).
-\item \textit{Italic Face}: Produced using \verb|\textit{...}| or \verb|\emph{...}| (Times-Italic).
-\item \texttt{Monospace Face}: Produced using \verb|\texttt{...}| or inline \verb|\verb| (Courier).
-\item \textbf{\textit{Combined Styling}}: Nested bold and italic produces Times-BoldItalic.
-\item \textbf{Sans-Serif (Helvetica)}: Activated via \verb|\usepackage{helvet}|, \verb|\documentclass[sans]{article}|, or \verb|\renewcommand{\familydefault}{\sfdefault}|.
+\item \textbf{Default Body Font (Computer Modern Roman)}: LaTeX's default typeface, as in the body of this manual.
+\item \textbf{Bold Face}: Produced using \verb|\textbf{...}| (Computer Modern Bold Extended).
+\item \textit{Italic Face}: Produced using \verb|\textit{...}| or \verb|\emph{...}| (Computer Modern Italic).
+\item \texttt{Monospace Face}: Produced using \verb|\texttt{...}| or inline \verb|\verb| (Computer Modern Typewriter).
+\item \textbf{\textit{Combined Styling}}: Nested bold and italic produces Computer Modern Bold Extended Italic.
+\item \textbf{Sans-Serif (Helvetica)}: Activated via \verb|\usepackage{helvet}|, then making the sans-serif family the default: \verb|\renewcommand{\familydefault}{\sfdefault}|.
 \item \textbf{Palatino Typeface}: Activated via \verb|\usepackage{palatino}| or \verb|\usepackage{mathpazo}| for elegant book typography.
-\item \textbf{Computer Modern}: Classic TeX typeface activated via \verb|\usepackage{lmodern}| or \verb|\documentclass[cm]{article}|.
-\item \textbf{Math and Dingbat Symbols}: Native support for STEM symbols like \verb|\alpha|, \verb|\beta|, \verb|\infty|, and dingbats like checkmarks via Adobe Symbol and ZapfDingbats fonts.
+\item \textbf{Latin Modern}: The Computer Modern successor, activated via \verb|\usepackage{lmodern}|.
+\item \textbf{Math and Dingbat Symbols}: STEM symbols like \verb|\alpha|, \verb|\beta|, \verb|\infty| from the Computer Modern math fonts and the AMS fonts (\verb|\usepackage{amssymb}|), and dingbats like checkmarks via \verb|\usepackage{pifont}| (ZapfDingbats).
 \item \textbf{Special Character Escapes}: Escaped symbols for \verb|\%|, \verb|\$|, \verb|\&|, \verb|\#|, \verb|\_|, \verb|\{|, and \verb|\}|.
 \item \textbf{Text Entity Commands}: \verb|\textbackslash{}| emits \textbackslash{}, \verb|\textasciitilde{}| emits \textasciitilde{}, and \verb|\textasciicircum{}| emits \textasciicircum{}.
 \end{itemize}
 
 \subsection{Selective PDF Resource Pruning}
-To minimize generated PDF file sizes and reduce reader decode times, \texttt{rushtex} performs dynamic font pruning during document emission:
+To minimize generated PDF file sizes and reduce reader decode times, \texttt{rushtex} writes only the fonts a document uses, as pdfTeX does:
 \begin{itemize}
-\item Before emitting the PDF \texttt{/Resources} dictionary, the backend traverses the document's paint operations to construct an exact bitset of referenced font identifiers.
-\item Font descriptors (e.g. \texttt{/Fr}, \texttt{/Fb}, \texttt{/Fi}, \texttt{/Fbi}, \texttt{/Fc}, \texttt{/Fs}, \texttt{/Fz}) are only written to the PDF if glyphs from that font family actually appear on a page.
-\item Documents using only Roman text emit a single font dictionary, stripping all unused font entries from the file.
+\item Before emitting a page's \texttt{/Resources} dictionary, the backend records which fonts the page uses, and the dictionary names only those.
+\item Each Type 1 font is subset to the glyphs the document uses before it is embedded.
+\item Font programs come from the TeX Live installation when one is found, otherwise from the copies the binary carries.
 \end{itemize}
 
-\subsection{Microtypography and the hz-Algorithm}
-The layout engine implements Hermann Zapf's hz-algorithm principles for superior optical quality:
+\subsection{Microtypography and Page Breaking}
+Margin kerning and font expansion are pdfTeX's, set up by the \texttt{microtype} package; page breaking is TeX's:
 \begin{itemize}
-\item \textbf{Optical Margin Alignment}: Punctuation marks (such as hyphens, periods, commas, and quotes) slightly protrude into the right margin using branchless lookup tables (LUT), eliminating the visual indentation illusion at line boundaries.
-\item \textbf{Inter-Word Expansion (\texttt{Tw})}: Lines formatted under full justification compute precise word-spacing adjustments, emitted as PDF \texttt{Tw} operators with exact zero-resetting on paragraph terminal lines.
-\item \textbf{Orphan and Widow Protection}: Section headings and trailing paragraph lines are bound to adjacent blocks, preventing orphan headings at page bottoms.
+\item \textbf{Optical Margin Alignment}: With \verb|\usepackage{microtype}|, punctuation marks (such as hyphens, periods, commas, and quotes) protrude into the margin by the amounts of \texttt{microtype}'s configuration, as pdfTeX computes them.
+\item \textbf{Font Expansion}: pdfTeX's \verb|\pdfadjustspacing| stretches or shrinks glyphs within \texttt{microtype}'s limits, and line breaking takes it into account.
+\item \textbf{Club and Widow Penalties}: \verb|\clubpenalty| and \verb|\widowpenalty| (150 in LaTeX) weigh a page break after a paragraph's first line or before its last, as TeX's page builder does.
 \end{itemize}
 
 \subsection{Paragraph Formatting and First-Line Indents}
-Standard LaTeX paragraph control commands are supported with zero runtime overhead:
+Standard LaTeX paragraph control commands are supported as LaTeX defines them:
 \begin{itemize}
 \item \verb|\setlength{\parindent}{18pt}|: Sets global paragraph first-line indent.
 \item \verb|\indent|: Explicitly forces first-line indentation on a paragraph.
@@ -282,7 +269,7 @@ Standard LaTeX paragraph control commands are supported with zero runtime overhe
 \end{itemize}
 
 \section{Code Listings and Verbatim}
-Both raw verbatim blocks and styled numbered listings are natively supported:
+Both raw verbatim blocks and styled numbered listings (\texttt{listings}) are supported; \texttt{listings} is what sends this manual to the TeX engine:
 
 \begin{verbatim}
 // Raw verbatim block preserving exact whitespace and symbols:
@@ -306,7 +293,7 @@ pub fn fast_add(a: u64, b: u64) -> u64 {
 Code listings feature automatic tab expansion to four spaces, optional line numbering in a dedicated gutter, a light background panel, and an accent bar.
 
 \section{Tables Subsystem and Layout}
-The \texttt{rushtex} engine provides a dedicated, modular table layout subsystem (\texttt{src/tables/}) supporting standard LaTeX tables, publication-quality \texttt{booktabs} rules, column spanning, fixed-width paragraph columns, floating table environments with numbered captions, and multi-page streaming tables via \texttt{longtable}.
+Tables are LaTeX's, set by TeX's alignment (\verb|\halign|) on both paths, supporting standard LaTeX tables, publication-quality \texttt{booktabs} rules, column spanning, fixed-width paragraph columns, floating table environments with numbered captions, and multi-page streaming tables via \texttt{longtable}.
 
 \subsection{Standard Tabular Environment}
 The \texttt{tabular} environment supports left (\texttt{l}), center (\texttt{c}), and right (\texttt{r}) column alignments, vertical boundary and separator rules (\texttt{|}), and full horizontal rules (\verb|\hline|):
@@ -317,20 +304,18 @@ The \texttt{tabular} environment supports left (\texttt{l}), center (\texttt{c})
 \hline
 \textbf{Component} & \textbf{Data Structure} & \textbf{Cache Footprint} \\
 \hline
-AST Block & Enum (boxed payloads) & 32 bytes (2 / line) \\
-AST Inline & Enum (boxed payloads) & 32 bytes (2 / line) \\
-Line Descriptor & Flat struct & 16 bytes (4 / line) \\
-Display Op & Flat Copy enum & 24 bytes \\
-Column Spec & Bit-packed struct & 1 byte (100\% packed) \\
-List Options & Bit-packed struct & 32 bytes \\
-Listing Options & Bit-packed struct & 24 bytes \\
+Node & Kind, subtype, font, two words & 12 bytes (5 / line) \\
+Meaning & Enum & at most 16 bytes (4 / line) \\
+Match Table & Packed \texttt{u64} array & 32 KB (L1 resident) \\
+Literal Huffman Table & Packed \texttt{u32} array & 1 KB \\
+Fixed Huffman Codes & \texttt{u16} array & 576 bytes \\
 \hline
 \end{tabular}
 
 \medskip
 
 \subsection{Professional Rules: The \texttt{booktabs} Package}
-In professional document design, vertical rules are discouraged in favor of variable-weight horizontal rules. \texttt{rushtex} natively implements the \texttt{booktabs} standard:
+In professional document design, vertical rules are discouraged in favor of variable-weight horizontal rules. \texttt{rushtex} implements the \texttt{booktabs} standard:
 \begin{itemize}
 \item \verb|\toprule|: Heavy boundary rule (1.2 pt) initiating the table.
 \item \verb|\midrule|: Medium separator rule (0.6 pt) delineating the header from data rows.
@@ -342,14 +327,14 @@ In professional document design, vertical rules are discouraged in favor of vari
 
 \begin{tabular}{llr}
 \toprule
-\textbf{Pipeline Phase} & \textbf{Subsystem Directory} & \textbf{Latency Budget} \\
+\textbf{Compilation Phase} & \textbf{Source File} & \textbf{Source of Truth} \\
 \midrule
-Token Lexing \& Parsing & \texttt{src/frontend/} & $< 1.5$ $\mu$s \\
-Table Data Modeling & \texttt{src/tables/} & $< 2.0$ $\mu$s \\
-Line \& Paragraph Layout & \texttt{src/layout/} & $< 5.0$ $\mu$s \\
+Pre-Scan \& Direct Lowering & \texttt{src/engine/engine\_doc.rs} & guarded lowering \\
+Page Building & \texttt{src/engine/engine\_page.rs} & \texttt{tex.web} \S980 \\
+Line \& Paragraph Breaking & \texttt{src/engine/engine\_linebreak.rs} & \texttt{tex.web} \S813 \\
 \cmidrule(lr){1-2}
-PDF Stream Serialization & \texttt{src/backend/pdf.rs} & $< 3.0$ $\mu$s \\
-DEFLATE L1 Compression & \texttt{src/backend/deflate.rs} & $< 8.0$ $\mu$s \\
+PDF Stream Serialization & \texttt{src/backend/backend\_ship.rs} & pdfTeX \\
+DEFLATE L1 Compression & \texttt{src/backend/backend\_deflate.rs} & RFC 1951 \\
 \bottomrule
 \end{tabular}
 
@@ -362,11 +347,11 @@ Cells can span multiple columns using \verb|\multicolumn{n}{align}{content}|, al
 
 \begin{tabular}{|l|c|r|}
 \hline
-\multicolumn{2}{|c|}{\textbf{Combined Frontend \& Layout}} & \textbf{Backend} \\
+\multicolumn{2}{|c|}{\textbf{Native Job \& TeX Engine}} & \textbf{Backend} \\
 \hline
-Lexing \& Syntax & Knuth-Plass hz DP & PDF Serialization \\
+Pre-Scan \& Lowering & Knuth--Plass Breaking & PDF Serialization \\
 \cline{1-2}
-AST Construction & Table Streaming & DEFLATE Match Table \\
+Macro Expansion & Page Building & DEFLATE Match Table \\
 \hline
 \end{tabular}
 
@@ -381,9 +366,9 @@ For tabular columns containing paragraphs of explanatory prose, \texttt{rushtex}
 \hline
 \textbf{Feature Description} & \textbf{Support Level} \\
 \hline
-Automatic multi-line word wrapping governed by Knuth-Plass greedy line breaking within cell boundaries. & Full Native Support \\
+Automatic multi-line word wrapping by the same Knuth--Plass line breaking as body text, within cell boundaries. & Exact \\
 \hline
-Zero-allocation string borrowing directly from input buffer. & Active Invariant \\
+Cell width fixed by the column specification, as in the \texttt{array} package's preamble. & Exact \\
 \hline
 \end{tabular}
 
@@ -398,9 +383,9 @@ The \texttt{table} environment provides a floating enclosure supporting optional
 \hline
 \textbf{Subsystem} & \textbf{Primary Module} & \textbf{Target Invariant} \\
 \hline
-Frontend & \texttt{src/frontend/} & $\le 32$ B AST Nodes \\
-Tables & \texttt{src/tables/} & 1 B \texttt{ColSpec} \\
-Layout & \texttt{src/layout/} & Knuth-Plass hz \\
+Native job & \texttt{src/engine/engine\_doc.rs} & Whole-document pre-scan \\
+TeX engine & \texttt{src/engine/} & \texttt{tex.web} and pdfTeX \\
+Data tables & \texttt{src/data/} & Generated, checked in CI \\
 Backend & \texttt{src/backend/} & 32 KB L1 Match Table \\
 \hline
 \end{tabular}
@@ -428,64 +413,63 @@ The \texttt{figure} environment supports centered graphics and numbered captions
 \end{figure}
 
 \section{Document Indexing and Navigation Subsystem}
-Document catalogs and navigation structures---such as Table of Contents (\texttt{\textbackslash tableofcontents}), List of Figures (\texttt{\textbackslash listoffigures}), and List of Tables (\texttt{\textbackslash listoftables})---are isolated in a dedicated, decoupled domain module located at \texttt{src/index/}. This architecture ensures contributors can extend cataloging, indexing, and hyperlinking mechanisms without impacting paragraph layout, font engines, or PDF serialization.
+Document catalogs and navigation structures---such as Table of Contents (\texttt{\textbackslash tableofcontents}), List of Figures (\texttt{\textbackslash listoffigures}), and List of Tables (\texttt{\textbackslash listoftables})---are typeset by LaTeX's own commands (\verb|\@starttoc|, \verb|\contentsline|, \verb|\@dottedtocline|), so their indentation, leaders and page numbers are pdfLaTeX's.
 
-\subsection{Modular Subsystem Structure}
-The index subsystem exposes clean, public Rust APIs designed for high-concurrency and massive collaboration:
+\subsection{Where the Entries Come From}
+Each list is made from what the document's sectioning and caption commands record:
 \begin{itemize}
-\item \texttt{src/index/model.rs}: Declares zero-copy index entry models (\texttt{TocEntry<'a, 'doc>}, \texttt{FigureEntry<'a, 'doc>}, \texttt{TableEntry<'a, 'doc>}) and the central catalog container (\texttt{IndexRegistry<'a, 'doc>}). All entries borrow title/caption slices directly from the parsed AST without vector allocation.
-\item \texttt{src/index/toc.rs}: Implements hierarchical indentation (e.g. 0pt for sections, 16pt for subsections, 32pt for subsubsections), section number formatting, dotted leaders (\texttt{. . . . . .}), and right-aligned page numbers.
-\item \texttt{src/index/lof\_lot.rs}: Formats sequential figure and table entries with aligned identifiers, captions, leaders, and page targets.
-\item \texttt{src/index/mod.rs}: Provides AST pre-scanning (\texttt{pre\_scan\_entries}) that traverses document blocks in approximately 2 microseconds to register all headings and captions prior to page layout.
+\item \verb|\section|, \verb|\subsection| and \verb|\subsubsection| add \texttt{toc} entries with their numbers.
+\item \verb|\caption| in a \texttt{figure} or \texttt{table} adds a \texttt{lof} or \texttt{lot} entry.
+\item \verb|\label| records the current number and page for \verb|\ref| and \verb|\pageref|.
+\item \verb|\tableofcontents| typesets the \texttt{toc} entries with \verb|\l@section| and its kin.
 \end{itemize}
 
-\subsection{Two-Pass In-Memory Page Resolution}
-Legacy LaTeX engines write structural metadata to disk auxiliary files (e.g. \texttt{.toc}, \texttt{.lot}, \texttt{.lof}) requiring multiple invocations of the compiler. In \texttt{rushtex}, resolution is entirely in-memory and executes in sub-millisecond time:
+\subsection{In-Memory Resolution}
+LaTeX writes this metadata to auxiliary files (e.g. \texttt{.toc}, \texttt{.lot}, \texttt{.lof}) and needs several runs. \texttt{rushtex} writes no auxiliary files:
 \begin{enumerate}
-\item \textbf{AST Pre-Scan}: \texttt{pre\_scan\_entries} crawls the block hierarchy in a single fast pass, recording heading levels and hierarchical section numbering counters (\texttt{[u16; 4]}).
-\item \textbf{Pass 1 (Dry Run)}: If any index command is detected, the layout engine runs a dry-run layout pass (\texttt{is\_dry\_run = true}). The dry run allocates the exact vertical space required for \texttt{\textbackslash tableofcontents} and records the exact 1-based page number where each heading, figure, and table lands. All glyph pooling and display command pushes are bypassed, completing in under 50 microseconds.
-\item \textbf{Pass 2 (Vector Layout)}: The final layout pass executes with the populated \texttt{IndexRegistry}, emitting exact page numbers and perfectly aligned dotted leaders without page drift. Documents lacking index commands skip Pass 1 entirely with zero overhead.
+\item \textbf{Native Job}: Entries, labels and page numbers are kept in memory and resolved within its one pass.
+\item \textbf{TeX Engine}: The job runs as many times as LaTeX would need (three for this manual), with the auxiliary files kept in memory between runs.
+\item \textbf{Same Output}: Either way the PDF is the one pdfLaTeX writes on its final run.
 \end{enumerate}
 
-\subsection{Zero-Allocation Display List Commands}
-To preserve the 64-byte L1 CPU cache footprint and eliminate memory allocation during page formatting, \texttt{rushtex} avoids string formatting or leaking memory. Dynamic numbers are captured as first-class display list variants:
+\subsection{Shipping Pages Out}
+A finished page is shipped out as pdfTeX ships it (\texttt{tex.web} \S592 and pdfTeX's PDF backend):
 \begin{itemize}
-\item \texttt{Paint::SectionNumber \{ number: [u16; 4], level: u8, ... \}}: Directly emits formatted section numbers (such as ``1'', ``1.2'', or ``1.2.3'') into PDF character streams without heap string creation.
-\item \texttt{Paint::FigureTag \{ n: u32, ... \}}: Emits ``Figure N'' directly into the PDF content stream.
-\item \texttt{Paint::TableTag \{ n: u32, ... \}}: Emits ``Table N'' directly into the PDF content stream.
-\item \texttt{Paint::PageNumber \{ page\_number: u32, ... \}}: Directly emits 1-based target page numbers.
+\item Characters become text-showing operators in the page's content stream, with the font's encoding.
+\item Rules become filled rectangles.
+\item Images included with \verb|\includegraphics| become image XObjects (an included PDF becomes a form XObject).
+\item Each content stream is compressed with DEFLATE before it is written.
 \end{itemize}
 
-\subsection{Resource-Conscious Progressive Reclamation Architecture}
-Following strict hardware cache and memory locality invariants, \texttt{rushtex} prevents peak resident RAM compounding on massive documents (100,000+ words) via two orthogonal architectural paradigms:
+\subsection{Memory Use}
+Following strict hardware cache and memory locality invariants, \texttt{rushtex} keeps peak resident RAM low on large documents:
 \begin{itemize}
-\item \textbf{AST Lifetime Decoupling (\texttt{'doc} vs \texttt{'a})}: The internal abstract syntax tree and registry references are parameterized over distinct lifetimes \texttt{IndexRegistry<'a, 'doc>} and \texttt{Layouter<'a, 'doc>}. The resulting page display lists (\texttt{Vec<Page<'a>>}) retain only the source string lifetime \texttt{'a}. Consequently, the entire multi-megabyte AST is immediately dropped (\texttt{drop(document)}) prior to backend PDF serialization.
-\item \textbf{Progressive Display-List Disposal (\texttt{emit\_into\_consume})}: As the PDF backend serializes each page content stream into the output buffer, each page's display operations (\texttt{page.ops = Vec::new()}) and text references (\texttt{page.text\_pool = Vec::new()}) are immediately deallocated. This guarantees that peak memory consumption does not compound the display lists and the PDF binary buffer concurrently.
+\item \textbf{Arena Nodes}: Nodes live in one arena with side tables, and lists being built sit back to back in one growing buffer, so building a box allocates nothing per box.
+\item \textbf{Page at a Time}: Each page is written to the PDF when it is shipped out, and its nodes are freed.
 \end{itemize}
 
-\section{100,000-Word Benchmark Comparison}
-The table below summarizes the empirical performance of \texttt{rushtex} compiling a 106,182-word document (\texttt{stress\_100k.tex}) across 295 pages against standard \texttt{pdflatex}:
+\section{Benchmark Comparison}
+Speed is measured against standard \texttt{pdflatex} by \texttt{cargo benchmark}, on documents of 10 pages or more (\texttt{scripts/bench/}):
 
 \medskip
 
 \begin{tabular}{|l|c|r|}
 \hline
-\textbf{Benchmark Metric} & \textbf{rushtex (Release)} & \textbf{pdflatex (TeXLive)} \\
+\textbf{Benchmark Metric} & \textbf{Measured by} & \textbf{Compared with} \\
 \hline
-Wall-Clock Compilation & 19.96 ms & 1,310.00 ms \\
-Compilation Throughput & 5,319,739 words/s & 81,055 words/s \\
-Peak Resident RAM & 10.48 MB & 74.30 MB \\
-Output PDF File Size & 851 KB & 1,008 KB \\
-Page Formatting Rate & 14,779 pages/s & 204 pages/s \\
-Speedup Factor & 65.6x faster & 1.0x (baseline) \\
-Memory Reduction & 85.9\% less RAM & 0.0\% (baseline) \\
+Instructions Retired & CPU counters & pdflatex \\
+CPU and Wall Time & per run & pdflatex \\
+Peak Resident RAM & per run & pdflatex \\
+Output PDF File Size & bytes & pdflatex \\
+Cost per Page & instructions & pdflatex \\
+Glyph and Pixel Match & \texttt{parity-testing zero} & pdflatex \\
 \hline
 \end{tabular}
 
 \bigskip
 
 \section{Mathematical Typography and Equation Reference (\texttt{math})}
-The \texttt{rushtex} mathematical typesetting subsystem faithfully implements the canonical mathematical layout engine specified in TeX Appendix G (\emph{The TeXbook} by Donald Knuth), engineered in pure safe Rust under zero-allocation performance budgets. This section serves a dual purpose: it acts as a comprehensive reference guide explaining how every equation type is defined, parsed, and typeset, while functioning as a rigorous visual specimen suite spanning major branches of theoretical physics and modern mathematics.
+The \texttt{rushtex} mathematical typesetting subsystem implements the mathematical layout specified in TeX Appendix G (\emph{The TeXbook} by Donald Knuth) as \texttt{tex.web} computes it. This section serves a dual purpose: it acts as a comprehensive reference guide explaining how every equation type is defined, parsed, and typeset, while functioning as a rigorous visual specimen suite spanning major branches of theoretical physics and modern mathematics.
 
 \subsection{Mathematical Environments and Equation Types}
 Mathematical typesetting in \texttt{rushtex} is strictly partitioned into distinct rendering environments, each tailored for specific structural, geometric, and semantic requirements.
@@ -548,15 +532,15 @@ f(x) = a_0 + a_1 x + a_2 x^2 + a_3 x^3 + a_4 x^4 + a_5 x^5 + a_6 x^6 \\
 \end{multline}
 
 \subsection{TeX Appendix G Architectural Engine and Mathematical Spacing}
-The \texttt{rushtex} mathematical typesetting subsystem implements the 22 fundamental placement rules of TeX Appendix G with zero dynamic heap allocations on the layout hot path:
+The \texttt{rushtex} mathematical typesetting subsystem implements the placement rules of TeX Appendix G as \texttt{tex.web} does (\S719--\S767):
 
 \begin{itemize}
 \item \textbf{Mathematical Axis Centering}: All fraction rules, relation operators ($=$, $\le$, $\approx$), and extensible delimiters are symmetrically centered on the font's mathematical axis ($\sigma_{22}$), eliminating vertical drift between formulas.
 \item \textbf{The Eight Atom Kinds}: Every mathematical node is categorized into: \texttt{Ord} (ordinary symbol), \texttt{Op} (large operator), \texttt{Bin} (binary operator), \texttt{Rel} (relation), \texttt{Open} (opening fence), \texttt{Close} (closing fence), \texttt{Punct} (punctuation), and \texttt{Inner} (enclosed sub-formula).
-\item \textbf{Contiguous SoA Atom Scanning in L1 Cache}: Expression rows stream atom classifications across 128-element stack buffers organized as a Structure-of-Arrays (1 byte per \texttt{MathAtomKind}). A full 64-atom sequence resides entirely within a single 64-byte L1 cache line, eliminating cache line misses and heap allocations on the hot path.
-\item \textbf{Single-Pass Shifting Architecture ($O(1)$ L1 Cache Traversal)}: Rather than performing exponential $O(2^d)$ recursive dual-pass measurements across nested sub-formulas (fractions, radicals, fences, limits, and over/under braces), child sub-trees are laid out and emitted directly in a single pass. Subsequent geometric positioning is performed via linear coordinate shifts directly over contiguous output operations residing in L1 cache, eliminating dry-run traversals.
-\item \textbf{Authoritative Font Parameters (\texttt{FontDimen22})}: Clearances, rule thicknesses ($\xi_8$), numerator shifts ($\sigma_8, \sigma_9$), denominator drops ($\sigma_{11}, \sigma_{12}$), and operator limit gaps ($\xi_9 \dots \xi_{12}$) are read directly from 64-byte aligned static metric tables rather than floating-point estimates.
-\item \textbf{Branchless Spacing LUT}: Typographic spacing between any adjacent pair of atoms is resolved in a single CPU cycle via the 64-byte aligned \texttt{ATOM\_SPACING\_LUT}, providing canonical math spacing: thin space ($3\,\text{mu}$), medium space ($4\,\text{mu}$), and thick space ($5\,\text{mu}$), with display-style natural glue expansion.
+\item \textbf{Math Lists as in \texttt{tex.web}}: A formula is a list of noads, one per atom, converted to boxes and glue by \texttt{mlist\_to\_hlist} (\S726).
+\item \textbf{Two Passes}: The first pass builds each atom's box and fixes its class; the second inserts inter-atom spacing and penalties (\S760--\S767).
+\item \textbf{Authoritative Font Parameters (\texttt{FontDimen22})}: Clearances, rule thicknesses ($\xi_8$), numerator shifts ($\sigma_8, \sigma_9$), denominator drops ($\sigma_{11}, \sigma_{12}$), and operator limit gaps ($\xi_9 \dots \xi_{12}$) are read from the TFM parameters of math families 2 and 3, never estimated.
+\item \textbf{Spacing Table}: Typographic spacing between any adjacent pair of atoms comes from TeX's spacing table (\S764), giving canonical math spacing: thin space ($3\,\text{mu}$), medium space ($4\,\text{mu}$), and thick space ($5\,\text{mu}$), with display-style natural glue expansion.
 \item \textbf{Rule 5 Boundary Normalization}: Binary operators (\texttt{Bin}) positioned at expression boundaries or directly following another operator (e.g., unary minus in $-x$ or $x = -y$) are dynamically converted to ordinary atoms (\texttt{Ord}), preventing erroneous gap expansion.
 \item \textbf{Italic Correction and Overhang Shielding}: Slanted characters (such as $f$, $j$, $y$) project an italic correction to superscripts and opening delimiters to eliminate visual collisions (e.g., $f(x)$ vs. $x(t)$), while subscripts remain tucked underneath.
 \end{itemize}
@@ -565,7 +549,7 @@ The \texttt{rushtex} mathematical typesetting subsystem implements the 22 fundam
 Fractions and combinatorial coefficients are governed by TeX Appendix G Rule 10:
 
 \subsubsection{Standard and Sized Fractions}
-Standard fractions are typeset with \verb|\frac{numerator}{denominator}|. In addition, AMS-LaTeX style-forcing commands are natively supported:
+Standard fractions are typeset with \verb|\frac{numerator}{denominator}|. In addition, AMS-LaTeX style-forcing commands are supported:
 \begin{itemize}
 \item \verb|\dfrac{a}{b}| forces display-style sizing even within inline text.
 \item \verb|\tfrac{a}{b}| forces text-style sizing inside display equations.
@@ -626,7 +610,7 @@ Limits can be explicitly controlled with \verb|\limits| and \verb|\nolimits|:
 \]
 
 \subsection{Matrices, Arrays, and Piecewise Systems}
-RushTeX implements content-sensitive matrix layout with zero dynamic heap allocations. Row heights and column widths adjust dynamically to their cell contents, and delimiters are rendered with constant, crisp stroke thickness:
+Matrices are \texttt{amsmath}'s arrays, set by TeX's alignment. Row heights and column widths adjust to their cell contents, and delimiters are built from the font's extensible pieces:
 
 \subsubsection{Matrix Flavors and Delimiters}
 \begin{itemize}
@@ -719,7 +703,7 @@ Horizontal rhythm can be fine-tuned using micro-spacing commands:
 \end{itemize}
 
 \subsection{Comprehensive Physics Showcase}
-This section presents foundational formulations from major branches of theoretical and applied physics, formatted natively in \texttt{rushtex}.
+This section presents foundational formulations from major branches of theoretical and applied physics, typeset by \texttt{rushtex}.
 
 \subsubsection{Classical Mechanics and Analytical Dynamics}
 In Lagrangian mechanics, the dynamics of a system with generalized coordinates $q_i$ and generalized velocities $\dot{q}_i$ are governed by the action principle $\delta S = 0$, where $S = \int \mathcal{L} \, \mathrm{d}t$:
@@ -895,45 +879,43 @@ The \texttt{rushtex} executable provides intuitive invocation modes:
 # Compile a TeX document to PDF
 rushtex document.tex -o output.pdf
 
-# Pipe standard input to standard output
-cat document.tex | rushtex > output.pdf
+# Recompile whenever the file changes
+rushtex --watch document.tex
 
-# Inspect the generated Abstract Syntax Tree (AST)
-rushtex --ast document.tex
+# Say which path ran, and why the native job declined
+RT_NATIVE_WHY=1 rushtex document.tex
 
-# Generate uncompressed PDF for stream inspection
-rushtex document.tex --no-compress -o debug.pdf
+# List everything the native job does not take yet
+rushtex document.tex --native-gaps
 \end{lstlisting}
 
-Upon completion, \texttt{rushtex} reports the compiled page count and precise wall-clock latency:
+Upon completion, \texttt{rushtex} reports the output file, the page count and the wall-clock time:
 
 \begin{verbatim}
 $ rushtex document.tex
-[DONE] Compilation of document.tex completed and RUSHTEX wrote 10 pages in 0.002 second
+[COMPILED] Output file is in document.pdf, 10 pages in 0.002 seconds
 \end{verbatim}
 
 \section{Programmatic Rust API}
-For embedding typesetting inside web servers or cloud functions, \texttt{rushtex} exposes zero-allocation and buffer-reusing functions:
+For embedding typesetting inside web servers or cloud functions, the library exposes the native job as \texttt{engine::engine\_doc::run}; a document it declines needs the TeX engine, which the command line (\texttt{src/main.rs}) runs:
 
 \begin{lstlisting}[language=Rust, numbers=left]
-use rushtex::{compile_str, compile_into, compile_file};
+use rushtex::engine::engine_doc;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
     let src = "\\documentclass{article}\\begin{document}Hello!\\end{document}";
 
-    // 1. Compile directly to owned PDF byte vector
-    let pdf_bytes = compile_str(src)?;
+    // The job's date (Unix seconds), for \today
+    let now = engine_doc::run_date();
 
-    // 2. Compile into reusable buffer (zero allocation churn)
-    let mut buffer = Vec::with_capacity(4096);
-    compile_into(src, &mut buffer)?;
-
-    // 3. Compile file on disk
-    compile_file(std::path::Path::new("doc.tex"), None)?;
-    Ok(())
+    // The native job: the PDF, or why it declined
+    match engine_doc::run(src, now, None) {
+        Ok(out) => println!("{} pages", out.pages),
+        Err(why) => eprintln!("native job declined: {why}"),
+    }
 }
 \end{lstlisting}
 
 \section{Summary}
-The \texttt{rushtex} engine delivers order-of-magnitude performance gains over legacy TeX distributions while preserving standard LaTeX formatting, strict memory safety, and complete portability across native and WebAssembly platforms.
+The \texttt{rushtex} engine produces the PDF pdfLaTeX produces, natively where its pre-scan accepts a document and on the ported TeX engine otherwise, with strict memory safety.
 \end{document}

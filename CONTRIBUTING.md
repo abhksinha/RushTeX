@@ -34,7 +34,10 @@ benchmark and the check are written in Rust, in the testing framework (`testing/
    native path and on its TeX engine. Every page's boxes must be identical.
 4. Compares `docs/master.tex` and the documents in `scripts/bench/` with pdfLaTeX's
    output: every glyph, rule, link and pixel at 300 dpi (`parity-testing zero`).
-5. With a base (`origin/master`), builds the base and checks every probe and benchmark PDF
+5. Edits `docs/master.tex` (native) and `scripts/parity/corpus/bare_jrnl.tex` (on the
+   engine) at random, in one `--watch` session, and compares the session's PDF after every
+   save with a fresh compile, byte for byte (`parity-testing incr`).
+6. With a base (`origin/master`), builds the base and checks every probe and benchmark PDF
    is byte-identical to the base's. A change meant to alter output (a fix) differs here
    on purpose: say so in the pull request; steps 3 and 4 must still pass.
 
@@ -42,9 +45,15 @@ benchmark and the check are written in Rust, in the testing framework (`testing/
 
 - Step 3 prints the first differing lines of the page's box dump. Rerun one file with
   `scripts/native_probes.sh path/to/file.tex -k /tmp/boxes` to keep both dumps.
-- Step 4: `testing/target/release/parity-testing zero --engine docs/master.tex --why PAGE`
+- Step 4: `testing/target/release/parity-testing zero docs/master.tex --why PAGE`
   shows the first mark on that page without an exact twin.
-- Step 5 keeps both PDFs in `target/check-pdfs/base` and `target/check-pdfs/now`.
+- Step 5 names the first save that differs, its edit and source lines, the first PDF object
+  that differs, and keeps both PDFs and both sources in `target/parity/incr/<doc>-fail/`.
+  The edits come from a seed, so `testing/target/release/parity-testing incr docs/master.tex
+  --edits N --seed S -v` replays them exactly. Any document can be tested so; a change to
+  `--watch` or to what it keeps between compiles is also run on a few templates:
+  `parity-testing incr DOC.. --edits 60 --seed S` (`--edits` default 20, `--seed` 1).
+- Step 6 keeps both PDFs in `target/check-pdfs/base` and `target/check-pdfs/now`.
 
 ## Speed
 

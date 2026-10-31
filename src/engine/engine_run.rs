@@ -6,7 +6,6 @@
 use super::engine_catcode::Cat;
 use super::engine_eqtb::{Reg, Region};
 use super::engine_input::Input;
-use super::engine_names::END_LINE_CHAR;
 use super::engine_prim::{Meaning, Prim, LONG, OUTER, PROTECTED};
 use super::engine_token::{Token, DONT_EXPAND};
 use super::Engine;
@@ -18,6 +17,7 @@ const MAX_DEPTH: usize = 5000;
 
 /// Whether a token of meaning `m` expands (§366: a command code above `max_command`,
 /// undefined names included).
+#[inline]
 pub(super) fn expandable(m: Meaning) -> bool {
     match m {
         Meaning::Macro(_) | Meaning::Undefined => true,
@@ -69,8 +69,8 @@ pub struct Machine<'e, 'a> {
     pub(super) after_group: Vec<(u16, Token)>,
     /// The last commands the main loop ran, newest at `recent_at - 1`, and whether errors
     /// list them (`trace`): a diagnostic, cheap enough to keep on.
-    recent: [Token; 16],
-    recent_at: usize,
+    pub(super) recent: [Token; 16],
+    pub(super) recent_at: usize,
     pub trace: bool,
     /// §770 the alignments in progress, innermost last, and §305 `scanner_status =
     /// aligning` while a preamble is read.
@@ -120,9 +120,11 @@ pub struct Machine<'e, 'a> {
     pub(super) in_csname: u32,
     /// The name `\csname` and `\ifcsname` collect, reused so neither allocates per call.
     pub(super) name_buf: String,
-    expansions: u32,
+    pub(super) expansions: u32,
     /// Error messages, in TeX's words; the run continues past each one.
     pub errors: Vec<String>,
+    /// The `\hbox`es TeX reports as underfull (index 0) and overfull (index 1) (§660, §666).
+    pub box_warnings: [u32; 2],
     /// The run stopped (runaway recursion or stack overflow).
     pub(super) halted: bool,
     /// §76 `error_count`: errors since the last paragraph ended; at 100 the run stops (§82).
@@ -139,6 +141,9 @@ pub struct Machine<'e, 'a> {
     /// when there is none. The engine has no file system of its own (it builds for WASM
     /// too). Text is read as pdfTeX reads it: each byte is one character code 0–255.
     pub read_file: Option<FileReader<'e>>,
+    /// A `--watch` session's caches (`backend_cache`): shipped pages are taken from it when
+    /// everything their walk reads is as before (`ship_page`).
+    pub pdf_cache: Option<&'e crate::backend::backend_cache::PdfCache>,
     /// §532 `\jobname`.
     pub job_name: String,
     /// §480 the sixteen `\read` streams and §1342 the sixteen `\write` streams; closed
@@ -176,6 +181,21 @@ pub struct Machine<'e, 'a> {
     pub(super) mprof: super::engine_mprof::MacroProfile,
     /// Which run of the job this is (`engine_job`), from 1.
     pub run_index: u32,
+    /// A watch session's checkpoints of this run (`engine_checkpoint`); `None` in a
+    /// one-shot run, which takes none.
+    pub(super) checkpoints: Option<Box<super::engine_checkpoint::Checkpoints>>,
+    /// `--watch` (`engine_resume`): [`Machine::run`] returns, `paused`, where the preamble
+    /// ends: at `\document`'s last token, `\ignorespaces`, read again when the run goes on.
+    pub stop_at_document: bool,
+    /// `--watch` (`engine_resume`): [`Machine::run`] returns, `paused`, earlier, where
+    /// `\document` is about to read the `.aux`: after its `\global\let\@multiplelabels\relax`,
+    /// the command before `\@input{\jobname.aux}`.
+    pub stop_at_aux: bool,
+    /// How many times `\inputlineno` was read: a watch session's early cutoff takes the
+    /// rest of a run whose line numbers moved only when the rest read none
+    /// (`engine_checkpoint::converged`).
+    pub(super) line_reads: u32,
+    pub paused: bool,
 }
 
 /// §211: vertical, horizontal or math mode.
@@ -196,10 +216,16 @@ pub(super) struct X {
 
 impl<'e, 'a> Machine<'e, 'a> {
     pub fn new(e: &'e mut Engine, src: &'a str) -> Self {
-        Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), text_run: None, words: Default::default(), break_pool: Default::default(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), dead_buf: Vec::new(), kernel: None, doc: None, #[cfg(all(test, feature = "oracle"))] used_cs: Vec::new(), #[cfg(feature = "mprof")] mprof: Default::default(), run_index: 1 }
+        let late_literals = e.nodes.list.iter().any(|n| n.kind == super::engine_node::Kind::Whatsit && n.sub == super::engine_whatsit::LATE_LITERAL);
+        let mut m = Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), box_warnings: [0; 2], halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, pdf_cache: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), text_run: None, words: Default::default(), break_pool: Default::default(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), dead_buf: Vec::new(), kernel: None, doc: None, #[cfg(all(test, feature = "oracle"))] used_cs: Vec::new(), #[cfg(feature = "mprof")] mprof: Default::default(), run_index: 1, stop_at_document: false, stop_at_aux: false, line_reads: 0, paused: false, checkpoints: None };
+        m.page.late_literals = late_literals;
+        m
     }
 
-    /// Records an error with TeX's `l.<line>` context of the innermost file.
+    /// Records an error with TeX's `l.<line>` context of the innermost file. Rare: out of
+    /// line, so the hot loops that can report one stay small.
+    #[cold]
+    #[inline(never)]
     pub(super) fn error(&mut self, msg: impl Into<String>) {
         let mut msg = msg.into();
         if self.trace {
@@ -223,38 +249,51 @@ impl<'e, 'a> Machine<'e, 'a> {
         }
     }
 
-    /// §365 `get_token`: the next token, unexpanded.
+    /// §365 `get_token`: the next token, unexpanded. Inline, the common case only: an
+    /// alignment entry's end (`align_state` zero) is [`Machine::align_token`]'s.
+    #[inline(always)]
     pub(super) fn get_token(&mut self) -> Option<Token> {
         if self.halted {
             return None;
         }
-        let elc = self.e.eqtb.word(Reg { region: Region::Int, slot: END_LINE_CHAR });
-        loop {
-            let Engine { eqtb, cs, toks, .. } = &mut *self.e;
-            let t = self.input.next(toks, eqtb, cs, elc)?;
-            #[cfg(feature = "mprof")]
-            self.mprof_token(t);
-            self.dont_expand = t.0 & DONT_EXPAND != 0;
-            let t = Token(t.0 & !DONT_EXPAND);
-            // §342: an alignment entry ends at an alignment character or `\cr` at its
-            // own brace level.
-            if self.input.align_state == 0 {
-                if let Some(code) = self.align_code(t) {
-                    self.insert_v_template(code);
-                    if self.halted {
-                        return None;
-                    }
-                    continue;
-                }
-            }
-            return Some(t);
+        let t = self.read_token()?;
+        if self.input.align_state == 0 {
+            return self.align_token(t);
         }
+        Some(t)
+    }
+
+    /// The next token from the input stack, its `\noexpand` mark noted and taken off.
+    #[inline(always)]
+    fn read_token(&mut self) -> Option<Token> {
+        let Engine { eqtb, cs, toks, .. } = &mut *self.e;
+        let t = self.input.next(toks, eqtb, cs)?;
+        #[cfg(feature = "mprof")]
+        self.mprof_token(t);
+        self.dont_expand = t.0 & DONT_EXPAND != 0;
+        Some(Token(t.0 & !DONT_EXPAND))
+    }
+
+    /// §342: an alignment entry ends at an alignment character or `\cr` at its own brace
+    /// level; the ⟨v_j⟩ template is read first, then the token after it.
+    #[inline(never)]
+    fn align_token(&mut self, mut t: Token) -> Option<Token> {
+        while self.input.align_state == 0 {
+            let Some(code) = self.align_code(t) else { break };
+            self.insert_v_template(code);
+            if self.halted {
+                return None;
+            }
+            t = self.read_token()?;
+        }
+        Some(t)
     }
 
     /// The meaning of the token `get_token` just read: §358, an expandable token marked by
     /// `\noexpand` means [`Meaning::DontExpand`].
+    #[inline(always)]
     pub(super) fn meaning_read(&self, t: Token) -> Meaning {
-        let m = self.meaning(t);
+        let m = self.meaning_inline(t);
         if self.dont_expand && expandable(m) {
             Meaning::DontExpand
         } else {
@@ -269,12 +308,20 @@ impl<'e, 'a> Machine<'e, 'a> {
 
     /// The meaning of `t` now: a control sequence's or active character's equivalent (a
     /// primitive by name while never assigned); a character token means itself.
+    #[inline]
     pub(super) fn meaning(&self, t: Token) -> Meaning {
+        self.meaning_inline(t)
+    }
+
+    /// [`Machine::meaning`], always inline: for the readers of every token
+    /// ([`Machine::meaning_read`]); an active character past 255 is looked up out of line.
+    #[inline(always)]
+    fn meaning_inline(&self, t: Token) -> Meaning {
         let id = match t.cs_id() {
             Some(id) => id,
             None if t.cat() == Some(Cat::Active) => match t.chr() as u32 {
                 c @ 0..=255 => c,
-                _ => match self.e.cs.get(active_key(t.chr(), &mut [0; 5])) {
+                _ => match self.active_id(t.chr()) {
                     Some(id) => id,
                     None => return Meaning::Undefined,
                 },
@@ -287,6 +334,12 @@ impl<'e, 'a> Machine<'e, 'a> {
             Meaning::Unset => Meaning::Undefined,
             m => m,
         }
+    }
+
+    /// The id of active character `c` past 255, if it was interned (by its key's name).
+    #[inline(never)]
+    fn active_id(&self, c: char) -> Option<u32> {
+        self.e.cs.get(active_key(c, &mut [0; 5]))
     }
 
     /// §372: the characters up to `\endcsname`, expanded, in the reused name buffer (the
@@ -358,13 +411,21 @@ impl<'e, 'a> Machine<'e, 'a> {
                 // §370: an undefined control sequence. The native job does not have every
                 // LaTeX command: the document runs on the engine instead.
                 Meaning::Undefined if self.doc.is_some() => {
-                    let name = t.cs_id().map(|id| self.e.cs.name(id).to_string()).unwrap_or_default();
-                    self.not_native(&format!("\\{name}"));
+                    self.undefined_not_native(t);
                     return Some(X { t, m });
                 }
                 _ => return Some(X { t, m }),
             }
         }
+    }
+
+    /// §370 in the native job: undefined control sequence `t` sends the document to the
+    /// engine. Rare, so out of [`Machine::get_x_token`]'s loop.
+    #[cold]
+    #[inline(never)]
+    fn undefined_not_native(&mut self, t: Token) {
+        let name = t.cs_id().map(|id| self.e.cs.name(id).to_string()).unwrap_or_default();
+        self.not_native(&format!("\\{name}"));
     }
 
     /// Counts one expansion; `false` (and the run halts) past the limits.
@@ -491,7 +552,7 @@ impl<'e, 'a> Machine<'e, 'a> {
     /// `SOURCE_DATE_EPOCH` so when `FORCE_SOURCE_DATE` is 1): `\time` in minutes since
     /// midnight, `\day`, `\month`, `\year`.
     pub fn fix_date_and_time(&mut self, secs: i64) {
-        let (y, m, d) = crate::expand::civil_from_days(secs.div_euclid(86_400));
+        let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
         let minutes = secs.rem_euclid(86_400) / 60;
         for (slot, v) in [(20, minutes as i32), (21, d as i32), (22, m as i32), (23, y as i32)] {
             self.e.eqtb.set_word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot }, v, true);
@@ -522,6 +583,9 @@ impl<'e, 'a> Machine<'e, 'a> {
             self.command(x, 0);
             // Between commands no Rust frame holds a token span: the arena can be collected.
             self.maybe_collect();
+            if self.paused {
+                return;
+            }
         }
         // §1378: the job ends with every `\openout` file closed.
         for k in 0..16 {
@@ -615,6 +679,17 @@ impl<'e, 'a> Machine<'e, 'a> {
             // §1271 `save_for_after`: outside every group it does nothing.
             // §1045: spaces after it are skipped, expanding as it goes.
             Prim::IgnoreSpaces if self.building() => {
+                // The preamble's end (`engine_resume`): latex.ltx's `\document` ends
+                // `\global\let\@nodocument\relax \global\let\do\noexpand
+                // \UseOneTimeHook{begindocument/end}\ignorespaces`, so with `\@nodocument`
+                // now `\relax` and only the document open, this is its last token and no byte
+                // of the body has been read; it is read again when the run goes on.
+                if self.stop_at_document && self.e.cs.get("@nodocument").is_some_and(|id| self.e.eqtb.meaning(id) == Meaning::Prim(Prim::Relax)) && self.input.at_base() {
+                    self.stop_at_document = false;
+                    self.paused = true;
+                    self.input.back(x.t);
+                    return;
+                }
                 if let Some(n) = self.next_non_blank() {
                     self.input.back(n.t);
                 }
@@ -773,6 +848,14 @@ impl<'e, 'a> Machine<'e, 'a> {
                 let m = self.meaning(u);
                 self.e.eqtb.set_meaning(id, m, global);
                 self.after_assignment();
+                // Where `\document` reads the `.aux` (`engine_resume`): latex.ltx's
+                // `\document` does `\global \let \@multiplelabels \relax \@input{\jobname.aux}`,
+                // so the run pauses between this command and the `.aux`; nothing before reads
+                // it, and the run goes on from the next token.
+                if self.stop_at_aux && global && self.e.cs.get("@multiplelabels") == Some(id) {
+                    self.stop_at_aux = false;
+                    self.paused = true;
+                }
             }
             Prim::FutureLet => {
                 self.future_let(global);
@@ -937,6 +1020,11 @@ impl<'e, 'a> Machine<'e, 'a> {
     /// Something the engine cannot build into a box yet (math, `\vadjust`, inserts ...):
     /// one error per kind, so the run shows what is missing.
     fn unsupported(&mut self, t: Token) {
+        // §370: a name nothing defined, which `get_x_token` hands on in the engine: TeX's
+        // error at each one (the token is dropped, as `expand` drops it).
+        if self.meaning(t) == Meaning::Undefined {
+            return self.error("Undefined control sequence");
+        }
         let what = match t.cs_id() {
             Some(id) => format!("\\{}", self.e.cs.name(id)),
             None => format!("{:?} character", t.cat()),
@@ -1105,7 +1193,7 @@ mod tests {
         // `RT_FMT_IN=<file>`: start from a dumped format, as `pdflatex doc.tex` does, instead
         // of IniTeX.
         let fmt_in = std::env::var("RT_FMT_IN").ok();
-        let now = crate::engine::engine_host::run_date();
+        let now = crate::engine::engine_doc::run_date();
         // §532: the job is named after the first file read.
         let job_name = std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("texput").to_string();
         let setup = |m: &mut Machine| {
@@ -1326,4 +1414,18 @@ mod tests {
         }
         eprintln!();
     }
+}
+
+/// Howard Hinnant's days-to-civil conversion (proleptic Gregorian calendar).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    (y, m, d)
 }

@@ -35,7 +35,10 @@ impl Machine<'_, '_> {
         }
         Some(match name {
             "pdftexversion" => Value::Int(PDFTEX_VERSION),
-            "inputlineno" => Value::Int(self.input.line() as i32),
+            "inputlineno" => {
+                self.line_reads += 1;
+                Value::Int(self.input.line() as i32)
+            }
             "currentgrouplevel" => Value::Int(self.e.eqtb.level() as i32 - 1),
             "currentgrouptype" => Value::Int(self.groups.last().copied().unwrap_or(0) as i32),
             "currentiflevel" => Value::Int(self.conds.len() as i32),

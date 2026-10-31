@@ -11,7 +11,7 @@ use crate::engine::engine_tounicode::{GlyphCode, GlyphUnicode};
 
 /// One shipped page: its object number (given by the engine, which refers to it), its size
 /// in scaled points, its content stream and its annotations' objects.
-#[derive(Debug, Default, Clone)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct ShippedPage {
     pub id: i32,
     pub width: i32,
@@ -29,7 +29,7 @@ pub struct ShippedPage {
 /// A shipped `\pdfxform` (pdftex.web `pdf_ship_out` of a form): its object, its box's width
 /// and height plus depth, content, the images and forms it shows, and its `attr` and
 /// `resources` text.
-#[derive(Debug, Clone, Default)]
+#[derive(PartialEq, Debug, Clone, Default)]
 pub struct ShippedForm {
     pub id: i32,
     pub width: i32,
@@ -502,6 +502,41 @@ fn push_hex(s: &mut Vec<u8>, v: u32, digits: u32) {
     }
 }
 
+/// The ToUnicode CMap of a built-in Computer Modern program (`backend_cm_fonts`'s table for
+/// codes 0-127): one `bfchar` per mapped code, in groups of at most 100; ligatures extract
+/// as their letters (U+FB00-FB04 decomposed), as pdfTeX's glyph names do.
+fn builtin_tounicode_cmap(map: &[u16; 128]) -> Vec<u8> {
+    let mut s = Vec::with_capacity(1500);
+    s.extend_from_slice(b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /RushTeX-ToUnicode def\n/CMapType 2 def\n1 begincodespacerange\n<00> <7F>\nendcodespacerange\n");
+    let entries: Vec<(u8, u16)> = map.iter().enumerate().filter(|&(_, &u)| u != 0).map(|(c, &u)| (c as u8, u)).collect();
+    for chunk in entries.chunks(100) {
+        s.extend_from_slice(format!("{} beginbfchar\n", chunk.len()).as_bytes());
+        for &(code, u) in chunk {
+            s.push(b'<');
+            push_hex(&mut s, u32::from(code), 2);
+            s.extend_from_slice(b"> <");
+            let letters: &[u8] = match u {
+                0xFB00 => b"ff",
+                0xFB01 => b"fi",
+                0xFB02 => b"fl",
+                0xFB03 => b"ffi",
+                0xFB04 => b"ffl",
+                _ => &[],
+            };
+            if letters.is_empty() {
+                push_hex(&mut s, u32::from(u), 4);
+            }
+            for &c in letters {
+                push_hex(&mut s, u32::from(c), 4);
+            }
+            s.extend_from_slice(b">\n");
+        }
+        s.extend_from_slice(b"endbfchar\n");
+    }
+    s.extend_from_slice(b"endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    s
+}
+
 /// `utf16be` written into `s`.
 fn push_utf16be(s: &mut Vec<u8>, code: u32) {
     if code <= 0xFFFF {
@@ -653,6 +688,25 @@ struct FontWork<'f> {
     unicode: Option<Vec<u8>>,
     /// The embedded program: its stream, `/Length1` and `/Length2`, and `/FontBBox`.
     embedded: Option<(Vec<u8>, [usize; 2], [i32; 4])>,
+    /// Prepared already (taken from a session's cache).
+    ready: bool,
+    /// With a session's cache: the key it is kept by once prepared, when every file it read
+    /// is one the cache knows unchanged (`font_work_cached`), and those files' names.
+    key: Option<u128>,
+    names: Vec<Box<str>>,
+}
+
+/// A Type 1 font's finished parts, as a session's cache keeps them (`backend_cache`): what
+/// `Doc::write_font` reads besides the font's own sizes, and the files it was made from.
+pub(crate) struct FontDone {
+    names: Vec<Box<str>>,
+    program: Option<&'static crate::backend::backend_cm_fonts::CmFontProgram>,
+    base: String,
+    enc: Option<std::sync::Arc<Encoding>>,
+    differences: bool,
+    italic: i32,
+    unicode: Option<Vec<u8>>,
+    embedded: Option<(Vec<u8>, [usize; 2], [i32; 4])>,
 }
 
 /// Font `f`'s files read and its names, encoding and ToUnicode map made: everything that
@@ -672,7 +726,7 @@ fn font_work<'f>(f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, fi
         })
     };
     let own = entry.as_ref().and_then(|e| e.file).and_then(clear);
-    let program = if own.is_some() { None } else { crate::backend::backend_optical::program_by_name(&f.name) };
+    let program = if own.is_some() { None } else { crate::backend::backend_cm_fonts::program_by_name(&f.name) };
     // A font from the map file carries its glyph names; its program is embedded whole.
     // With `\pdfgentounicode`, every font's ToUnicode comes from its glyph names (the
     // `.enc` file's, else the program's built-in encoding), as pdfTeX makes it.
@@ -739,15 +793,78 @@ fn font_work<'f>(f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, fi
         cmap = Some(tounicode_cmap(&f.name, None, &tounicode_body(&f.name, &names, u)));
     }
     let pfb = if program.is_none() { pfb } else { None };
-    let map = if program.is_some() && cmap.is_none() { crate::backend::backend_optical::tounicode_by_name(&f.name) } else { None };
-    let unicode = map.map(crate::backend::backend_pdf::build_tounicode_cmap_bytes).or(cmap);
+    let map = if program.is_some() && cmap.is_none() { crate::backend::backend_cm_fonts::tounicode_by_name(&f.name) } else { None };
+    let unicode = map.map(builtin_tounicode_cmap).or(cmap);
     // The layout `rushtex-gen` stored with a carried font, else the program is indexed when
     // it is subset.
     let layout = if pfb.is_some() { entry.as_ref().and_then(|e| e.file).and_then(|file| files(&format!("{file}#layout"))) } else { None };
-    FontWork { f, program, base, enc, differences, stored_names, layout, italic, pfb, unicode, embedded: None }
+    FontWork { f, program, base, enc, differences, stored_names, layout, italic, pfb, unicode, embedded: None, ready: false, key: None, names: Vec::new() }
+}
+
+/// [`font_work`] through a session's cache: a font made before from the same name, glyphs,
+/// map line and ToUnicode entries (`unicode`, their hash), whose files are all unchanged
+/// (`PdfCache::files_unchanged`), is taken whole from the cache, prepared. Otherwise it is
+/// made, with the names of the files it reads (its encoding's too, when an earlier font read
+/// that), and keyed when they are all unchanged files.
+#[allow(clippy::too_many_arguments)]
+fn font_work_cached<'f>(cache: &crate::backend::backend_cache::PdfCache, f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, unicode: u128, encodings: &mut Vec<(String, std::sync::Arc<Encoding>)>) -> FontWork<'f> {
+    let line = map.get(f.name.as_str()).copied();
+    let mut h = crate::backend::backend_hash::ContentHasher::new();
+    h.u64(4);
+    h.bytes(f.name.as_bytes());
+    f.used.iter().for_each(|&u| h.u64(u));
+    h.bytes(line.unwrap_or("").as_bytes());
+    h.u64(line.is_some() as u64);
+    h.u64(unicode as u64);
+    h.u64((unicode >> 64) as u64);
+    let key = h.finish();
+    if let Some(d) = cache.font(key).filter(|d| cache.files_unchanged(d.names.iter().map(|n| &**n))) {
+        return FontWork { f, program: d.program, base: d.base.clone(), enc: d.enc.clone(), differences: d.differences, stored_names: None, layout: None, italic: d.italic, pfb: None, unicode: d.unicode.clone(), embedded: d.embedded.clone(), ready: true, key: None, names: Vec::new() };
+    }
+    let reads = std::cell::RefCell::new(Vec::new());
+    let read = |name: &str| {
+        reads.borrow_mut().push(Box::<str>::from(name));
+        files(name)
+    };
+    let mut w = font_work(f, map, &read, to_unicode, encodings);
+    let mut names = reads.into_inner();
+    if let Some(enc) = line.map(map_entry).and_then(|e| e.enc).filter(|_| w.enc.is_some()) {
+        names.push(enc.into());
+    }
+    if cache.files_unchanged(names.iter().map(|n| &**n)) {
+        w.key = Some(key);
+    }
+    w.names = names;
+    w
 }
 
 impl FontWork<'_> {
+    /// The cache key of what [`prepare`](Self::prepare) makes: a hash of everything it reads
+    /// (the ToUnicode text, the program and its segments, the glyphs used, the names they are
+    /// found by, the stored layout and the subset tag).
+    fn prepare_key(&self) -> u128 {
+        let mut h = crate::backend::backend_hash::ContentHasher::new();
+        h.u64(2);
+        let mut opt = |b: Option<&[u8]>| match b {
+            Some(b) => {
+                h.u64(1);
+                h.bytes(b);
+            }
+            None => h.u64(0),
+        };
+        opt(self.unicode.as_deref());
+        opt(self.pfb.as_ref().map(|(d, _)| &d[..]));
+        opt(self.enc.as_ref().map(|e| e.text.as_bytes()));
+        opt(self.stored_names.as_deref());
+        opt(self.layout.as_deref());
+        opt(Some(self.base.split('+').next().unwrap_or_default().as_bytes()));
+        if let Some((_, lens)) = &self.pfb {
+            lens.iter().for_each(|&n| h.u64(n as u64));
+        }
+        self.f.used.iter().for_each(|&u| h.u64(u));
+        h.finish()
+    }
+
     /// The ToUnicode map compressed, and the map file's program subset as pdfTeX subsets it
     /// (`writet1.c`), encrypted and compressed.
     fn prepare(&mut self, deflate: &mut crate::backend::backend_deflate::DeflateCompressor) {
@@ -858,11 +975,59 @@ fn prepare_all(fonts: &mut [&mut FontWork], streams: &[&[u8]]) -> Vec<Vec<u8>> {
     })
 }
 
+/// [`prepare_all`] through a session's cache: fonts and streams made by an earlier write
+/// from the same bytes are taken from it, the others prepared (on threads as without a
+/// cache) and kept.
+fn prepare_cached(cache: &crate::backend::backend_cache::PdfCache, work: &mut [Option<FontWork>], streams: &[&[u8]]) -> Vec<Vec<u8>> {
+    use crate::backend::backend_cache::stream_key;
+    // A font keyed whole (`font_work_cached`) is kept whole once prepared; another (a file
+    // read from outside the binary) by a hash of what `prepare` reads.
+    let mut fonts: Vec<(Option<u128>, &mut FontWork)> = Vec::new();
+    for w in work.iter_mut().flatten().filter(|w| !w.ready) {
+        if w.key.is_some() {
+            fonts.push((None, w));
+            continue;
+        }
+        let key = w.prepare_key();
+        match cache.prepared(key) {
+            Some(p) => {
+                w.unicode.clone_from(&p.0);
+                w.embedded.clone_from(&p.1);
+                w.pfb = None;
+                w.ready = true;
+            }
+            None => fonts.push((Some(key), w)),
+        }
+    }
+    let keys: Vec<u128> = streams.iter().map(|s| stream_key(s)).collect();
+    let mut out: Vec<Option<Vec<u8>>> = keys.iter().map(|&k| cache.stream(k).map(|s| (*s).clone())).collect();
+    let missing: Vec<&[u8]> = streams.iter().zip(&out).filter(|(_, o)| o.is_none()).map(|(s, _)| *s).collect();
+    let mut made = prepare_all(&mut fonts.iter_mut().map(|(_, w)| &mut **w).collect::<Vec<_>>(), &missing).into_iter();
+    for (key, w) in fonts {
+        match (key, w.key) {
+            (Some(key), _) => cache.put_prepared(key, (w.unicode.clone(), w.embedded.clone())),
+            (None, Some(key)) => cache.put_font(key, FontDone { names: std::mem::take(&mut w.names), program: w.program, base: w.base.clone(), enc: w.enc.clone(), differences: w.differences, italic: w.italic, unicode: w.unicode.clone(), embedded: w.embedded.clone() }),
+            (None, None) => {}
+        }
+    }
+    for (o, &k) in out.iter_mut().zip(&keys) {
+        if o.is_none() {
+            let s = made.next().unwrap_or_default();
+            cache.put_stream(k, s.clone());
+            *o = Some(s);
+        }
+    }
+    out.into_iter().map(Option::unwrap_or_default).collect()
+}
+
 /// The PDF of `pages`; `fonts[i]` is engine font `i` when a page uses it. `files` reads
 /// `pdftex.map`, encoding and font files by name; `to_unicode`, when pdfTeX's
 /// `\pdfgentounicode` is on, names the Unicode of a glyph for the ToUnicode maps of fonts
 /// read from the map file.
-pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, meta: &DocMeta) -> Vec<u8> {
+///
+/// `cache`, a `--watch` session's (`backend_cache`), gives back the fonts and streams an
+/// earlier write made from the same bytes; a one-shot run passes none and hashes nothing.
+pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, meta: &DocMeta, cache: Option<&crate::backend::backend_cache::PdfCache>) -> Vec<u8> {
     let map = files("pdftex.map").map(|b| b.iter().map(|&c| char::from(c)).collect::<String>()).unwrap_or_default();
     let map = map_index(&map);
     // pdfTeX's header: `\pdfminorversion` (4 when unset or out of range).
@@ -894,9 +1059,30 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
     // Type 1 fonts' files read in order; their programs subset and every stream compressed
     // (`prepare_all`, on several threads); then every object written in order.
     let mut encodings = Vec::new();
-    let mut work: Vec<Option<FontWork>> = fonts.iter().map(|f| f.as_ref().filter(|f| f.pk.is_none()).map(|f| font_work(f, &map, files, to_unicode, &mut encodings))).collect();
+    // With a session's cache, the ToUnicode entries' hash, part of every font's key.
+    let unicode = cache.map_or(0, |_| {
+        let mut h = crate::backend::backend_hash::ContentHasher::new();
+        match to_unicode {
+            Some(u) => u.digest(&mut h),
+            None => h.u64(0),
+        }
+        h.finish()
+    });
+    let mut work: Vec<Option<FontWork>> = fonts
+        .iter()
+        .map(|f| {
+            f.as_ref().filter(|f| f.pk.is_none()).map(|f| match cache {
+                None => font_work(f, &map, files, to_unicode, &mut encodings),
+                Some(c) => font_work_cached(c, f, &map, files, to_unicode, unicode, &mut encodings),
+            })
+        })
+        .collect();
     let streams: Vec<&[u8]> = pages.iter().map(|p| &p.content[..]).chain(meta.forms.iter().map(|f| &f.content[..])).collect();
-    let mut packed = prepare_all(&mut work.iter_mut().flatten().collect::<Vec<_>>(), &streams).into_iter();
+    let mut packed = match cache {
+        None => prepare_all(&mut work.iter_mut().flatten().collect::<Vec<_>>(), &streams),
+        Some(c) => prepare_cached(c, &mut work, &streams),
+    }
+    .into_iter();
     for (i, f) in fonts.iter().enumerate() {
         let Some(f) = f else { continue };
         font_obj[i] = next;

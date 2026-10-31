@@ -20,7 +20,7 @@ enum State {
 }
 
 /// The tokenizer over one source text.
-#[derive(Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct Lexer<'a> {
     /// The document is borrowed; a file read by `\input` is owned.
     src: Cow<'a, str>,
@@ -44,6 +44,32 @@ pub struct Lexer<'a> {
 impl<'a> Lexer<'a> {
     pub fn new(src: impl Into<Cow<'a, str>>) -> Self {
         Lexer { src: src.into(), next_line: 0, buf: Vec::with_capacity(128), loc: 0, state: State::NewLine, par: None, invalid: 0, end_after_line: false, line: 0, eof_seen: false }
+    }
+
+    /// This lexer at its place over `src` instead of its own text: a document resumed after its
+    /// preamble (`engine_resume`) reads on from the same byte in the new text, whose bytes up to
+    /// there are the old ones.
+    pub fn over<'b>(&self, src: impl Into<Cow<'b, str>>) -> Lexer<'b> {
+        Lexer { src: src.into(), next_line: self.next_line, buf: self.buf.clone(), loc: self.loc, state: self.state, par: self.par, invalid: self.invalid, end_after_line: self.end_after_line, line: self.line, eof_seen: self.eof_seen }
+    }
+
+    /// Byte offset of the next unread line: everything before it has been read.
+    pub fn read_to(&self) -> usize {
+        self.next_line
+    }
+
+    /// The text, when borrowed (the document's).
+    pub fn text(&self) -> &'a str {
+        match self.src {
+            Cow::Borrowed(s) => s,
+            Cow::Owned(_) => "",
+        }
+    }
+
+    /// Moves the read offset by `d`.
+    pub fn shift(&mut self, d: isize, lines: i32) {
+        self.next_line = self.next_line.wrapping_add_signed(d);
+        self.line = self.line.wrapping_add_signed(lines);
     }
 
     /// §362: moves to the next line of the file; `false` at its end.

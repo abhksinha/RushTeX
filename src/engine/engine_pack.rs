@@ -151,6 +151,9 @@ impl Machine<'_, '_> {
         let (hbadness, hfuzz) = (self.int(HBADNESS), self.dimen_param(HFUZZ));
         self.last_badness = 0;
         let overfull = self.set_glue(&mut b, excess, &stretch, &shrink, nonempty, hbadness, hfuzz);
+        // §660 and §666: the boxes TeX reports as `Underfull \hbox` (or `Loose`) and
+        // `Overfull \hbox`, counted for the command line's one-line summary; nothing is printed.
+        self.box_warnings[usize::from(overfull)] += u32::from(overfull || (excess > 0 && self.last_badness > hbadness));
         // §666: an overfull box gets a rule `\overfullrule` wide at its end.
         let rule = self.dimen_param(OVERFULL_RULE);
         if overfull && rule > 0 {

@@ -46,6 +46,11 @@ impl Machine<'_, '_> {
     #[inline]
     pub(super) fn maybe_collect(&mut self) {
         if self.e.toks.len() as u32 >= self.collect_at {
+            // A watch session's checkpoint is due: its threshold was zeroed so that this test,
+            // made between commands anyway, finds it (`engine_checkpoint`).
+            if self.checkpoints.as_ref().is_some_and(|c| c.due) {
+                return self.checkpoint_top();
+            }
             self.collect_tokens();
         }
         if self.e.eqtb.has_dead_boxes() {
@@ -83,7 +88,7 @@ impl Machine<'_, '_> {
     }
 
     /// Flushes the boxes assignments and group ends released (§275 `eq_destroy`).
-    fn flush_dead_boxes(&mut self) {
+    pub(super) fn flush_dead_boxes(&mut self) {
         let mut dead = std::mem::take(&mut self.dead_buf);
         self.e.eqtb.take_dead_boxes(&mut dead);
         for b in dead.drain(..) {
@@ -141,7 +146,7 @@ impl Machine<'_, '_> {
             a.for_each_span(f);
         }
         self.page.for_each_span(f);
-        for n in self.e.nodes.list.iter_mut().chain(self.cur.iter_mut()) {
+        for n in self.e.nodes.list.as_mut_slice().iter_mut().chain(self.cur.iter_mut()) {
             node_span(n, f);
         }
         for n in self.adjust.iter_mut().chain(self.adjust_out.iter_mut()).flatten() {
@@ -149,46 +154,90 @@ impl Machine<'_, '_> {
         }
     }
 
-    fn collect_tokens(&mut self) {
-        // The live ranges, sorted and merged, each with its new start.
-        let mut live = std::mem::take(&mut self.collect_buf);
-        live.clear();
+    pub(super) fn collect_tokens(&mut self) {
+        // One live bit per arena token, set over every root span: its maximal runs are the
+        // live ranges sorted and merged (touching spans join, as overlapping ones do), and a
+        // token's new place is the number of live bits before it. No sort of the spans.
+        let mut bits = vec![0u64; self.e.toks.len().div_ceil(64)];
         self.for_each_root(&mut |s| {
             if !s.is_empty() {
-                live.push((s.start, s.end, 0));
+                set_bits(&mut bits, s.start, s.end);
             }
         });
-        live.sort_unstable_by_key(|r| r.0);
-        let mut merged = 0;
-        for i in 0..live.len() {
-            let (s, e, _) = live[i];
-            if merged > 0 && s <= live[merged - 1].1 {
-                live[merged - 1].1 = live[merged - 1].1.max(e);
-            } else {
-                live[merged] = (s, e, 0);
-                merged += 1;
+        // `rank[w]`: the live tokens before word `w`.
+        let mut live = std::mem::take(&mut self.collect_buf);
+        live.clear();
+        let mut rank = Vec::with_capacity(bits.len());
+        let mut to = 0u32;
+        let mut open: Option<u32> = None;
+        for (w, &x) in bits.iter().enumerate() {
+            rank.push(to);
+            to += x.count_ones();
+            let base = w as u32 * 64;
+            let mut i = 0u32;
+            while i < 64 {
+                match open {
+                    Some(start) => {
+                        let z = !x >> i;
+                        if z == 0 {
+                            break;
+                        }
+                        i += z.trailing_zeros();
+                        live.push((start, base + i, 0));
+                        open = None;
+                    }
+                    None => {
+                        let o = x >> i;
+                        if o == 0 {
+                            break;
+                        }
+                        i += o.trailing_zeros();
+                        open = Some(base + i);
+                    }
+                }
             }
         }
-        live.truncate(merged);
-        let mut to = 0;
-        for r in live.iter_mut() {
-            r.2 = to;
-            to += r.1 - r.0;
+        if let Some(start) = open {
+            live.push((start, bits.len() as u32 * 64, 0));
         }
-        // Each span moves with the range holding its start (both passes visit the same
-        // roots, so every start lies in a range).
+        let mut next = 0;
+        for r in live.iter_mut() {
+            r.2 = next;
+            next += r.1 - r.0;
+        }
+        debug_assert_eq!(next, to);
+        // Each span moves with the range holding its start: every token between the range's
+        // start and the span's is live, so its new start is the live count before it (both
+        // passes visit the same roots).
         self.for_each_root(&mut |s| {
             if s.is_empty() {
                 *s = Span::default();
                 return;
             }
-            let (rs, _, rto) = live[live.partition_point(|r| r.0 <= s.start) - 1];
-            let delta = s.start - rs;
-            *s = Span { start: rto + delta, end: rto + delta + (s.end - s.start) };
+            let (w, b) = ((s.start / 64) as usize, s.start % 64);
+            let start = rank[w] + (bits[w] & ((1u64 << b) - 1)).count_ones();
+            *s = Span { start, end: start + (s.end - s.start) };
         });
         self.e.toks.slide(&live);
         self.collect_at = to.saturating_mul(2).max(MIN_COLLECT);
         self.collect_buf = live;
+    }
+}
+
+/// Sets bits `a..b` (`a < b`) of `bits`, growing it if a span ends past the arena.
+fn set_bits(bits: &mut Vec<u64>, a: u32, b: u32) {
+    let (wa, wb) = ((a / 64) as usize, ((b - 1) / 64) as usize);
+    if wb >= bits.len() {
+        bits.resize(wb + 1, 0);
+    }
+    let lo = !0u64 << (a % 64);
+    let hi = !0u64 >> (63 - (b - 1) % 64);
+    if wa == wb {
+        bits[wa] |= lo & hi;
+    } else {
+        bits[wa] |= lo;
+        bits[wa + 1..wb].fill(!0);
+        bits[wb] |= hi;
     }
 }
 

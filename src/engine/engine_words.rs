@@ -18,6 +18,7 @@
 //! `RT_WORD_CHECK=1` makes every word the slow way as well and stops at the first that
 //! differs from its entry; `RT_WORD_NODES=0` copies the nodes everywhere.
 
+use super::engine_chunk::Chunked;
 use super::engine_catcode::Cat;
 use super::engine_eqtb::{Reg, Region};
 use super::engine_hyph::WordHash;
@@ -28,7 +29,7 @@ use super::engine_token::Token;
 use std::collections::HashMap;
 
 /// A word entry's nodes and its natural size (§656 for its characters and kerns).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(PartialEq, Clone, Copy, Debug, Default)]
 pub struct WordRec {
     pub start: u32,
     pub end: u32,
@@ -42,16 +43,16 @@ pub struct WordRec {
 /// Every entry's nodes; a ligature's `b` is where its characters start in `ligs`. A
 /// hyphenated form's discretionary has its `a` in `discs`, whose pre- and post-break
 /// texts are ranges of `items` too.
-#[derive(Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct WordStore {
-    pub recs: Vec<WordRec>,
-    pub items: Vec<Node>,
-    pub ligs: Vec<u8>,
-    pub discs: Vec<[(u32, u32); 2]>,
+    pub recs: Chunked<WordRec>,
+    pub items: Chunked<Node>,
+    pub ligs: Chunked<u8>,
+    pub discs: Chunked<[(u32, u32); 2]>,
     /// Per entry (indexed by its id; absent or empty for a plain word), the range of its
     /// discretionaries' rows in `rows`, which only the second pass reads.
-    pub brk: Vec<(u32, u32)>,
-    pub rows: Vec<BreakRow>,
+    pub brk: Chunked<(u32, u32)>,
+    pub rows: Chunked<BreakRow>,
     /// `capture_list`'s lists while they are read, a stack: an inner list is written past
     /// its outer one and taken off when it moves to `items`.
     stack: Vec<Node>,
@@ -59,7 +60,7 @@ pub struct WordStore {
 
 /// One discretionary of a hyphenated form, as §869 and §840 read it, all widths natural
 /// (no glue in a word, so no stretch or shrink): read whole, one row per break.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(PartialEq, Clone, Copy, Debug, Default)]
 pub struct BreakRow {
     /// The width of the form's nodes before the discretionary (replaced ones included).
     pub before: i32,
@@ -84,6 +85,18 @@ impl BreakRow {
 }
 
 impl WordStore {
+    /// A checkpoint's copy, sharing what did not change since the last one, and a live copy
+    /// of one (`engine_chunk`); the scratch stack is empty between commands.
+    pub fn freeze(&mut self) -> WordStore {
+        let WordStore { recs, items, ligs, discs, brk, rows, stack: _ } = self;
+        WordStore { recs: recs.freeze(), items: items.freeze(), ligs: ligs.freeze(), discs: discs.freeze(), brk: brk.freeze(), rows: rows.freeze(), stack: Vec::new() }
+    }
+
+    pub fn thaw(&self) -> WordStore {
+        let WordStore { recs, items, ligs, discs, brk, rows, stack: _ } = self;
+        WordStore { recs: recs.thaw(), items: items.thaw(), ligs: ligs.thaw(), discs: discs.thaw(), brk: brk.thaw(), rows: rows.thaw(), stack: Vec::new() }
+    }
+
     #[inline]
     pub fn range(&self, id: u32) -> (usize, usize) {
         let r = &self.recs[id as usize];
@@ -221,6 +234,67 @@ impl WordStore {
         Some((s, self.items.len() as u32))
     }
 
+    /// Whether entry `a` here and entry `b` of live store `other` stand for the same nodes
+    /// (a watch session's early cutoff: two runs give one word different ids).
+    pub fn same_entry(&self, a: u32, other: &WordStore, b: u32) -> bool {
+        let (Some(x), Some(y)) = (self.recs.get(a as usize), other.recs.get(b as usize)) else { return false };
+        if (x.width, x.height, x.depth, x.disc) != (y.width, y.height, y.depth, y.disc) || self.rows(a) != other.rows(b) {
+            return false;
+        }
+        let (i, j) = (&self.items[x.start as usize..x.end as usize], &other.items[y.start as usize..y.end as usize]);
+        if i == j && !i.iter().any(|n| n.kind == Kind::Lig || (n.kind == Kind::Disc && n.a >= 0)) {
+            return true;
+        }
+        let (mut p, mut q) = (Vec::new(), Vec::new());
+        self.text((x.start, x.end), &mut p);
+        other.text((y.start, y.end), &mut q);
+        p == q
+    }
+
+    /// Entry `id` of live store `from` appended here as a new entry: its id.
+    pub fn copy_entry(&mut self, from: &WordStore, id: u32) -> u32 {
+        let r = from.recs[id as usize];
+        let (start, end) = self.copy_items(from, (r.start, r.end));
+        let new = self.recs.len() as u32;
+        self.recs.push(WordRec { start, end, ..r });
+        let rows = from.rows(id);
+        if !rows.is_empty() {
+            let at = self.rows.len() as u32;
+            self.rows.extend_from_slice(rows);
+            if self.brk.len() < new as usize {
+                self.brk.resize(new as usize, (0, 0));
+            }
+            self.brk.push((at, self.rows.len() as u32));
+        }
+        new
+    }
+
+    /// Item range `r` of `from` appended here, a discretionary's texts first (as
+    /// [`Self::capture_list`] lays them out): its range.
+    fn copy_items(&mut self, from: &WordStore, (s, e): (u32, u32)) -> (u32, u32) {
+        let mut out = Vec::with_capacity((e - s) as usize);
+        for n in &from.items[s as usize..e as usize] {
+            match n.kind {
+                Kind::Lig => {
+                    let at = self.ligs.len() as i32;
+                    self.ligs.extend_from_slice(from.lig_from(n));
+                    out.push(Node { b: at, ..*n });
+                }
+                Kind::Disc if n.a >= 0 => {
+                    let [pre, post] = from.discs[n.a as usize];
+                    let pre = self.copy_items(from, pre);
+                    let post = self.copy_items(from, post);
+                    self.discs.push([pre, post]);
+                    out.push(Node { a: self.discs.len() as i32 - 1, ..*n });
+                }
+                _ => out.push(*n),
+            }
+        }
+        let at = self.items.len() as u32;
+        self.items.extend_from_slice(&out);
+        (at, self.items.len() as u32)
+    }
+
     /// A canonical text of item range `r`, to compare two entries.
     fn text(&self, (s, e): (u32, u32), out: &mut Vec<i64>) {
         for n in &self.items[s as usize..e as usize] {
@@ -272,6 +346,7 @@ impl std::hash::Hasher for Folded {
     }
 }
 
+#[derive(PartialEq, Clone)]
 pub struct Words {
     /// Key: font, hyphen character, paragraph, the characters; value: the entry. Words of
     /// up to [`SHORT`] characters after the first are in `short`, keyed as one `u128`.
@@ -290,7 +365,7 @@ pub struct Words {
     forms: HashMap<u64, Form, WordHash>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 enum Form {
     /// No hyphen: the word stays one node.
     Whole,

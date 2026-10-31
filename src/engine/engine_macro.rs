@@ -276,7 +276,7 @@ impl Machine<'_, '_> {
     /// argument in `args` and its bounds in `bounds`. Returns the number of arguments, or
     /// `None` after an error (the call is dropped, as TeX drops it).
     fn scan_arguments(&mut self, name: Token, long: bool, pattern: &[Token], args: &mut Vec<Token>, bounds: &mut [(u32, u32); 9]) -> Option<usize> {
-        let par = Some(Token::cs(self.e.cs.intern("par")));
+        let par = Some(Token::cs(self.e.cs.par()));
         let space = Token::char(Cat::Space, ' ');
         let mut n = 0usize;
         let mut r = 0usize;

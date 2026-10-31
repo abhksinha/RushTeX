@@ -11,14 +11,19 @@
 \usepackage{multirow}
 \usepackage{array}
 \usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{siunitx}
 \usepackage{xcolor}
+\usepackage{tikz}
 \usepackage{url}
 \usepackage{float}
 \usepackage{textcomp}
 \usepackage{dcolumn}
 \usepackage{enumitem}
+\usepackage{setspace}
 \setlist[enumerate,2]{itemsep=1pt}
 \usepackage{fancyhdr}
+\usepackage{multicol}
 \fancyhf{}
 \fancyhead[L]{The RushTeX manual}
 \fancyhead[R]{Page \thepage}
@@ -31,10 +36,13 @@
 \numberwithin{equation}{section}
 \DeclareMathOperator{\tr}{tr}
 \newcommand{\gdl}{Guarded Direct Lowering}
+\newenvironment{rtnote}{\par\medskip\noindent\textbf{Note.}\ }{\par\medskip}
 \def\half#1{\frac{#1}{2}}
 \renewcommand{\baselinestretch}{1}
 \renewcommand{\textfraction}{.2}
 \renewcommand{\thetable}{T\arabic{table}}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{Y}{>{\raggedleft\arraybackslash}X}
 \newtheorem{theorem}{Theorem}[section]
 \newtheorem{lemma}[theorem]{Lemma}
 \newtheorem{corollary}{Corollary}[theorem]
@@ -1868,6 +1876,84 @@ hyphenate as letters (caract\'eristiques, t\'el\'ecommunications), while \H{o}, 
 This document is set in OT1; the gates compile it a second time with T1 loaded, and both
 must match the engine box for box and pdf\LaTeX\ pixel for pixel.
 
+\section{Columns}\label{sec:columns}
+The multicol package sets text in columns inside a page. Its environment
+\texttt{multicols} takes the number of columns; the page above it is kept, the columns
+are filled to the page's height and, at the end, balanced so that they come out of equal
+height. RushTeX runs multicol's own algorithm: the columns are split from one box with
+\texttt{vsplit}, the first height tried is the material's height divided by the number of
+columns, and it grows a point at a time until no column is too bad and the last one is not
+longer than the others.
+
+\begin{multicols}{2}
+A balanced pair of columns. The text runs down the left column first and then the right
+one, and the environment ends with both of the same height, so that the text after it
+starts below the longer of the two. The space between the columns is
+\texttt{columnsep}, and \texttt{columnseprule} draws a line between them when it is
+not zero.
+
+The second paragraph shows that a paragraph may be broken across the columns: its lines
+go where the balancing puts the break, and a club or widow penalty weighs on that choice
+as it does on a page.
+\end{multicols}
+
+Text after the environment continues in one column, after \texttt{multicolsep}.
+\setlength{\columnseprule}{0.4pt}
+\begin{multicols}{3}
+\small Three columns with a rule between them. A list works inside a column:
+\begin{itemize}
+  \item the first item,
+  \item a second item that is long enough to take two lines,
+\end{itemize}
+and so does mathematics, $a^2+b^2=c^2$, set at the column's width.
+\end{multicols}
+\setlength{\columnseprule}{0pt}
+The starred environment \texttt{multicols*} does not balance: its columns are filled one
+after the other to the page's height, the last perhaps short.
+
+\clearpage
+\section{Tables of 31 October 2026}\label{sec:oct31tables}
+
+\subsection{Long tables on one page}
+A \texttt{longtable} is set in chunks, each an alignment as wide as the line; a head
+ended by \texttt{endhead} is a chunk of its own, and the columns of all chunks are made
+equally wide, as the second run of pdf\LaTeX\ makes them from the auxiliary file. The table
+steps the table counter, and booktabs' rules in it are rows of leaders.
+\begin{longtable}{@{}p{12mm}p{30mm}l@{}}
+\toprule
+ID & Date & Decision\\
+\midrule
+\endhead
+D01 & 29 August & Use the sheltered baseline as the reference run\\
+D02 & 30 August & Keep the raw values\\
+\bottomrule
+\end{longtable}
+A long table that would not end on the page it starts on still runs on the engine path.
+
+\subsection{Column types of one's own}
+array's \texttt{newcolumntype} names a column specification, with arguments if it has
+some. Before the preamble is built, every letter so defined is replaced by its text, again
+and again until none is left, exactly as array's \texttt{\textbackslash NC@list} does. Here
+\texttt{P} is a ragged-right paragraph column of a given width and \texttt{Y} a ragged-left
+\texttt{X} column of tabularx.
+
+\begin{center}
+\begin{tabular}{@{}P{.3\textwidth}P{.45\textwidth}@{}}
+\toprule
+Driver & Base-case assumption\\
+\midrule
+Growth & Twelve per cent a year for three years, then eight, with no further change in the
+mix of customers\\
+Margin & Flat\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{tabularx}{\linewidth}{@{}X r Y@{}}
+Item & Hours & Amount\\
+Design of the column rewriting, read from array's source & 6 & 480.00\\
+\end{tabularx}
+
 \clearpage
 \section{Current limits}\label{sec:limits}
 
@@ -1960,9 +2046,138 @@ one shows which section to read.
         dcolumn, text symbols in a table cell, \texttt{thanks} and \texttt{and},
         \texttt{hbox}, \texttt{vskip}, \texttt{rlap}, \texttt{llap}, \texttt{nobreak},
         \texttt{sloppy}, a prefixed \texttt{thetable}.
+  \item[Section~\ref{sec:columns}] multicol's \texttt{multicols} balanced in two and three
+        columns, \texttt{columnsep}, \texttt{columnseprule}, a list and mathematics in a
+        column.
   \item[Section~\ref{sec:bib}] \texttt{bibliography}, \texttt{bibliographystyle} and the
         \texttt{thebibliography} they bring.
 \end{description}
+
+\section{Small commands}\label{sec:small}
+Short inline code is written with \verb|\verb|, as in \verb+\section{Title}+ or
+\verb!x = a, b; y--z!. The text between the two delimiters is read as it stands in the
+file, in the typewriter font, without ligatures and with French spacing: \verb|e.g. this.|
+The starred form shows each space as a visible space: \verb*|a b c|.
+
+\noindent\makebox[30mm][l]{\bfseries Label:}a value set after a box of fixed width, then
+\makebox[2cm]{centred}, \makebox[2cm][r]{right}, \makebox[0pt][l]{over}\makebox[3em][s]{s p}
+and \makebox{a plain box}; a box of no width lets its text overlap what follows.
+
+Leaders fill a line's rest with a rule or with dots, as forms and tables of contents do:
+
+\noindent Signature \hrulefill\par
+\noindent The first chapter \dotfill\ 3\par
+\noindent Date \hrulefill{} and place \dotfill
+
+More text symbols of the TS1 encoding: 5\,\textmu m at 20\,\textcelsius, 3\,\textohm,
+\texteuro\,10, \textyen\,7, \textonequarter, \textthreequarters, \textlnot, a\textminus b,
+\textnumero\,4 and \textflorin.
+
+\begin{rtnote}
+An environment the preamble defines with \texttt{newenvironment}: its begin and end texts
+run around this paragraph.
+\end{rtnote}
+Text after the environment goes on.
+
+\begin{spacing}{1.5}
+Inside a \texttt{spacing} environment of setspace the stretch is one and a half: the
+baselines of this paragraph are further apart than those around it, and the environment
+ends with a correction for the skip it adds.
+\end{spacing}
+\begin{onehalfspace}
+The \texttt{onehalfspace} environment sets the stretch the class size asks for, here
+1.25 for ten points, with a paragraph long enough to wrap.
+\end{onehalfspace}
+The text after both environments is set at the normal spacing again.
+
+\section{Quantities and units}\label{sec:siunitx}
+siunitx prints numbers and units in math, at its default settings: a speed of
+\SI{0.42}{\kilo\watt\hour} per day, \num{1250} samples, an acceleration in
+\si{\meter\per\second\squared}, a resistance of \SI{0.12}{\ohm} that changes by
+\si{\ohm\per\degreeCelsius}, a volume of \SI{200}{mL} at \SI{86.0}{\celsius}. In a
+formula the unit joins it, $v = 3\,\si{\meter\per\second}$, and a script may be a math
+alphabet, as in $T_\mathrm{room}$.
+
+An \texttt{S} column with a \texttt{table-format} aligns its numbers on the decimal marker,
+the integer part in the width of the format's digits and the decimal part followed by the
+space its missing digits leave; a braced entry is text, centred.
+\begin{center}
+\begin{tabular}{@{}l S[table-format=2.2] S[table-format=1.3]@{}}
+\toprule
+Run & {Input (\si{\volt})} & {$T$ (\si{\second})}\\
+\midrule
+1 & 1.00 & 0.084\\
+2 & 20.5 & 1.2\\
+3 & 3 & 2.009\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Drawings}\label{sec:tikz}
+\begin{tikzpicture}[remember picture,overlay]
+  \draw[line width=.8pt,rtblue]
+    ([xshift=15mm,yshift=-15mm]current page.north west)
+    rectangle ([xshift=-15mm,yshift=15mm]current page.south east);
+\end{tikzpicture}%
+This document loads \texttt{tikz}, and the native job loads it as pdfLaTeX does: the
+package and the eleven it brings (pgf's utilities, keys, mathematics, system and basic
+layers, \texttt{pgffor}, \texttt{graphicx} and \texttt{xcolor}) come from tables evaluated
+from their sources, and every page gets the box that pgf's \texttt{shipout/background} hook
+puts at the page origin, empty until a picture needs page-level objects.
+
+The frame around this page and the bands at its foot and corner are pictures of the kind
+certificates, menus and title pages draw: \texttt{remember picture,overlay}, with
+\texttt{draw} and \texttt{fill} of a \texttt{rectangle} between two anchors of
+\texttt{current page}, shifted by
+\begin{tikzpicture}[overlay,remember picture]%
+\fill[rtdeep!20] (current page.south west) rectangle ([yshift=8mm]current page.south east);
+\fill[orange!85!black](current page.north east)rectangle([xshift=-6mm,yshift=-6mm]current page.north east);
+\end{tikzpicture} \texttt{xshift} and \texttt{yshift}, in a line width and a colour. pgf
+turns each path into \texttt{pdfliteral} operators whose numbers are \TeX{} dimensions
+converted to big points by a truncating decimal multiplication, and the corners are
+measured from where the picture lands on the page, which pgf reads from the position it
+saved on the previous run; the native job writes them in the one pass that ships the page,
+from the same position. Pictures with nodes, other paths and other options still go to the
+engine.
+
+\section{Boxes of a fixed height}\label{sec:boxheight}
+A \texttt{minipage} or \texttt{parbox} may be given a height after its position and then an
+inner position, which places the text inside that height: \texttt{[t][2cm][c]} is a box two
+centimetres tall, aligned on the line by its top, with its text centred in it.
+
+\noindent\begin{minipage}[t][2cm][c]{0.3\textwidth}
+\centering\sffamily\bfseries\large NOTICE\\[3pt]\normalsize text centred in the box
+\end{minipage}\hfill
+\begin{minipage}[t][2cm][b]{0.3\textwidth}
+This text sits at the foot of its box.
+\end{minipage}\hfill
+\fbox{\begin{minipage}[t][1.5cm]{0.3\textwidth}
+A framed box with a height and no inner position keeps its text at the top.
+\end{minipage}}
+
+\medskip
+A \parbox[b][1cm]{2.5cm}{parbox one centimetre tall} and a
+\parbox[c][1.6cm][s]{2.5cm}{stretched\vfill parbox} sit on the line beside an empty height,
+\parbox[t][]{2cm}{as tall as its text}, and a box within a box:
+\fbox{\parbox[c][1.2cm][t]{3.2cm}{outer, \parbox[b][.6cm][c]{1.2cm}{inner}}}.
+
+\noindent The kernel's \texttt{\textbackslash fill} is a skip of zero plus one fill:
+left\hspace{\fill}middle\hspace*{\fill}right.
+\vspace{\fill}
+
+\noindent A \texttt{raisebox} lifts its text, \raisebox{1ex}{up} or
+\raisebox{-.5\height}{\fbox{down by half its height}}, and may give it another height and
+depth, as \raisebox{1.5ex}[0pt][0pt]{this one} that takes no room above the line.
+A \texttt{framebox} is a framed \texttt{makebox}: \framebox[3cm]{centred},
+\framebox[3cm][l]{at the left}, \framebox[1.5\width]{half again as wide}.
+
+\section{Struts that start a paragraph}\label{sec:strut}
+\strut A \verb|\strut| between paragraphs starts one, as \verb|\unhcopy\strutbox| does in
+vertical mode: the paragraph indent comes first, then the strut's rule. memoir builds every
+head and foot slot so, \verb|\parbox[b]{w}{\raggedright\strut ...\strut}|:
+\parbox[b]{8em}{\raggedright\strut left slot\strut}\hfill
+\parbox[b]{8em}{\centering\strut\strut}\hfill
+\parbox[b]{8em}{\raggedleft\strut right\strut}
 
 \section{References}\label{sec:bib}
 

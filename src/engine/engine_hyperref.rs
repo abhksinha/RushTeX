@@ -19,6 +19,7 @@ const BORDER_COLORS: [&str; 3] = ["1 0 0", "0 1 0", "0 1 1"];
 /// The options the native job takes (`hyper_keys`): `hidelinks` (border 0, no colour),
 /// `colorlinks` (border 0 and `\Hy@colorlink` at `\begin{document}`), the link colours by
 /// kind (names, made literals at `\begin{document}`).
+#[derive(PartialEq, Clone)]
 pub(super) struct HyperOpts {
     hide: bool,
     colorlinks: bool,
@@ -60,6 +61,72 @@ fn pdf_string(v: &str) -> Option<String> {
     Some(out)
 }
 
+/// The sectioning counters by heading level: article's levels start at `section`, report's
+/// at `chapter`.
+fn heading_names(report: bool) -> &'static [&'static str] {
+    if report { &["chapter", "section", "subsection"] } else { &["section", "subsection", "subsubsection"] }
+}
+
+/// The anchor of a numbered heading at `level` with the sectioning counters `counters`:
+/// `<prefix>.\theH<counter>`, the counters in arabic. hyperref's `\appendix` makes
+/// `\theHchapter` (article: `\theHsection`) `\Hy@AlphNoErr` (`A` to `Z`, else `Alph<n>`),
+/// and the prefix of `chapter` (`\Hy@chapapp`) and of `section` (`target-prefix=
+/// {section}{\Hy@appendixstring}`) `appendix`: report's `appendix.A`, `appendix.A.1`,
+/// `subsection.A.1.1`, article's `appendix.A`, `subsection.A.1`.
+pub(super) fn heading_anchor_name<T: Copy + Into<i64>>(report: bool, appendix: bool, level: usize, counters: &[T]) -> String {
+    let name = heading_names(report)[level];
+    let mut out = String::from(if appendix && matches!(name, "chapter" | "section") { "appendix" } else { name });
+    for (k, &c) in counters[..=level].iter().enumerate() {
+        out.push('.');
+        out.push_str(&if k == 0 { the_h_top(c, appendix) } else { c.into().to_string() });
+    }
+    out
+}
+
+/// `\theHchapter` (article: `\theHsection`) of counter value `c`: arabic, after hyperref's
+/// `\appendix` `\Hy@AlphNoErr` (`A` to `Z`, else `Alph<n>`).
+pub(super) fn the_h_top<T: Into<i64>>(c: T, appendix: bool) -> String {
+    match c.into() {
+        c @ 1..=26 if appendix => ((b'A' + c as u8 - 1) as char).to_string(),
+        c if appendix => format!("Alph{c}"),
+        c => c.to_string(),
+    }
+}
+
+/// The anchor of a starred chapter: `chapter*.N`, after hyperref's `\appendix` (`\Hy@chapapp`)
+/// `appendix*.N`. A starred section keeps `section*.N`.
+pub(super) fn star_chapter_anchor(appendix: bool, n: impl std::fmt::Display) -> String {
+    format!("{}*.{n}", if appendix { "appendix" } else { "chapter" })
+}
+
+/// The anchor of a numbered heading at `level` whose number is `number`, as
+/// `heading_anchor_name` makes it: an appendix number starts with its letter; `None` for a
+/// number that is neither.
+fn heading_href(report: bool, level: usize, number: &str) -> Option<String> {
+    let names = heading_names(report);
+    // An unnumbered contents entry ("*N", book's chapters outside the main matter): its
+    // `\Hy@MakeCurrentHrefAuto{chapter*}` anchor.
+    // `\addcontentsline`'s ("#href"): `\@currentHref` when it was written.
+    if let Some(h) = number.strip_prefix('#') {
+        return (!h.is_empty()).then(|| h.to_string());
+    }
+    if let Some(n) = number.strip_prefix('*') {
+        return names.get(level).map(|k| format!("{k}*.{n}"));
+    }
+    if level >= names.len() {
+        return None;
+    }
+    let mut parts = number.split('.');
+    let first = parts.next().unwrap_or("");
+    let appendix = first.len() == 1 && first.as_bytes()[0].is_ascii_uppercase();
+    let arabic = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+    if !(appendix || arabic(first)) || !parts.all(arabic) {
+        return None;
+    }
+    let name = names[level];
+    Some(format!("{}.{number}", if appendix && matches!(name, "chapter" | "section") { "appendix" } else { name }))
+}
+
 /// The keys of a key-value list: commas inside braces stay in the value.
 fn key_items(list: &str) -> Vec<&str> {
     let (mut items, mut depth, mut from) = (Vec::new(), 0, 0);
@@ -93,7 +160,8 @@ impl Machine<'_, '_> {
         let start = self.cur.len();
         let explicit = |w| Node { sub: 1, ..Node::new(Kind::Kern, w) };
         self.cur.extend([explicit(offsets[1]), explicit(margin), explicit(-ONE_BP)]);
-        self.append_dest(format!("page.{page}"));
+        let name = format!("page.{}", self.the_page(page));
+        self.append_dest(name);
         self.cur.push(Node::new(Kind::Penalty, 10000));
         let n = self.e.nodes.glue_node(fil, 0);
         self.cur.push(n);
@@ -130,7 +198,8 @@ impl Machine<'_, '_> {
         }
         text.push_str(&format!("/Keywords({})", field(5, "")));
         self.add_info(&text);
-        let entries: Option<Vec<(usize, String, String)>> = self.doc.as_ref().and_then(|d| d.contents.as_ref()).map(|t| t.iter().map(|e| (e.level, e.number.clone(), e.title.clone())).collect());
+        // hyperref's `\addcontentsline` writes no bookmark while `\@currentHref` is empty.
+        let entries: Option<Vec<(usize, String, String)>> = self.doc.as_ref().and_then(|d| d.contents.as_ref()).map(|t| t.iter().filter(|e| e.number != "#").map(|e| (e.level, e.number.clone(), e.title.clone())).collect());
         if let Some(entries) = entries {
             if let Err(what) = self.bookmarks(&entries) {
                 return self.not_native(what);
@@ -163,13 +232,11 @@ impl Machine<'_, '_> {
         }
     }
 
-    /// The anchor of a numbered heading at `level` (0 `section`): `section.\theHsection`, the
-    /// counters in arabic (the kernel's `\theH<level>`).
+    /// The anchor of a numbered heading at `level` (0 `section`, report's `chapter`):
+    /// `section.\theHsection`, the counters in arabic (the kernel's `\theH<level>`).
     pub(super) fn heading_anchor(&mut self, level: usize, counters: &[i32]) {
-        let mut name = ["section", "subsection", "subsubsection"][level].to_string();
-        for c in &counters[..=level] {
-            name.push_str(&format!(".{c}"));
-        }
+        let (report, appendix) = self.doc.as_ref().map_or((false, false), |d| (d.report, d.appendix));
+        let name = heading_anchor_name(report, appendix, level, counters);
         self.set_current_href(&name);
         self.vertical_anchor(name);
     }
@@ -191,6 +258,7 @@ impl Machine<'_, '_> {
     /// `\pdfstringdef` makes it (UTF-16BE with its mark, in octal escapes). `Err` for what is
     /// not ported: a title that is not plain text, a level jump.
     pub(super) fn bookmarks(&mut self, entries: &[(usize, String, String)]) -> Result<(), &'static str> {
+        let report = self.doc.as_ref().is_some_and(|d| d.report);
         let mut prev = None;
         for (level, _, _) in entries {
             if *level > prev.map_or(0, |p: usize| p + 1) {
@@ -229,13 +297,9 @@ impl Machine<'_, '_> {
                 }
                 bookmark_char(c, &mut text);
             }
-            // The anchor is `\theH<level>`, the counters in arabic, as `heading_anchor` makes it.
-            if !number.split('.').all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) {
+            let Some(name) = heading_href(report, *level, number) else {
                 return Err("hyperref: a heading number that is not arabic");
-            }
-            let mut name = ["section", "subsection", "subsubsection"][*level].to_string();
-            name.push('.');
-            name.push_str(number);
+            };
             self.append_outline(&name, -children, &text);
         }
         Ok(())
@@ -263,6 +327,25 @@ impl Machine<'_, '_> {
         list.extend(text);
         list.extend([self.named_cs(named!("endgroup")), self.doc_id(super::END_LINK_NATIVE)]);
         self.back_list(&list);
+    }
+
+    /// hyperref's `\contentsline` (`linktoc=section`): `\l@<level>{\Hy@toclinkstart{#2}
+    /// \Hy@toclinkend}`, so the entry's `\numberline` and title inside `\pdfstartlink`, a
+    /// group, `\pdfendlink`; the target the heading's `\@currentHref` when it was written.
+    pub(super) fn toc_link_start(&mut self, level: usize, number: &str) {
+        let Some(doc) = self.doc.as_mut() else { return };
+        let Some(name) = heading_href(doc.report, level, number) else {
+            return self.not_native("hyperref: a contents entry whose number is not arabic");
+        };
+        doc.link = Some((LINK, name));
+        self.start_link();
+        self.begin_group(super::SIMPLE_GROUP);
+    }
+
+    /// The group's end and `\pdfendlink` of [`Self::toc_link_start`].
+    pub(super) fn toc_link_end(&mut self) {
+        self.end_group(super::SIMPLE_GROUP);
+        self.end_link();
     }
 
     /// The link `ref_link` prepared, started where the text begins (after `\leavevmode`).
@@ -336,7 +419,8 @@ impl Machine<'_, '_> {
         doc.equation += 1;
         let counters: Vec<u32> = doc.counters.iter().map(|&c| c as u32).collect();
         // hyperref's `\theHequation` is `\arabic{equation}`: a prefixed `\theequation` names no anchor.
-        let name = super::theorem_href("equation", &counters, doc.eq_within, doc.equation as u32);
+        // report's `\@addtoreset{equation}{chapter}`: `\theHchapter.` first (latex.ltx).
+        let name = super::theorem_href("equation", &counters, doc.eq_within.or(doc.report.then_some(0)), doc.equation as u32);
         let n = self.equation_text();
         self.store_current_label(&n);
         self.set_current_href(&name);

@@ -14,6 +14,7 @@ use crate::backend::scaled::{xn_over_d, Scaler};
 use std::borrow::Cow;
 
 /// One loaded font (§549's per-font arrays). Its scaled values live in `Fonts::info`.
+#[derive(PartialEq, Clone)]
 pub struct Font {
     /// The TFM name: borrowed from the font table for a pinned font, owned otherwise.
     pub name: Cow<'static, str>,
@@ -41,7 +42,7 @@ pub struct Font {
 }
 
 /// A font's bases in `Fonts::info` and its parameter count.
-#[derive(Clone, Copy, Default)]
+#[derive(PartialEq, Clone, Copy, Default)]
 struct FontAt {
     width: u32,
     height: u32,
@@ -100,7 +101,7 @@ impl Font {
     /// A width or kern of this font's base, scaled to this expanded copy.
     #[inline]
     /// [`Font::dims`]' records, appended to the arena from its scaled arrays.
-    fn resolve_all(&mut self, info: &mut Vec<i32>) {
+    fn resolve_all(&mut self, info: &mut super::engine_chunk::Chunked<i32>) {
         self.at.dims = info.len() as u32;
         info.reserve(4 * 256);
         for c in 0..=255u8 {
@@ -124,7 +125,7 @@ impl Font {
 /// Where a font's character metrics come from. Both kinds hold the same layout: §539's
 /// word arrays as little-endian quads (`data_tfm::TfmView`), so the per-character paths
 /// below read one representation.
-#[derive(Clone)]
+#[derive(PartialEq, Clone)]
 pub enum Metrics {
     None,
     /// A pinned font: its rows in the static table (`data_tfm::fonts`), resolved once at
@@ -135,6 +136,7 @@ pub enum Metrics {
 }
 
 /// The parts of a TFM file read at run time (§539–§546), in the table's quad layout.
+#[derive(PartialEq)]
 pub struct FileTfm {
     bc: u8,
     design: i32,
@@ -252,6 +254,18 @@ pub fn restart(j: u32) -> usize {
 }
 
 impl Fonts {
+    /// A checkpoint's copy, the parameter arena sharing what did not change since the last
+    /// one, and a live copy of one (`engine_chunk`).
+    pub fn freeze(&mut self) -> Fonts {
+        Fonts { list: self.list.freeze(), info: self.info.freeze(), by_key: self.by_key.clone(), micro: self.micro.clone() }
+    }
+
+    pub fn thaw(&self) -> Fonts {
+        Fonts { list: self.list.thaw(), info: self.info.thaw(), by_key: self.by_key.clone(), micro: self.micro.clone() }
+    }
+}
+
+impl Fonts {
     /// The fonts of a format: each one's scaled parameters, and its metrics as the name of an
     /// embedded TFM or the parts of the file read.
     #[cfg(feature = "oracle")]
@@ -288,7 +302,7 @@ impl Fonts {
     #[cfg(feature = "oracle")]
     pub(super) fn undump(r: &mut super::engine_snapshot::Reader) -> Option<Fonts> {
         let n = r.count()?;
-        let mut fonts = Fonts { list: Vec::with_capacity(n), info: Vec::new(), by_key: Default::default(), micro: Default::default() };
+        let mut fonts = Fonts { list: super::engine_chunk::Chunked::with_capacity(n), info: Default::default(), by_key: Default::default(), micro: Default::default() };
         for _ in 0..n {
             let (name, size, design, params, hyphen_char, skew_char): (String, i32, i32, Vec<i32>, i32, i32) = (r.str()?, r.i32()?, r.i32()?, r.all()?, r.i32()?, r.i32()?);
             let metrics = match r.u8()? {
@@ -317,8 +331,10 @@ impl Fonts {
         }
         // The format's fonts fit exactly (one font's parameters can be large: expl3 keeps
         // data in `\fontdimen`s), with fixed room for a document's own fonts.
-        fonts.info.shrink_to_fit();
-        fonts.info.reserve_exact(ARENA_HEADROOM);
+        let mut info = fonts.info.take();
+        info.shrink_to_fit();
+        info.reserve_exact(ARENA_HEADROOM);
+        fonts.info = info.into();
         (!fonts.list.is_empty()).then_some(fonts)
     }
 }
@@ -330,11 +346,12 @@ fn table_name(id: u32) -> Option<&'static str> {
 
 /// Every font loaded so far, and their scaled values in one append-only arena (TeX's
 /// `font_info`, §549). Fonts are never freed, as in TeX; a checkpoint is the two lengths.
+#[derive(PartialEq, Clone)]
 pub struct Fonts {
-    pub list: Vec<Font>,
+    pub list: super::engine_chunk::Chunked<Font>,
     /// Scaled widths, heights, depths, italic corrections and kerns of every font, then its
     /// parameters last, so §579's growth of the last font's parameters appends in place.
-    pub info: Vec<i32>,
+    pub info: super::engine_chunk::Chunked<i32>,
     /// (hash of the name, size) to the first font loaded with them (§1260's search).
     by_key: std::collections::HashMap<(u64, i32), u16>,
     /// Protrusion and expansion codes and links (`engine_microtype`); never in a format.
@@ -353,7 +370,7 @@ fn name_key(name: &str) -> u64 {
 impl Default for Fonts {
     /// §552: `\nullfont` has seven zero parameters.
     fn default() -> Self {
-        let mut f = Fonts { list: Vec::new(), info: Vec::new(), by_key: Default::default(), micro: Default::default() };
+        let mut f = Fonts { list: Default::default(), info: Default::default(), by_key: Default::default(), micro: Default::default() };
         f.push(Cow::Borrowed("nullfont"), 0, 0, Metrics::None, [0; 7].into_iter(), false, '-' as i32, -1);
         f
     }
@@ -368,7 +385,7 @@ impl Fonts {
     fn push(&mut self, name: Cow<'static, str>, size: i32, design: i32, metrics: Metrics, params: impl Iterator<Item = i32>, scale_params: bool, hyphen_char: i32, skew_char: i32) -> u16 {
         let s = Scaler::new(size);
         let v = metrics.view();
-        let base = |info: &mut Vec<i32>, col: U32s| {
+        let base = |info: &mut super::engine_chunk::Chunked<i32>, col: U32s| {
             let b = info.len() as u32;
             info.extend(col.iter().map(|x| s.scale(x as i32)));
             b
@@ -412,7 +429,7 @@ impl Fonts {
     #[inline]
     pub fn params_mut(&mut self, f: u16) -> &mut [i32] {
         let a = self.list[f as usize].at;
-        &mut self.info[a.param as usize..(a.param + a.params) as usize]
+        self.info.slice_mut(a.param as usize..(a.param + a.params) as usize)
     }
 
     /// §579: the last-loaded font's parameters grown to `n`; its parameters end the arena.

@@ -95,7 +95,13 @@ impl<'a> Lexer<'a> {
         self.next_line += used;
         let line = line.strip_suffix('\r').unwrap_or(line);
         self.buf.clear();
-        self.buf.extend(line.trim_end_matches(' ').chars());
+        let line = line.trim_end_matches(' ');
+        // An ASCII line (most) is one `char` per byte: a sized copy, not a UTF-8 decode.
+        if line.is_ascii() {
+            self.buf.extend(line.bytes().map(char::from));
+        } else {
+            self.buf.extend(line.chars());
+        }
         if (0..=255).contains(&end_line_char) {
             self.buf.push(char::from(end_line_char as u8));
         }

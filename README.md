@@ -13,9 +13,11 @@ A LaTeX-to-PDF compiler written from scratch in pure safe Rust (`#![forbid(unsaf
 
 | Compiler | Instructions retired |
 |---|---|
-| rushtex, one pass | 0.50 billion |
-| pdfLaTeX, one run | 40.5 billion (80x more) |
-| pdfLaTeX, the usual 3 runs | 128.3 billion (255x more) |
+| rushtex, one pass | 0.51 billion |
+| pdfLaTeX, one run | 43.1 billion (85x more) |
+| pdfLaTeX, the usual 3 runs | 134.8 billion (266x more) |
+
+All benchmarks, with wall time, memory and PDF size: [abhksinha.github.io/RushTeX](https://abhksinha.github.io/RushTeX/#benchmarks).
 
 ## Build and use
 

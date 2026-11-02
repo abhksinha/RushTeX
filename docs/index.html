@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>RushTeX</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description" content="RushTeX: a LaTeX compiler in pure safe Rust whose PDF matches pdfLaTeX's pixel for pixel, with 38x fewer CPU instructions than one pdfLaTeX run.">
+<meta name="description" content="RushTeX: a LaTeX compiler in pure safe Rust whose PDF matches pdfLaTeX's pixel for pixel, with 85x fewer CPU instructions than one pdfLaTeX run on its 87-page reference document.">
 <style>
 /* Layout: a spec sheet. Slim sticky local nav, a short statement, then dense
    label/content rows and tables in one 980px column, hairlines between rows. */
@@ -202,12 +202,12 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
   <div class="wrap">
     <p class="eyebrow">Open source · MIT or Apache-2.0 · pure safe Rust</p>
     <h1>The same PDF as pdfLaTeX. A fraction of the work.</h1>
-    <p class="lede">RushTeX is a LaTeX compiler written from scratch in Rust, with no runtime dependencies and no unsafe code. Its output is checked against pdfLaTeX <strong>glyph for glyph and pixel for pixel</strong>. On the 12-page project description it takes <strong>38.8× fewer CPU instructions</strong> than one pdfLaTeX run, and <strong>120.5× fewer</strong> than the three runs pdfLaTeX needs to finish that document.</p>
+    <p class="lede">RushTeX is a LaTeX compiler written from scratch in Rust, with no runtime dependencies and no unsafe code. Its output is checked against pdfLaTeX <strong>glyph for glyph and pixel for pixel</strong>. On its 87-page reference document it takes <strong>85× fewer CPU instructions</strong> than one pdfLaTeX run, and <strong>266× fewer</strong> than the three runs pdfLaTeX needs to finish it.</p>
     <div class="figures">
-      <div class="fig"><b>38.2×</b><span>fewer instructions than one pdfLaTeX run, 25 pages</span></div>
-      <div class="fig"><b>25.9 ms</b><span>wall time for 25 pages, against 758.6 ms</span></div>
-      <div class="fig"><b>0 px</b><span>pixels differing on 85 CTAN documents, 2,137 pages</span></div>
-      <div class="fig"><b>14.5 MB</b><span>peak memory, against 31.0 MB</span></div>
+      <div class="fig"><b>85×</b><span>fewer instructions than one pdfLaTeX run, 87 pages</span></div>
+      <div class="fig"><b>31 ms</b><span>wall time for 87 pages, against 2,156 ms</span></div>
+      <div class="fig"><b>0 px</b><span>pixels differing on every benchmark document and 85 CTAN documents</span></div>
+      <div class="fig"><b>7×</b><span>less work per page than pdfLaTeX, 40–64× less fixed cost</span></div>
       <div class="fig"><b>1 pass</b><span>no <code>.aux</code> file, no reruns, references resolved in memory</span></div>
     </div>
   </div>
@@ -224,7 +224,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
       </dd>
       <dt>Online editors</dt>
       <dd>
-        <p>Collaborative editors such as Overleaf compile every user's document on their own servers, again on each save, for millions of users. The cost of a compile is paid in server CPU, in queueing when load peaks, and in the seconds a writer waits to see the page. A compiler that does a thirtieth of the work for the same PDF cuts that cost directly, and one that runs in the browser removes it from the server altogether.</p>
+        <p>Collaborative editors such as Overleaf compile every user's document on their own servers, again on each save, for millions of users. The cost of a compile is paid in server CPU, in queueing when load peaks, and in the seconds a writer waits to see the page. A compiler that does an eightieth of the work for the same PDF cuts that cost directly, and one that runs in the browser removes it from the server altogether.</p>
       </dd>
       <dt>The approach</dt>
       <dd>
@@ -299,7 +299,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
       <li><span class="what">Write the <code>.aux</code> file and rerun until it settles</span><em class="tag t-removed">Removed</em><span class="how">References, citations and contents resolved in memory, in the same pass.</span></li>
       <li><span class="what">Walk each page, selecting a font per character</span><em class="tag t-once">Once</em><span class="how">Per word, font made current once per word.</span></li>
       <li><span class="what">Read, decrypt, subset, encrypt the font programs</span><em class="tag t-kept">Kept</em><span class="how">Fonts are carried decrypted; each document's subset is cut as pdfTeX cuts it. Next: per-glyph pieces prepared at build time.</span></li>
-      <li><span class="what">Compress each page's content stream</span><em class="tag t-kept">Kept</em><span class="how">Kept, with a fast fixed-code compressor; encrypted font data is stored, not searched.</span></li>
+      <li><span class="what">Compress each page's content stream</span><em class="tag t-kept">Kept</em><span class="how">A strong compressor for a one-shot compile, a fast one in watch mode; encrypted font data is stored, not searched.</span></li>
     </ol>
   </div>
 </section>
@@ -307,46 +307,45 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 <section id="benchmarks">
   <div class="wrap">
     <h2>Benchmarks</h2>
-    <p class="sub">CPU instructions retired are the headline measure: unlike a timer they do not change with machine load. Every document is at least 10 pages and runs on the native path.</p>
+    <p class="sub">CPU instructions retired are the headline measure: unlike a timer they do not change with machine load. Every document runs on the native path and matches pdfLaTeX at zero shift, every pixel at 300 dpi included.</p>
 
-    <h3>The RushTeX book, <code>docs/master.tex</code> (25 pages)</h3>
+    <h3>The RushTeX book, <code>docs/master.tex</code> (87 pages)</h3>
     <div class="table">
       <table>
         <thead><tr><th>Metric</th><th>RushTeX</th><th>pdfLaTeX</th><th>Factor</th></tr></thead>
         <tbody>
-          <tr class="key"><td>Instructions, one run</td><td>190.7M</td><td>7,279.5M</td><td>38.2× fewer</td></tr>
-          <tr class="key"><td>Instructions, real workflow (pdfLaTeX needs 3 runs)</td><td>190.7M</td><td>22,347.9M</td><td>117.2× fewer</td></tr>
-          <tr><td>CPU time (user + sys), one run</td><td>23.6 ms</td><td>720.6 ms</td><td>30.5× less</td></tr>
-          <tr><td>Wall time, one run</td><td>25.9 ms</td><td>758.6 ms</td><td>29.3× less</td></tr>
-          <tr><td>Peak memory (RSS)</td><td>14.5 MB</td><td>31.0 MB</td><td>2.1× less</td></tr>
-          <tr><td>Same preamble, one-word body</td><td>30.0M</td><td>3,803.3M</td><td>126.7× fewer</td></tr>
-          <tr><td>PDF size</td><td>338.1 KB</td><td>290.8 KB</td><td>16.3% larger</td></tr>
-          <tr><td>Operating-system process floor (<code>/usr/bin/true</code>)</td><td>8.0M</td><td>8.0M</td><td></td></tr>
+          <tr class="key"><td>Instructions, one run</td><td>506.3M</td><td>43,076.2M</td><td>85.1× fewer</td></tr>
+          <tr class="key"><td>Instructions, real workflow (pdfLaTeX needs 3 runs)</td><td>506.3M</td><td>134,843.1M</td><td>266.3× fewer</td></tr>
+          <tr><td>CPU time (user + sys), one run</td><td>38.6 ms</td><td>2,120.1 ms</td><td>55.0× less</td></tr>
+          <tr><td>Wall time, one run</td><td>31.1 ms</td><td>2,155.7 ms</td><td>69.3× less</td></tr>
+          <tr><td>Peak memory (RSS)</td><td>33.8 MB</td><td>53.7 MB</td><td>1.6× less</td></tr>
+          <tr><td>PDF size</td><td>681.4 KB</td><td>667.8 KB</td><td>2% larger</td></tr>
+          <tr><td>Operating-system process floor (<code>/usr/bin/true</code>)</td><td>8.1M</td><td>8.1M</td><td></td></tr>
         </tbody>
       </table>
     </div>
-    <p class="small muted">The book is RushTeX's own documentation and its test: every construct it explains is used in its text, and the whole compiles natively and matches pdfLaTeX at 150, 300 and 600 dpi. It loads amssymb, graphicx, amsmath and inputenc with options, sets ten font sizes and every shape of Times, and includes a PDF and a PNG picture; pdfLaTeX's fixed cost for that preamble alone is 3,803M instructions. Its fixed and per-page costs are not fitted, because a body repeated four times holds every label four times and runs on the engine path; the fit below uses the other documents. Before this measurement, slanted Times was missing from the built-in font table, which made RushTeX run the whole job a second time from disk: the book cost 435M instructions, now 190.7M. Page streams keep the fast fixed-code compressor: an encoder with per-block Huffman tables made every PDF here smaller than pdfLaTeX's, but cost about 0.6M instructions per page, so speed was kept.</p>
+    <p class="small muted">The book is RushTeX's own documentation and its test: every construct it explains is used in its text, and the whole compiles natively and matches pdfLaTeX page for page and, node for node, the engine's boxes. Its compiled output is published as <a href="master.pdf"><code>docs/master.pdf</code></a>. Since 25 October it has grown from 25 to 87 pages (TikZ, listings, hyperref, tables, theorems, bibliographies), and a round of exact speed work on 2 November cut its cost from 724M to 506M instructions with byte-identical output.</p>
 
     <h3 style="margin-top:26px">Every benchmark document</h3>
     <div class="table">
       <table>
         <thead>
-          <tr><th></th><th></th><th class="grp" colspan="3">Instructions, one run</th><th class="grp" colspan="3">Wall time, median</th><th class="grp" colspan="2">Cycles per instruction</th><th class="grp" colspan="2">Peak memory</th><th class="grp" colspan="2">PDF</th></tr>
-          <tr><th>Document</th><th>Pages</th><th>RushTeX</th><th>pdfLaTeX</th><th>Factor</th><th>RushTeX</th><th>pdfLaTeX</th><th>Factor</th><th>RushTeX</th><th>pdfLaTeX</th><th>RushTeX</th><th>pdfLaTeX</th><th>RushTeX</th><th>pdfLaTeX</th></tr>
+          <tr><th></th><th></th><th class="grp" colspan="3">Instructions, one run</th><th class="grp" colspan="3">Wall time, median</th><th class="grp" colspan="2">Peak memory</th><th class="grp" colspan="2">PDF</th></tr>
+          <tr><th>Document</th><th>Pages</th><th>RushTeX</th><th>pdfLaTeX</th><th>Factor</th><th>RushTeX</th><th>pdfLaTeX</th><th>Factor</th><th>RushTeX</th><th>pdfLaTeX</th><th>RushTeX</th><th>pdfLaTeX</th></tr>
         </thead>
         <tbody>
-          <tr><td>The RushTeX book</td><td>25</td><td>190.7M</td><td>7,279.5M</td><td class="x">38.2×</td><td>25.9 ms</td><td>758.6 ms</td><td class="x">29.3×</td><td>0.268</td><td>0.229</td><td>14.5 MB</td><td>31.0 MB</td><td>338 KB</td><td>291 KB</td></tr>
-          <tr><td>Mathematics</td><td>20</td><td>141.9M</td><td>3,240.2M</td><td class="x">22.8×</td><td>18.8 ms</td><td>355.9 ms</td><td class="x">18.9×</td><td>0.278</td><td>0.225</td><td>11.5 MB</td><td>29.4 MB</td><td>324 KB</td><td>307 KB</td></tr>
-          <tr><td>Mixed article</td><td>29</td><td>205.9M</td><td>3,816.3M</td><td class="x">18.5×</td><td>27.0 ms</td><td>434.0 ms</td><td class="x">16.1×</td><td>0.248</td><td>0.220</td><td>13.3 MB</td><td>30.1 MB</td><td>377 KB</td><td>351 KB</td></tr>
-          <tr><td>Tables</td><td>29</td><td>156.4M</td><td>2,799.1M</td><td class="x">17.9×</td><td>20.4 ms</td><td>333.4 ms</td><td class="x">16.3×</td><td>0.262</td><td>0.232</td><td>12.0 MB</td><td>29.4 MB</td><td>262 KB</td><td>231 KB</td></tr>
-          <tr><td>Running text</td><td>61</td><td>279.6M</td><td>3,280.7M</td><td class="x">11.7×</td><td>39.2 ms</td><td>396.9 ms</td><td class="x">10.1×</td><td>0.245</td><td>0.233</td><td>17.3 MB</td><td>29.1 MB</td><td>371 KB</td><td>298 KB</td></tr>
-          <tr><td>Earlier project description ×10</td><td>95</td><td>356.0M</td><td>4,734.2M</td><td class="x">13.3×</td><td>42.2 ms</td><td>525.3 ms</td><td class="x">12.4×</td><td>0.235</td><td>0.226</td><td>18.5 MB</td><td>28.7 MB</td><td>614 KB</td><td>513 KB</td></tr>
+          <tr><td>The RushTeX book (<code>docs/master.tex</code>)</td><td>87</td><td>506.3M</td><td>43,076.2M</td><td class="x">85.1×</td><td>31.1 ms</td><td>2,155.7 ms</td><td class="x">69.3×</td><td>33.8 MB</td><td>53.7 MB</td><td>681 KB</td><td>668 KB</td></tr>
+          <tr><td>Mathematics</td><td>20</td><td>109.8M</td><td>3,829.9M</td><td class="x">34.9×</td><td>8.9 ms</td><td>250.5 ms</td><td class="x">28.3×</td><td>15.8 MB</td><td>41.7 MB</td><td>303 KB</td><td>307 KB</td></tr>
+          <tr><td>Mixed article</td><td>29</td><td>152.9M</td><td>4,432.1M</td><td class="x">29.0×</td><td>10.9 ms</td><td>282.8 ms</td><td class="x">26.0×</td><td>17.1 MB</td><td>41.7 MB</td><td>346 KB</td><td>351 KB</td></tr>
+          <tr><td>Tables</td><td>29</td><td>131.9M</td><td>3,345.4M</td><td class="x">25.4×</td><td>10.2 ms</td><td>229.4 ms</td><td class="x">22.5×</td><td>15.8 MB</td><td>41.5 MB</td><td>230 KB</td><td>231 KB</td></tr>
+          <tr><td>Running text</td><td>61</td><td>211.5M</td><td>3,824.6M</td><td class="x">18.1×</td><td>13.4 ms</td><td>256.0 ms</td><td class="x">19.1×</td><td>19.5 MB</td><td>41.6 MB</td><td>298 KB</td><td>298 KB</td></tr>
+          <tr><td>Earlier project description ×10</td><td>95</td><td>301.8M</td><td>5,334.1M</td><td class="x">17.7×</td><td>17.7 ms</td><td>334.0 ms</td><td class="x">18.9×</td><td>25.6 MB</td><td>41.7 MB</td><td>511 KB</td><td>513 KB</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="small muted">Cycles per instruction are cycles elapsed over instructions retired, both from the hardware counters, medians of three runs: 0.235–0.278 for RushTeX and 0.220–0.233 for pdfLaTeX in the same session, so both run at close to the processor's best and the speed difference is the amount of work, not how well the processor runs it. The factor falls with length because RushTeX's fixed cost is almost gone (28–45× below pdfLaTeX's: 64.8M against 2,890.6M for the mathematics document, 78.6M against 2,220.2M for the running text) while its cost per page is 4.6–5.3× below (3.3–4.8M against 17.4–23.1M); bringing the per-page cost to the same level is the current work. Long documents' PDFs are up to a fifth larger, from the fixed-code compression of page streams.</p>
+    <p class="small muted">Each document repeated 4 and 10 times gives the cost per page and the fixed cost. RushTeX's fixed cost is 55–68M instructions against pdfLaTeX's 2,763–3,777M (40–64× less), and its cost per page 2.3–3.3M against 17.4–23.1M (6.8–7.4× less). So the factor is largest for short documents with rich preambles and settles near 7× per run for very long ones, or about 20× against pdfLaTeX's three runs. Page streams are compressed with a strong compressor for a one-shot compile, so the PDFs are as small as pdfLaTeX's; <code>--watch</code> uses a fast one.</p>
 
-    <h3 style="margin-top:26px">Against Typst (earlier measurement)</h3>
+    <h3 style="margin-top:26px">Against Typst (25 October measurement)</h3>
     <div class="table">
       <table>
         <thead><tr><th>Document</th><th>RushTeX</th><th>Typst</th><th>pdfLaTeX, one run</th></tr></thead>
@@ -360,11 +359,11 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 
     <dl class="spec" style="margin-top:22px">
       <dt>Setup</dt>
-      <dd class="small">Apple M5, macOS (Darwin 27.0.0). pdfTeX 3.141592653-2.6-1.40.29, TeX Live 2026, <code>pdflatex -interaction=batchmode</code>, no latexmk; the script reruns it until the PDF stops changing. RushTeX at commit <code>af079e2</code>, one run, measured 25 October 2026. Instructions are medians of 3–5 runs from <code>/usr/bin/time -l</code>, which also counts the kernel's process set-up and the dynamic loader (8.0M instructions for an empty program). Times are medians of 11 runs after a warm-up.</dd>
+      <dd class="small">Apple M5, macOS (Darwin 27.2.0). pdfTeX 3.141592653-2.6-1.40.29, TeX Live 2026, <code>pdflatex -interaction=batchmode</code>, no latexmk; the benchmark reruns it until the PDF stops changing (3 runs for every document here). RushTeX one run, measured 2 November 2026. Instructions are medians of 5 runs from <code>/usr/bin/time -l</code>, which also counts the kernel's process set-up and the dynamic loader (8.1M instructions for an empty program). Times are medians of 11 alternating runs after a warm-up.</dd>
       <dt>Reproduce</dt>
       <dd><pre>cargo build --release
-./benchmark.sh docs/master.tex
-./benchmark.sh scripts/bench/native-text-61p.tex</pre></dd>
+cargo benchmark docs 5
+cargo benchmark docs/master.tex</pre></dd>
     </dl>
   </div>
 </section>
@@ -375,7 +374,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
     <p class="sub">“Zero shift” means the RushTeX PDF and the pdfLaTeX PDF agree on everything a reader or a program can observe.</p>
     <div class="cols">
       <div><h3>What is compared</h3><p>Every glyph and its position in scaled points, every rule and path, every colour, link, destination and outline entry, and every pixel of the pages rendered at 300 dpi. New native features are also checked at 600 dpi and node by node against the engine's page boxes.</p></div>
-      <div><h3>Against what</h3><p>A pinned TeX Live 2026 snapshot with a checksummed file list, so references, generated tables and CI all come from the same sources. 85 CTAN documents, 2,137 pages, compile at zero shift on the engine path.</p></div>
+      <div><h3>Against what</h3><p>A pinned TeX Live 2026 snapshot with a checksummed file list, so references, generated tables and CI all come from the same sources. 85 CTAN documents, 2,137 pages, compile at zero shift on the engine path, and 303 templates compile natively, each byte-identical to its reference.</p></div>
       <div><h3>How</h3><p><code>parity-testing</code>, an independent checker in Rust with its own PDF reader, inflate and renderer comparison. Exactness is derived from <code>tex.web</code> and <code>latex.ltx</code>, never tuned per document; code cites the section it implements.</p></div>
     </div>
   </div>
@@ -384,28 +383,30 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 <section id="coverage">
   <div class="wrap">
     <h2>What works today</h2>
-    <p class="sub">The engine path compiles what pdfLaTeX compiles, given a TeX Live installation. The native path is younger and growing in the order of the papers each feature unblocks.</p>
+    <p class="sub">The engine path compiles what pdfLaTeX compiles, given a TeX Live installation. The native path takes 14 classes and 92 packages, listed with their options in <a href="https://github.com/abhksinha/RushTeX/blob/master/docs/native-packages.md"><code>docs/native-packages.md</code></a>.</p>
     <dl class="spec">
-      <dt>Native: document</dt>
-      <dd>article class with its size, paper, <code>draft</code>, <code>twoside</code> and <code>landscape</code> options; <code>\maketitle</code>, abstract; sections to subsubsection, run-in headings; <code>\tableofcontents</code>, forward <code>\ref</code> and <code>\pageref</code> in one pass; footnotes; page styles.</dd>
-      <dt>Native: text</dt>
-      <dd>Paragraphs with TeX's line breaking and hyphenation; ligatures and kerns; font families, series, shapes and sizes from the NFSS tables, including <code>\rmdefault</code> and every shape of Times, with LaTeX's font substitutions; accents and special characters; <code>quote</code>, <code>quotation</code>, <code>verse</code>; <code>itemize</code>, <code>enumerate</code>, <code>description</code>; <code>center</code>, flush environments, <code>verbatim</code>; <code>\\</code>, <code>\vspace</code>, <code>\hspace</code>, <code>\newpage</code>.</dd>
-      <dt>Native: floats and tables</dt>
-      <dd><code>figure</code> and <code>table</code> with <code>\caption</code> and the float queue; <code>tabular</code> with rules, <code>\multicolumn</code> and <code>\cline</code>.</dd>
-      <dt>Native: mathematics</dt>
-      <dd>Inline and display math, <code>equation</code>, TeX's Appendix G layout; amssymb and amsfonts with their alphabets; amsmath's <code>equation*</code>, <code>align</code> and <code>align*</code> (set in one pass, where amsmath sets them twice), <code>\text</code>, <code>\eqref</code>, <code>\operatorname</code>, <code>\DeclareMathOperator</code>, accents, dots, <code>\colon</code> and the <code>\big</code> family.</dd>
-      <dt>Native: graphics</dt>
-      <dd>graphicx's <code>\includegraphics</code> with <code>width</code>, <code>height</code>, <code>scale</code> and <code>keepaspectratio</code>, for PDF and PNG files; each file embedded once; the PDF page set to the paper size as the pdfTeX driver sets it.</dd>
-      <dt>Native: references</dt>
-      <dd><code>\cite</code> with <code>thebibliography</code>; <code>\label</code>/<code>\ref</code> resolved in memory.</dd>
-      <dt>Native: preamble</dt>
-      <dd>inputenc, and package options that change nothing (amsmath's defaults, <code>psamsfonts</code>, graphicx's <code>pdftex</code> and <code>final</code>, <code>utf8</code>), each checked by comparing the package's whole state with and without the option; <code>\newcommand</code> and <code>\renewcommand</code>.</dd>
+      <dt>Classes</dt>
+      <dd>article, report, book, letter, amsart, IEEEtran, memoir, scrartcl, scrreprt, scrbook, scrlttr2, extarticle, a0poster, screenplay.</dd>
+      <dt>Mathematics</dt>
+      <dd>amsmath (all displays, <code>\tag</code>, matrices, <code>cases</code>, <code>subequations</code>), amssymb, amsfonts, amsthm, mathtools, bm, mathrsfs, latexsym, dsfont, bbm, stmaryrd, upgreek, esint, bbold, braket, wasysym, nicefrac, units, cancel, xfrac, gensymb.</dd>
+      <dt>Tables</dt>
+      <dd>array, tabularx, booktabs, multirow, longtable, colortbl, dcolumn, makecell, threeparttable, siunitx.</dd>
+      <dt>Layout and lists</dt>
+      <dd>geometry, fancyhdr, titlesec, setspace, parskip, multicol, enumitem, float, placeins, caption, subcaption, subfig, footmisc, lastpage, microtype, ragged2e, authblk, epigraph, tcolorbox, algorithm, algpseudocode, lipsum, and more.</dd>
+      <dt>Fonts</dt>
+      <dd>fontenc (T1), inputenc (UTF-8), lmodern, textcomp, times, helvet, courier, palatino, mathpazo, babel.</dd>
+      <dt>Graphics and colour</dt>
+      <dd>graphicx (PDF and PNG pictures, scaled, rotated, trimmed or clipped), color, xcolor, TikZ and pgf, qrcode.</dd>
+      <dt>References and links</dt>
+      <dd>hyperref, cleveref, natbib, biblatex, cite, apacite, csquotes, url, makeidx; BibTeX <code>.bbl</code> files; <code>\ref</code>, <code>\pageref</code>, citations and contents resolved in one pass.</dd>
+      <dt>Code</dt>
+      <dd>listings, verbatim, comment.</dd>
       <dt>Not native yet</dt>
-      <dd>Rotated, clipped or JPEG pictures, <code>\resizebox</code>, amsmath's <code>gather</code>, <code>multline</code>, <code>split</code>, <code>cases</code>, matrices and <code>\tag</code>, package options that change a package, characters outside ASCII, the T1 font encoding, hyperref, BibTeX <code>.bbl</code>, amsthm, natbib, booktabs, geometry, xcolor, two columns, other classes. Documents that use them run on the engine path. Of a sample of 169 arXiv papers, 1 runs natively today; the list above is ordered to raise that number fastest.</dd>
+      <dd>beamer, JPEG pictures, a package option or command a ported package does not take yet, and every package not listed. Such documents run whole on the engine path with the same output. Of 211 real documents fetched from GitHub, 19 run natively today (9%); work is ordered by how many real documents each item unblocks.</dd>
       <dt>Your own <code>.sty</code> and <code>.cls</code></dt>
-      <dd>A document with its own style files always runs whole on the engine, with the exact output, rather than being ported.</dd>
+      <dd>A document with its own class runs whole on the engine. A preamble <code>.sty</code> made only of commands the native path takes is read inline; any other runs on the engine.</dd>
       <dt>Implementation</dt>
-      <dd>About 146,000 lines of Rust, standard library only, <code>#![forbid(unsafe_code)]</code>. Builds as a command, a Rust library and a C-compatible dynamic library. 370 unit tests; Clippy with warnings as errors.</dd>
+      <dd>About 109,000 lines of Rust, standard library only, <code>#![forbid(unsafe_code)]</code>. Builds as a command and a Rust library; macOS builds need macOS 13 or later. 225 library tests; Clippy clean.</dd>
     </dl>
   </div>
 </section>
@@ -413,18 +414,16 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 <section id="future" class="alt">
   <div class="wrap">
     <h2>Where it can go: WebAssembly and the client side</h2>
-    <p class="sub">Because RushTeX uses only Rust's standard library and carries its fonts and tables inside the program, the same code that runs on a server can run in a browser. Each item says what exists today and what is planned.</p>
+    <p class="sub">RushTeX uses only Rust's standard library and carries its fonts and tables inside the program, so the code that runs on a server can in principle run in a browser. Each item says what exists today and what is planned.</p>
     <dl class="spec">
-      <dt>WebAssembly build <span class="st now">Today</span></dt>
-      <dd>The library compiles for <code>wasm32-unknown-unknown</code>: 28 MB with the fonts, metrics, class tables and hyphenation patterns included. A browser API and a font subset for the web are not yet published.</dd>
-      <dt>Client-side compile for online editors <span class="st plan">Planned</span></dt>
-      <dd>An editor like Overleaf could compile in the writer's browser instead of on its servers. Server CPU per compile drops to zero, compiles no longer queue at peak hours, and the writer sees the page without a network round trip. The server can keep the engine path for documents the native path does not yet cover.</dd>
+      <dt>Watch mode <span class="st now">Today</span></dt>
+      <dd><code>rushtex --watch paper.tex</code> recompiles on every save, keeping the session's state between compiles and writing the PDF atomically, so a viewer never sees a half-written file.</dd>
       <dt>Incremental compile <span class="st plan">Planned</span></dt>
-      <dd>The state is designed to be checkpointed per block: after an edit, only the changed paragraphs are set again, page breaking runs until it matches the previous layout, and only the changed pages are written. The target is under 16 ms per typical edit, one display frame, so the PDF updates as you type.</dd>
-      <dt>Tablets and phones <span class="st plan">Planned</span></dt>
-      <dd>With no TeX installation and about 11–19 MB of memory per document today, a full LaTeX compile fits on an iPad or a phone, offline, with the same PDF a journal would produce.</dd>
-      <dt>Privacy <span class="st plan">Planned</span></dt>
-      <dd>A manuscript compiled on the device never has to leave it: useful for unpublished results, peer review and confidential reports.</dd>
+      <dd>After an edit, only the changed paragraphs are set again, page breaking runs until it matches the previous layout, and only the changed pages are written. The target is under 16 ms per typical edit, one display frame.</dd>
+      <dt>WebAssembly and online editors <span class="st plan">Planned</span></dt>
+      <dd>An editor like Overleaf could compile in the writer's browser instead of on its servers: no server CPU per compile, no queueing at peak hours, no network round trip. A browser build and API are not yet published.</dd>
+      <dt>Tablets, phones and privacy <span class="st plan">Planned</span></dt>
+      <dd>With no TeX installation and 16–34 MB of memory per document, a full LaTeX compile fits on a phone, offline, and a manuscript compiled on the device never has to leave it.</dd>
       <dt>Servers and CI <span class="st now">Today</span></dt>
       <dd>One static program with no TeX Live for native documents: small containers, fast cold starts, one pass instead of three for documents with references.</dd>
     </dl>
@@ -439,30 +438,28 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
       <div>
         <h3>Where to start</h3>
         <ul class="plain small">
+          <li><code>CONTRIBUTING.md</code>: building, the checks, how to send a change.</li>
           <li><code>docs/architecture/progress.md</code>: what is done and what is next.</li>
           <li><code>docs/architecture/guarded-direct-lowering.md</code>: how a native feature is built.</li>
-          <li><code>docs/architecture/native-architecture.md</code>: the long-term rules.</li>
-          <li><code>docs/master.tex</code>: the project's description and its growing native test, one section per feature.</li>
+          <li><code>docs/native-packages.md</code>: what the native path takes.</li>
+          <li><code>docs/master.tex</code>: the project's description and its native test, one section per feature.</li>
         </ul>
       </div>
       <div>
-        <h3>Open work, in order</h3>
+        <h3>Open work</h3>
         <ul class="plain small">
-          <li>amsmath: <code>align</code>, <code>\text</code>, <code>equation*</code>, <code>\eqref</code></li>
-          <li>Package options, UTF-8 input, hyperref</li>
-          <li>BibTeX, amsthm, natbib, booktabs, geometry, xcolor</li>
-          <li>Font pieces per glyph at build time</li>
-          <li>Per-page cost: fewer tokens, per-word shipping</li>
-          <li>A browser API for the WebAssembly build</li>
+          <li>Cost per page: word building, line breaking, packing</li>
+          <li>Packages and options most used by real documents</li>
+          <li>More of TikZ natively</li>
+          <li>Incremental compile per paragraph and page</li>
+          <li>A browser build and API</li>
         </ul>
       </div>
       <div>
-        <h3>The gate every change passes</h3>
+        <h3>The check every change passes</h3>
 <pre>cargo test --release
-cargo clippy -- -D warnings
-scripts/native_probes.sh
-parity-testing zero --engine \
-  --pixels --all</pre>
+cargo clippy --release
+cargo benchmark check origin/master</pre>
         <p class="small muted">Exactness comes from the TeX and LaTeX sources, never from tuning a document until it matches. Licensed MIT or Apache-2.0; bundled TeX Live data keeps its own licences (see <code>NOTICE</code>).</p>
       </div>
     </div>
@@ -473,7 +470,7 @@ parity-testing zero --engine \
   <div class="wrap">
     <span>RushTeX · MIT or Apache-2.0</span>
     <a href="https://github.com/abhksinha/RushTeX">github.com/abhksinha/RushTeX</a>
-    <span>Measurements from commit c84f1a2, 24 October 2026.</span>
+    <span>Measurements of 2 November 2026.</span>
   </div>
 </footer>
 

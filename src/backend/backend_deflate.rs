@@ -279,7 +279,7 @@ pub fn adler32_from(state: u32, data: &[u8]) -> u32 {
 
 /// Bit writer: codes gather LSB-first in a 64-bit register, and each full register goes to
 /// the output as 8 little-endian bytes, one store into capacity the callers reserved
-/// ahead. Codes are at most 32 bits, with no bits set above their length.
+/// ahead. Codes are at most 48 bits, with no bits set above their length.
 struct BitWriter<'a> {
     buf: &'a mut Vec<u8>,
     bit_buf: u64,
@@ -302,7 +302,7 @@ impl<'a> BitWriter<'a> {
             return;
         }
         self.buf.extend_from_slice(&self.bit_buf.to_le_bytes());
-        // The rest of `val` (`64 - bit_count` is 1..=32 here, as `count` is at most 32).
+        // The rest of `val` (`64 - bit_count` is 1..=48 here, as `count` is at most 48).
         self.bit_buf = val >> (64 - self.bit_count);
         self.bit_count = total - 64;
     }
@@ -326,7 +326,7 @@ pub struct DeflateCompressor {
     head: Vec<u32>,
     prev: Vec<u32>,
     base: u32,
-    /// LZ77 output of the current input: a literal byte, or `MATCH | len << 16 | dist`.
+    /// LZ77 output of the current input: a literal byte, or a match ([`match_token`]).
     tokens: Vec<u32>,
     /// Whether the block written is the stream's last (BFINAL); false only inside
     /// `compress_zlib_parts`.
@@ -374,21 +374,26 @@ const CL_ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 1
 /// `max_insert_length` for its faster levels): long repeats are found from their start.
 const MAX_INSERT: usize = 8;
 
-/// Length 3..=258 to its symbol's index above 257, and each symbol's extra bits and base
-/// (RFC 1951 §3.2.5), as tables instead of a comparison chain per token.
-static LEN_SYM: [u8; 259] = {
-    let mut t = [0u8; 259];
+/// Each length symbol's extra bits and base (RFC 1951 §3.2.5), for `LEN_INFO`.
+static LEN_EXTRA: [u8; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+static LEN_BASE: [u16; 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+// Distance tables padded to 32 entries: a symbol taken from 5 bits indexes them with no
+// bounds check.
+static DIST_EXTRA: [u8; 32] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 0, 0];
+static DIST_BASE: [u16; 32] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577, 0, 0];
+/// Length 3..=258 to its symbol's index above 257 (bits 0-4), its extra bits (bits 8-11)
+/// and their value (bits 16-23): one load a match. 512 entries, so a 9-bit length indexes
+/// it with no bounds check.
+static LEN_INFO: [u32; 512] = {
+    let mut t = [0u32; 512];
     let mut l = 3;
     while l <= 258 {
-        t[l] = (const_get_length_code(l).0 - 257) as u8;
+        let s = (const_get_length_code(l).0 - 257) as usize;
+        t[l] = s as u32 | (LEN_EXTRA[s] as u32) << 8 | ((l - LEN_BASE[s] as usize) as u32) << 16;
         l += 1;
     }
     t
 };
-static LEN_EXTRA: [u8; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
-static LEN_BASE: [u16; 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
-static DIST_EXTRA: [u8; 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
-static DIST_BASE: [u16; 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
 /// Distance symbols as zlib's `_dist_code`: by `d - 1` below 256, else by `(d - 1) >> 7`.
 static DIST_LO: [u8; 256] = {
     let mut t = [0u8; 256];
@@ -409,6 +414,13 @@ static DIST_HI: [u8; 256] = {
     t
 };
 
+/// A match as a token: `MATCH`, the distance's symbol (bits 25-29, found once here for
+/// both of `write_block`'s passes), the length (bits 16-24) and the distance (bits 0-15).
+#[inline(always)]
+fn match_token(len: usize, dist: usize) -> u32 {
+    MATCH | (dist_sym(dist) as u32) << 25 | (len as u32) << 16 | dist as u32
+}
+
 #[inline(always)]
 fn dist_sym(d: usize) -> usize {
     if d <= 256 { DIST_LO[d - 1] as usize } else { DIST_HI[(d - 1) >> 7] as usize }
@@ -416,7 +428,11 @@ fn dist_sym(d: usize) -> usize {
 
 #[inline(always)]
 fn hash3(d: &[u8], i: usize) -> usize {
-    let v = d[i] as u32 | (d[i + 1] as u32) << 8 | (d[i + 2] as u32) << 16;
+    // One 4-byte load where the input has a fourth byte, else three.
+    let v = match d.get(i..i + 4) {
+        Some(w) => u32::from_le_bytes([w[0], w[1], w[2], w[3]]) & 0x00FF_FFFF,
+        None => d[i] as u32 | (d[i + 1] as u32) << 8 | (d[i + 2] as u32) << 16,
+    };
     (v.wrapping_mul(0x1e35_a7bd) >> (32 - HASH_BITS)) as usize
 }
 
@@ -448,11 +464,15 @@ fn code_lengths(freq: &[u32], limit: usize, out: &mut [u8]) {
     // Fixed arrays on the stack, sized for the largest alphabet (288 literal/length
     // symbols), so a block's tables allocate nothing.
     const MAX_SYMS: usize = 288;
-    let mut leaves = [(0u32, 0u16); MAX_SYMS];
+    // Each leaf as one sort key, its frequency above its symbol: the order of (frequency,
+    // symbol) pairs, compared in one step. Frequencies are below 2^16 (a block has at most
+    // `BLOCK_TOKENS` tokens).
+    let mut leaves = [0u32; MAX_SYMS];
     let mut n = 0;
     for (s, &f) in freq.iter().enumerate() {
         if f > 0 {
-            leaves[n] = (f, s as u16);
+            debug_assert!(f < 1 << 16);
+            leaves[n] = f << 16 | s as u32;
             n += 1;
         }
     }
@@ -460,16 +480,16 @@ fn code_lengths(freq: &[u32], limit: usize, out: &mut [u8]) {
         if n >= 2 {
             break;
         }
-        leaves[n] = (1, s as u16);
+        leaves[n] = 1 << 16 | s as u32;
         n += 1;
     }
     let leaves = &mut leaves[..n];
     leaves.sort_unstable();
     // Two queues: the sorted leaves, and the internal nodes in the order made (their
-    // weights never decrease).
-    let mut weight = [0u64; 2 * MAX_SYMS];
+    // weights never decrease). Weights are at most the block's token count plus one.
+    let mut weight = [0u32; 2 * MAX_SYMS];
     for (w, l) in weight.iter_mut().zip(leaves.iter()) {
-        *w = l.0 as u64;
+        *w = l >> 16;
     }
     let mut parent = [0u16; 2 * MAX_SYMS];
     let (mut li, mut qi) = (0, n);
@@ -488,13 +508,14 @@ fn code_lengths(freq: &[u32], limit: usize, out: &mut [u8]) {
         parent[a] = k as u16;
         parent[b] = k as u16;
     }
-    let mut depth = [0usize; 2 * MAX_SYMS];
+    let mut depth = [0u16; 2 * MAX_SYMS];
     for k in (0..2 * n - 2).rev() {
         depth[k] = depth[parent[k] as usize] + 1;
     }
     let mut count = [0usize; 64];
     let mut overflow = 0usize;
     for &d in &depth[..n] {
+        let d = d as usize;
         if d > limit {
             overflow += 1;
             count[limit] += 1;
@@ -516,7 +537,7 @@ fn code_lengths(freq: &[u32], limit: usize, out: &mut [u8]) {
     let mut i = 0;
     for len in (1..=limit).rev() {
         for _ in 0..count[len] {
-            out[leaves[i].1 as usize] = len as u8;
+            out[(leaves[i] & 0xFFFF) as usize] = len as u8;
             i += 1;
         }
     }
@@ -807,53 +828,6 @@ impl DeflateCompressor {
         bit_writer.finish();
     }
 
-    /// Adds position `i` to the chains; the previous position with the same hash.
-    #[inline(always)]
-    fn insert(&mut self, d: &[u8], i: usize) -> u32 {
-        let h = hash3(d, i);
-        let old = self.head[h];
-        self.head[h] = self.base + i as u32 + 1;
-        self.prev[i & WMASK] = old;
-        old
-    }
-
-    /// The longest match for position `i` longer than `shorter`, from chain entry `cand`:
-    /// (length, distance), or (0, 0).
-    #[inline(always)]
-    fn longest(&self, d: &[u8], i: usize, mut cand: u32, shorter: usize) -> (usize, usize) {
-        let max = (d.len() - i).min(258);
-        let mut best = shorter.max(2);
-        if best >= max {
-            return (0, 0);
-        }
-        let mut dist_best = 0;
-        let mut chain = if shorter >= 32 { MAX_CHAIN / 4 } else { MAX_CHAIN };
-        while cand > self.base && chain > 0 {
-            let p = (cand - self.base - 1) as usize;
-            let dist = i - p;
-            if dist >= WSIZE {
-                break;
-            }
-            if d[p + best] == d[i + best] && d[p] == d[i] && d[p + 1] == d[i + 1] {
-                let len = common(d, p, i, max);
-                if len > best {
-                    best = len;
-                    dist_best = dist;
-                    if len >= NICE.min(max) {
-                        break;
-                    }
-                }
-            }
-            cand = self.prev[p & WMASK];
-            chain -= 1;
-        }
-        if dist_best == 0 {
-            (0, 0)
-        } else {
-            (best, dist_best)
-        }
-    }
-
     /// `d` as LZ77 tokens in `self.tokens`, with one position of deferred matching: a
     /// match shorter than `LAZY` is kept only if the next position has none longer.
     fn lz77(&mut self, d: &[u8]) {
@@ -868,29 +842,34 @@ impl DeflateCompressor {
             self.base = 0;
         }
         self.tokens.clear();
+        self.tokens.reserve(d.len());
+        // The chains as fixed-size arrays: a hash or a masked position indexes them with no
+        // bounds check.
+        let mut chains = Chains { head: (&mut self.head[..]).try_into().expect("head"), prev: (&mut self.prev[..]).try_into().expect("prev"), base: self.base };
+        let tokens = &mut self.tokens;
         let n = d.len();
         let mut i = 0;
         let mut pending: Option<(usize, usize)> = None;
         while i < n {
             let found = if i + 3 <= n {
-                let cand = self.insert(d, i);
-                self.longest(d, i, cand, pending.map_or(0, |p| p.0))
+                let cand = chains.insert(d, i);
+                chains.longest(d, i, cand, pending.map_or(0, |p| p.0))
             } else {
                 (0, 0)
             };
             if let Some((len, dist)) = pending {
                 if found.0 > len {
                     // A longer match one later: the deferred position becomes a literal.
-                    self.tokens.push(d[i - 1] as u32);
+                    tokens.push(d[i - 1] as u32);
                     pending = Some(found);
                     i += 1;
                     continue;
                 }
-                self.tokens.push(MATCH | (len as u32) << 16 | dist as u32);
+                tokens.push(match_token(len, dist));
                 let end = i - 1 + len;
                 if len <= MAX_INSERT {
                     for j in i + 1..end.min(n.saturating_sub(2)) {
-                        self.insert(d, j);
+                        chains.insert(d, j);
                     }
                 }
                 pending = None;
@@ -903,22 +882,87 @@ impl DeflateCompressor {
                     i += 1;
                     continue;
                 }
-                self.tokens.push(MATCH | (found.0 as u32) << 16 | found.1 as u32);
+                tokens.push(match_token(found.0, found.1));
                 if found.0 <= MAX_INSERT {
                     for j in i + 1..(i + found.0).min(n.saturating_sub(2)) {
-                        self.insert(d, j);
+                        chains.insert(d, j);
                     }
                 }
                 i += found.0;
                 continue;
             }
-            self.tokens.push(d[i] as u32);
+            tokens.push(d[i] as u32);
             i += 1;
         }
         if let Some((len, dist)) = pending {
-            self.tokens.push(MATCH | (len as u32) << 16 | dist as u32);
+            tokens.push(match_token(len, dist));
         }
         self.base = self.base.wrapping_add(n as u32 + WSIZE as u32 + 1);
+    }
+}
+
+/// The hash chains of one input (`DeflateCompressor::head`, `prev`, `base`), borrowed as
+/// fixed-size arrays.
+struct Chains<'a> {
+    head: &'a mut [u32; 1 << HASH_BITS],
+    prev: &'a mut [u32; WSIZE],
+    base: u32,
+}
+
+impl Chains<'_> {
+    /// Adds position `i` to the chains; the previous position with the same hash.
+    #[inline(always)]
+    fn insert(&mut self, d: &[u8], i: usize) -> u32 {
+        let h = hash3(d, i);
+        let old = self.head[h];
+        self.head[h] = self.base + i as u32 + 1;
+        self.prev[i & WMASK] = old;
+        old
+    }
+
+    /// The longest match for position `i` longer than `shorter`, from chain entry `cand`:
+    /// (length, distance), or (0, 0). A candidate is measured only when its first two
+    /// bytes and the two ending at the length to beat agree with `i`'s (zlib's `scan_end`
+    /// test): any other candidate is shorter than the best so far, so the result is the one
+    /// the byte-by-byte test gives.
+    #[inline(always)]
+    fn longest(&self, d: &[u8], i: usize, mut cand: u32, shorter: usize) -> (usize, usize) {
+        let max = (d.len() - i).min(258);
+        let mut best = shorter.max(2);
+        // No candidate (an empty chain or one from an earlier input): nothing to read.
+        if best >= max || cand <= self.base {
+            return (0, 0);
+        }
+        let pair = |k: usize| u16::from_le_bytes(d[k..k + 2].try_into().unwrap());
+        let start = pair(i);
+        let mut end = pair(i + best - 1);
+        let mut dist_best = 0;
+        let mut chain = if shorter >= 32 { MAX_CHAIN / 4 } else { MAX_CHAIN };
+        while cand > self.base && chain > 0 {
+            let p = (cand - self.base - 1) as usize;
+            let dist = i - p;
+            if dist >= WSIZE {
+                break;
+            }
+            if pair(p + best - 1) == end && pair(p) == start {
+                let len = common(d, p, i, max);
+                if len > best {
+                    best = len;
+                    dist_best = dist;
+                    if len >= NICE.min(max) {
+                        break;
+                    }
+                    end = pair(i + best - 1);
+                }
+            }
+            cand = self.prev[p & WMASK];
+            chain -= 1;
+        }
+        if dist_best == 0 {
+            (0, 0)
+        } else {
+            (best, dist_best)
+        }
     }
 }
 
@@ -926,19 +970,25 @@ impl DeflateCompressor {
 /// with them (small blocks, where the tables cost more than they save).
 fn write_block(w: &mut BitWriter, tokens: &[u32], last: bool) {
     let mut lf = [0u32; 286];
-    let mut df = [0u32; 30];
+    // Length and distance symbols counted apart in 32-entry arrays (indexed by 5 bits),
+    // the lengths folded into `lf` after.
+    let mut lenf = [0u32; 32];
+    let mut df32 = [0u32; 32];
     let mut extra = 0u64;
     for &t in tokens {
         if t & MATCH == 0 {
-            lf[t as usize] += 1;
+            lf[(t & 0xFF) as usize] += 1;
         } else {
-            let ls = LEN_SYM[((t >> 16) & 0x1FF) as usize] as usize;
-            let ds = dist_sym((t & 0xFFFF) as usize);
-            lf[257 + ls] += 1;
-            df[ds] += 1;
-            extra += (LEN_EXTRA[ls] + DIST_EXTRA[ds]) as u64;
+            let info = LEN_INFO[((t >> 16) & 0x1FF) as usize];
+            let ds = (t >> 25 & 31) as usize;
+            lenf[(info & 31) as usize] += 1;
+            df32[ds] += 1;
+            extra += (info >> 8 & 15) as u64 + DIST_EXTRA[ds] as u64;
         }
     }
+    lf[257..].copy_from_slice(&lenf[..29]);
+    let mut df = [0u32; 30];
+    df.copy_from_slice(&df32[..30]);
     lf[256] = 1;
     let mut ll = [0u8; 286];
     let mut dl = [0u8; 30];
@@ -1027,18 +1077,38 @@ fn write_block(w: &mut BitWriter, tokens: &[u32], last: bool) {
         canonical(&ll, &mut lc);
         canonical(&dl, &mut dc);
     }
+    // Each symbol's code and length in one word (AoS, one load a token): code in the low
+    // 16 bits, length above.
+    // Literals by byte, length symbols and distance symbols in 32-entry arrays.
+    let mut lit = [0u32; 256];
+    for s in 0..256 {
+        lit[s] = lc[s] as u32 | (ll[s] as u32) << 16;
+    }
+    let mut lens = [0u32; 32];
+    for s in 0..29 {
+        lens[s] = lc[257 + s] as u32 | (ll[257 + s] as u32) << 16;
+    }
+    let mut dis = [0u32; 32];
+    for s in 0..30 {
+        dis[s] = dc[s] as u32 | (dl[s] as u32) << 16;
+    }
     for &t in tokens {
         if t & MATCH == 0 {
-            w.write_bits(lc[t as usize] as u64, ll[t as usize]);
+            let e = lit[(t & 0xFF) as usize];
+            w.write_bits((e & 0xFFFF) as u64, (e >> 16) as u8);
         } else {
-            let len = ((t >> 16) & 0x1FF) as usize;
+            let info = LEN_INFO[((t >> 16) & 0x1FF) as usize];
             let dist = (t & 0xFFFF) as usize;
-            let ls = LEN_SYM[len] as usize;
-            let ds = dist_sym(dist);
-            let (lx, dx) = ((len - LEN_BASE[ls] as usize) as u64, (dist - DIST_BASE[ds] as usize) as u64);
-            let s = 257 + ls;
-            w.write_bits(lc[s] as u64 | lx << ll[s], ll[s] + LEN_EXTRA[ls]);
-            w.write_bits(dc[ds] as u64 | dx << dl[ds], dl[ds] + DIST_EXTRA[ds]);
+            let ds = (t >> 25 & 31) as usize;
+            let (lx, dx) = ((info >> 16) as u64, (dist - DIST_BASE[ds] as usize) as u64);
+            let (le, de) = (lens[(info & 31) as usize], dis[ds]);
+            // The length's code and extra bits, then the distance's, as one write of at most
+            // 15 + 5 + 15 + 13 = 48 bits.
+            let lbits = (le >> 16) as u8 + (info >> 8 & 15) as u8;
+            let dbits = (de >> 16) as u8 + DIST_EXTRA[ds];
+            let lv = (le & 0xFFFF) as u64 | lx << (le >> 16);
+            let dv = (de & 0xFFFF) as u64 | dx << (de >> 16);
+            w.write_bits(lv | dv << lbits, lbits + dbits);
         }
     }
     w.write_bits(lc[256] as u64, ll[256]);

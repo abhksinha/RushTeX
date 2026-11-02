@@ -1258,6 +1258,27 @@ impl Nodes {
         }
     }
 
+    /// Nodes §903 made for a word of the word store, what they own kept in `sc`: made anew
+    /// here, owning what they own in the node store.
+    pub fn make_scratch(&mut self, sc: &super::engine_words::Scratch, list: &[Node], out: &mut Vec<Node>) {
+        for &m in list {
+            match m.kind {
+                Kind::Lig => out.push(self.lig_node(m.font, m.a as u8, sc.lig_from(&m), m.sub & 3)),
+                Kind::Disc if m.a >= 0 => {
+                    let [pre, post] = sc.texts(m.a as usize);
+                    let mut list = Vec::new();
+                    self.make_scratch(sc, pre, &mut list);
+                    let pre = self.store(&list);
+                    list.clear();
+                    self.make_scratch(sc, post, &mut list);
+                    let post = self.store(&list);
+                    out.push(Node { a: self.add_disc([pre, post]) as i32, ..m });
+                }
+                _ => out.push(m),
+            }
+        }
+    }
+
     #[inline]
     pub fn glue(&self, n: &Node) -> Glue {
         self.glues[n.a as usize]

@@ -3,3 +3,11 @@
 # testing/src/main.rs); cargo builds it when needed. `cargo benchmark --help` lists the modes.
 [alias]
 benchmark = ["run", "--quiet", "--release", "--manifest-path", "testing/Cargo.toml", "--", "bench"]
+
+# macOS 13 as the oldest system the binary runs on: the linker then writes chained fixups,
+# which the kernel applies to a page of pointer tables (`DOC`, `PRIMITIVES`, the babel and
+# font tables: about 12k pointers) when the page is first read, instead of dyld rebasing
+# every pointer before `main`: about 1.1M instructions less per run (2026-11-02,
+# memorycastle/journal/2026-11-02-instruction-cuts.md). Other systems ignore it.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "13.0"

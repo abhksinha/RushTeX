@@ -3658,8 +3658,19 @@ pub fn splice_comments(src: &str) -> std::borrow::Cow<'_, str> {
     }
     let mut out = String::with_capacity(src.len());
     out.push_str(&src[..start]);
-    let mut lines = src[start..].split_inclusive('\n');
-    while let Some(line) = lines.next() {
+    // Only a line holding `\begin{comment}` can be one: the lines up to the next such line
+    // are copied at once (a line at a time cost about 1.3M instructions on master.tex).
+    let mut pos = start;
+    loop {
+        let Some(k) = src[pos..].find("\\begin{comment}") else {
+            out.push_str(&src[pos..]);
+            break;
+        };
+        let at = pos + src[pos..pos + k].rfind('\n').map_or(0, |n| n + 1);
+        out.push_str(&src[pos..at]);
+        let mut lines = src[at..].split_inclusive('\n');
+        let Some(line) = lines.next() else { break };
+        pos = at + line.len();
         if line.trim() != "\\begin{comment}" {
             out.push_str(line);
             continue;
@@ -3679,6 +3690,7 @@ pub fn splice_comments(src: &str) -> std::borrow::Cow<'_, str> {
                 break;
             }
         }
+        pos = at + held.iter().map(|l| l.len()).sum::<usize>();
         if !closed {
             out.extend(held);
         }
@@ -3701,7 +3713,7 @@ pub fn splice_bibliography<'a>(src: &'a str, bbl: Option<&str>) -> std::borrow::
     let b = src.as_bytes();
     while i < b.len() {
         match b[i] {
-            b'%' => i += src[i..].find('\n').unwrap_or(src.len() - i),
+            b'%' => i = byte_end(b, i, b'\n'),
             // Verbatim text is not read as commands: a `\bibliography{x}` shown in
             // `verbatim`, `lstlisting` or `\verb|..|` stays as typed.
             b'\\' if src[i + 1..].starts_with("begin{verbatim}") || src[i + 1..].starts_with("begin{lstlisting}") => {
@@ -3752,7 +3764,7 @@ pub fn splice_bibliography<'a>(src: &'a str, bbl: Option<&str>) -> std::borrow::
             }
             b'\\' => i += 2,
             // To the next `%` or `\` (a watch session splices at every save).
-            _ => i += b[i..].iter().position(|&c| c == b'%' || c == b'\\').unwrap_or(b.len() - i),
+            _ => i = bytes_end(b, i, *b"%\\"),
         }
     }
     out.push_str(&src[from..]);
@@ -3818,7 +3830,7 @@ fn splice_files(src: &str, b: &[u8], mut i: usize, mut from: usize, out: &mut St
     let mut braces = 0usize;
     while i < b.len() {
         match b[i] {
-            b'%' => i += src[i..].find('\n').unwrap_or(src.len() - i),
+            b'%' => i = byte_end(b, i, b'\n'),
             b'{' => {
                 braces += 1;
                 i += 1;
@@ -3951,7 +3963,7 @@ fn splice_files(src: &str, b: &[u8], mut i: usize, mut from: usize, out: &mut St
                 (i, from) = (resume, resume);
             }
             // To the next `%`, `\` or brace.
-            _ => i += b[i..].iter().position(|&c| matches!(c, b'%' | b'\\' | b'{' | b'}')).unwrap_or(b.len() - i),
+            _ => i = bytes_end(b, i, *b"%\\{}"),
         }
     }
     out.push_str(&src[from..]);
@@ -4058,18 +4070,28 @@ fn plain_end(b: &[u8], mut i: usize, class: u8) -> usize {
 
 /// The first index at or after `i` whose byte is `c`, or the end: eight bytes at a time, as
 /// [`plain_end`] (the lowest flag of the zero-byte test is a real match).
-fn byte_end(b: &[u8], mut i: usize, c: u8) -> usize {
+fn byte_end(b: &[u8], i: usize, c: u8) -> usize {
+    bytes_end(b, i, [c])
+}
+
+/// The first index at or after `i` whose byte is one of `cs`, or the end, eight bytes at a
+/// time: one zero-byte test per byte sought, their flags joined. A false flag only lies above
+/// a real match of the same test (a borrow runs upward), so the lowest flag of all is real.
+fn bytes_end<const N: usize>(b: &[u8], mut i: usize, cs: [u8; N]) -> usize {
     const LO: u64 = 0x0101_0101_0101_0101;
     const HI: u64 = 0x8080_8080_8080_8080;
     while let Some(chunk) = b.get(i..i + 8) {
-        let v = u64::from_le_bytes(chunk.try_into().expect("eight bytes")) ^ (LO * c as u64);
-        let m = v.wrapping_sub(LO) & !v & HI;
+        let w = u64::from_le_bytes(chunk.try_into().expect("eight bytes"));
+        let m = cs.iter().fold(0, |m, &c| {
+            let v = w ^ (LO * c as u64);
+            m | (v.wrapping_sub(LO) & !v & HI)
+        });
         if m != 0 {
             return i + (m.trailing_zeros() / 8) as usize;
         }
         i += 8;
     }
-    i + b.get(i..).map_or(0, |r| r.iter().take_while(|&&x| x != c).count())
+    i + b.get(i..).map_or(0, |r| r.iter().take_while(|x| !cs.contains(x)).count())
 }
 
 /// Where `\begin{document}` starts: the first one not in a `%` comment (templates name it
@@ -4126,6 +4148,76 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool) 
     scan_from(src, block, None, None)
 }
 
+/// The packages [`scan_from`] asks about at its commands, a bit each (`has!`).
+const SCAN_PACKAGES: [&str; 34] = ["algorithmicx", "amsmath", "amsthm", "array", "authblk", "biblatex", "calc", "color", "enumerate", "enumitem", "etoolbox", "fancyhdr", "float", "footmisc", "geometry", "graphicx", "hyperref", "ifthen", "listings", "longtable", "mathtools", "multicol", "natbib", "setspace", "siunitx", "subcaption", "tabularx", "tcolorbox", "threeparttable", "tikz", "titlesec", "url", "verbatim", "xcolor"];
+
+/// A package's bit in [`SCAN_PACKAGES`] (a name not there fails the build).
+const fn scan_package_bit(name: &str) -> u64 {
+    let mut k = 0;
+    while k < SCAN_PACKAGES.len() {
+        let p = SCAN_PACKAGES[k].as_bytes();
+        let n = name.as_bytes();
+        if p.len() == n.len() {
+            let mut j = 0;
+            while j < p.len() && p[j] == n[j] {
+                j += 1;
+            }
+            if j == p.len() {
+                return 1 << k;
+            }
+        }
+        k += 1;
+    }
+    panic!("a package not in SCAN_PACKAGES")
+}
+
+/// The bits of [`SCAN_PACKAGES`] in `loaded`.
+fn scan_packages(loaded: &[&str]) -> u64 {
+    loaded.iter().fold(0, |m, p| m | scan_package_of(p))
+}
+
+/// [`scan_package_bit`] at run time (a `match` the compiler sorts by length; the
+/// `scan_packages_match` test checks it against [`SCAN_PACKAGES`]).
+fn scan_package_of(p: &str) -> u64 {
+    1 << match p {
+        "algorithmicx" => 0,
+        "amsmath" => 1,
+        "amsthm" => 2,
+        "array" => 3,
+        "authblk" => 4,
+        "biblatex" => 5,
+        "calc" => 6,
+        "color" => 7,
+        "enumerate" => 8,
+        "enumitem" => 9,
+        "etoolbox" => 10,
+        "fancyhdr" => 11,
+        "float" => 12,
+        "footmisc" => 13,
+        "geometry" => 14,
+        "graphicx" => 15,
+        "hyperref" => 16,
+        "ifthen" => 17,
+        "listings" => 18,
+        "longtable" => 19,
+        "mathtools" => 20,
+        "multicol" => 21,
+        "natbib" => 22,
+        "setspace" => 23,
+        "siunitx" => 24,
+        "subcaption" => 25,
+        "tabularx" => 26,
+        "tcolorbox" => 27,
+        "threeparttable" => 28,
+        "tikz" => 29,
+        "titlesec" => 30,
+        "url" => 31,
+        "verbatim" => 32,
+        "xcolor" => 33,
+        _ => return 0,
+    }
+}
+
 /// [`scan_from`]'s locals between two steps, as a watch session's mark keeps them: the
 /// names owned, the ends of enumitem keys and of a box's lengths from the mark's byte.
 #[derive(Clone, Default, PartialEq)]
@@ -4175,12 +4267,17 @@ struct ScanAt<'a> {
     after: &'a str,
     mcols: usize,
     loaded: &'a [&'static str],
+    /// The source's backslashes and `starttoc_room`'s count, made once a scan.
+    slashes: &'a [usize],
+    lists: &'a std::cell::OnceCell<(usize, usize)>,
+    /// Where `\begin{document}` starts ([`doc_start`]), found at the first check that asks.
+    doc: &'a std::cell::OnceCell<Option<usize>>,
 }
 
 impl ScanAt<'_> {
     /// Whether the command is past `\begin{document}`.
     fn in_body(&self) -> bool {
-        doc_start(self.src).is_some_and(|d| d < self.i)
+        self.doc.get_or_init(|| doc_start(self.src)).is_some_and(|d| d < self.i)
     }
 }
 
@@ -4199,9 +4296,12 @@ enum Verdict {
 /// `\@outlinefile`, …). A document with more goes to the engine, as pdfLaTeX's "No room for a
 /// new \write" would break its lists.
 fn starttoc_room(s: &ScanAt) -> Verdict {
-    // One pass over the source's backslashes (a byte search), not a scan per name.
-    let lists = s.src.match_indices('\\').filter(|&(k, _)| ["tableofcontents", "listof"].iter().any(|c| s.src.as_bytes()[k + 1..].starts_with(c.as_bytes()))).count();
-    let index = usize::from(s.src.contains("\\makeindex"));
+    // One pass over the source's backslashes (found once a scan), not a scan per name, and
+    // once a scan, not at each of its commands.
+    let (lists, index) = *s.lists.get_or_init(|| {
+        let starts = |c: &[&str]| s.slashes.iter().filter(|&&k| c.iter().any(|c| s.src.as_bytes()[k + 1..].starts_with(c.as_bytes()))).count();
+        (starts(&["tableofcontents", "listof"]), usize::from(starts(&["makeindex"]) > 0))
+    });
     // comment.sty's `\newwrite\CommentStream`.
     let index = index + usize::from(s.loaded.contains(&"comment"));
     if 3 + index + lists <= 13 { Verdict::Pass } else { Verdict::Stop(Some("more lists than pdfTeX's \\write streams hold")) }
@@ -4347,14 +4447,21 @@ const PRESCAN_CHECKS: &[(&str, &str, fn(&ScanAt) -> Verdict)] = &[
 /// commands of the source, so the rows are indexed by name once a process (sorted, table
 /// order kept among rows of one name) rather than compared with `name` one by one.
 fn prescan_check(name: &str, loaded: &[&str]) -> Option<fn(&ScanAt) -> Verdict> {
-    static BY_NAME: std::sync::OnceLock<Vec<(&'static str, u16)>> = std::sync::OnceLock::new();
-    let rows = BY_NAME.get_or_init(|| {
+    // The rows sorted by name (table order kept among a name's), and each name's run of them
+    // by hash: one FNV hash a command, not a binary search comparing names.
+    type ByName = (Vec<u16>, std::collections::HashMap<&'static str, (u16, u16), super::engine_hyph::WordHash>);
+    static BY_NAME: std::sync::OnceLock<ByName> = std::sync::OnceLock::new();
+    let (rows, runs) = BY_NAME.get_or_init(|| {
         let mut v: Vec<(&'static str, u16)> = PRESCAN_CHECKS.iter().enumerate().map(|(i, c)| (c.0, i as u16)).collect();
         v.sort_unstable();
-        v
+        let mut runs = std::collections::HashMap::with_hasher(super::engine_hyph::WordHash);
+        for (k, r) in v.iter().enumerate() {
+            runs.entry(r.0).or_insert((k as u16, 0)).1 += 1;
+        }
+        (v.into_iter().map(|r| r.1).collect(), runs)
     });
-    let start = rows.partition_point(|r| r.0 < name);
-    rows[start..].iter().take_while(|r| r.0 == name).map(|r| &PRESCAN_CHECKS[r.1 as usize]).find(|c| c.1.is_empty() || loaded.contains(&c.1)).map(|c| c.2)
+    let &(start, n) = runs.get(name)?;
+    rows[start as usize..][..n as usize].iter().map(|&r| &PRESCAN_CHECKS[r as usize]).find(|c| c.1.is_empty() || loaded.contains(&c.1)).map(|c| c.2)
 }
 
 fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, from: Option<(&ScanState, usize)>, mut marks: Option<&mut prescan::Marks<ScanState>>) -> Result<&'a str, &'a str> {
@@ -4373,7 +4480,10 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
     // Where `\makeatletter` and `\makeatother` stand, found once: whether `@` is a letter at a
     // byte is the later of the two that end before it (a search back from every command made
     // the pre-scan quadratic in the source).
-    let at_marks = |pat: &str| src.match_indices(pat).map(|(k, _)| k + pat.len()).collect::<Vec<_>>();
+    // The source's backslashes, found once by a byte search: the marks here, the definitions
+    // `macros_holding_at` reads, the control words' uses (`WordUses`) and `starttoc_room`'s lists.
+    let slashes = backslashes(src);
+    let at_marks = |pat: &str| slashes.iter().filter(|&&k| src.as_bytes()[k..].starts_with(pat.as_bytes())).map(|&k| k + pat.len()).collect::<Vec<_>>();
     let (at_letter, at_other) = (at_marks("\\makeatletter"), at_marks("\\makeatother"));
     let last_before = |ends: &[usize], i: usize| ends[..ends.partition_point(|&e| e <= i)].last().copied();
     // The preamble's tikz styles, read once for the pictures (`tikz::preamble_styles`).
@@ -4422,6 +4532,26 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
     let mut ext = false;
     // The packages `\usepackage` loads from native tables, with the packages they load.
     let mut loaded: Vec<&'static str> = Vec::new();
+    // Which of [`SCAN_PACKAGES`] are in `loaded`, a bit each, made again whenever `require`
+    // changes it (`req!`, its only writer here): the per-command questions (`has!`) were each a
+    // walk of the list comparing names.
+    let mut hot = 0u64;
+    macro_rules! req {
+        ($p:expr) => {{
+            let r = require($p, &mut loaded);
+            #[allow(unused_assignments)]
+            {
+                hot = scan_packages(&loaded);
+            }
+            r
+        }};
+    }
+    macro_rules! has {
+        ($p:literal) => {{
+            const BIT: u64 = scan_package_bit($p);
+            hot & BIT != 0
+        }};
+    }
     let (mut have, mut have_for) = (KERNEL_BIT, 0);
     // Open `tabular`s: `&`, `\hline` and `\tabularnewline` are taken only inside one.
     let mut tabs = 0usize;
@@ -4450,7 +4580,16 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
     let mut def_end = 0;
     // The document's macros whose text opens an alignment (`\newcommand{\mat}[2]{\left(
     // \begin{array}{#1}#2\end{array}\right)}`): the `&`s of a use's arguments are its tabs.
-    let tab_own = macros_holding(src, |t| ["{array}", "{tabular}", "matrix}", "{cases}", "{aligned}", "{split}"].iter().any(|e| t.contains(&format!("\\begin{e}"))));
+    let tab_own = macros_holding_at(src, &slashes, |t| ["\\begin{array}", "\\begin{tabular}", "\\beginmatrix}", "\\begin{cases}", "\\begin{aligned}", "\\begin{split}"].iter().any(|e| t.contains(e)));
+    // The control words' uses by name, made at the first definition that asks (`uses_of`).
+    let words = std::cell::OnceCell::new();
+    let uses = |name: &str| match WordUses::of(name) {
+        true => words.get_or_init(|| WordUses::new(src, &slashes)).count(name).min(2),
+        false => uses_of(src, name),
+    };
+    // `starttoc_room`'s lists and `\makeindex`, counted at its first command.
+    let lists = std::cell::OnceCell::new();
+    let doc = std::cell::OnceCell::new();
     // babel's languages (`engine_babel`), and whether `[T1]{fontenc}` is loaded (babel's
     // OT1 `\"` is its own, with `\bbl@allowhyphens`).
     let mut lang: Option<babel::ScanBabel> = None;
@@ -4468,6 +4607,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
         (define_next, provide) = (st.define_next, st.provide);
         [class, report, book, letter, ams, koma, memoir, lttr] = st.class;
         loaded.clone_from(&st.loaded);
+        hot = scan_packages(&loaded);
         (tabs, floats, mcols) = (st.tabs, st.floats, st.mcols);
         thms = st.thms.iter().map(|s| &**s).collect();
         counters = st.counters.iter().map(|s| &**s).collect();
@@ -4573,11 +4713,11 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                 // its `\@verbatim` lacks the kernel's `\@tempswafalse` and `\verbatim@start`
                 // swallows the first end of line, so the first line's `\leavevmode\null` follows
                 // whatever `\if@tempswa` was left by the text before (a `\cite`, a file hook).
-                if loaded.contains(&"tcolorbox") && rest.starts_with("begin{verbatim}") {
+                if has!("tcolorbox") && rest.starts_with("begin{verbatim}") {
                     stop("verbatim under tcolorbox", &mut blocked)?;
                 }
                 // A listing's options and text (`listings::env_len`), not scanned.
-                if let Some(r) = rest.strip_prefix("begin{lstlisting}").filter(|_| loaded.contains(&"listings")) {
+                if let Some(r) = rest.strip_prefix("begin{lstlisting}").filter(|_| has!("listings")) {
                     match listings::env_len(r) {
                         Some(k) => {
                             i += 1 + "begin{lstlisting}".len() + k;
@@ -4592,15 +4732,15 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     i += k + 1 + "\\end{verbatim}".len();
                     // verbatim.sty's `\verbatim@rescan` drops the rest of the `\end` line, which
                     // the kernel sets; its `\endverbatim` has no `\if@newlist \leavevmode`.
-                    if loaded.contains(&"verbatim") && (!src[i..].split('\n').next().unwrap_or("").trim().is_empty() || matches!(rest[..k].strip_prefix("begin{verbatim}").map(|r| r.trim_matches([' ', '\t'])), Some("" | "\n"))) {
+                    if has!("verbatim") && (!src[i..].split('\n').next().unwrap_or("").trim().is_empty() || matches!(rest[..k].strip_prefix("begin{verbatim}").map(|r| r.trim_matches([' ', '\t'])), Some("" | "\n"))) {
                         stop("verbatim.sty: text after \\end{verbatim}, or no text", &mut blocked)?;
                     }
                     continue;
                 }
                 // A tikzpicture of `engine_tikz`'s grammar is read whole; any other stops.
-                if let Some(r) = rest.strip_prefix("begin{tikzpicture}").filter(|_| loaded.contains(&"tikz") && !defined.contains(&"tikzpicture")) {
+                if let Some(r) = rest.strip_prefix("begin{tikzpicture}").filter(|_| has!("tikz") && !defined.contains(&"tikzpicture")) {
                     // A node's `\includegraphics` is graphicx's, natively only when it is loaded.
-                    match r.find("\\end{tikzpicture}").filter(|&k| (loaded.contains(&"graphicx") || !r[..k].contains("\\includegraphics")) && tikz::accepts(&r[..k], tikz_styles.get_or_init(|| tikz::preamble_styles(src)))) {
+                    match r.find("\\end{tikzpicture}").filter(|&k| (has!("graphicx") || !r[..k].contains("\\includegraphics")) && tikz::accepts(&r[..k], tikz_styles.get_or_init(|| tikz::preamble_styles(src)))) {
                         Some(k) => {
                             i += 1 + "begin{tikzpicture}".len() + k + "\\end{tikzpicture}".len();
                             continue;
@@ -4613,7 +4753,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                 }
                 // `\tikz[opts] <command>;` (tikz.code.tex `\tikz@collect@command`): the picture
                 // of that one command, read whole like the environment's.
-                if let Some(r) = rest.strip_prefix("tikz").filter(|r| loaded.contains(&"tikz") && !defined.contains(&"tikz") && r.trim_start_matches([' ', '\t']).starts_with(['\\', '['])) {
+                if let Some(r) = rest.strip_prefix("tikz").filter(|r| has!("tikz") && !defined.contains(&"tikz") && r.trim_start_matches([' ', '\t']).starts_with(['\\', '['])) {
                     let lead = r.len() - r.trim_start_matches([' ', '\t']).len();
                     let r = &r[lead..];
                     let opts = if r.starts_with('[') { r.find(']').map_or(0, |k| k + 1) } else { 0 };
@@ -4631,7 +4771,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                             }
                             depth == 0
                         }).map(|(k, _)| k);
-                        match close.filter(|&k| (loaded.contains(&"graphicx") || !braced[..k].contains("\\includegraphics")) && tikz::accepts(&format!("{}{}", &r[..opts], &braced[1..k]), tikz_styles.get_or_init(|| tikz::preamble_styles(src)))) {
+                        match close.filter(|&k| (has!("graphicx") || !braced[..k].contains("\\includegraphics")) && tikz::accepts(&format!("{}{}", &r[..opts], &braced[1..k]), tikz_styles.get_or_init(|| tikz::preamble_styles(src)))) {
                             Some(k) => {
                                 i += 1 + "tikz".len() + lead + opts + (cmd.len() - braced.len()) + k + 1;
                                 continue;
@@ -4652,7 +4792,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         }
                         ch == ';' && depth == 0
                     }).map(|(k, _)| k);
-                    match semi.filter(|&k| cmd.trim_start().starts_with('\\') && !cmd[..k].contains("\n\n") && (loaded.contains(&"graphicx") || !cmd[..k].contains("\\includegraphics")) && tikz::accepts(&r[..opts + k + 1], tikz_styles.get_or_init(|| tikz::preamble_styles(src)))) {
+                    match semi.filter(|&k| cmd.trim_start().starts_with('\\') && !cmd[..k].contains("\n\n") && (has!("graphicx") || !cmd[..k].contains("\\includegraphics")) && tikz::accepts(&r[..opts + k + 1], tikz_styles.get_or_init(|| tikz::preamble_styles(src)))) {
                         Some(k) => {
                             i += 1 + "tikz".len() + lead + opts + k + 1;
                             continue;
@@ -4741,7 +4881,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                 // url.sty reads `\url{...}` and `\path{...}` with its specials other: the text is
                 // not scanned (it ends at the first `}`, as `\Url@y` reads it from the file).
                 // hyperref's `\href` reads its URL so too (`\hyper@normalise`).
-                if matches!(name, "url" | "path") && (loaded.contains(&"url") || loaded.contains(&"hyperref")) || name == "href" && loaded.contains(&"hyperref") {
+                if matches!(name, "url" | "path") && (has!("url") || has!("hyperref")) || name == "href" && has!("hyperref") {
                     let t = rest[n..].trim_start_matches(' ');
                     if let Some(k) = t.strip_prefix('{').and_then(|r| r.find('}').map(|k| rest.len() - r.len() + k)) {
                         i += 1 + k + 1;
@@ -4751,7 +4891,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                 }
                 // siunitx's `\si`/`\unit`, `\num`, `\SI`/`\qty`, `\ang` and the ranges: the arguments `siunitx::units`
                 // and `siunitx::number` take, not scanned (their unit macros exist only there).
-                if loaded.contains(&"siunitx") && matches!(name, "si" | "unit" | "num" | "SI" | "qty" | "ang" | "numrange" | "SIrange" | "qtyrange") {
+                if has!("siunitx") && matches!(name, "si" | "unit" | "num" | "SI" | "qty" | "ang" | "numrange" | "SIrange" | "qtyrange") {
                     match siunitx::scan_args(name, &rest[n..]) {
                         Some(k) => {
                             i += 1 + n + k;
@@ -4768,7 +4908,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     let after = rest[n..].trim_start();
                     let spec = after.strip_prefix('{').and_then(|r| balanced(r).map(|k| r[k + 1..].trim_start())).and_then(|r| r.strip_prefix('{')).and_then(|r| balanced(r).map(|k| &r[..k]));
                     seen!(spec.map_or("", |s| after_part(src, s)));
-                    if spec.and_then(|s| tabular::spec_cols(s, loaded.contains(&"array"), loaded.contains(&"tabularx"), loaded.contains(&"siunitx"), &coltypes)) != Some(1) {
+                    if spec.and_then(|s| tabular::spec_cols(s, has!("array"), has!("tabularx"), has!("siunitx"), &coltypes)) != Some(1) {
                         stop("multicolumn preamble", &mut blocked)?;
                     }
                 }
@@ -4820,16 +4960,16 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                 if ext && (EXT_LATER.contains(&name) || name == "begin" && EXT_LATER_ENVS.iter().any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
                     stop(if name == "begin" { "an environment extarticle defines otherwise" } else { name }, &mut blocked)?;
                 }
-                if koma && (KOMA_LATER.contains(&name) && !(report && matches!(name, "maketitle" | "tableofcontents" | "caption") || book && name == "cleardoublepage") || name == "begin" && KOMA_LATER_ENVS.iter().filter(|e| !(report && matches!(**e, "figure" | "table") || book && **e == "thebibliography" && loaded.contains(&"natbib"))).any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
+                if koma && (KOMA_LATER.contains(&name) && !(report && matches!(name, "maketitle" | "tableofcontents" | "caption") || book && name == "cleardoublepage") || name == "begin" && KOMA_LATER_ENVS.iter().filter(|e| !(report && matches!(**e, "figure" | "table") || book && **e == "thebibliography" && has!("natbib"))).any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
                     stop(if name == "begin" { "an environment scrartcl defines otherwise" } else { name }, &mut blocked)?;
                 }
                 // Under biblatex every key is missing (no `.bbl` is read); its
                 // `\bibliography` and `\bibliographystyle`, a kernel bibliography and natbib
                 // are not native.
-                if loaded.contains(&"biblatex") && (matches!(name, "bibitem" | "bibliography" | "bibliographystyle") || name == "begin" && rest[n..].starts_with("{thebibliography}")) {
+                if has!("biblatex") && (matches!(name, "bibitem" | "bibliography" | "bibliographystyle") || name == "begin" && rest[n..].starts_with("{thebibliography}")) {
                     stop("biblatex with a kernel bibliography", &mut blocked)?;
                 }
-                if loaded.contains(&"authblk") && authblk::NAMES.contains(&name) {
+                if has!("authblk") && authblk::NAMES.contains(&name) {
                     stop("authblk's settings", &mut blocked)?;
                 }
                 if define_next {
@@ -4864,7 +5004,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     // parameter it has or `##`); anything else is scanned as before.
                     let before = src[..i].trim_end_matches('{').trim_end().trim_end_matches('*');
                     let fresh = scan_list(name) == 0 && table_names(name) == 0 && !defined.contains(&name);
-                    if !prefixed && fresh && (before.ends_with("\\newcommand") || before.ends_with("\\providecommand")) && uses_of(src, name) == 1 {
+                    if !prefixed && fresh && (before.ends_with("\\newcommand") || before.ends_with("\\providecommand")) && uses(name) == 1 {
                         if let Some(len) = definition_len(&rest[n..]) {
                             defined.push(name);
                             i += 1 + n + len;
@@ -4944,14 +5084,14 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                             if !layoutpkgs::fullpage_options_ok(opts) {
                                 stop("a fullpage option", &mut blocked)?;
                             }
-                            if loaded.contains(&"geometry") || koma || memoir {
+                            if has!("geometry") || koma || memoir {
                                 stop("fullpage after geometry, or under KOMA or memoir", &mut blocked)?;
                             }
-                            if !require(p, &mut loaded) {
+                            if !req!(p) {
                                 stop(p, &mut blocked)?;
                             }
                             continue;
-                        } else if p == "xurl" && loaded.contains(&"biblatex") {
+                        } else if p == "xurl" && has!("biblatex") {
                             // xurl.sty's `\@ifpackageloaded{biblatex}` counters.
                             stop("xurl after biblatex", &mut blocked)?;
                             continue;
@@ -5003,8 +5143,8 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                             }
                         } else if p == "xcolor" && opts.split(',').map(str::trim).filter(|o| !o.is_empty()).eq(["table"]) {
                             // `table` loads colortbl after xcolor (`use_package`).
-                            require(p, &mut loaded);
-                            require("colortbl", &mut loaded);
+                            req!(p);
+                            req!("colortbl");
                             continue;
                         } else if p == "mathpazo" && opts.trim() == "sc" || p == "nth" && opts.trim() == "super" {
                             // `sc` (`use_package`).
@@ -5038,21 +5178,21 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         } else if p == "tcolorbox" && tcolorbox::most(opts) {
                             // `most`'s libraries: theorems' `\RequirePackage{amsmath}`, listingsutf8's
                             // listings (the rest define keys and macros only, `tcolorbox::most`).
-                            if !require(p, &mut loaded) || !require("amsmath", &mut loaded) || !require("listings", &mut loaded) {
+                            if !req!(p) || !req!("amsmath") || !req!("listings") {
                                 stop(p, &mut blocked)?;
                             }
                             continue;
                         } else if !same_options(p, opts) {
                             // A package without a table is its own blocker; its options are
                             // named only for a package the native job loads.
-                            let native = require(p, &mut loaded);
+                            let native = req!(p);
                             if native {
                                 detail.set(p);
                             }
                             stop(if native { "package options" } else { p }, &mut blocked)?;
                             continue;
                         }
-                        if !require(p, &mut loaded) {
+                        if !req!(p) {
                             stop(p, &mut blocked)?;
                         }
                     }
@@ -5061,7 +5201,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                 } else if name == "newtheorem" {
                     // `{env}[shared]{Title}` or `{env}{Title}[level]`, with plain text;
                     // amsthm's `\newtheorem*{env}{Title}`.
-                    let star = loaded.contains(&"amsthm") && rest[n..].trim_start().starts_with('*');
+                    let star = has!("amsthm") && rest[n..].trim_start().starts_with('*');
                     let at = if star { n + rest[n..].find('*').expect("a star") + 1 } else { n };
                     let Some((env, shared, title, _, len, parent)) = newtheorem_args(&rest[at..], report).filter(|a| !star || a.1.is_none() && a.3.is_none() && a.5.is_none()).filter(|a| !report || a.5.is_none()) else {
                         stop("newtheorem", &mut blocked)?;
@@ -5079,7 +5219,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     let plain = title.bytes().all(|c| c.is_ascii_alphanumeric() || b" -'".contains(&c));
                     i += 1 + at + if plain { len } else { title.as_ptr() as usize - rest[at..].as_ptr() as usize - 1 };
                     continue;
-                } else if name == "newcolumntype" && loaded.contains(&"array") {
+                } else if name == "newcolumntype" && has!("array") {
                     // `\newcolumntype{c}[n]{text}` in the preamble (`nc_rewrite`); a letter of
                     // array.sty's own (`\@tfor\next:=<>clrmbp@!|`, tabularx's `X`, `*`) or an
                     // optional argument declines. The text is scanned on.
@@ -5124,13 +5264,13 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     // code (`\ver@amsthm.sty` is set, so `\usepackage{amsthm}` loads nothing).
                     if ams {
                         for p in ["amsmath", "amsfonts", "amsthm"] {
-                            require(p, &mut loaded);
+                            req!(p);
                         }
                     }
                     // memoir.cls's `\RequirePackage{array}` and `{booktabs}`.
                     if memoir {
                         for p in ["array", "booktabs"] {
-                            require(p, &mut loaded);
+                            req!(p);
                         }
                     }
                     class = true;
@@ -5172,11 +5312,11 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                 } else if name == "makebox" {
                     // `\makebox[width][pos]{text}`, `\makebox{text}` or the picture form.
                     seen!(rest[n..].trim_start());
-                } else if matches!(name, "thepage" | "leftmark" | "rightmark") && loaded.contains(&"fancyhdr") && !doc_start(src).is_some_and(|d| d < i) {
+                } else if matches!(name, "thepage" | "leftmark" | "rightmark") && has!("fancyhdr") && !doc_start(src).is_some_and(|d| d < i) {
                     // In a fancyhdr slot, typeset at output time (`fancy_tokens`).
                 } else if matches!(name, "colorbox" | "fcolorbox") {
                     // xcolor's `\color@b@x` (`colorbox`); color.sty's differs.
-                    if !loaded.contains(&"xcolor") {
+                    if !has!("xcolor") {
                         stop(name, &mut blocked)?;
                     }
                 } else if name == "parbox" {
@@ -5208,7 +5348,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         }
                         None => stop(name, &mut blocked)?,
                     }
-                } else if matches!(name, "preto" | "appto" | "gpreto" | "gappto") && loaded.contains(&"etoolbox") {
+                } else if matches!(name, "preto" | "appto" | "gpreto" | "gappto") && has!("etoolbox") {
                     // etoolbox's patch of a kernel macro the document never runs
                     // (`userdef::etb_unseen_patch`, `etb_unseen`): its code is not read.
                     match userdef::etb_unseen_patch(src, &rest[n..]) {
@@ -5235,9 +5375,9 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         }
                         _ => stop(name, &mut blocked)?,
                     }
-                } else if matches!(name, "titleformat" | "titlespacing" | "titlelabel") && loaded.contains(&"titlesec") {
+                } else if matches!(name, "titleformat" | "titlespacing" | "titlelabel") && has!("titlesec") {
                     // Read whole by `titlesec::call_len`; the natives store the arguments.
-                    match titlesec::call_len(name, &rest[n..], loaded.contains(&"xcolor") || loaded.contains(&"color"), report && !koma && !memoir) {
+                    match titlesec::call_len(name, &rest[n..], has!("xcolor") || has!("color"), report && !koma && !memoir) {
                         Some(len) => {
                             // A last `[...]` was looked for.
                             let t = rest[n + len..].trim_start();
@@ -5247,10 +5387,10 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         }
                         None => stop(name, &mut blocked)?,
                     }
-                } else if matches!(name, "paragraph" | "subparagraph") && loaded.contains(&"titlesec") {
+                } else if matches!(name, "paragraph" | "subparagraph") && has!("titlesec") {
                     // titlesec's run-in shape.
                     stop(name, &mut blocked)?;
-                } else if name == "setlist" && loaded.contains(&"enumitem") {
+                } else if name == "setlist" && has!("enumitem") {
                     // `\setlist[names]{keys}` in the preamble (`set_list`).
                     let after = rest[n..].trim_start();
                     let (names, after) = match after.strip_prefix('[') {
@@ -5267,7 +5407,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     }
                     enit_end = src.len() - after.len() + 1 + keys.map_or(0, str::len);
                     seen!(&src[enit_end..]);
-                } else if name == "newtcolorbox" && loaded.contains(&"tcolorbox") {
+                } else if name == "newtcolorbox" && has!("tcolorbox") {
                     // `\newtcolorbox{name}[n][default]{options}` in the preamble
                     // (`new_tcolorbox`): the environment is the document's, its options of
                     // `tcolorbox::keys_ok` (`#n` items allowed), scanned on as text.
@@ -5287,7 +5427,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     // text. A name the native job has or reads goes to the engine.
                     let env = rest[n..].trim_start_matches('*').trim_start().strip_prefix('{').and_then(|r| r.split_once('}')).map(|r| r.0);
                     match env {
-                        Some(e) if !e.is_empty() && e.bytes().all(|c| c.is_ascii_alphabetic()) && !ENVS.contains(&e) && !AMS_ARRAYS.contains(&e) && !thms.contains(&e) && !READ_INTERNALLY.contains(&e) && !known(e) && !(SETSPACE_ENVS.contains(&e) && loaded.contains(&"setspace")) && !doc_start(src).is_some_and(|d| d < i) => {
+                        Some(e) if !e.is_empty() && e.bytes().all(|c| c.is_ascii_alphabetic()) && !ENVS.contains(&e) && !AMS_ARRAYS.contains(&e) && !thms.contains(&e) && !READ_INTERNALLY.contains(&e) && !known(e) && !(SETSPACE_ENVS.contains(&e) && has!("setspace")) && !doc_start(src).is_some_and(|d| d < i) => {
                             seen!(after_part(src, e));
                             defined.push(e)
                         }
@@ -5333,7 +5473,8 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                             if !fresh(&word[1..]) {
                                 stop(name, &mut blocked)?;
                             }
-                            let at = src.match_indices(&word).map(|(k, _)| k).find(|&k| !src[k + word.len()..].starts_with(|c: char| c.is_ascii_alphabetic()));
+                            // `word` is letters (`base` and the suffix): its first use as a whole word.
+                            let at = words.get_or_init(|| WordUses::new(src, &slashes)).first(&word[1..]);
                             if let Some(k) = at {
                                 defined.push(&src[k + 1..k + word.len()]);
                             }
@@ -5360,7 +5501,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         }
                         _ => stop(name, &mut blocked)?,
                     }
-                } else if name == "newfloat" && loaded.contains(&"float") {
+                } else if name == "newfloat" && has!("float") {
                     // float.sty's `\newfloat{type}{placement}{ext}[within]` in the preamble
                     // (`engine_float::new_float`): a new name of letters, its counter one of
                     // the document's, `\begin{type}` a float.
@@ -5419,7 +5560,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         }
                         // In an `\ifthenelse` test, a counter `counter_value` reads (the
                         // native `\value` declines anywhere else).
-                        Some(c) if name == "value" && loaded.contains(&"ifthen") && matches!(c, "chapter" | "section" | "subsection" | "subsubsection" | "enumi" | "enumii" | "enumiii" | "enumiv" | "footnote" | "figure" | "table" | "equation") => {
+                        Some(c) if name == "value" && has!("ifthen") && matches!(c, "chapter" | "section" | "subsection" | "subsubsection" | "enumi" | "enumii" | "enumiii" | "enumiv" | "footnote" | "figure" | "table" | "equation") => {
                             i = src.len() - after.len() + c.len() + 2;
                             continue;
                         }
@@ -5429,7 +5570,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     // `\the<name>` of one of the document's counters (its macro, or the
                     // document's redefinition).
                 } else if let Some(check) = prescan_check(name, &loaded) {
-                    match check(&ScanAt { src, i, after: &rest[n..], mcols, loaded: &loaded }) {
+                    match check(&ScanAt { src, i, after: &rest[n..], mcols, loaded: &loaded, slashes: &slashes, lists: &lists, doc: &doc }) {
                         Verdict::Pass => {}
                         Verdict::Stop(why) => stop(why.unwrap_or(name), &mut blocked)?,
                         Verdict::Skip(to) => {
@@ -5451,14 +5592,14 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     let skipped = rest.len() - n - after.len() + target;
                     let value = rest[n + skipped..].trim_start();
                     let Some(len) = value.strip_prefix('{').and_then(balanced) else { return Err(name) };
-                    if loaded.contains(&"calc") && calc_expression(&value[1..1 + len]) {
+                    if has!("calc") && calc_expression(&value[1..1 + len]) {
                         stop("a calc expression", &mut blocked)?;
                     }
                     i += 1 + n + (rest.len() - n - value.len()) + len + 2;
                     continue;
                 }
                 // calc's `\setcounter` reads an expression; the native job reads a number.
-                if matches!(name, "setcounter" | "addtocounter") && loaded.contains(&"calc") {
+                if matches!(name, "setcounter" | "addtocounter") && has!("calc") {
                     let parts = rest[n..].split_once('}').and_then(|r| r.1.trim_start().strip_prefix('{')).and_then(|r| r.split_once('}'));
                     seen!(parts.map_or("", |r| r.1));
                     let value = parts.map_or("+", |r| r.0);
@@ -5468,7 +5609,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                 }
                 // footmisc (`footmisc_options_ok`): its footnotes and its float placement are
                 // not native.
-                if loaded.contains(&"footmisc") && (matches!(name, "footnote" | "footnotemark" | "footnotetext" | "thanks") || name == "begin" && ["{figure}", "{table}", "{figure*}", "{table*}"].iter().any(|e| rest[n..].starts_with(e))) {
+                if has!("footmisc") && (matches!(name, "footnote" | "footnotemark" | "footnotetext" | "thanks") || name == "begin" && ["{figure}", "{table}", "{figure*}", "{table*}"].iter().any(|e| rest[n..].starts_with(e))) {
                     stop("a footnote or float under footmisc", &mut blocked)?;
                 }
                 if mcols > 0 && matches!(name, "footnote" | "footnotetext" | "thanks" | "marginpar" | "clearpage" | "cleardoublepage") {
@@ -5479,14 +5620,14 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     seen!(after_part(src, env));
                     // enumitem's lists with their defaults print as the kernel's; the keys of
                     // `enit_keys_ok` are native in `enumerate` and `itemize`.
-                    if name == "begin" && matches!(env, "enumerate" | "itemize" | "description") && loaded.contains(&"enumitem") {
+                    if name == "begin" && matches!(env, "enumerate" | "itemize" | "description") && has!("enumitem") {
                         let after = rest[n + env.len() + 2..].trim_start();
                         seen!(after);
                         if let Some(r) = after.strip_prefix('[') {
                             let keys = bracketed(r);
                             let ok = if env == "description" { enit_desc_keys_ok } else { enit_keys_ok };
                             let short = enit_short && env != "description" && keys.is_some_and(|k| enit_short_ok(k, env == "enumerate"));
-                            if loaded.contains(&"enumerate") || !(short || keys.is_some_and(ok)) {
+                            if has!("enumerate") || !(short || keys.is_some_and(ok)) {
                                 stop("enumitem list options", &mut blocked)?;
                             }
                             enit_end = src.len() - r.len() + keys.map_or(0, str::len);
@@ -5495,7 +5636,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                     }
                     // tcolorbox's `[options]` (`tcolorbox::keys_ok`), also after a
                     // `\newtcolorbox` environment with an optional argument.
-                    if name == "begin" && loaded.contains(&"tcolorbox") && (env == "tcolorbox" && !defined.contains(&env) || tcb_opt.contains(&env)) {
+                    if name == "begin" && has!("tcolorbox") && (env == "tcolorbox" && !defined.contains(&env) || tcb_opt.contains(&env)) {
                         let after = rest[n + env.len() + 2..].trim_start();
                         seen!(after);
                         if let Some(r) = after.strip_prefix('[') {
@@ -5505,24 +5646,24 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                             }
                         }
                     }
-                    if name == "begin" && (env == "minipage" || matches!(env, "subfigure" | "subtable") && loaded.contains(&"subcaption")) {
+                    if name == "begin" && (env == "minipage" || matches!(env, "subfigure" | "subtable") && has!("subcaption")) {
                         let (ok, read) = box_position_ok(&rest[n + env.len() + 2..]);
                         seen!(read);
                         if !ok {
                             stop("a minipage with a height or another position", &mut blocked)?;
                         }
                     }
-                    let ams_array = AMS_ARRAYS.contains(&env) && loaded.contains(&"amsmath") && (!MT_CASES.contains(&env) && !MT_MATRICES.contains(&env) || loaded.contains(&"mathtools"));
-                    let proof = env == "proof" && loaded.contains(&"amsthm") || env == "IEEEkeywords" && ieee || env == "titlingpage" && memoir || env == "dialogue" && sp || env == "tabularx" && loaded.contains(&"tabularx") || env == "longtable" && loaded.contains(&"longtable") || SETSPACE_ENVS.contains(&env) && loaded.contains(&"setspace") || matches!(env, "multicols" | "multicols*") && loaded.contains(&"multicol") || env == "tcolorbox" && loaded.contains(&"tcolorbox") || matches!(env, "threeparttable" | "tablenotes") && loaded.contains(&"threeparttable") || matches!(env, "subfigure" | "subtable") && loaded.contains(&"subcaption") || env == "algorithmic" && loaded.contains(&"algorithmicx") || env == "@twocolumnfalse";
+                    let ams_array = AMS_ARRAYS.contains(&env) && has!("amsmath") && (!MT_CASES.contains(&env) && !MT_MATRICES.contains(&env) || has!("mathtools"));
+                    let proof = env == "proof" && has!("amsthm") || env == "IEEEkeywords" && ieee || env == "titlingpage" && memoir || env == "dialogue" && sp || env == "tabularx" && has!("tabularx") || env == "longtable" && has!("longtable") || SETSPACE_ENVS.contains(&env) && has!("setspace") || matches!(env, "multicols" | "multicols*") && has!("multicol") || env == "tcolorbox" && has!("tcolorbox") || matches!(env, "threeparttable" | "tablenotes") && has!("threeparttable") || matches!(env, "subfigure" | "subtable") && has!("subcaption") || env == "algorithmic" && has!("algorithmicx") || env == "@twocolumnfalse";
                     // threeparttable's `[t]` only; tablenotes' options (`para`, `flushleft`)
                     // decline.
-                    if name == "begin" && matches!(env, "threeparttable" | "tablenotes") && loaded.contains(&"threeparttable") {
+                    if name == "begin" && matches!(env, "threeparttable" | "tablenotes") && has!("threeparttable") {
                         let after = rest[n + env.len() + 2..].trim_start();
                         if after.starts_with('[') && !(env == "threeparttable" && after.starts_with("[t]")) {
                             stop("a threeparttable or tablenotes option", &mut blocked)?;
                         }
                     }
-                    if matches!(env, "multicols" | "multicols*") && loaded.contains(&"multicol") && !defined.contains(&env) {
+                    if matches!(env, "multicols" | "multicols*") && has!("multicol") && !defined.contains(&env) {
                         // `{n}` with n from 2 to 20, no heading argument, at the outer level.
                         if name == "end" {
                             mcols = mcols.saturating_sub(1);
@@ -5542,7 +5683,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         stop("a footnote, float or \\clearpage in multicols", &mut blocked)?;
                     }
                     let newfloat = newfloats.contains(&env.strip_suffix('*').unwrap_or(env));
-                    if !(ams_array || proof || newfloat || thms.contains(&env) || ENVS.contains(&env) && blocked_names(env) & have == 0 && (!matches!(env, "equation*" | "subequations" | "align" | "align*" | "alignat" | "alignat*" | "flalign" | "flalign*" | "gather" | "gather*" | "multline" | "multline*" | "aligned" | "gathered" | "split") || loaded.contains(&"amsmath"))) && !defined.contains(&env) {
+                    if !(ams_array || proof || newfloat || thms.contains(&env) || ENVS.contains(&env) && blocked_names(env) & have == 0 && (!matches!(env, "equation*" | "subequations" | "align" | "align*" | "alignat" | "alignat*" | "flalign" | "flalign*" | "gather" | "gather*" | "multline" | "multline*" | "aligned" | "gathered" | "split") || has!("amsmath"))) && !defined.contains(&env) {
                         stop(env, &mut blocked)?;
                     }
                     if matches!(env, "figure" | "table" | "figure*" | "table*") || newfloat {
@@ -5590,13 +5731,13 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         };
                         let spec = after.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
                         seen!(spec.map_or("", |s| after_part(src, s)));
-                        if loaded.contains(&"array") {
+                        if has!("array") {
                             spec_end = spec.map_or(spec_end, |s| src.len() - after_part(src, s).len());
                         }
-                        if !spec.is_some_and(|s| tabular::spec_ok(s, loaded.contains(&"array"), loaded.contains(&"tabularx"), loaded.contains(&"siunitx"), &coltypes)) {
+                        if !spec.is_some_and(|s| tabular::spec_ok(s, has!("array"), has!("tabularx"), has!("siunitx"), &coltypes)) {
                             stop("tabular preamble", &mut blocked)?;
                         }
-                    } else if env == "longtable" && loaded.contains(&"longtable") && !defined.contains(&env) {
+                    } else if env == "longtable" && has!("longtable") && !defined.contains(&env) {
                         // `[pos]{spec}`, in a paragraph of its own (`longtable_begin`).
                         tabs += 1;
                         if tabs > 1 || floats > 0 {
@@ -5609,13 +5750,13 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         };
                         let spec = after.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
                         seen!(spec.map_or("", |s| after_part(src, s)));
-                        if loaded.contains(&"array") {
+                        if has!("array") {
                             spec_end = spec.map_or(spec_end, |s| src.len() - after_part(src, s).len());
                         }
-                        if !spec.is_some_and(|s| tabular::spec_ok(s, loaded.contains(&"array"), loaded.contains(&"tabularx"), loaded.contains(&"siunitx"), &coltypes)) {
+                        if !spec.is_some_and(|s| tabular::spec_ok(s, has!("array"), has!("tabularx"), has!("siunitx"), &coltypes)) {
                             stop("tabular preamble", &mut blocked)?;
                         }
-                    } else if env == "tabularx" && loaded.contains(&"tabularx") && !defined.contains(&env) {
+                    } else if env == "tabularx" && has!("tabularx") && !defined.contains(&env) {
                         // `{width}[pos]{spec}`.
                         tabs += 1;
                         let after = rest[n + env.len() + 2..].trim_start();
@@ -5627,7 +5768,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                         let spec = after.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
                         seen!(spec.map_or("", |s| after_part(src, s)));
                         spec_end = spec.map_or(spec_end, |s| src.len() - after_part(src, s).len());
-                        if !spec.is_some_and(|s| tabular::spec_ok(s, true, true, loaded.contains(&"siunitx"), &coltypes)) {
+                        if !spec.is_some_and(|s| tabular::spec_ok(s, true, true, has!("siunitx"), &coltypes)) {
                             stop("tabular preamble", &mut blocked)?;
                         }
                     }
@@ -6184,7 +6325,7 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
     // The body's definitions too: a macro used before its definition is checked as any other.
     let (quiet, loud, star_macros) = quiet_macros(src, slashes, &operators);
     // Own macros a heading's contents line may hold.
-    let toc_own = toc_own_macros(src, start, &quiet);
+    let toc_own = toc_own_macros(src, slashes, start, &quiet);
     // The preamble's macros holding `\tag` (`tag_macros`).
     let tagm = tag_macros(&src[..start]);
     // The preamble's `secnumdepth`, then each `\setcounter{secnumdepth}` the body's walk meets.
@@ -7546,6 +7687,40 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
     out
 }
 
+/// The control words of a source by name (letters only): where each first stands as a whole
+/// word and how many times, from one walk over the backslashes, for the pre-scan's questions
+/// about a name's uses (`uses_of`), which searched the whole source once per definition.
+/// `\name` stands at a backslash as a whole word exactly when the letters after it are
+/// `name`.
+struct WordUses<'a> {
+    /// Name to (first backslash, uses).
+    map: std::collections::HashMap<&'a str, (u32, u32), super::engine_hyph::WordHash>,
+}
+
+impl<'a> WordUses<'a> {
+    fn new(src: &'a str, slashes: &[usize]) -> Self {
+        let b = src.as_bytes();
+        let mut map = std::collections::HashMap::with_capacity_and_hasher(slashes.len() / 4, super::engine_hyph::WordHash);
+        for &k in slashes {
+            let n = b[k + 1..].iter().take_while(|c| c.is_ascii_alphabetic()).count();
+            if n > 0 {
+                map.entry(&src[k + 1..k + 1 + n]).or_insert((k as u32, 0)).1 += 1;
+            }
+        }
+        WordUses { map }
+    }
+    /// Whether a name is one the table answers for: letters only.
+    fn of(name: &str) -> bool {
+        !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphabetic())
+    }
+    fn count(&self, name: &str) -> usize {
+        self.map.get(name).map_or(0, |e| e.1 as usize)
+    }
+    fn first(&self, name: &str) -> Option<usize> {
+        self.map.get(name).map(|e| e.0 as usize)
+    }
+}
+
 /// How many times `\name` stands in `src` as a whole control word, counted up to two (the
 /// pre-scan asks only whether a definition is its name's one use): the search stops at the
 /// second, mostly near the definition, instead of reading the whole source for each name.
@@ -7613,7 +7788,9 @@ fn newif_words<'a>(src: &'a str, slashes: &[usize]) -> Vec<&'a str> {
         out.push(full);
         for suffix in ["true", "false"] {
             let word = format!("\\{}{suffix}", &full[2..]);
-            if let Some(at) = src.match_indices(&word).map(|(j, _)| j).find(|&j| !src[j + word.len()..].starts_with(|c: char| c.is_ascii_alphabetic())) {
+            // Its first use as a whole word, looked for at the backslashes (the word starts
+            // with the only one it holds).
+            if let Some(at) = slashes.iter().copied().find(|&j| b[j..].starts_with(word.as_bytes()) && !src[j + word.len()..].starts_with(|c: char| c.is_ascii_alphabetic())) {
                 out.push(&src[at + 1..at + word.len()]);
             }
         }
@@ -8029,9 +8206,16 @@ fn tag_macros(pre: &str) -> Vec<&str> {
 
 /// The preamble's macros (`\def`, `\gdef`, `\newcommand`, `\renewcommand`) whose text `hold`s.
 fn macros_holding(pre: &str, hold: impl Fn(&str) -> bool) -> Vec<&str> {
+    macros_holding_at(pre, &backslashes(pre), hold)
+}
+
+/// [`macros_holding`] with `pre`'s backslashes found already: each name is looked for at
+/// them (the same places `match_indices` finds, a name starting with the only backslash it
+/// holds), not by a substring search of the whole text per name.
+fn macros_holding_at<'a>(pre: &'a str, slashes: &[usize], hold: impl Fn(&str) -> bool) -> Vec<&'a str> {
     let mut out = Vec::new();
     for d in ["\\def", "\\gdef", "\\newcommand", "\\renewcommand"] {
-        for (k, _) in pre.match_indices(d) {
+        for k in slashes.iter().copied().filter(|&k| pre.as_bytes()[k..].starts_with(d.as_bytes())) {
             let after = &pre[k + d.len()..];
             if after.starts_with(|c: char| c.is_ascii_alphabetic()) {
                 continue;
@@ -8061,25 +8245,29 @@ fn tag_macro_uses(s: &str, names: &[&str]) -> usize {
 /// most a number of parameters (no default) and a text of [`toc_safe`] commands and `#n`.
 /// The `.toc` line `\addcontentsline`'s `\protected@write` makes is the macro's expansion:
 /// the same tokens the title gives when the contents line expands the macro itself.
-fn toc_own_macros<'a>(src: &str, start: usize, quiet: &[&'a str]) -> Vec<&'a str> {
+fn toc_own_macros<'a>(src: &str, slashes: &[usize], start: usize, quiet: &[&'a str]) -> Vec<&'a str> {
     const DEFS: [&str; 10] = ["\\newcommand", "\\renewcommand", "\\providecommand", "\\def", "\\gdef", "\\edef", "\\xdef", "\\let", "\\DeclareRobustCommand", "\\NewDocumentCommand"];
     // Every definition's command, place and the text after its `\\`, found once in `DEFS`
     // order (a scan of the source per macro and command cost tens of millions of
-    // instructions on a document with many macros).
-    let defs: Vec<(&str, usize, &str)> = DEFS
+    // instructions on a document with many macros). They are looked for at the text's
+    // backslashes in one pass (no name of `DEFS` starts another, so one at most matches at a
+    // backslash), then put in `DEFS` order, each command's in the text's order, as ten
+    // substring searches of the whole text gave them.
+    let mut defs: Vec<(usize, usize, &str)> = slashes
         .iter()
-        .flat_map(|&d| {
-            src.match_indices(d).filter_map(move |(k, _)| {
-                let after = &src[k + d.len()..];
-                if after.starts_with(|c: char| c.is_ascii_alphabetic()) {
-                    return None;
-                }
-                let r = after.trim_start_matches('*').trim_start();
-                let r = r.strip_prefix('{').unwrap_or(r);
-                Some((d, k, r.strip_prefix('\\')?))
-            })
+        .filter_map(|&k| {
+            let j = DEFS.iter().position(|d| src.as_bytes()[k..].starts_with(d.as_bytes()))?;
+            let after = &src[k + DEFS[j].len()..];
+            if after.starts_with(|c: char| c.is_ascii_alphabetic()) {
+                return None;
+            }
+            let r = after.trim_start_matches('*').trim_start();
+            let r = r.strip_prefix('{').unwrap_or(r);
+            Some((j, k, r.strip_prefix('\\')?))
         })
         .collect();
+    defs.sort_by_key(|d| d.0);
+    let defs: Vec<(&str, usize, &str)> = defs.into_iter().map(|(j, k, r)| (DEFS[j], k, r)).collect();
     quiet.iter().copied().filter(|name| {
         let mut found = None;
         for &(d, k, r) in &defs {
@@ -8594,6 +8782,48 @@ pub(super) fn instructions_retired() -> u64 {
     PHASE_COUNTER.get().map_or(0, |f| f())
 }
 
+/// The counter [`piece`] reads, set apart from [`PHASE_COUNTER`] so the phases' laps carry
+/// no piece reads (`examples/phase_count.rs` sets both with `RT_PIECES=1`).
+pub static PIECE_COUNTER: std::sync::OnceLock<fn() -> u64> = std::sync::OnceLock::new();
+
+/// Instructions inside a measured piece of the job, when [`PIECE_COUNTER`] is set: per
+/// piece, the total (the counter's own reads taken off, its own and those of pieces inside
+/// it) and the number of times it ran; `RT_TIME` prints them at the end of the job.
+static PIECES: [[std::sync::atomic::AtomicU64; 2]; 3] = [const { [const { std::sync::atomic::AtomicU64::new(0) }; 2] }; 3];
+/// Counter reads made so far by [`piece`], and one read's cost (the least of a few pairs).
+static PIECE_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PIECE_COST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+/// The pieces: 0 hyphenation as a whole (§891's words expanded, §894–§934, §903), 1 a word
+/// not yet in the memo (its nodes made, hyphenated and captured), 2 the trie walk (§923).
+const PIECE_NAMES: [&str; 3] = ["hyphenation (expand_words_near, hyphenate_par)", "  of it: words not seen before (hyphenate_word's miss path)", "  of it: the pattern trie walk (Trie::find, §923)"];
+
+/// `f`, its instructions added to piece `k` when a counter is set.
+#[inline(always)]
+pub(super) fn piece<R>(k: usize, f: impl FnOnce() -> R) -> R {
+    use std::sync::atomic::Ordering::Relaxed;
+    let Some(c) = PIECE_COUNTER.get() else { return f() };
+    let cost = *PIECE_COST.get_or_init(|| (0..9).map(|_| (c(), c())).map(|(a, b)| b - a).min().unwrap_or(0));
+    let reads = PIECE_READS.load(Relaxed);
+    let a = c();
+    let r = f();
+    let b = c();
+    let inner = PIECE_READS.load(Relaxed) - reads;
+    PIECES[k][0].fetch_add((b - a).saturating_sub((1 + inner) * cost), Relaxed);
+    PIECES[k][1].fetch_add(1, Relaxed);
+    PIECE_READS.fetch_add(2, Relaxed);
+    r
+}
+
+fn print_pieces() {
+    use std::sync::atomic::Ordering::Relaxed;
+    if PIECE_COUNTER.get().is_none() {
+        return;
+    }
+    for (k, name) in PIECE_NAMES.iter().enumerate() {
+        eprintln!("             {:9.3}M instructions in {name} ({} runs)", PIECES[k][0].load(Relaxed) as f64 / 1e6, PIECES[k][1].load(Relaxed));
+    }
+}
+
 /// The native job over `text`; with `ck`, a watch session's: checkpoints taken at its pages,
 /// and, when `ck.1`, the run starts from the last of `ck.0.snaps` instead of the class.
 #[allow(clippy::too_many_arguments)]
@@ -8708,6 +8938,7 @@ fn job(text: &str, class: &'static ClassTable<'static>, key: u32, now: i64, read
     let pages = m.page.pages;
     let pdf = m.pdf_cached(cache);
     lap("pdf");
+    print_pieces();
     let out = Output { pdf, pages, errors: std::mem::take(&mut m.errors) };
     if let Some(c) = ck {
         c.pages = std::mem::take(&mut m.page.pdf);
@@ -21384,12 +21615,53 @@ mod tests {
     }
 
     #[test]
+    fn word_uses_match_uses_of() {
+        let src = r"\newcommand{\cell}{x}\cellbox \cell\\cell \cell@x \cells{\cell}\x\xx\x";
+        let slashes = backslashes(src);
+        let w = WordUses::new(src, &slashes);
+        for name in ["cell", "cellbox", "cells", "x", "xx", "newcommand", "none"] {
+            assert_eq!(w.count(name).min(2), uses_of(src, name), "{name}");
+            let first = src.match_indices(&format!("\\{name}")).map(|(k, _)| k).find(|&k| !src[k + 1 + name.len()..].starts_with(|c: char| c.is_ascii_alphabetic()));
+            assert_eq!(w.first(name), first, "{name}");
+        }
+    }
+
+    #[test]
+    fn scan_packages_match() {
+        for (k, p) in SCAN_PACKAGES.iter().enumerate() {
+            assert_eq!(scan_package_of(p), 1 << k);
+            assert_eq!(scan_package_bit(p), 1 << k);
+        }
+        assert_eq!(scan_package_of("amssymb"), 0);
+    }
+
+    #[test]
     fn byte_end_finds_each_place() {
         for at in 0..20 {
             let mut b = vec![b'a'; 24];
             b[at] = b'\\';
             assert_eq!(byte_end(&b, 0, b'\\'), at);
             assert_eq!(byte_end(&b, at + 1, b'\\'), 24);
+        }
+    }
+
+    #[test]
+    fn bytes_end_finds_the_first_of_several() {
+        let set = [b'%', b'\\', b'{', b'}'];
+        for c in 0..=255u8 {
+            for at in 0..20 {
+                for later in [None, Some(at + 1), Some(at + 9)] {
+                    let mut b = vec![b'a'; 24];
+                    b[at] = c;
+                    if let Some(k) = later.filter(|&k| k < b.len()) {
+                        b[k] = b'}';
+                    }
+                    for start in [0, 1, 7, 9] {
+                        let slow = start + b[start..].iter().take_while(|x| !set.contains(x)).count();
+                        assert_eq!(bytes_end(&b, start, set), slow, "byte {c} at {at} from {start}");
+                    }
+                }
+            }
         }
     }
 
@@ -21684,6 +21956,46 @@ mod tests {
         // Left for the pre-scan: `\endinput`, a missing file, an argument, verbatim.
         for src in ["\\input{e}", "\\input{zz}", "\\mbox{\\input{a}}", "\\begin{verbatim}\\input{a}\\end{verbatim}", "\\verb|\\input{a}|"] {
             assert_eq!(go(src), src);
+        }
+    }
+
+    /// The comment splice copying the lines between `\begin{comment}` lines at once gives
+    /// what a line-by-line walk gives (comment.sty's rule, then verbatim.sty's).
+    #[test]
+    fn splice_comments_equals_the_line_walk() {
+        let walk = |src: &str, comment_sty: bool| {
+            let start = doc_start(src).unwrap();
+            let mut out = src[..start].to_string();
+            let mut lines = src[start..].split_inclusive('\n');
+            while let Some(line) = lines.next() {
+                if line.trim() != "\\begin{comment}" {
+                    out.push_str(line);
+                    continue;
+                }
+                let (mut held, mut closed) = (vec![line], false);
+                for l in lines.by_ref() {
+                    held.push(l);
+                    if comment_sty && l.trim_start_matches('\t').trim_end() == "\\end{comment}" {
+                        closed = true;
+                        break;
+                    }
+                    if !comment_sty && l.contains("\\end{comment}") {
+                        closed = l.trim() == "\\end{comment}";
+                        break;
+                    }
+                }
+                if !closed {
+                    out.extend(held);
+                }
+            }
+            out
+        };
+        let bodies = ["a \\begin{comment} b\n\\begin{comment}\nx\n\\end{comment}\nc\n", "\\begin{comment}\n\\begin{comment}\ny\n \\end{comment} z\n\\end{comment}\nq", "x\n\t\\begin{comment}\t\n1\n\t\\end{comment}\n\\begin{comment}\nopen to the end\n", "\\begin{comment}\\end{comment}\n\\begin{comment}"];
+        for (pkg, sty) in [("comment", true), ("verbatim", false)] {
+            for body in bodies {
+                let src = format!("\\usepackage{{{pkg}}}\\begin{{document}}\n{body}");
+                assert_eq!(splice_comments(&src), walk(&src, sty), "{pkg}: {body:?}");
+            }
         }
     }
 

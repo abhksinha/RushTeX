@@ -127,31 +127,42 @@ impl Index {
     /// name and renamed, so a reader never sees half of it.
     fn save(&self, path: &Path, stamp: &[u8], roots: &[Vec<u8>]) {
         let mut out = Vec::with_capacity(self.text.len() + self.dirs.len() * 8 + self.files.len() * 20 + stamp.len() + 64);
-        let len = |out: &mut Vec<u8>, n: usize| out.extend_from_slice(&(n as u64).to_le_bytes());
         out.extend_from_slice(INDEX_MAGIC);
-        len(&mut out, stamp.len());
-        out.extend_from_slice(stamp);
-        let roots = roots.join(&b'\n');
-        len(&mut out, roots.len());
-        out.extend_from_slice(&roots);
-        len(&mut out, self.text.len());
-        out.extend_from_slice(&self.text);
-        len(&mut out, self.dirs.len());
+        put_part(&mut out, stamp);
+        put_part(&mut out, &roots.join(&b'\n'));
+        self.put(&mut out);
+        write_whole(path, &out);
+    }
+
+    /// `text`, `dirs` and `files` as little-endian arrays, each behind its length.
+    fn put(&self, out: &mut Vec<u8>) {
+        put_part(out, &self.text);
+        out.extend_from_slice(&(self.dirs.len() as u64).to_le_bytes());
         for &(a, b) in &self.dirs {
             out.extend_from_slice(&a.to_le_bytes());
             out.extend_from_slice(&b.to_le_bytes());
         }
-        len(&mut out, self.files.len());
+        out.extend_from_slice(&(self.files.len() as u64).to_le_bytes());
         for &(h, d, a, n) in &self.files {
             out.extend_from_slice(&h.to_le_bytes());
             for v in [d, a, n] {
                 out.extend_from_slice(&v.to_le_bytes());
             }
         }
-        let tmp = path.with_extension("part");
-        if std::fs::write(&tmp, &out).is_ok() {
-            let _ = std::fs::rename(&tmp, path);
-        }
+    }
+
+    /// What [`Index::put`] wrote, from `r`; `None` when it is not sound.
+    fn get(r: &mut Bytes) -> Option<Index> {
+        let text = r.part()?.to_vec();
+        let u32_at = |s: &[u8], i: usize| u32::from_le_bytes([s[i], s[i + 1], s[i + 2], s[i + 3]]);
+        let n = r.len()?;
+        let raw = r.take(n.checked_mul(8)?)?;
+        let dirs: Vec<(u32, u32)> = raw.as_chunks::<8>().0.iter().map(|c| (u32_at(c, 0), u32_at(c, 4))).collect();
+        let n = r.len()?;
+        let raw = r.take(n.checked_mul(20)?)?;
+        let files: Vec<(u64, u32, u32, u32)> = raw.as_chunks::<20>().0.iter().map(|c| (u64::from_le_bytes(c[..8].try_into().unwrap()), u32_at(c, 8), u32_at(c, 12), u32_at(c, 16))).collect();
+        let sound = dirs.iter().all(|&(a, l)| (a as usize).checked_add(l as usize).is_some_and(|e| e <= text.len())) && files.iter().all(|&(_, d, a, l)| (d as usize) < dirs.len() && (a as usize).checked_add(l as usize).is_some_and(|e| e <= text.len()));
+        sound.then_some(Index { text, dirs, files })
     }
 
     /// The index saved at `path` when its stamp is `stamp`, with the roots that had a
@@ -166,16 +177,74 @@ impl Index {
             return None;
         }
         let roots: Vec<Vec<u8>> = r.part()?.split(|&c| c == b'\n').filter(|r| !r.is_empty()).map(<[u8]>::to_vec).collect();
-        let text = r.part()?.to_vec();
-        let u32_at = |s: &[u8], i: usize| u32::from_le_bytes([s[i], s[i + 1], s[i + 2], s[i + 3]]);
-        let n = r.len()?;
-        let raw = r.take(n.checked_mul(8)?)?;
-        let dirs: Vec<(u32, u32)> = raw.as_chunks::<8>().0.iter().map(|c| (u32_at(c, 0), u32_at(c, 4))).collect();
-        let n = r.len()?;
-        let raw = r.take(n.checked_mul(20)?)?;
-        let files: Vec<(u64, u32, u32, u32)> = raw.as_chunks::<20>().0.iter().map(|c| (u64::from_le_bytes(c[..8].try_into().unwrap()), u32_at(c, 8), u32_at(c, 12), u32_at(c, 16))).collect();
-        let sound = dirs.iter().all(|&(a, l)| (a as usize).checked_add(l as usize).is_some_and(|e| e <= text.len())) && files.iter().all(|&(_, d, a, l)| (d as usize) < dirs.len() && (a as usize).checked_add(l as usize).is_some_and(|e| e <= text.len()));
-        sound.then_some((Index { text, dirs, files }, roots))
+        Some((Index::get(&mut r)?, roots))
+    }
+
+    /// The `ls-R` databases of `roots` indexed, with the roots that have one.
+    fn build(roots: &[&str]) -> (Index, Vec<Vec<u8>>) {
+        let mut db = Index::default();
+        let mut db_roots = Vec::new();
+        for root in roots {
+            let text = std::fs::read(format!("{root}/ls-R")).or_else(|_| std::fs::read(format!("{root}/ls-r")));
+            if let Ok(text) = text {
+                db.read_ls_r(root.as_bytes(), &text);
+                db_roots.push(root.as_bytes().to_vec());
+            }
+        }
+        db.seal();
+        (db, db_roots)
+    }
+
+    /// The disk index of `root` and the directories it was made from, saved at `path` by
+    /// [`Index::save_walk`], when every one of them still has the time stamp it had then (a
+    /// walk now would list the same names in the same order); else `None`.
+    fn load_walk(path: &Path, root: &[u8]) -> Option<(Index, Walked)> {
+        let b = std::fs::read(path).ok()?;
+        if b.get(..WALK_MAGIC.len())? != WALK_MAGIC {
+            return None;
+        }
+        let mut r = Bytes { b: &b, at: WALK_MAGIC.len() };
+        if r.part()? != root {
+            return None;
+        }
+        let mut walked = Walked::default();
+        for _ in 0..r.len()? {
+            let dir = PathBuf::from(std::str::from_utf8(r.part()?).ok()?);
+            let t = r.take(17)?;
+            let nanos = u128::from_le_bytes(t[1..].try_into().ok()?);
+            let time = (t[0] == 1).then(|| std::time::UNIX_EPOCH + std::time::Duration::new((nanos / 1_000_000_000) as u64, (nanos % 1_000_000_000) as u32));
+            walked.dirs.push((dir, time));
+        }
+        let ix = Index::get(&mut r)?;
+        walked.unchanged().then_some((ix, walked))
+    }
+
+    /// Saves this disk index of `root` with the directories it was made from (their paths
+    /// and time stamps), unless one had just changed ([`Walked::racy`]) or a stamp is not
+    /// after 1970.
+    fn save_walk(&self, path: &Path, root: &[u8], walked: &Walked) {
+        if walked.racy {
+            return;
+        }
+        let mut out = Vec::with_capacity(self.text.len() + self.files.len() * 20 + walked.dirs.len() * 64 + 64);
+        out.extend_from_slice(WALK_MAGIC);
+        put_part(&mut out, root);
+        out.extend_from_slice(&(walked.dirs.len() as u64).to_le_bytes());
+        for (d, t) in &walked.dirs {
+            let Some(d) = d.to_str() else { return };
+            put_part(&mut out, d.as_bytes());
+            let nanos = match t {
+                Some(t) => match t.duration_since(std::time::UNIX_EPOCH) {
+                    Ok(n) => Some(n.as_nanos()),
+                    Err(_) => return,
+                },
+                None => None,
+            };
+            out.push(nanos.is_some() as u8);
+            out.extend_from_slice(&nanos.unwrap_or(0).to_le_bytes());
+        }
+        self.put(&mut out);
+        write_whole(path, &out);
     }
 
     /// db.c `kpathsea_db_search`: each directory holding `base` whose path matches `elt`,
@@ -254,6 +323,162 @@ impl Index {
     }
 }
 
+/// A length, then the bytes.
+fn put_part(out: &mut Vec<u8>, b: &[u8]) {
+    out.extend_from_slice(&(b.len() as u64).to_le_bytes());
+    out.extend_from_slice(b);
+}
+
+/// `out` written beside `path` and renamed into place, so a reader never sees half of it.
+fn write_whole(path: &Path, out: &[u8]) {
+    // The process id in the name: two runs saving at once do not write into one file.
+    let tmp = path.with_extension(format!("part{}", std::process::id()));
+    if std::fs::write(&tmp, out).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
+/// A saved walked-directory index's first bytes (`Index::save_walk`).
+const WALK_MAGIC: &[u8] = b"RTKPSEW1";
+
+/// The bytes a [`Saved`] index reads at a time, and how many reads it makes before it reads
+/// the rest of the file whole: a document asking for a few files outside the binary reads a
+/// few pieces of the 8.7 MB index (reading and decoding all of it was about 7M instructions),
+/// while a run asking for many (the engine's) reads it once, as before.
+const SAVED_CHUNK: u64 = 1 << 14;
+const SAVED_CHUNKS_LAZY: usize = 64;
+
+/// A saved `ls-R` index ([`Index::save`]) read in pieces as lookups need them: the file's
+/// arrays at their offsets, each piece read once. Same lookups as the decoded [`Index`].
+struct Saved {
+    path: PathBuf,
+    file: RefCell<std::fs::File>,
+    chunks: RefCell<HashMap<u64, Box<[u8]>>>,
+    text: (u64, u64),
+    dirs: (u64, u64),
+    files: (u64, u64),
+}
+
+impl Saved {
+    /// The index at `path` when its stamp is `stamp`, with the roots that had a database;
+    /// `None` when it is missing, of another stamp, or its arrays do not fill the file.
+    fn open(path: &Path, stamp: &[u8]) -> Option<(Saved, Vec<Vec<u8>>)> {
+        let file = std::fs::File::open(path).ok()?;
+        let size = file.metadata().ok()?.len();
+        let s = Saved { path: path.to_path_buf(), file: RefCell::new(file), chunks: Default::default(), text: (0, 0), dirs: (0, 0), files: (0, 0) };
+        let mut at = INDEX_MAGIC.len() as u64;
+        if s.bytes(0, at)? != INDEX_MAGIC {
+            return None;
+        }
+        let part = |at: &mut u64| -> Option<(u64, u64)> {
+            let n = u64::from_le_bytes(s.bytes(*at, 8)?.try_into().ok()?);
+            let start = *at + 8;
+            *at = start.checked_add(n)?;
+            Some((start, n))
+        };
+        let st = part(&mut at)?;
+        if s.bytes(st.0, st.1)? != stamp {
+            return None;
+        }
+        let ro = part(&mut at)?;
+        let roots: Vec<Vec<u8>> = s.bytes(ro.0, ro.1)?.split(|&c| c == b'\n').filter(|r| !r.is_empty()).map(<[u8]>::to_vec).collect();
+        let text = part(&mut at)?;
+        let nd = u64::from_le_bytes(s.bytes(at, 8)?.try_into().ok()?);
+        let dirs = (at + 8, nd);
+        at = dirs.0.checked_add(nd.checked_mul(8)?)?;
+        let nf = u64::from_le_bytes(s.bytes(at, 8)?.try_into().ok()?);
+        let files = (at + 8, nf);
+        if files.0.checked_add(nf.checked_mul(20)?)? != size {
+            return None;
+        }
+        Some((Saved { text, dirs, files, ..s }, roots))
+    }
+
+    /// Bytes `at..at + n` of the file, through the pieces read so far.
+    fn bytes(&self, at: u64, n: u64) -> Option<Vec<u8>> {
+        use std::io::{Read, Seek};
+        let mut out = Vec::with_capacity(n as usize);
+        let mut chunks = self.chunks.borrow_mut();
+        let mut pos = at;
+        let end = at.checked_add(n)?;
+        while pos < end {
+            let k = pos / SAVED_CHUNK;
+            let c = match chunks.entry(k) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    let mut f = self.file.borrow_mut();
+                    f.seek(std::io::SeekFrom::Start(k * SAVED_CHUNK)).ok()?;
+                    let mut buf = Vec::with_capacity(SAVED_CHUNK as usize);
+                    f.by_ref().take(SAVED_CHUNK).read_to_end(&mut buf).ok()?;
+                    e.insert(buf.into_boxed_slice())
+                }
+            };
+            let from = (pos - k * SAVED_CHUNK) as usize;
+            let to = ((end - k * SAVED_CHUNK) as usize).min(c.len());
+            if from >= to {
+                return None;
+            }
+            out.extend_from_slice(&c[from..to]);
+            pos = k * SAVED_CHUNK + to as u64;
+        }
+        Some(out)
+    }
+
+    /// File record `k`: (name hash, directory, name start, name length).
+    fn file(&self, k: u64) -> Option<(u64, u32, u32, u32)> {
+        let r = self.bytes(self.files.0 + 20 * k, 20)?;
+        let u = |i: usize| u32::from_le_bytes([r[i], r[i + 1], r[i + 2], r[i + 3]]);
+        Some((u64::from_le_bytes(r[..8].try_into().ok()?), u(8), u(12), u(16)))
+    }
+
+    fn text(&self, at: u32, len: u32) -> Option<Vec<u8>> {
+        ((at as u64).checked_add(len as u64)? <= self.text.1).then_some(())?;
+        self.bytes(self.text.0 + at as u64, len as u64)
+    }
+
+    /// [`Index::each`] on the file: the first record of the hash found by bisection, then
+    /// the records of that hash in order.
+    fn each(&self, base: &[u8], elt: &[u8], hit: &mut dyn FnMut(&[u8]) -> bool) -> bool {
+        let h = hash(base);
+        let (mut lo, mut hi) = (0, self.files.1);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match self.file(mid) {
+                Some((fh, ..)) if fh < h => lo = mid + 1,
+                Some(_) => hi = mid,
+                None => return false,
+            }
+        }
+        let mut full = Vec::new();
+        for k in lo..self.files.1 {
+            let Some((fh, d, at, len)) = self.file(k) else { return false };
+            if fh != h {
+                break;
+            }
+            if self.text(at, len).as_deref() != Some(base) || d as u64 >= self.dirs.1 {
+                continue;
+            }
+            let Some(r) = self.bytes(self.dirs.0 + 8 * d as u64, 8) else { return false };
+            let (da, dl) = (u32::from_le_bytes([r[0], r[1], r[2], r[3]]), u32::from_le_bytes([r[4], r[5], r[6], r[7]]));
+            let Some(dir) = self.text(da, dl) else { continue };
+            full.clear();
+            full.extend_from_slice(&dir);
+            full.extend_from_slice(base);
+            if matches(&full, elt) && hit(&full) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// The `ls-R` index: read in pieces from its saved file at first, decoded whole once many
+/// pieces have been read (or when it was just built).
+enum Db {
+    Saved(Saved),
+    Whole(Index),
+}
+
 /// db.c `match`: whether file path `f` lies in path element `elt`, where `//` stands for any
 /// number of directories and the file must be directly in the last directory named.
 fn matches(f: &[u8], elt: &[u8]) -> bool {
@@ -330,7 +555,10 @@ struct Elt {
 pub struct Kpse {
     paths: [Vec<Elt>; 9],
     db_roots: Vec<Vec<u8>>,
-    db: Index,
+    db: RefCell<Db>,
+    /// Where the walked directories' indexes are kept between runs (`kpse-walk-<hash>`
+    /// beside `kpse-paths`), if anywhere.
+    cache: Option<PathBuf>,
     /// Disk indexes of the `//` elements no database covers, made when first searched, with
     /// the directories they were made from.
     disk: RefCell<HashMap<Vec<u8>, (Index, Walked)>>,
@@ -403,27 +631,18 @@ impl Kpse {
         let roots: Vec<&str> = lines[FORMATS.len()].split(':').map(|r| r.trim_start_matches("!!").trim_end_matches('/')).filter(|r| !r.is_empty()).collect();
         let stamp = Index::stamp(&roots);
         let saved = cache.map(|c| c.with_file_name("kpse-index"));
-        let (db, db_roots) = match saved.as_ref().and_then(|p| Index::load(p, &stamp)) {
-            Some(loaded) => loaded,
+        let (db, db_roots) = match saved.as_ref().and_then(|p| Saved::open(p, &stamp)) {
+            Some((s, r)) => (Db::Saved(s), r),
             None => {
-                let mut db = Index::default();
-                let mut db_roots = Vec::new();
-                for root in &roots {
-                    let text = std::fs::read(format!("{root}/ls-R")).or_else(|_| std::fs::read(format!("{root}/ls-r")));
-                    if let Ok(text) = text {
-                        db.read_ls_r(root.as_bytes(), &text);
-                        db_roots.push(root.as_bytes().to_vec());
-                    }
-                }
-                db.seal();
+                let (db, db_roots) = Index::build(&roots);
                 if let Some(p) = &saved {
                     db.save(p, &stamp, &db_roots);
                 }
-                (db, db_roots)
+                (Db::Whole(db), db_roots)
             }
         };
         let roots = roots.iter().map(|r| r.to_string()).collect();
-        Some(Kpse { paths, db_roots, db, disk: Default::default(), doc_dir, found: Default::default(), roots, stamp })
+        Some(Kpse { paths, db_roots, db: RefCell::new(db), cache: cache.map(Path::to_path_buf), disk: Default::default(), doc_dir, found: Default::default(), roots, stamp })
     }
 
     /// For a search kept between compiles (`--watch`): forgets where names were found and
@@ -513,6 +732,22 @@ impl Kpse {
         None
     }
 
+    /// [`Index::each`] on the `ls-R` index, read in pieces until [`SAVED_CHUNKS_LAZY`] have
+    /// been read, then decoded whole (made again from the databases if it is not sound).
+    fn db_each(&self, base: &[u8], elt: &[u8], hit: &mut dyn FnMut(&[u8]) -> bool) -> bool {
+        let whole = match &*self.db.borrow() {
+            Db::Saved(s) if s.chunks.borrow().len() >= SAVED_CHUNKS_LAZY => Some(Index::load(&s.path, &self.stamp).map_or_else(|| Index::build(&self.roots.iter().map(String::as_str).collect::<Vec<_>>()).0, |l| l.0)),
+            _ => None,
+        };
+        if let Some(ix) = whole {
+            *self.db.borrow_mut() = Db::Whole(ix);
+        }
+        match &*self.db.borrow() {
+            Db::Saved(s) => s.each(base, elt, hit),
+            Db::Whole(ix) => ix.each(base, elt, hit),
+        }
+    }
+
     /// pathsearch.c `path_search` of one element: the database when one covers the
     /// element, else the disk when the element allows it.
     fn search<T>(&self, elt: &Elt, name: &str, probe: &mut dyn FnMut(&Path) -> Option<T>) -> Option<T> {
@@ -530,7 +765,7 @@ impl Kpse {
             got.is_some()
         };
         if self.db_roots.iter().any(|r| path.starts_with(r) && path.get(r.len()).is_none_or(|&c| c == b'/')) {
-            self.db.each(base.as_bytes(), &path, &mut read);
+            self.db_each(base.as_bytes(), &path, &mut read);
             return got;
         }
         if !elt.disk {
@@ -548,13 +783,23 @@ impl Kpse {
         };
         let root = elt.path[..cut].to_vec();
         let mut disk = self.disk.borrow_mut();
+        // A walk saved by an earlier run is taken while every directory it listed keeps its
+        // time stamp (one `stat` each instead of listing it); a new walk is saved.
         let (ix, _) = disk.entry(root).or_insert_with_key(|root| {
+            let saved = self.cache.as_ref().map(|c| c.with_file_name(format!("kpse-walk-{:016x}", hash(root))));
+            if let Some(kept) = saved.as_ref().and_then(|p| Index::load_walk(p, root)) {
+                return kept;
+            }
             let mut ix = Index::default();
             let mut walked = Walked::default();
             if let Ok(r) = std::str::from_utf8(root) {
                 ix.walk(Path::new(r), &mut walked);
             }
             ix.seal();
+            // A root that is not there costs one `stat` to find so again: not saved.
+            if let Some(p) = saved.filter(|_| walked.dirs.iter().any(|(_, t)| t.is_some())) {
+                ix.save_walk(&p, root, &walked);
+            }
             (ix, walked)
         });
         ix.each(base.as_bytes(), &path, &mut read);
@@ -625,5 +870,51 @@ mod tests {
         });
         assert_eq!(seen, ["/r/tex/a/x.sty", "/r/tex/a/b/x.sty"]);
         assert_eq!((format_of("cmr10.tfm"), format_of("cmr10.600pk"), format_of("foo.pgf"), format_of("x.pk")), (1, 8, 0, 0));
+    }
+
+    /// The saved index read in pieces finds what the decoded one finds, in the same order,
+    /// across piece boundaries; another stamp is refused. A saved walk is taken back while
+    /// its directories are unchanged.
+    #[test]
+    fn saved_index_in_pieces_and_saved_walk() {
+        let dir = std::env::temp_dir().join(format!("rushtex-kpse-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("w/sub")).unwrap();
+        let mut ix = Index::default();
+        let mut ls = b"% ls-R\n".to_vec();
+        for d in 0..400 {
+            ls.extend_from_slice(format!("./tex/d{d}:\nx{}.sty\ncommon.sty\n\n", d % 50).as_bytes());
+        }
+        ix.read_ls_r(b"/r", &ls);
+        ix.seal();
+        let path = dir.join("kpse-index");
+        ix.save(&path, b"stamp", &[b"/r".to_vec()]);
+        assert!(Saved::open(&path, b"other").is_none());
+        let (saved, roots) = Saved::open(&path, b"stamp").unwrap();
+        assert_eq!(roots, [b"/r".to_vec()]);
+        for name in ["common.sty", "x7.sty", "x49.sty", "none.sty"] {
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            ix.each(name.as_bytes(), b"/r/tex//", &mut |f| {
+                a.push(f.to_vec());
+                false
+            });
+            saved.each(name.as_bytes(), b"/r/tex//", &mut |f| {
+                b.push(f.to_vec());
+                false
+            });
+            assert_eq!(a, b, "{name}");
+        }
+        std::fs::write(dir.join("w/a.tfm"), b"").unwrap();
+        std::fs::write(dir.join("w/sub/b.tfm"), b"").unwrap();
+        let (mut w, mut walked) = (Index::default(), Walked::default());
+        w.walk(&dir.join("w"), &mut walked);
+        w.seal();
+        walked.racy = false;
+        let root = dir.join("w").to_str().unwrap().as_bytes().to_vec();
+        let wpath = dir.join("kpse-walk");
+        w.save_walk(&wpath, &root, &walked);
+        let (back, _) = Index::load_walk(&wpath, &root).expect("unchanged directories");
+        assert_eq!((back.text, back.dirs, back.files), (w.text.clone(), w.dirs.clone(), w.files.clone()));
+        assert!(Index::load_walk(&wpath, b"/elsewhere").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

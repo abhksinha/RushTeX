@@ -878,7 +878,10 @@ impl Machine<'_, '_> {
         }
         // A session's kept page the last run looked into says whether it holds pgf's glue.
         let known = self.ship_memo.as_ref().and_then(|s| s.same()).and_then(|p| p.pgf_glue);
-        let placed_later = self.page.pgf_glue && known.filter(|_| !ship_check()).unwrap_or_else(|| pgf_glue_in(&self.e.nodes, b));
+        // Only `RT_PAGEHASH` and a session's memo read it: a one-shot run does not walk the
+        // page for it (about 4M instructions on master.tex).
+        let wanted = self.ship_memo.is_some() || page_hash_on();
+        let placed_later = self.page.pgf_glue && wanted && known.filter(|_| !ship_check()).unwrap_or_else(|| pgf_glue_in(&self.e.nodes, b));
         assert!(!self.page.pgf_glue || known.is_none_or(|k| k == placed_later), "RT_SHIP_CHECK: kept page whose pgf glue the last run found otherwise");
         if !placed_later {
             page_hash(self, b);
@@ -1101,6 +1104,17 @@ fn pgf_glue_in(nodes: &super::engine_node::Nodes, b: u32) -> bool {
     })
 }
 
+/// [`page_hash`]'s file, `RT_PAGEHASH`.
+fn page_hash_path() -> Option<&'static String> {
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| std::env::var("RT_PAGEHASH").ok()).as_ref()
+}
+
+/// Whether [`page_hash`] writes (`RT_PAGEHASH` set).
+fn page_hash_on() -> bool {
+    page_hash_path().is_some()
+}
+
 /// `RT_PAGEHASH=<file>`: one line per shipped page, `run page hash`, the hash of the page box
 /// as `\showbox` prints it. Comparing runs shows which pages a rerun changes, the measure for
 /// single-pass references (P2b): the first changed page is where a single pass must resume.
@@ -1112,8 +1126,7 @@ pub(super) fn ship_check() -> bool {
 }
 
 fn page_hash(m: &Machine, b: u32) {
-    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let Some(path) = PATH.get_or_init(|| std::env::var("RT_PAGEHASH").ok()) else { return };
+    let Some(path) = page_hash_path() else { return };
     use std::hash::{Hash, Hasher};
     let mut s = String::new();
     m.show_box(b, &mut s);

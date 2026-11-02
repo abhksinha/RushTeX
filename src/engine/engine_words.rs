@@ -185,11 +185,27 @@ impl WordStore {
         self.brk.get(id as usize).map_or(&[], |&(s, e)| &self.rows[s as usize..e as usize])
     }
 
-    /// `list` (nodes §903 made, owned by `nodes`) as a new entry, its size from `dims`;
-    /// `None` for a node an entry cannot hold.
-    fn capture(&mut self, nodes: &super::engine_node::Nodes, list: &[Node], dims: &impl Fn(&Node) -> [i32; 4]) -> Option<u32> {
+    /// A hyphenated word as a new entry, its size from `dims`: this store's items `own[0]`,
+    /// then `list` (nodes §903 made, owning what is in `sc`), then this store's items `own[1]`.
+    /// The kept items are copied here directly, never made as nodes. `None` for a node an
+    /// entry cannot hold (the store is left as it was).
+    fn capture(&mut self, sc: &Scratch, own: [(u32, u32); 2], list: &[Node], dims: &impl Fn(&Node) -> [i32; 4]) -> Option<u32> {
         let marks = self.marks();
-        let main = self.capture_list(nodes, list);
+        let base = self.stack.len();
+        let mut main = || {
+            for i in own[0].0..own[0].1 {
+                self.push_own(i)?;
+            }
+            self.push_nodes(sc, list)?;
+            for i in own[1].0..own[1].1 {
+                self.push_own(i)?;
+            }
+            let s = self.items.len() as u32;
+            self.items.extend_from_slice(&self.stack[base..]);
+            self.stack.truncate(base);
+            Some((s, self.items.len() as u32))
+        };
+        let main = main();
         let Some((start, end)) = main else {
             self.truncate(marks);
             self.stack.clear();
@@ -250,8 +266,57 @@ impl WordStore {
     }
 
     /// `list`'s nodes appended to `items` (a discretionary's texts first): their range.
-    fn capture_list(&mut self, nodes: &super::engine_node::Nodes, list: &[Node]) -> Option<(u32, u32)> {
+    fn capture_list(&mut self, sc: &Scratch, list: &[Node]) -> Option<(u32, u32)> {
         let base = self.stack.len();
+        self.push_nodes(sc, list)?;
+        let s = self.items.len() as u32;
+        self.items.extend_from_slice(&self.stack[base..]);
+        self.stack.truncate(base);
+        Some((s, self.items.len() as u32))
+    }
+
+    /// This store's items `s..e` appended to `items` again, as [`Self::capture_list`] would
+    /// append the nodes `Nodes::make_items` makes of them: their range.
+    fn own_list(&mut self, (s, e): (u32, u32)) -> Option<(u32, u32)> {
+        let base = self.stack.len();
+        for i in s..e {
+            self.push_own(i)?;
+        }
+        let s = self.items.len() as u32;
+        self.items.extend_from_slice(&self.stack[base..]);
+        self.stack.truncate(base);
+        Some((s, self.items.len() as u32))
+    }
+
+    /// Item `i` of this store onto `stack`, what it owns copied (a ligature's characters,
+    /// a discretionary's texts appended to `items`), as `capture_list` takes the node
+    /// `Nodes::make_items` makes of it.
+    fn push_own(&mut self, i: u32) -> Option<()> {
+        let n = self.items[i as usize];
+        match n.kind {
+            Kind::Char => self.stack.push(n),
+            Kind::Kern if n.sub == 0 => self.stack.push(n),
+            Kind::Lig => {
+                let at = self.ligs.len();
+                let from = n.b as usize;
+                self.ligs.extend_from_within(from..from + (n.sub >> 2) as usize);
+                self.stack.push(Node { b: at as i32, ..n });
+            }
+            Kind::Disc if n.a < 0 => self.stack.push(n),
+            Kind::Disc => {
+                let [pre, post] = self.discs[n.a as usize];
+                let pre = self.own_list(pre)?;
+                let post = self.own_list(post)?;
+                self.discs.push([pre, post]);
+                self.stack.push(Node { a: self.discs.len() as i32 - 1, ..n });
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+
+    /// `list`'s nodes onto `stack` (a discretionary's texts appended to `items`).
+    fn push_nodes(&mut self, sc: &Scratch, list: &[Node]) -> Option<()> {
         for n in list {
             match n.kind {
                 Kind::Char => self.stack.push(*n),
@@ -259,24 +324,21 @@ impl WordStore {
                 Kind::Kern if n.sub == 0 => self.stack.push(*n),
                 Kind::Lig => {
                     let at = self.ligs.len() as i32;
-                    self.ligs.extend_from_slice(nodes.lig_from(n));
+                    self.ligs.extend_from_slice(sc.lig_from(n));
                     self.stack.push(Node { b: at, ..*n });
                 }
                 Kind::Disc if n.a < 0 => self.stack.push(*n),
                 Kind::Disc => {
-                    let [pre, post] = nodes.discs[n.a as usize];
-                    let pre = self.capture_list(nodes, nodes.get(pre))?;
-                    let post = self.capture_list(nodes, nodes.get(post))?;
+                    let [pre, post] = sc.texts(n.a as usize);
+                    let pre = self.capture_list(sc, pre)?;
+                    let post = self.capture_list(sc, post)?;
                     self.discs.push([pre, post]);
                     self.stack.push(Node { a: self.discs.len() as i32 - 1, ..*n });
                 }
                 _ => return None,
             }
         }
-        let s = self.items.len() as u32;
-        self.items.extend_from_slice(&self.stack[base..]);
-        self.stack.truncate(base);
-        Some((s, self.items.len() as u32))
+        Some(())
     }
 
     /// Whether entry `a` here and entry `b` of live store `other` stand for the same nodes
@@ -360,6 +422,52 @@ impl WordStore {
     }
 }
 
+/// The ligatures' characters and the discretionaries' texts of nodes §903 made for a word
+/// of the store (`Machine::hyphenate_word`), kept here instead of in the node store: the
+/// entry made of them copies them, and nothing is made only to be freed.
+#[derive(Default, PartialEq, Clone)]
+pub struct Scratch {
+    lists: Vec<Node>,
+    ligs: Vec<u8>,
+    discs: Vec<[(u32, u32); 2]>,
+}
+
+impl Scratch {
+    pub(super) fn clear(&mut self) {
+        self.lists.clear();
+        self.ligs.clear();
+        self.discs.clear();
+    }
+
+    /// A ligature of `c` in font `f` made from `from`, as `Nodes::lig_node` makes it.
+    pub(super) fn lig(&mut self, f: u16, c: u8, from: &[u8], hits: u8) -> Node {
+        let at = self.ligs.len() as i32;
+        self.ligs.extend_from_slice(from);
+        Node { kind: Kind::Lig, sub: (from.len().min(63) as u8) << 2 | hits, font: f, a: c as i32, b: at }
+    }
+
+    /// A discretionary's texts: its index.
+    pub(super) fn disc(&mut self, pre: &[Node], post: &[Node]) -> u32 {
+        let s = self.lists.len() as u32;
+        self.lists.extend_from_slice(pre);
+        let m = self.lists.len() as u32;
+        self.lists.extend_from_slice(post);
+        self.discs.push([(s, m), (m, self.lists.len() as u32)]);
+        self.discs.len() as u32 - 1
+    }
+
+    pub(super) fn lig_from(&self, n: &Node) -> &[u8] {
+        let at = n.b as usize;
+        &self.ligs[at..at + (n.sub >> 2) as usize]
+    }
+
+    /// Discretionary `d`'s texts.
+    pub(super) fn texts(&self, d: usize) -> [&[Node]; 2] {
+        let [p, q] = self.discs[d];
+        [&self.lists[p.0 as usize..p.1 as usize], &self.lists[q.0 as usize..q.1 as usize]]
+    }
+}
+
 /// The characters after the first that a word's key packs into a `u128`.
 const SHORT: usize = 9;
 
@@ -389,6 +497,11 @@ impl std::hash::Hasher for Folded {
         let m = ((v as u64) ^ 0x243f_6a88_85a3_08d3) as u128 * (((v >> 64) as u64) ^ 0x1319_8a2e_0370_7344) as u128;
         self.0 = (m as u64) ^ ((m >> 64) as u64);
     }
+    /// A packed `u64` key (`Words::forms`): one folded multiply, not eight FNV rounds.
+    fn write_u64(&mut self, v: u64) {
+        let m = (v ^ 0x243f_6a88_85a3_08d3) as u128 * 0x1319_8a2e_0370_7344u128;
+        self.0 = (m as u64) ^ ((m >> 64) as u64);
+    }
 }
 
 #[derive(PartialEq, Clone)]
@@ -401,19 +514,18 @@ pub struct Words {
     /// The key being looked up, and the word's characters after the first, reused.
     key: Vec<u8>,
     run: Vec<u8>,
-    /// `hyphenate_word`'s lists, kept for their room.
+    /// `hyphenate_word`'s list, kept for their room.
     temp: Vec<Node>,
-    made: Vec<Node>,
     /// An empty word store, swapped with the machine's while `hyphenate_word` writes into
     /// it (`mem::take` made a fresh store, six shared-chunk allocations, per new form).
     spare: WordStore,
     check: bool,
     nodes: bool,
     /// Per entry, language and hyphen minima: what §894–§903 make of the word.
-    forms: HashMap<u64, Form, WordHash>,
+    forms: HashMap<u64, Form, PackedHash>,
 }
 
-codec_struct!(Words { map, short, short_key, key, run, temp, made, check, nodes, forms; spare });
+codec_struct!(Words { map, short, short_key, key, run, temp, check, nodes, forms; spare });
 
 #[derive(PartialEq, Clone, Copy)]
 enum Form {
@@ -431,7 +543,7 @@ impl Default for Words {
     fn default() -> Self {
         let check = std::env::var_os("RT_WORD_CHECK").is_some_and(|v| v == "1");
         let nodes = std::env::var_os("RT_WORD_NODES").is_none_or(|v| v != "0");
-        Words { map: HashMap::default(), short: HashMap::default(), short_key: None, key: Vec::new(), run: Vec::new(), temp: Vec::new(), made: Vec::new(), spare: WordStore::default(), check, nodes, forms: HashMap::default() }
+        Words { map: HashMap::default(), short: HashMap::default(), short_key: None, key: Vec::new(), run: Vec::new(), temp: Vec::new(), spare: WordStore::default(), check, nodes, forms: HashMap::default() }
     }
 }
 
@@ -651,13 +763,15 @@ impl Machine<'_, '_> {
     /// them are expanded. A word is kept whole when TeX's walk from a glue can reach it
     /// only as the node right after that glue (the node before it is none of a character,
     /// ligature, font kern, whatsit or word, which §896 passes through) and, after a glue,
-    /// when a glue or penalty follows it, which ends §897–§899 at the word's end.
+    /// when a glue, penalty, kern other than a font kern, insertion, adjustment or mark
+    /// follows it: §896 and §897 stop at any of them as at a penalty, and §899 accepts each,
+    /// so §897–§899 end at the word's end (`hyphenate_word` puts a penalty there).
     pub(super) fn expand_words_near(&mut self, par: &mut Vec<Node>) {
         let through = |n: &Node| matches!(n.kind, Kind::Char | Kind::Lig | Kind::Whatsit | Kind::Word) || (n.kind == Kind::Kern && n.sub == 0);
         let unsure = |par: &[Node], i: usize| match i.checked_sub(1).map(|j| &par[j]) {
             None => false,
             Some(p) if through(p) => true,
-            Some(p) if p.kind == Kind::Glue => !par.get(i + 1).is_some_and(|n| matches!(n.kind, Kind::Glue | Kind::Penalty)),
+            Some(p) if p.kind == Kind::Glue => !par.get(i + 1).is_some_and(|n| matches!(n.kind, Kind::Glue | Kind::Penalty | Kind::Ins | Kind::Adjust | Kind::Mark) || (n.kind == Kind::Kern && n.sub != 0)),
             Some(_) => false,
         };
         if !(0..par.len()).any(|i| par[i].kind == Kind::Word && unsure(par, i)) {
@@ -668,9 +782,9 @@ impl Machine<'_, '_> {
         for i in 0..old.len() {
             let n = old[i];
             if n.kind == Kind::Word && unsure(&old, i) {
-                let mut one = vec![n];
-                self.e.nodes.expand_words(&mut one);
-                par.extend(one);
+                // Its nodes (`expand_words`), made straight into the paragraph.
+                let (s, e) = self.e.nodes.words.range(n.a as u32);
+                self.e.nodes.make_items(s as u32, e as u32, par);
             } else {
                 par.push(n);
             }
@@ -692,42 +806,58 @@ impl Machine<'_, '_> {
             Some(Form::Word(id)) if !self.words.check => return Some(id),
             _ => {}
         }
+        // §899 wants `l_hyf + r_hyf` letters in the word (§897 takes characters whose `\lccode`
+        // is not 0, a ligature's included): a word with fewer is kept whole without its nodes
+        // being made and hyphenated.
+        if known.is_none() && !self.words.check {
+            let ws = &self.e.nodes.words;
+            let letters: usize = ws.items(word.a as u32).iter().map(|n| match n.kind {
+                Kind::Char => usize::from(self.lc(n.a as u32) != 0),
+                Kind::Lig => ws.lig_from(n).iter().filter(|&&c| self.lc(c as u32) != 0).count(),
+                _ => 0,
+            }).sum();
+            if letters < l_hyf + r_hyf {
+                self.words.forms.insert(key, Form::Whole);
+                return None;
+            }
+        }
+        super::engine_doc::piece(1,|| self.hyphenate_new_word(par, g, word, key, known, lang, l_hyf, r_hyf, edits))
+    }
+
+    /// [`Machine::hyphenate_word`] for a word whose form is not known yet (or checked).
+    #[allow(clippy::too_many_arguments)]
+    fn hyphenate_new_word(&mut self, par: &[Node], g: usize, word: Node, key: u64, known: Option<Form>, lang: usize, l_hyf: usize, r_hyf: usize, edits: &mut Vec<(usize, usize, Vec<Node>)>) -> Option<u32> {
         // `temp` and `nodes` are the table's, kept for their room.
         let mut temp = std::mem::take(&mut self.words.temp);
         temp.clear();
-        temp.extend_from_slice(&[par[g], word]);
-        self.e.nodes.expand_words(&mut temp);
+        // The glue and the word's items as they are in the store: §894-§903 read a
+        // ligature's characters from the store (`try_hyphenate`'s `items`), so no node is
+        // made for a word kept whole, and the nodes §903 replaces own nothing to flush.
+        temp.push(par[g]);
+        let (s, e) = self.e.nodes.words.range(word.a as u32);
+        temp.extend_from_slice(&self.e.nodes.words.items[s..e]);
         temp.push(Node::new(Kind::Penalty, 0));
         let (mut lang, mut l_hyf, mut r_hyf) = (lang, l_hyf, r_hyf);
         let mut one = Vec::new();
-        self.try_hyphenate(&temp, 0, &mut lang, &mut l_hyf, &mut r_hyf, &mut one);
+        self.try_hyphenate(&temp, true, 0, &mut lang, &mut l_hyf, &mut r_hyf, &mut one);
         let last = temp.len() - 1;
         let Some((keep, hb, out)) = one.pop() else {
             assert!(!matches!(known, Some(Form::Word(..))), "RT_WORD_CHECK: a word's hyphenated form is not hyphenated again");
             self.words.forms.insert(key, Form::Whole);
-            for &n in &temp[1..last] {
-                self.e.nodes.flush_node(n);
-            }
             self.words.temp = temp;
             return None;
         };
-        // §903: the replaced nodes go; the rest of the word moves into the paragraph.
-        for &n in &temp[keep..=hb] {
-            self.e.nodes.flush_node(n);
-        }
-        let mut nodes = std::mem::take(&mut self.words.made);
-        nodes.clear();
-        nodes.extend_from_slice(&temp[1..keep]);
-        nodes.extend_from_slice(&out);
-        nodes.extend_from_slice(&temp[hb + 1..last]);
-        self.e.hyph.give_back(out);
+        // §903: the replaced nodes go. The kept items before and after them are copied
+        // into the new entry straight from the store (`temp[i]` is the store's item
+        // `s + i - 1`); nodes are made of them only for a form no entry can hold.
+        let own = [(s as u32, (s + keep - 1) as u32), ((s + hb) as u32, (s + last - 1) as u32)];
         self.words.temp = temp;
         let fonts = &self.e.fonts;
         let dims = |n: &Node| u8::try_from(n.a).ok().and_then(|c| fonts.dims(n.font, c)).unwrap_or_default();
         std::mem::swap(&mut self.e.nodes.words, &mut self.words.spare);
         let ws = &mut self.words.spare;
         let marks = ws.marks();
-        let form = ws.capture(&self.e.nodes, &nodes, &dims).map_or(Form::Again, Form::Word);
+        let form = ws.capture(self.e.hyph.scratch(), own, &out, &dims).map_or(Form::Again, Form::Word);
         let form = match (known, form) {
             (Some(Form::Word(old)), Form::Word(new)) => {
                 let (mut a, mut b) = (Vec::new(), Vec::new());
@@ -747,14 +877,19 @@ impl Machine<'_, '_> {
         std::mem::swap(&mut self.e.nodes.words, &mut self.words.spare);
         match form {
             Form::Word(id) => {
-                // The entry holds the form; the nodes made for it go.
-                for &n in &nodes {
-                    self.e.nodes.flush_node(n);
-                }
-                self.words.made = nodes;
+                // The entry holds the form; what §903 made for it owns nothing outside
+                // the scratch.
+                self.e.hyph.give_back(out);
                 Some(id)
             }
             _ => {
+                let mut nodes = Vec::new();
+                self.e.nodes.make_items(own[0].0, own[0].1, &mut nodes);
+                let sc = std::mem::take(self.e.hyph.scratch_mut());
+                self.e.nodes.make_scratch(&sc, &out, &mut nodes);
+                *self.e.hyph.scratch_mut() = sc;
+                self.e.nodes.make_items(own[1].0, own[1].1, &mut nodes);
+                self.e.hyph.give_back(out);
                 edits.push((g + 1, g + 1, nodes));
                 None
             }

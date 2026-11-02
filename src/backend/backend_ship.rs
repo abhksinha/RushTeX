@@ -559,6 +559,40 @@ fn push_utf16be(s: &mut Vec<u8>, code: u32) {
 /// at most 100.
 fn tounicode_body(tfm: &str, names: &[&str], unicode: &GlyphUnicode) -> Vec<u8> {
     let gtab: Vec<Option<GlyphCode>> = (0..257).map(|c| names.get(c).filter(|_| c < 256).and_then(|n| unicode.glyph_code(n, tfm))).collect();
+    body_of(&gtab)
+}
+
+/// The glyph table of font `tfm` whose codes have the glyph names stored as `text` (a
+/// `X.pfb#names`, one line a code): each name's Unicode looked up once per `write` for all
+/// the fonts with the same names (`tables`; 256 lookups were about 0.17M a font), then, for
+/// a font with entries of its own (`tfm:<tfm>/<glyph>`), the codes whose names reach one
+/// looked up again for it. The same table [`tounicode_body`] makes.
+fn stored_glyph_table(tfm: &str, text: &[u8], names: &[&str], unicode: &GlyphUnicode, tables: &mut GlyphTables) -> Vec<Option<GlyphCode>> {
+    let k = match tables.iter().position(|(t, _)| t == text) {
+        Some(k) => k,
+        None => {
+            tables.push((text.to_vec(), (0..257).map(|c| names.get(c).filter(|_| c < 256).and_then(|n| unicode.glyph_code_shared(n))).collect()));
+            tables.len() - 1
+        }
+    };
+    let mut gtab = tables[k].1.clone();
+    if unicode.has_font_entries(tfm) {
+        // `glyph_code` asks the font's entries for the part before `.`, or for each of its
+        // `_` parts: a name none of whose parts has one gets the shared answer.
+        let own = unicode.font_entry_names(tfm);
+        for (c, n) in names.iter().enumerate().take(256) {
+            let base = n.split('.').next().unwrap_or_default();
+            if base.split('_').any(|p| own.contains(&p.as_bytes())) {
+                gtab[c] = unicode.glyph_code(n, tfm);
+            }
+        }
+    }
+    gtab
+}
+
+/// The mappings of a ToUnicode CMap from each code's Unicode (`gtab`, 257 entries, the last
+/// none), as [`tounicode_body`] describes.
+fn body_of(gtab: &[Option<GlyphCode>]) -> Vec<u8> {
     let code = |c: usize| match gtab[c] {
         Some(GlyphCode::Code(u)) => Some(u),
         _ => None,
@@ -631,11 +665,15 @@ fn tounicode_body(tfm: &str, names: &[&str], unicode: &GlyphUnicode) -> Vec<u8> 
     s
 }
 
+/// The glyph tables of the stored names met in one `write`, by their text ([`stored_glyph_table`]).
+type GlyphTables = Vec<(Vec<u8>, Vec<Option<GlyphCode>>)>;
+
 /// The four numbers after `key` in a font's cleartext (`/FontBBox {-40 -250 1009 750}`).
+/// Read as bytes: a byte that is not a digit, `-` or `.` separates numbers, as a character
+/// that is not would (a lossy UTF-8 copy of the whole text cost about 20k instructions a font).
 fn font_bbox(clear: &[u8]) -> [i32; 4] {
-    let text = String::from_utf8_lossy(clear);
-    let Some(at) = text.find("/FontBBox") else { return [0; 4] };
-    let mut v = text[at + 9..].split(|c: char| !(c.is_ascii_digit() || c == '-' || c == '.')).filter(|t| !t.is_empty()).map(|t| t.parse::<f64>().unwrap_or(0.0) as i32);
+    let Some(at) = clear.windows(9).position(|w| w == b"/FontBBox") else { return [0; 4] };
+    let mut v = clear[at + 9..].split(|&c| !(c.is_ascii_digit() || c == b'-' || c == b'.')).filter(|t| !t.is_empty()).map(|t| std::str::from_utf8(t).ok().and_then(|t| t.parse::<f64>().ok()).unwrap_or(0.0) as i32);
     std::array::from_fn(|_| v.next().unwrap_or(0))
 }
 
@@ -722,7 +760,7 @@ pub(crate) struct FontDone {
 /// needs the file resolver, in the fonts' order.
 ///
 /// `encodings` keeps the encoding files read so far, by name.
-fn font_work<'f>(f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, encodings: &mut Vec<(String, std::sync::Arc<Encoding>)>) -> FontWork<'f> {
+fn font_work<'f>(f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, encodings: &mut Vec<(String, std::sync::Arc<Encoding>)>, tables: &mut GlyphTables) -> FontWork<'f> {
     let entry = map.get(f.name.as_str()).map(|l| map_entry(l));
     // The map file's Type 1 program, decrypted: `#clear` where the file layer has it,
     // else the file decrypted here. It is subset as pdfTeX subsets it, so a font the
@@ -744,7 +782,7 @@ fn font_work<'f>(f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, fi
         if let Some((_, e)) = encodings.iter().find(|(k, _)| k == name) {
             return Some(e.clone());
         }
-        let e = std::sync::Arc::new(Encoding::new(files(name)?.iter().map(|&c| char::from(c)).collect()));
+        let e = std::sync::Arc::new(Encoding::new(crate::engine::engine_io::latin1(files(name)?)));
         encodings.push((name.to_string(), e.clone()));
         Some(e)
     });
@@ -795,7 +833,7 @@ fn font_work<'f>(f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, fi
         });
     } else if let (Some(u), Some(text)) = (to_unicode, &stored_names) {
         let names: Vec<&str> = text.split(|&c| c == b'\n').map(|l| if l.is_empty() { ".notdef" } else { std::str::from_utf8(l).unwrap_or(".notdef") }).collect();
-        cmap = Some(tounicode_cmap(&f.name, None, &tounicode_body(&f.name, &names, u)));
+        cmap = Some(tounicode_cmap(&f.name, None, &body_of(&stored_glyph_table(&f.name, text, &names, u, tables))));
     } else if let (Some(u), Some((data, lens))) = (to_unicode, &pfb) {
         let names = builtin_encoding_names(&data[..lens[0]]);
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -816,7 +854,7 @@ fn font_work<'f>(f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, fi
 /// made, with the names of the files it reads (its encoding's too, when an earlier font read
 /// that), and keyed when they are all unchanged files.
 #[allow(clippy::too_many_arguments)]
-fn font_work_cached<'f>(cache: &crate::backend::backend_cache::PdfCache, f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, unicode: u128, encodings: &mut Vec<(String, std::sync::Arc<Encoding>)>) -> FontWork<'f> {
+fn font_work_cached<'f>(cache: &crate::backend::backend_cache::PdfCache, f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, unicode: u128, encodings: &mut Vec<(String, std::sync::Arc<Encoding>)>, tables: &mut GlyphTables) -> FontWork<'f> {
     let line = map.get(f.name.as_str()).copied();
     let mut h = crate::backend::backend_hash::ContentHasher::new();
     h.u64(4);
@@ -835,7 +873,7 @@ fn font_work_cached<'f>(cache: &crate::backend::backend_cache::PdfCache, f: &'f 
         reads.borrow_mut().push(Box::<str>::from(name));
         files(name)
     };
-    let mut w = font_work(f, map, &read, to_unicode, encodings);
+    let mut w = font_work(f, map, &read, to_unicode, encodings, tables);
     let mut names = reads.into_inner();
     if let Some(enc) = line.map(map_entry).and_then(|e| e.enc).filter(|_| w.enc.is_some()) {
         names.push(enc.into());
@@ -884,23 +922,24 @@ impl FontWork<'_> {
             deflate.compress_zlib(text, &mut out);
             *text = out;
         }
-        let Some((mut data, mut lens)) = self.pfb.take() else { return };
+        let Some((data, lens)) = self.pfb.take() else { return };
         let f = self.f;
         let used = |c: usize| f.used[c / 64] >> (c % 64) & 1 != 0;
         // pdfTeX's subset (`writet1.c`): the glyphs the pages used, by the encoding's
         // names (the `.enc` file's, else the program's own).
         // Borrowed from the encoding or the stored names: no string is made per glyph.
+        // Only the codes used are named, in code order.
         let names: Vec<std::borrow::Cow<str>> = match (&self.enc, &self.stored_names) {
-            (Some(enc), _) => enc.names().into_iter().map(std::borrow::Cow::Borrowed).collect(),
-            (None, Some(text)) => text.split(|&c| c == b'\n').map(|l| if l.is_empty() { std::borrow::Cow::Borrowed(".notdef") } else { String::from_utf8_lossy(l) }).collect(),
-            (None, None) => builtin_encoding_names(&data[..lens[0]]).into_iter().map(std::borrow::Cow::Owned).collect(),
+            (Some(enc), _) => enc.names().into_iter().take(256).enumerate().filter(|&(c, _)| used(c)).map(|(_, n)| std::borrow::Cow::Borrowed(n)).collect(),
+            (None, Some(text)) => text.split(|&c| c == b'\n').take(256).enumerate().filter(|&(c, _)| used(c)).map(|(_, l)| if l.is_empty() { std::borrow::Cow::Borrowed(".notdef") } else { String::from_utf8_lossy(l) }).collect(),
+            (None, None) => builtin_encoding_names(&data[..lens[0]]).into_iter().take(256).enumerate().filter(|&(c, _)| used(c)).map(|(_, n)| std::borrow::Cow::Owned(n)).collect(),
         };
-        let mut used: Vec<&str> = (0..256).filter(|&c| used(c)).filter_map(|c| names.get(c).map(|n| n.as_ref())).collect();
+        let mut used: Vec<&str> = names.iter().map(|n| n.as_ref()).collect();
         used.extend(self.shared.iter().map(String::as_str));
         let tag = self.base.split('+').next().unwrap_or_default();
         let clear = crate::backend::backend_type1::subset_clear(&data[..lens[0]], &|c: usize| f.used[c / 64] >> (c % 64) & 1 != 0, tag);
-        data.splice(..lens[0], clear.iter().copied());
-        lens[0] = clear.len();
+        // The subset's two parts are written from `clear` and `text` as they are: splicing
+        // them into the file's bytes moved its whole tail twice (about 0.1M a font).
         let binary = lens[0]..lens[0] + lens[1];
         // A subset comes with its charstrings encrypted; a font kept whole is encrypted
         // here, charstrings and eexec.
@@ -926,13 +965,11 @@ impl FontWork<'_> {
                 text
             }
         };
-        lens[1] = text.len();
-        data.splice(binary, text);
-        let bbox = font_bbox(&data[..lens[0]]);
+        let bbox = font_bbox(&clear);
         // The clear text is compressed; the eexec part, pseudo-random, is stored as is.
-        let mut packed = Vec::with_capacity(data.len() + 64);
-        deflate.compress_zlib_parts(&data[..lens[0]], &data[lens[0]..lens[0] + lens[1]], &mut packed);
-        self.embedded = Some((packed, [lens[0], lens[1]], bbox));
+        let mut packed = Vec::with_capacity(clear.len() + text.len() + 64);
+        deflate.compress_zlib_parts(&clear, &text, &mut packed);
+        self.embedded = Some((packed, [clear.len(), text.len()], bbox));
     }
 }
 
@@ -1089,7 +1126,7 @@ fn prepare_cached(cache: &crate::backend::backend_cache::PdfCache, work: &mut [O
 /// `cache`, a `--watch` session's (`backend_cache`), gives back the fonts and streams an
 /// earlier write made from the same bytes; a one-shot run passes none and hashes nothing.
 pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&str) -> Option<Vec<u8>>, to_unicode: ToUnicode, meta: &DocMeta, cache: Option<&crate::backend::backend_cache::PdfCache>) -> Vec<u8> {
-    let map = files("pdftex.map").map(|b| b.iter().map(|&c| char::from(c)).collect::<String>()).unwrap_or_default();
+    let map = files("pdftex.map").map(crate::engine::engine_io::latin1).unwrap_or_default();
     let map = map_index(&map);
     // pdfTeX's header: `\pdfminorversion` (4 when unset or out of range).
     let minor = if (0..=9).contains(&meta.minor) && meta.minor != 0 { meta.minor } else { 4 };
@@ -1120,6 +1157,7 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
     // Type 1 fonts' files read in order; their programs subset and every stream compressed
     // (`prepare_all`, on several threads); then every object written in order.
     let mut encodings = Vec::new();
+    let mut tables = Vec::new();
     // With a session's cache, the ToUnicode entries' hash, part of every font's key.
     let unicode = cache.map_or(0, |_| {
         let mut h = crate::backend::backend_hash::ContentHasher::new();
@@ -1139,8 +1177,8 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
         .map(|(f, k)| {
             let alone = k.is_none() || keys.iter().filter(|o| *o == k).count() < 2;
             f.as_ref().filter(|f| f.pk.is_none()).map(|f| match cache {
-                Some(c) if alone => font_work_cached(c, f, &map, files, to_unicode, unicode, &mut encodings),
-                _ => font_work(f, &map, files, to_unicode, &mut encodings),
+                Some(c) if alone => font_work_cached(c, f, &map, files, to_unicode, unicode, &mut encodings, &mut tables),
+                _ => font_work(f, &map, files, to_unicode, &mut encodings, &mut tables),
             })
         })
         .collect();

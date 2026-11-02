@@ -519,14 +519,16 @@ impl Machine<'_, '_> {
             None => {
                 self.e.hyph.ready = true;
                 // §894 reads a word's characters: words it could read beyond are expanded.
-                self.expand_words_near(&mut par);
-                self.hyphenate_par(&mut par, par_hyph);
-                // A hyphenated word stays one node (its entry's break rows give the second
-                // pass its discretionaries); a paragraph too long for a break's packed
-                // index is expanded instead.
-                if par.len() >= IN_WORD as usize {
-                    self.e.nodes.expand_words_if(&mut par, true);
-                }
+                super::engine_doc::piece(0, || {
+                    self.expand_words_near(&mut par);
+                    self.hyphenate_par(&mut par, par_hyph);
+                    // A hyphenated word stays one node (its entry's break rows give the second
+                    // pass its discretionaries); a paragraph too long for a break's packed
+                    // index is expanded instead.
+                    if par.len() >= IN_WORD as usize {
+                        self.e.nodes.expand_words_if(&mut par, true);
+                    }
+                });
                 let found = self.passes(&par, &shape, background, prev_graf, true).expect("the final pass always succeeds");
                 if self.words_checked() {
                     self.check_in_word_breaks(&par, &found, &shape, background, prev_graf);

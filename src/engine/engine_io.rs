@@ -108,7 +108,7 @@ impl Machine<'_, '_> {
 
     /// File `name` as text: one character per byte, as pdfTeX reads it.
     pub(super) fn open_file(&self, name: &str) -> Option<String> {
-        self.open_bytes(name).map(|b| b.iter().map(|&b| char::from(b)).collect())
+        self.open_bytes(name).map(latin1)
     }
 
     /// [`Machine::open_file`], with the name `read_file` found it under (`name`, else
@@ -120,7 +120,7 @@ impl Machine<'_, '_> {
             let n = w.name.strip_prefix("./").unwrap_or(&w.name);
             n == local || n.strip_suffix(".tex") == Some(local) || local.strip_suffix(".tex") == Some(n)
         });
-        let text = |b: Vec<u8>| b.iter().map(|&b| char::from(b)).collect::<String>();
+        let text = latin1;
         if written {
             return Some((self.open_file(name)?, None));
         }
@@ -298,4 +298,24 @@ impl Machine<'_, '_> {
             self.log.push(' ');
         }
     }
+}
+
+/// File bytes as pdfTeX reads them, each byte one character code: a text all ASCII is
+/// taken as it is, another copied by ASCII runs with each byte above 127 mapped (a watch
+/// session reads the source at every save; a character at a time cost 3M instructions on
+/// master.tex). The command line, the engine's file reads and the PDF writer's map and
+/// encoding files go through it.
+pub fn latin1(bytes: Vec<u8>) -> String {
+    if bytes.is_ascii() {
+        return String::from_utf8(bytes).unwrap_or_default();
+    }
+    let mut out = String::with_capacity(bytes.len() + bytes.iter().filter(|&&b| b >= 0x80).count());
+    let mut rest = &bytes[..];
+    while let Some(k) = rest.iter().position(|&b| b >= 0x80) {
+        out.push_str(std::str::from_utf8(&rest[..k]).unwrap_or_default());
+        out.push(char::from(rest[k]));
+        rest = &rest[k + 1..];
+    }
+    out.push_str(std::str::from_utf8(rest).unwrap_or_default());
+    out
 }

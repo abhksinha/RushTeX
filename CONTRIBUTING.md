@@ -22,6 +22,7 @@ benchmark and the check are written in Rust, in the testing framework (`testing/
 ## What you need
 
 - Rust (stable), from <https://rustup.rs>
+- On macOS, macOS 13 or later: `.cargo/config.toml` sets `MACOSX_DEPLOYMENT_TARGET` to 13.0
 - TeX Live with `pdflatex` (the reference RushTeX is compared against)
 - MuPDF's `mutool` (`brew install mupdf-tools`, `apt install mupdf-tools`)
 - `zsh` (preinstalled on macOS; `apt install zsh`)

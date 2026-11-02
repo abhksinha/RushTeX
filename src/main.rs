@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+use rushtex::engine::engine_io::latin1;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -629,7 +630,17 @@ fn loads_package(source: &str, name: &str) -> bool {
     if !source.contains(name) {
         return false;
     }
-    let text: String = source.lines().map(|line| line.char_indices().find(|&(i, c)| c == '%' && !line[..i].ends_with('\\')).map_or(line, |(i, _)| &line[..i])).collect::<Vec<_>>().join("\n");
+    // Each line to its first `%` not after a `\`, found by bytes (`%` and `\` are ASCII): a
+    // character walk of every line cost about 2M instructions on master.tex.
+    let mut text = String::with_capacity(source.len());
+    for (k, line) in source.lines().enumerate() {
+        if k > 0 {
+            text.push('\n');
+        }
+        let b = line.as_bytes();
+        let cut = (0..b.len()).find(|&i| b[i] == b'%' && (i == 0 || b[i - 1] != b'\\')).unwrap_or(b.len());
+        text.push_str(&line[..cut]);
+    }
     ["\\usepackage", "\\RequirePackage"].iter().any(|cmd| {
         text.match_indices(cmd).any(|(i, _)| {
             let mut rest = text[i + cmd.len()..].trim_start();
@@ -640,25 +651,6 @@ fn loads_package(source: &str, name: &str) -> bool {
             rest.strip_prefix('{').and_then(|r| r.find('}').map(|k| &r[..k])).is_some_and(|list| list.split(',').any(|p| p.trim() == name))
         })
     })
-}
-
-/// File bytes as pdfTeX reads them, each byte one character code: a text all ASCII is
-/// taken as it is, another copied by ASCII runs with each byte above 127 mapped (a watch
-/// session reads the source at every save; a character at a time cost 3M instructions on
-/// master.tex).
-fn latin1(bytes: Vec<u8>) -> String {
-    if bytes.is_ascii() {
-        return String::from_utf8(bytes).unwrap_or_default();
-    }
-    let mut out = String::with_capacity(bytes.len() + bytes.iter().filter(|&&b| b >= 0x80).count());
-    let mut rest = &bytes[..];
-    while let Some(k) = rest.iter().position(|&b| b >= 0x80) {
-        out.push_str(std::str::from_utf8(&rest[..k]).unwrap_or_default());
-        out.push(char::from(rest[k]));
-        rest = &rest[k + 1..];
-    }
-    out.push_str(std::str::from_utf8(rest).unwrap_or_default());
-    out
 }
 
 /// The job's PDF written, then its error report, the path that ran (`RT_NATIVE_WHY=1`) and

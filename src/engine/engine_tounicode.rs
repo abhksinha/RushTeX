@@ -82,16 +82,37 @@ impl GlyphUnicode {
         if self.pairs.get(k).is_some_and(|(n, _)| n.starts_with(&prefix)) {
             return true;
         }
-        // The carried table is hashed: the fonts it has entries for, listed once.
-        static FONTS: std::sync::OnceLock<Vec<&'static [u8]>> = std::sync::OnceLock::new();
-        let Some(table) = self.carried else { return false };
-        let fonts = FONTS.get_or_init(|| {
-            let mut v: Vec<&[u8]> = table.pairs().filter_map(|(n, _)| n.strip_prefix(b"tfm:")).filter_map(|n| n.iter().position(|&c| c == b'/').map(|k| &n[..k])).collect();
-            v.sort_unstable();
-            v.dedup();
-            v
-        });
-        fonts.binary_search(&tfm.as_bytes()).is_ok()
+        self.carried_entries(tfm).next().is_some()
+    }
+
+    /// The glyphs of font `tfm` the carried table has entries for (`tfm:<tfm>/<glyph>`).
+    fn carried_entries<'t>(&self, tfm: &'t str) -> impl Iterator<Item = &'static [u8]> + 't {
+        // The carried table is hashed: its font entries, as (font, glyph), listed once.
+        static FONTS: std::sync::OnceLock<Vec<(&'static [u8], &'static [u8])>> = std::sync::OnceLock::new();
+        let fonts: &'static [(&'static [u8], &'static [u8])] = match self.carried {
+            Some(table) => FONTS.get_or_init(|| {
+                let mut v: Vec<(&[u8], &[u8])> = table.pairs().filter_map(|(n, _)| n.strip_prefix(b"tfm:")).filter_map(|n| n.iter().position(|&c| c == b'/').map(|k| (&n[..k], &n[k + 1..]))).collect();
+                v.sort_unstable();
+                v.dedup();
+                v
+            }),
+            None => &[],
+        };
+        let k = fonts.partition_point(|(f, _)| *f < tfm.as_bytes());
+        fonts[k..].iter().take_while(move |(f, _)| *f == tfm.as_bytes()).map(|(_, g)| *g)
+    }
+
+    /// The glyph names font `tfm` has entries of its own for (`tfm:<tfm>/<glyph>`), in the
+    /// document's pairs or the carried table: only a code whose name reaches one of these
+    /// can differ in [`glyph_code`](Self::glyph_code) from [`glyph_code_shared`](Self::glyph_code_shared).
+    pub fn font_entry_names(&self, tfm: &str) -> Vec<&[u8]> {
+        let prefix = format!("tfm:{tfm}/");
+        let k = self.pairs.partition_point(|(n, _)| **n < *prefix);
+        let mut v: Vec<&[u8]> = self.pairs[k..].iter().take_while(|(n, _)| n.starts_with(&prefix)).map(|(n, _)| &n.as_bytes()[prefix.len()..]).collect();
+        for g in self.carried_entries(tfm) {
+            v.push(g);
+        }
+        v
     }
 
     /// The format's table from the binary, for a job that loads no format.
@@ -125,6 +146,17 @@ impl GlyphUnicode {
     /// before the first `.`; `a_b` as `a` then `b` (parts with none left out); the font's own
     /// entry (`tfm:<tfm>/<name>`), then the table; then `uniXXXX…` and `uXXXX`–`uXXXXXX`.
     pub fn glyph_code(&self, name: &str, tfm: &str) -> Option<GlyphCode> {
+        self.code_of(name, Some(tfm))
+    }
+
+    /// [`glyph_code`](Self::glyph_code) without any font's own entries: a font's answer
+    /// when none of the names it looks up (the part before `.`, or each `_` part of it) has
+    /// an entry of that font's.
+    pub fn glyph_code_shared(&self, name: &str) -> Option<GlyphCode> {
+        self.code_of(name, None)
+    }
+
+    fn code_of(&self, name: &str, tfm: Option<&str>) -> Option<GlyphCode> {
         let name = name.split('.').next().unwrap_or_default();
         if name.is_empty() {
             return None;
@@ -132,7 +164,7 @@ impl GlyphUnicode {
         if name.contains('_') {
             let mut seq = String::new();
             for part in name.split('_') {
-                match self.glyph_code(part, tfm) {
+                match self.code_of(part, tfm) {
                     Some(GlyphCode::Seq(s)) => seq.push_str(&s),
                     Some(GlyphCode::Code(c)) => seq.push_str(&utf16be(c)),
                     None => {}
@@ -140,7 +172,7 @@ impl GlyphUnicode {
             }
             return Some(GlyphCode::Seq(seq));
         }
-        if let Some(value) = self.get_tfm(tfm, name).or_else(|| self.get(name)) {
+        if let Some(value) = tfm.and_then(|tfm| self.get_tfm(tfm, name)).or_else(|| self.get(name)) {
             return entry_code(value);
         }
         if let Some(hex) = name.strip_prefix("uni") {

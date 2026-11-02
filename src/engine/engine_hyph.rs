@@ -31,8 +31,9 @@ const UC_HYPH: u32 = 38;
 /// A language's exceptions: each word's letters and its hyphen positions.
 pub type Exceptions<'a> = Vec<(&'a [u8], &'a [u8])>;
 
-/// §934's exception table: a word's letters and language, to its hyphen positions.
-type ExceptionTable = HashMap<Box<[u8]>, Box<[u8]>>;
+/// §934's exception table: a word's letters and language, to its hyphen positions; hashed
+/// with FNV-1a ([`WordHash`]) as the memo is, the keys being as short.
+type ExceptionTable = HashMap<Box<[u8]>, Box<[u8]>, WordHash>;
 
 /// The hyphenation tables (§920–§941), kept in a format.
 #[derive(PartialEq, Debug, Default, Clone)]
@@ -54,11 +55,12 @@ pub struct Hyph {
     /// read, and the native job's pre-scan refuses `\patterns`, `\hyphenation` and
     /// `\lccode`, so the patterns, exceptions and lowercase codes do not change under it;
     /// `enter_pattern` and `add_exception` clear it all the same.
-    memo: HashMap<Box<[u8]>, u64, WordHash>,
+    memo: Memo,
     /// The key being looked up, reused.
     memo_key: Vec<u8>,
-    /// §892–§918's state, lent to each word in turn.
-    spare: Word,
+    /// §892–§918's state, lent to each word in turn (boxed: lending it moves a pointer, not
+    /// the state's 450 bytes twice).
+    spare: Option<Box<Word>>,
 }
 
 // The built tries, the memo of words hyphenated and the scratch word are caches, made again
@@ -69,7 +71,7 @@ impl Hyph {
     /// A copy without the memo of words hyphenated (a cache that refills), for a checkpoint.
     pub fn without_memo(&self) -> Hyph {
         let Hyph { patterns, exceptions, ready, seen, tries, memo: _, memo_key: _, spare: _ } = self;
-        Hyph { patterns: patterns.clone(), exceptions: exceptions.clone(), ready: *ready, seen: seen.clone(), tries: tries.clone(), memo: HashMap::default(), memo_key: Vec::new(), spare: Word::default() }
+        Hyph { patterns: patterns.clone(), exceptions: exceptions.clone(), ready: *ready, seen: seen.clone(), tries: tries.clone(), memo: Memo::default(), memo_key: Vec::new(), spare: None }
     }
 
     /// Whether the two hold the same patterns and exceptions, their caches aside (what a
@@ -80,11 +82,59 @@ impl Hyph {
         *patterns == other.patterns && *exceptions == other.exceptions && *ready == other.ready && *seen == other.seen
     }
 
+    /// What §903 made for the last word of the word store hyphenated.
+    pub(super) fn scratch(&self) -> &super::engine_words::Scratch {
+        &self.spare.as_ref().expect("a word was hyphenated").scratch
+    }
+
+    pub(super) fn scratch_mut(&mut self) -> &mut super::engine_words::Scratch {
+        &mut self.spare.as_mut().expect("a word was hyphenated").scratch
+    }
+
     /// A word's replacement list, once read, back to make the next one in.
     pub(super) fn give_back(&mut self, out: Vec<Node>) {
-        if out.capacity() > self.spare.out.capacity() {
-            self.spare.out = out;
+        if let Some(w) = self.spare.as_mut().filter(|w| out.capacity() > w.out.capacity()) {
+            w.out = out;
         }
+    }
+}
+
+/// The memo of words hyphenated: a key of at most 15 bytes (a word of up to 12 letters, its
+/// language and minima) packed into a `u128` with its length in the top byte, looked up with
+/// one folded multiply and stored without an allocation; a longer one as bytes.
+#[derive(PartialEq, Debug, Default, Clone)]
+pub struct Memo {
+    short: HashMap<u128, u64, super::engine_words::PackedHash>,
+    long: HashMap<Box<[u8]>, u64, WordHash>,
+}
+
+impl Memo {
+    #[inline]
+    fn pack(key: &[u8]) -> Option<u128> {
+        (key.len() <= 15).then(|| key.iter().enumerate().fold((key.len() as u128) << 120, |v, (i, &b)| v | (b as u128) << (8 * i)))
+    }
+
+    fn get(&self, key: &[u8]) -> Option<u64> {
+        match Self::pack(key) {
+            Some(k) => self.short.get(&k).copied(),
+            None => self.long.get(key).copied(),
+        }
+    }
+
+    fn insert(&mut self, key: &[u8], mask: u64) {
+        match Self::pack(key) {
+            Some(k) => {
+                self.short.insert(k, mask);
+            }
+            None => {
+                self.long.insert(key.into(), mask);
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.short.clear();
+        self.long.clear();
     }
 }
 
@@ -422,14 +472,14 @@ impl Hyph {
             patterns.push(r.raw()?);
         }
         let n = r.count()?;
-        let mut exceptions = HashMap::with_capacity(n);
+        let mut exceptions = ExceptionTable::with_capacity_and_hasher(n, WordHash);
         for _ in 0..n {
             let k: Vec<u8> = r.all()?;
             let v: Vec<u8> = r.all()?;
             exceptions.insert(k.into_boxed_slice(), v.into_boxed_slice());
         }
         // §1325: a format's trie is always ready.
-        Some(Hyph { patterns: Arc::new(patterns), exceptions: Arc::new(exceptions), ready: true, seen: Default::default(), tries: Vec::new(), memo: HashMap::default(), memo_key: Vec::new(), spare: Word::default() })
+        Some(Hyph { patterns: Arc::new(patterns), exceptions: Arc::new(exceptions), ready: true, seen: Default::default(), tries: Vec::new(), memo: Memo::default(), memo_key: Vec::new(), spare: None })
     }
 }
 
@@ -453,11 +503,16 @@ struct Word {
     out: Vec<Node>,
     lig_stack: Vec<Item>,
     from: Vec<u8>,
+    /// For a word of the word store (`try_hyphenate`'s `items`): the ligatures and
+    /// discretionaries §903 makes keep what they own here, not in the node store, so the
+    /// new entry copies them and nothing is freed after.
+    to_scratch: bool,
+    scratch: super::engine_words::Scratch,
 }
 
 impl Default for Word {
     fn default() -> Self {
-        Word { hu: [0; 66], hyf: [0; 66], hn: 0, hf: 0, init_list: Vec::new(), init_lig: false, init_lft: false, hyphen_passed: 0, hold: Vec::new(), pre: Vec::new(), post: Vec::new(), major: Vec::new(), out: Vec::new(), lig_stack: Vec::new(), from: Vec::new() }
+        Word { hu: [0; 66], hyf: [0; 66], hn: 0, hf: 0, init_list: Vec::new(), init_lig: false, init_lft: false, hyphen_passed: 0, hold: Vec::new(), pre: Vec::new(), post: Vec::new(), major: Vec::new(), out: Vec::new(), lig_stack: Vec::new(), from: Vec::new(), to_scratch: false, scratch: Default::default() }
     }
 }
 
@@ -487,11 +542,21 @@ struct Item {
 }
 
 impl Machine<'_, '_> {
-    fn lc(&self, c: u32) -> u16 {
+    pub(super) fn lc(&self, c: u32) -> u16 {
         if c > 255 {
             0
         } else {
             self.e.eqtb.code(Code::Lc, c) as u16
+        }
+    }
+
+    /// Ligature `n`'s characters: the word store's (`items`) or the node store's.
+    #[inline]
+    fn lig_chars(&self, n: &Node, items: bool) -> &[u8] {
+        if items {
+            self.e.nodes.words.lig_from(n)
+        } else {
+            self.e.nodes.lig_from(n)
         }
     }
 
@@ -638,7 +703,7 @@ impl Machine<'_, '_> {
                         par[k + 1].a = id as i32;
                     }
                 }
-                Kind::Glue if auto_breaking => self.try_hyphenate(par, k, &mut lang, &mut l_hyf, &mut r_hyf, &mut edits),
+                Kind::Glue if auto_breaking => self.try_hyphenate(par, false, k, &mut lang, &mut l_hyf, &mut r_hyf, &mut edits),
                 _ => {}
             }
             k += 1;
@@ -661,17 +726,29 @@ impl Machine<'_, '_> {
         par.extend_from_slice(&old[at..]);
     }
 
-    /// §894: the word after glue node `g`.
-    pub(super) fn try_hyphenate(&mut self, par: &[Node], g: usize, lang: &mut usize, l_hyf: &mut usize, r_hyf: &mut usize, edits: &mut Vec<(usize, usize, Vec<Node>)>) {
+    /// §894: the word after glue node `g`. With `items`, `par`'s nodes are the word store's
+    /// (`Machine::hyphenate_word`): a ligature's characters are the store's, and the nodes
+    /// replaced own nothing in the node store.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn try_hyphenate(&mut self, par: &[Node], items: bool, g: usize, lang: &mut usize, l_hyf: &mut usize, r_hyf: &mut usize, edits: &mut Vec<(usize, usize, Vec<Node>)>) {
+        // §896 passes only characters, ligatures, font kerns and whatsits before the word:
+        // after anything else there is no word to hyphenate.
+        if !par.get(g + 1).is_some_and(|n| matches!(n.kind, Kind::Char | Kind::Lig | Kind::Whatsit) || (n.kind == Kind::Kern && n.sub == 0)) {
+            return;
+        }
         // One `Word` serves every word: its lists keep their room from word to word.
-        let mut w = std::mem::take(&mut self.e.hyph.spare);
+        let mut w = self.e.hyph.spare.take().unwrap_or_default();
         w.reset();
-        self.try_hyphenate_in(&mut w, par, g, lang, l_hyf, r_hyf, edits);
-        self.e.hyph.spare = w;
+        w.to_scratch = items;
+        if items {
+            w.scratch.clear();
+        }
+        self.try_hyphenate_in(&mut w, par, items, g, lang, l_hyf, r_hyf, edits);
+        self.e.hyph.spare = Some(w);
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn try_hyphenate_in(&mut self, w: &mut Word, par: &[Node], g: usize, lang: &mut usize, l_hyf: &mut usize, r_hyf: &mut usize, edits: &mut Vec<(usize, usize, Vec<Node>)>) {
+    fn try_hyphenate_in(&mut self, w: &mut Word, par: &[Node], items: bool, g: usize, lang: &mut usize, l_hyf: &mut usize, r_hyf: &mut usize, edits: &mut Vec<(usize, usize, Vec<Node>)>) {
         let mut hc = [0u16; 66];
         // §896: to the node before the first letter.
         let mut prev_s = g;
@@ -683,7 +760,7 @@ impl Machine<'_, '_> {
                     w.hf = n.font;
                     n.a as u32
                 }
-                Kind::Lig => match self.e.nodes.lig_from(&n).first() {
+                Kind::Lig => match self.lig_chars(&n, items).first() {
                     None => 256,
                     Some(&c) => {
                         w.hf = n.font;
@@ -748,7 +825,7 @@ impl Machine<'_, '_> {
                     if n.font != w.hf {
                         break;
                     }
-                    let from = self.e.nodes.lig_from(&n);
+                    let from = self.lig_chars(&n, items);
                     if let Some(&c) = from.first() {
                         hyf_bchar = c as u16;
                     }
@@ -801,7 +878,7 @@ impl Machine<'_, '_> {
         hy.memo_key.extend(hc[1..=hn].iter().map(|&c| c as u8));
         hy.memo_key.extend_from_slice(&[*lang as u8, *l_hyf as u8, *r_hyf as u8]);
         let mask = match hy.memo.get(hy.memo_key.as_slice()) {
-            Some(&m) => m,
+            Some(m) => m,
             None => {
                 // The exception key, the word and its language, is the memo key's start.
                 if let Some(pos) = hy.exceptions.get(&hy.memo_key[..=hn]) {
@@ -812,7 +889,7 @@ impl Machine<'_, '_> {
                     let Some(trie) = hy.trie(*lang) else { return };
                     hc[0] = 0;
                     hc[hn + 1] = 0;
-                    trie.find(&hc, hn, *r_hyf, &mut w.hyf);
+                    super::engine_doc::piece(2, || trie.find(&hc, hn, *r_hyf, &mut w.hyf));
                 }
                 for j in 0..*l_hyf {
                     w.hyf[j] = 0;
@@ -822,8 +899,7 @@ impl Machine<'_, '_> {
                 }
                 let m = (0..=hn).filter(|&j| w.hyf[j] & 1 == 1).fold(0u64, |m, j| m | 1 << j);
                 let hy = &mut self.e.hyph;
-                let key: Box<[u8]> = hy.memo_key.as_slice().into();
-                hy.memo.insert(key, m);
+                hy.memo.insert(&hy.memo_key, m);
                 m
             }
         };
@@ -834,13 +910,13 @@ impl Machine<'_, '_> {
         for j in 0..=hn {
             w.hyf[j] = (mask >> j & 1) as u8;
         }
-        let (keep, out) = self.replace_word(par, ha, w, hyf_bchar, hyf_char as u16);
+        let (keep, out) = self.replace_word(par, items, ha, w, hyf_bchar, hyf_char as u16);
         edits.push((keep, hb, out));
     }
 
     /// §903, §913–§918: nodes `ha..=hb` replaced by the word with its discretionaries.
     /// Returns where the replaced nodes start (`keep`) and the nodes that replace `keep..=hb`.
-    fn replace_word(&mut self, par: &[Node], ha: usize, w: &mut Word, hyf_bchar: u16, hyf_char: u16) -> (usize, Vec<Node>) {
+    fn replace_word(&mut self, par: &[Node], items: bool, ha: usize, w: &mut Word, hyf_bchar: u16, hyf_char: u16) -> (usize, Vec<Node>) {
         let bchar = hyf_bchar;
         let hn = w.hn;
         let hf = w.hf;
@@ -870,7 +946,7 @@ impl Machine<'_, '_> {
                     (ha + 1, 0)
                 } else {
                     w.init_list.clear();
-                    w.init_list.extend_from_slice(self.e.nodes.lig_from(&a));
+                    w.init_list.extend_from_slice(self.lig_chars(&a, items));
                     w.init_lig = true;
                     w.init_lft = a.sub & 3 > 1;
                     w.hu[0] = a.a as u16;
@@ -965,9 +1041,13 @@ impl Machine<'_, '_> {
                     }
                     // §918
                     if r_count <= 127 {
-                        let pre = self.e.nodes.store(&w.pre);
-                        let post = self.e.nodes.store(&w.post);
-                        let d = self.e.nodes.add_disc([pre, post]);
+                        let d = if w.to_scratch {
+                            w.scratch.disc(&w.pre, &w.post)
+                        } else {
+                            let pre = self.e.nodes.store(&w.pre);
+                            let post = self.e.nodes.store(&w.post);
+                            self.e.nodes.add_disc([pre, post])
+                        };
                         out.push(Node { kind: Kind::Disc, sub: r_count as u8, font: 0, a: d as i32, b: 0 });
                     }
                     out.append(&mut w.major);
@@ -1040,7 +1120,7 @@ impl Machine<'_, '_> {
                         hits += 1;
                         rt_hit = false;
                     }
-                    let p = nodes.lig_node(hf, cur_l as u8, &w.from, hits);
+                    let p = if w.to_scratch { w.scratch.lig(hf, cur_l as u8, &w.from, hits) } else { nodes.lig_node(hf, cur_l as u8, &w.from, hits) };
                     w.hold.push(p);
                     ligature_present = false;
                 }

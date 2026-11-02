@@ -71,10 +71,19 @@ pub(super) struct AmsAlign {
     /// formula is still open (the last row's tag closes it, `\let\endmultline@math\relax`).
     math_start: usize,
     math_open: bool,
-    /// `\maxfields@`, counted from the body and made even.
+    /// `\maxfields@`, counted from the body and made even (`alignat`'s twice its argument).
     maxfields: usize,
+    /// `\xatlevel@`: 0 `alignat`, 1 `align`, 2 `flalign`.
+    level: u8,
     /// `doc.tabs.len()` when it opened: `\\` is `\math@cr` while no `tabular` opened since.
     tabs: usize,
+    /// Under hyperref, the body's `\tag`s and the tags the rows set (`df_tag`): the measuring
+    /// pass runs each `\df@tag` too, so `\Hy@linkcounter` takes the first count before the
+    /// rows' anchors; a tag the body hides (in a macro) leaves them unequal, not native.
+    pub(super) tags: [usize; 2],
+    /// A `multline`'s `\tag` typeset through the input: where its box starts in the row and
+    /// the last row's formula width (`multline_tag_done`).
+    ml_tag: (usize, i32),
     /// `\if@eqnsw`, `\ifdt@p`, `\@eqpen`.
     pub(super) eqnsw: bool,
     dtp: bool,
@@ -95,6 +104,9 @@ pub(super) struct AmsAligned {
     tabs: usize,
     /// The space of the last `\\[...]`.
     skip: i32,
+    /// The `aligned` or `gathered` whose entry this one is in, back at its end (amsmath's
+    /// state is the group's: `\column@` and the rest are restored when it closes).
+    outer: Option<Box<AmsAligned>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -112,10 +124,15 @@ struct Row {
     fields: Vec<i32>,
     lineht: i32,
     tag: i32,
+    /// amsthm's `\qedhere` in the row (`\align@qed`): the measuring pass's `\tag*{\qedsymbol}`
+    /// is `tag`, and the real pass ends the row with `\qed@tag`.
+    pub(super) qed: bool,
+    /// The field the `\qedhere` was in (its `\let\math@cr@@@\qed@tag` is local to it).
+    qed_at: usize,
 }
 
-/// The numbers `\measure@` and `\calc@shift@align` settle for `align` (`\xatlevel@` 1, tags
-/// right, no `fleqn`).
+/// The numbers `\measure@` and `\calc@shift@align` settle for `align` (`\xatlevel@` 1),
+/// `alignat` (0) and `flalign` (2), tags right, no `fleqn`.
 #[derive(Debug, PartialEq)]
 struct Shifts {
     eqnshift: i32,
@@ -128,17 +145,27 @@ struct Shifts {
 }
 
 /// `\measure@` after the measuring `\halign`, then `\calc@shift@align`: `cols` are the
-/// field columns' widths (`\maxcol@width`), `rows` each row's field widths and tag width.
-fn align_shifts(dw: i32, cols: &[i32], rows: &[(&[i32], i32)], mintagsep: i32) -> Shifts {
+/// field columns' widths (`\maxcol@width`), `rows` each row's field widths and tag width,
+/// `level` `\xatlevel@` (2 with fewer than three fields is 0). `None` where TeX would
+/// divide by zero.
+fn align_shifts(dw: i32, cols: &[i32], rows: &[(&[i32], i32)], mintagsep: i32, level: u8) -> Option<Shifts> {
     let maxcol = |c: usize| cols.get(c - 1).copied().unwrap_or(0);
     let totwidth: i32 = cols.iter().sum();
     let pairs = (cols.len() / 2) as i32;
-    // `\ifcase\xatlevel@` `\or`: `\@tempcnta` pairs plus one, `\@tempcntb` pairs less one.
-    let (cnta, cntb) = (pairs + 1, pairs - 1);
-    let mut eqnshift = (dw - totwidth) / cnta;
-    let mut alignsep = eqnshift;
-    if alignsep < MIN_ALIGN_SEP {
-        alignsep = MIN_ALIGN_SEP;
+    let level = if level == 2 && cols.len() < 3 { 0 } else { level };
+    // `\ifcase\xatlevel@`: 0, no space between the pairs (`\let\minalignsep\z@`), half
+    // the room each side; 1, `\@tempcnta` pairs plus one, `\@tempcntb` pairs less one, the
+    // room shared; 2, both pairs less one, no room before (`\eqnshift@` 0).
+    let (minsep, cnta, cntb, mut eqnshift, mut alignsep) = match level {
+        0 => (0, 2, 0, (dw - totwidth) / 2, 0),
+        1 => {
+            let e = (dw - totwidth) / (pairs + 1);
+            (MIN_ALIGN_SEP, pairs + 1, pairs - 1, e, e)
+        }
+        _ => (MIN_ALIGN_SEP, pairs - 1, pairs - 1, 0, (dw - totwidth).checked_div(pairs - 1)?),
+    };
+    if alignsep < minsep {
+        alignsep = minsep;
         if eqnshift > 0 {
             eqnshift = (dw - totwidth - cntb * alignsep) / 2;
         }
@@ -174,14 +201,15 @@ fn align_shifts(dw: i32, cols: &[i32], rows: &[(&[i32], i32)], mintagsep: i32) -
             b = column;
         }
         let dima = dimc + tagwidth;
-        if MIN_ALIGN_SEP * b + 2 * mintagsep + dima > dw {
+        let flush = i32::from(level == 2) * mintagsep;
+        if minsep * b + 2 * mintagsep - flush + dima > dw {
             drops = true;
             continue;
         }
         if eqnshift + dima + b * alignsep + tagwidth > dw {
-            let d = if a > 0 { (dw - dima) / a } else { 0 };
-            if d < MIN_ALIGN_SEP {
-                alignsep = MIN_ALIGN_SEP;
+            let d = (dw - dima - flush).checked_div(a)?;
+            if d < minsep {
+                alignsep = minsep;
                 eqnshift = (dw - dima - b * alignsep) / 2;
             } else {
                 if d < eqnshift {
@@ -194,7 +222,7 @@ fn align_shifts(dw: i32, cols: &[i32], rows: &[(&[i32], i32)], mintagsep: i32) -
         }
     }
     let tagshift = totwidth + cntb * alignsep + eqnshift - dw;
-    Shifts { eqnshift, alignsep, tagshift, totwidth: totwidth + cntb * MIN_ALIGN_SEP, drops }
+    Some(Shifts { eqnshift, alignsep, tagshift, totwidth: totwidth + cntb * minsep, drops })
 }
 
 /// `\calc@shift@gather` (tags right, no `fleqn`): the kern before a row's formula of width
@@ -218,23 +246,29 @@ impl Machine<'_, '_> {
     /// body's fields per row for `\maxfields@`, the body put back; `\dollardollar@begin`,
     /// then [`Self::align_start`] in the display.
     pub(super) fn align_begin(&mut self, starred: bool) {
-        self.ams_align_begin(starred, AmsKind::Align);
+        self.ams_align_begin(starred, AmsKind::Align, 1);
+    }
+
+    /// `\begin{alignat}{n}` (`\start@align\z@`, `\maxfields@` twice n, more fields an error)
+    /// and `\begin{flalign}` (`\start@align\tw@`), with their starred forms: as `align`.
+    pub(super) fn alignat_begin(&mut self, starred: bool, level: u8) {
+        self.ams_align_begin(starred, AmsKind::Align, level);
     }
 
     /// `\begin{gather}` (`gather*`): `\start@gather`'s `\collect@body`, the body put back
     /// (a `&` in it is not native); then as `align`.
     pub(super) fn gather_begin(&mut self, starred: bool) {
-        self.ams_align_begin(starred, AmsKind::Gather);
+        self.ams_align_begin(starred, AmsKind::Gather, 1);
     }
 
     /// `\begin{multline}` (`multline*`): `\start@multline`'s `\collect@body`, the body put
     /// back after the first row's `\multline@indent`; `\shoveleft`, `\shoveright` and `&`
     /// are not native.
     pub(super) fn multline_begin(&mut self, starred: bool) {
-        self.ams_align_begin(starred, AmsKind::Multline);
+        self.ams_align_begin(starred, AmsKind::Multline, 1);
     }
 
-    fn ams_align_begin(&mut self, starred: bool, kind: AmsKind) {
+    fn ams_align_begin(&mut self, starred: bool, kind: AmsKind, level: u8) {
         if self.mode == Mode::Math {
             return self.not_native("an align inside math");
         }
@@ -242,8 +276,24 @@ impl Machine<'_, '_> {
         if let Some(doc) = self.doc.as_mut() {
             doc.endpe = false;
         }
+        // `alignat`'s `{n}`.
+        let at = if level == 0 {
+            let mut arg = Vec::new();
+            self.read_arg(&mut arg);
+            let n: String = arg.iter().filter(|t| t.cat() != Some(Cat::Space)).map(|t| if t.cs_id().is_some() { 'x' } else { t.chr() }).collect();
+            match n.parse::<usize>() {
+                Ok(n) if n > 0 && n < 100 => 2 * n,
+                _ => return self.not_native("alignat's number of pairs not digits"),
+            }
+        } else {
+            0
+        };
         self.ams_display(3);
         let name = match (kind, starred) {
+            (AmsKind::Align, false) if level == 0 => "alignat",
+            (AmsKind::Align, true) if level == 0 => "alignat*",
+            (AmsKind::Align, false) if level == 2 => "flalign",
+            (AmsKind::Align, true) if level == 2 => "flalign*",
             (AmsKind::Align, false) => "align",
             (AmsKind::Align, true) => "align*",
             (AmsKind::Gather, false) => "gather",
@@ -257,8 +307,44 @@ impl Machine<'_, '_> {
         // Open `array`s and amsmath's environments built on it: their `&` and `\\` are
         // their own.
         let mut inner = 0usize;
+        // Whether only spaces came since the last row's `\\` (where `\intertext` may stand).
+        let mut row_start = false;
         loop {
             let Some(t) = self.get_token() else { return self.not_native("an align without its end") };
+            // The document's macro whose text starts with `\intertext` or `\shortintertext`
+            // (`\newcommand{\st}[1]{\shortintertext{#1}}`): expanded here, as TeX's
+            // alignment expands a row's first token looking for `\noalign`.
+            if let Some(Meaning::Macro(mac)) = t.cs_id().map(|c| self.e.eqtb.meaning(c)) {
+                let text = self.e.toks.get(mac.text);
+                let body = text.iter().position(|x| *x == Token::END_MATCH).map_or(text, |k| &text[k + 1..]);
+                if body.first().and_then(|x| x.cs_id()).is_some_and(|c| matches!(self.e.cs.name(c), "intertext" | "shortintertext")) {
+                    self.macro_call(t, mac);
+                    continue;
+                }
+            }
+            if t.cat() != Some(Cat::Space) {
+                let was = row_start;
+                row_start = t.cs_id() == Some(nl) && depth == 0 && inner == 0;
+                let it = t.cs_id().map(|c| self.e.cs.name(c)).filter(|n| matches!(*n, "intertext" | "shortintertext")).map(|n| n == "shortintertext");
+                if let Some(short) = it.filter(|_| kind != AmsKind::Multline) {
+                    // amsmath's `\intertext` (and mathtools' `\shortintertext`): `\ifvmode\else
+                    // \\\@empty\fi` first, so mid-row it ends the row itself.
+                    if !was && (depth != 0 || inner != 0 || body.is_empty()) {
+                        return self.not_native("\\intertext inside a group or first in an align");
+                    }
+                    if !was {
+                        self.input.back(t);
+                        self.input.back(Token::cs(nl));
+                        continue;
+                    }
+                    let mut arg = Vec::new();
+                    self.read_arg(&mut arg);
+                    let Some(t) = self.intertext(arg, short) else { return self.not_native("\\intertext with \\baselineskip stretching to infinity, or \\shortintertext without mathtools") };
+                    body.extend(t);
+                    row_start = true;
+                    continue;
+                }
+            }
             if t == Token::cs(end) || t == Token::cs(begin) {
                 let mut arg = Vec::new();
                 self.read_arg(&mut arg);
@@ -266,7 +352,7 @@ impl Machine<'_, '_> {
                 if t == Token::cs(end) && env == name && inner == 0 {
                     break;
                 }
-                if !matches!(env.as_str(), "array" | "cases" | "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix") {
+                if !matches!(env.as_str(), "array" | "cases" | "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix") && !super::MT_CASES.contains(&env.as_str()) && !super::MT_MATRICES.contains(&env.as_str()) {
                     return self.not_native("an environment inside align");
                 }
                 if t == Token::cs(end) {
@@ -304,6 +390,12 @@ impl Machine<'_, '_> {
         }
         maxfields = maxfields.max(fields);
         maxfields += maxfields % 2;
+        if level == 0 {
+            if maxfields > at {
+                return self.not_native("an alignat row with more fields than its pairs");
+            }
+            maxfields = at;
+        }
         let tabs = self.doc.as_ref().map_or(0, |d| d.tabs.len());
         // `\mmeasure@` sets the body in an `\halign` under the display's `\everycr`: its
         // `\crcr` takes the first `\ifdt@p`, so the real rows start with `\penalty\@eqpen`,
@@ -318,8 +410,17 @@ impl Machine<'_, '_> {
                 d.eqpen = pen;
             }
         }
+        // hyperref: `\Hy@make@anchor` in each tag of the measuring pass (`AmsAlign::tags`).
+        // A macro of the document's holding `\tag` counts its tags (`align_finish` checks the
+        // rows set as many).
+        let tags = body.iter().map(|t| self.tags_in(*t, 0)).sum::<usize>();
+        if self.hyper() && tags > 0 {
+            if let Some(doc) = self.doc.as_mut() {
+                doc.link_counter += tags as u32;
+            }
+        }
         if let Some(doc) = self.doc.as_mut() {
-            doc.align = Some(Box::new(AmsAlign { starred, kind, split: false, math_start: 0, math_open: false, maxfields, tabs, eqnsw: !starred, dtp, eqpen, skip: 0, rows: Vec::new(), row: Row::default() }));
+            doc.align = Some(Box::new(AmsAlign { tags: [tags, 0], ml_tag: (0, 0), starred, kind, split: false, math_start: 0, math_open: false, maxfields, level, tabs, eqnsw: !starred, dtp, eqpen, skip: 0, rows: Vec::new(), row: Row::default() }));
         }
         let dollar = Token::char(Cat::MathShift, '$');
         let mut t = vec![dollar, dollar, self.doc_id(AL_START)];
@@ -332,6 +433,39 @@ impl Machine<'_, '_> {
         t.extend(name.chars().map(|c| Token::char(if c == '*' { Cat::Other } else { Cat::Letter }, c)));
         t.push(Token::char(Cat::EndGroup, '}'));
         self.back_list(&t);
+    }
+
+    /// amsmath's `\intertext{text}` (`\intertext@`) at a row's start, where `\ifvmode` holds:
+    /// `\noalign{\penalty\postdisplaypenalty\vskip\belowdisplayskip \vbox{\normalbaselines
+    /// \parshape\@ne\@totalleftmargin\linewidth (when `\linewidth` is not `\columnwidth`)
+    /// \noindent\ignorespaces text\par} \penalty\predisplaypenalty\vskip\abovedisplayskip}`.
+    /// `\normalbaselines` is `\lineskip\normallineskip` (1pt) `\baselineskip
+    /// \normalbaselineskip \lineskiplimit\normallineskiplimit` (0pt), read here as the
+    /// display holds them. mathtools' (`\MT_intertext:`) adds `\vskip-\lineskiplimit
+    /// \vskip\normallineskiplimit \vskip\l_MT_above_intertext_sep` (0pt) after each skip
+    /// (`below` after the second), and sets the `\parshape` also when `\@totalleftmargin` is
+    /// not zero; its `\shortintertext` (`\MT_shortintertext:n`) has `\abovedisplayshortskip`
+    /// for both skips and seps of 3pt.
+    fn intertext(&mut self, arg: Vec<Token>, short: bool) -> Option<Vec<Token>> {
+        let b = self.e.eqtb.glue(super::NORMAL_BASELINE_SKIP);
+        let mt = self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathtools"));
+        if b.stretch_order != 0 || b.shrink_order != 0 || short && !mt {
+            return None;
+        }
+        let (lw, cw, tlm) = (self.rw(super::R_LINEWIDTH), self.e.eqtb.word(super::COLUMN_WIDTH), self.rw(super::R_TOTALLEFTMARGIN));
+        let shape = if lw != cw || mt && tlm != 0 { format!("\\parshape 1 {tlm}sp {lw}sp ") } else { String::new() };
+        let (above, below) = if short { ("abovedisplayshortskip", "abovedisplayshortskip") } else { ("belowdisplayskip", "abovedisplayskip") };
+        let sep = match (mt, short) {
+            (false, _) => String::new(),
+            (true, false) => "\\vskip-\\lineskiplimit\\vskip0pt\\vskip0pt".to_string(),
+            (true, true) => "\\vskip-\\lineskiplimit\\vskip0pt\\vskip3pt".to_string(),
+        };
+        let text = format!("\\penalty\\postdisplaypenalty\\vskip\\{above}{sep}\\vbox{{\\lineskip1pt\\baselineskip{}sp plus{}sp minus{}sp\\lineskiplimit0pt{shape}\\noindent\\ignorespaces ", b.width, b.stretch, b.shrink);
+        let mut t = vec![self.named_cs(named!("noalign")), Token::char(Cat::BeginGroup, '{')];
+        t.extend(self.tex_tokens(&text));
+        t.extend(arg);
+        t.extend(self.tex_tokens(&format!("\\par}}\\penalty\\predisplaypenalty\\vskip\\{below}{sep}}}")));
+        Some(t)
     }
 
     /// Whether macro `c`, or one its text names (to `depth` levels), holds `&` or `\\`.
@@ -403,9 +537,13 @@ impl Machine<'_, '_> {
     /// `\@eqnswtrue`): the formula closed, `\hskip\multlinetaggap\make@display@tag` when the
     /// tag fits beside the row's formula (`\mmeasure@`'s width of the last row), otherwise
     /// not native. Without: `\hskip\multlinegap` in the formula. Then `\hfilneg\math@cr`.
+    /// A `\tag` in any row (`\tag@in@align` in `\mmeasure@`, gobbled in the rows) is `\iftag@`
+    /// too: `\make@display@tag` sets its `\df@tag` (`align_df_tag`), starred or not.
     pub(super) fn multline_end(&mut self) {
-        let Some(a) = self.doc.as_mut().and_then(|d| d.align.as_mut()) else { return };
-        let (tagged, first, start) = (a.eqnsw && !a.starred, a.rows.is_empty(), a.math_start);
+        let Some(doc) = self.doc.as_mut() else { return };
+        let given = doc.df_tag.is_some();
+        let Some(a) = doc.align.as_mut() else { return };
+        let (tagged, first, start) = (a.eqnsw && !a.starred || given, a.rows.is_empty(), a.math_start);
         if tagged {
             a.math_open = false;
             self.after_math();
@@ -413,23 +551,53 @@ impl Machine<'_, '_> {
             let w = self.measure_h(&self.cur[start..]).0 - if first { MULTLINE_GAP } else { 0 };
             self.build_glue(Glue { width: MULTLINE_TAG_GAP, ..Glue::default() }, false);
             let at = self.cur.len();
-            self.begin_group(SIMPLE_GROUP);
-            self.tag_equation_step();
-            self.align_tag_num();
-            self.end_group(SIMPLE_GROUP);
-            let tag = self.cur[at..].iter().find(|n| n.kind == Kind::Box).map_or(0, |n| self.e.nodes.boxes[n.a as usize].width);
-            let dw = self.dimen_param(super::super::engine_noad::DISPLAY_WIDTH);
-            if w + tag + MULTLINE_TAG_GAP > dw {
-                return self.not_native("a multline tag that goes below its row");
+            if given {
+                if let Some(a) = self.doc.as_mut().and_then(|d| d.align.as_mut()) {
+                    a.ml_tag = (at, w);
+                }
+                // A tag of tokens: `rt@atagend` (`align_tag_end`) goes on.
+                if self.align_df_tag() {
+                    return;
+                }
+            } else {
+                self.begin_group(SIMPLE_GROUP);
+                self.tag_equation_step();
+                self.align_tag_num();
+                self.end_group(SIMPLE_GROUP);
             }
-        } else {
-            if self.doc.as_ref().is_some_and(|d| d.df_label.is_some()) {
-                return self.not_native("a \\label in a multline without a number");
-            }
-            self.build_glue(Glue { width: MULTLINE_GAP, ..Glue::default() }, false);
+            return self.multline_tag_done(at, w);
+        }
+        if self.doc.as_ref().is_some_and(|d| d.df_label.is_some()) {
+            return self.not_native("a \\label in a multline without a number");
+        }
+        self.build_glue(Glue { width: MULTLINE_GAP, ..Glue::default() }, false);
+        self.build_glue(fil_glue(Prim::HfilNeg), false);
+        self.align_end();
+    }
+
+    /// After a `multline`'s tag box (from `at` in the row): it fits beside the last row's
+    /// formula (width `w`) or the tag would go below (`\ifshifttag@`, not native); then
+    /// `\hfilneg\math@cr`.
+    fn multline_tag_done(&mut self, at: usize, w: i32) {
+        let tag = self.cur[at..].iter().find(|n| n.kind == Kind::Box).map_or(0, |n| self.e.nodes.boxes[n.a as usize].width);
+        let dw = self.dimen_param(super::super::engine_noad::DISPLAY_WIDTH);
+        if w + tag + MULTLINE_TAG_GAP > dw {
+            return self.not_native("a multline tag that goes below its row");
         }
         self.build_glue(fil_glue(Prim::HfilNeg), false);
         self.align_end();
+    }
+
+    /// The `\tag`s token `t` stands for: 1 for `\tag`, a macro's in its text (to depth 8).
+    fn tags_in(&self, t: Token, depth: u8) -> usize {
+        let Some(c) = t.cs_id() else { return 0 };
+        if self.e.cs.name(c) == "tag" {
+            return 1;
+        }
+        match self.e.eqtb.meaning(c) {
+            Meaning::Macro(m) if depth < 8 => self.e.toks.get(m.text).iter().map(|x| self.tags_in(*x, depth + 1)).sum(),
+            _ => 0,
+        }
     }
 
     fn ams_kind(&self) -> Option<AmsKind> {
@@ -452,6 +620,7 @@ impl Machine<'_, '_> {
         if !self.in_split_display() {
             self.open_up_jot();
         }
+        self.spread_done();
         {
             let reg = param!("everycr");
             let span = self.e.toks.store(&[self.doc_id(AL_ALIGN_CR)]);
@@ -472,6 +641,21 @@ impl Machine<'_, '_> {
         let lsl = Reg { region: Region::Dimen, slot: LINE_SKIP_LIMIT };
         let v = self.e.eqtb.word(lsl);
         self.e.eqtb.set_word(lsl, v + JOT, false);
+        self.spread_done();
+    }
+
+    /// `\spread@equation`'s `\let\spread@equation\@empty`: a later one in the group (a
+    /// mathtools cases inside an `align` or an `aligned`) does nothing.
+    fn spread_done(&mut self) {
+        let (id, empty) = (self.e.cs.intern("spread@equation"), self.named_id(named!("@empty")));
+        let m = self.e.eqtb.meaning(empty);
+        self.e.eqtb.set_meaning(id, m, false);
+    }
+
+    /// Whether `\spread@equation` is done in this group ([`Self::spread_done`]).
+    fn spread_is_done(&mut self) -> bool {
+        let (id, empty) = (self.e.cs.intern("spread@equation"), self.named_id(named!("@empty")));
+        self.e.eqtb.meaning(id) == self.e.eqtb.meaning(empty)
     }
 
     /// [`Self::ams_spread`], and the field templates, as `align`'s.
@@ -606,9 +790,22 @@ impl Machine<'_, '_> {
         }
         // `\math@cr@@@gather`'s `&`, the tag column's template done by the tag native.
         let amps = if a.kind == AmsKind::Gather { 1 } else { a.maxfields.saturating_sub(a.row.fields.len()) };
-        let mut t: Vec<Token> = (0..amps).map(|_| Token::char(Cat::AlignTab, '&')).collect();
+        let qed = a.row.qed;
+        // A `\qedhere` in an earlier field: its `\let` is gone, but the measuring pass's
+        // `\tag*` (global) stays.
+        if qed && a.row.qed_at != a.row.fields.len() {
+            return self.not_native("\\qedhere in a field before the row's end");
+        }
         let Some((omit, cr)) = self.doc.as_ref().map(|d| (d.omit_id, d.cr_id)) else { return };
-        t.extend([Token::cs(omit), self.doc_id(AL_TAG), Token::cs(cr), self.doc_id(doc!("rt@algap"))]);
+        let mut t: Vec<Token> = if qed {
+            let Some(t) = self.qed_row_end(amps) else { return };
+            t
+        } else {
+            let mut t: Vec<Token> = (0..amps).map(|_| Token::char(Cat::AlignTab, '&')).collect();
+            t.extend([Token::cs(omit), self.doc_id(AL_TAG)]);
+            t
+        };
+        t.extend([Token::cs(cr), self.doc_id(doc!("rt@algap"))]);
         t.extend(last);
         if let Some(a) = self.doc.as_mut().and_then(|d| d.align.as_mut()) {
             a.skip = skip;
@@ -653,8 +850,8 @@ impl Machine<'_, '_> {
                 }
                 self.align_tag_num();
                 self.end_group(SIMPLE_GROUP);
-            } else if given {
-                self.align_df_tag();
+            } else if given && self.align_df_tag() {
+                return;
             }
             self.package();
             return self.gather_tag_keep();
@@ -664,7 +861,9 @@ impl Machine<'_, '_> {
             self.open_box(HBOX_GROUP, Ctx::Set { n: 0, global: false }, false, 0, false);
             self.build_copy_register(STRUT_BOX);
             if given {
-                self.align_df_tag();
+                if self.align_df_tag() {
+                    return;
+                }
             } else {
                 self.begin_group(SIMPLE_GROUP);
                 self.tag_equation_step();
@@ -677,17 +876,106 @@ impl Machine<'_, '_> {
     }
 
     /// `\make@display@tag` after a `\tag`: `\df@tag` (the tag's box, `\@currentlabel` its
-    /// text, in the box's group) and the stored `\label`.
-    fn align_df_tag(&mut self) {
+    /// text, in the box's group) and the stored `\label`. A tag of tokens is typeset
+    /// through the input: `rt@dftag`, the label, then `rt@atagend` (`align_tag_end`) closes
+    /// the group and the box and keeps the row; `true` then, the row's end left to it.
+    fn align_df_tag(&mut self) -> bool {
         self.begin_group(SIMPLE_GROUP);
-        if let Some(text) = self.doc.as_ref().and_then(|d| d.df_tag.as_ref()).map(|t| t.0.clone()) {
-            self.set_current_label(&text);
+        if let Some((text, _, toks)) = self.doc.as_ref().and_then(|d| d.df_tag.as_ref()).map(|t| (t.0.clone(), t.1, t.2.clone())) {
+            self.set_tag_label(&text, &toks);
+            // Under hyperref the text is typeset from tokens after `\Hy@make@anchor` (`df_tag`).
+            if !toks.is_empty() || self.hyper() {
+                let mut t = vec![self.doc_id(doc!("rt@dftag"))];
+                if let Some(key) = self.doc.as_mut().and_then(|d| d.df_label.take()) {
+                    t.extend([self.doc_id(doc!("rt@ltxlabel")), Token::char(Cat::BeginGroup, '{')]);
+                    t.extend(key);
+                    t.push(Token::char(Cat::EndGroup, '}'));
+                }
+                t.push(self.doc_id(doc!("rt@atagend")));
+                self.back_list(&t);
+                return true;
+            }
         }
         self.df_tag();
         if let Some(key) = self.doc.as_mut().and_then(|d| d.df_label.take()) {
             self.label_key(&key);
         }
         self.end_group(SIMPLE_GROUP);
+        false
+    }
+
+    /// amsthm's `\qedhere` in an `align*` field: `\aftergroup\align*@qed`, `\align@qed`,
+    /// whose measuring pass adds `\tag*{\qedsymbol}` to the row and whose real pass lets
+    /// `\math@cr@@@` be `\qed@tag` (`align_row_end`). `false` when not native: another
+    /// alignment (`alignat*` and `flalign*` have no `@qed` macro, `align`'s rows a number),
+    /// a second one in the row, or under hyperref.
+    pub(super) fn align_qed(&mut self) -> bool {
+        if self.hyper() {
+            self.not_native("hyperref: \\qedhere in align*");
+            return false;
+        }
+        let Some(a) = self.doc.as_mut().and_then(|d| d.align.as_mut()) else { return false };
+        if a.kind != AmsKind::Align || a.level != 1 || !a.starred || a.split || a.row.qed {
+            self.not_native("\\qedhere in an alignment other than align*");
+            return false;
+        }
+        a.row.qed = true;
+        a.row.qed_at = a.row.fields.len();
+        true
+    }
+
+    /// `\qed@tag` as the row's end: `\global\tag@true\nonumber&\omit\setboxz@h{\strut@
+    /// \qedsymbol}\tagsleft@false\place@tag@gather\kern-\tabskip\ifst@rred\else\global
+    /// \@eqnswtrue\fi\global\advance\row@\@ne\cr`. Its one `&` reaches the tag column only
+    /// from the row's last field. The entry measures the measuring pass's tag, `\hbox{\m@th
+    /// \normalfont\qedsymbol}` (`rt@qedw`), then sets the real box (`rt@qedkeep`); its
+    /// `\place@tag@gather` (`\llap{\boxz@}`, no `\shifttag@`, the display wide enough) and
+    /// `\kern-\tabskip` (`\alignsep@`, the preamble's last `\tabskip`) wait for the end.
+    fn qed_row_end(&mut self, amps: usize) -> Option<Vec<Token>> {
+        if amps != 1 {
+            self.not_native("\\qedhere in a field before the row's last");
+            return None;
+        }
+        let omit = self.doc.as_ref().map(|d| d.omit_id)?;
+        let cs = |i: usize| self.named_cs(i);
+        let (open, close) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'));
+        let mut t = vec![Token::char(Cat::AlignTab, '&'), Token::cs(omit)];
+        t.extend([cs(named!("setbox")), Token::char(Cat::Other, '0'), cs(named!("hbox")), open, self.doc_id(doc!("rt@tagfont")), cs(named!("qedsymbol")), close, self.doc_id(doc!("rt@qedw"))]);
+        t.extend([cs(named!("setbox")), Token::char(Cat::Other, '0'), cs(named!("hbox")), open, self.doc_id(doc!("rt@strutbox")), cs(named!("qedsymbol")), close, self.doc_id(doc!("rt@qedkeep"))]);
+        Some(t)
+    }
+
+    /// The measuring pass's tag width of a `\qedhere` row: box 0's.
+    pub(super) fn qed_width(&mut self) {
+        let w = self.e.eqtb.box_reg(0).map_or(0, |b| self.e.nodes.boxes[b as usize].width);
+        if let Some(a) = self.doc.as_mut().and_then(|d| d.align.as_mut()) {
+            a.row.tag = w.max(1);
+        }
+    }
+
+    /// The `\qedhere` row kept, its entry box 0, `\ifst@rred\else\global\@eqnswtrue\fi`.
+    pub(super) fn qed_keep(&mut self) {
+        let Some(a) = self.doc.as_mut().and_then(|d| d.align.as_mut()) else { return };
+        let row = std::mem::take(&mut a.row);
+        a.rows.push(row);
+        a.eqnsw = !a.starred;
+        self.build_box_register(0);
+    }
+
+    /// After a tag of tokens (`align_df_tag`): the group's end, the box's, and the row kept
+    /// as `align_tag` keeps it.
+    pub(super) fn align_tag_end(&mut self) {
+        self.end_group(SIMPLE_GROUP);
+        // A `multline`'s tag sits in the row itself, no box around it.
+        if let Some((at, w)) = self.doc.as_ref().and_then(|d| d.align.as_ref()).filter(|a| a.kind == AmsKind::Multline).map(|a| a.ml_tag) {
+            return self.multline_tag_done(at, w);
+        }
+        self.package();
+        if self.doc.as_ref().and_then(|d| d.align.as_ref()).is_some_and(|a| a.kind == AmsKind::Gather) {
+            self.gather_tag_keep();
+        } else {
+            self.align_tag_keep(true);
+        }
     }
 
     /// `\print@eqnum` (`\tagform@\theequation`: `\hbox{\m@th\normalfont(n\/)}`) and the
@@ -758,7 +1046,7 @@ impl Machine<'_, '_> {
     /// Whether `\\` is `\math@cr` of an `align`.
     /// In an `align` or `gather` whose rows take a `\tag` (not a `split`'s, not `multline`).
     pub(super) fn in_tag_rows(&self) -> bool {
-        self.in_align() && self.doc.as_ref().and_then(|d| d.align.as_ref()).is_some_and(|a| !a.split && a.kind != AmsKind::Multline)
+        self.in_align() && self.doc.as_ref().and_then(|d| d.align.as_ref()).is_some_and(|a| !a.split)
     }
 
     pub(super) fn in_align(&self) -> bool {
@@ -783,6 +1071,9 @@ impl Machine<'_, '_> {
     /// `\ignorespacesafterend`.
     pub(super) fn align_finish(&mut self) {
         let Some(a) = self.doc.as_mut().and_then(|d| d.align.take()) else { return };
+        if a.tags[0] != a.tags[1] && self.hyper() {
+            return self.not_native("hyperref: a \\tag the align's body hides");
+        }
         if let Some(doc) = self.doc.as_mut() {
             doc.ams_display = 0;
             if doc.df_label.is_some() {
@@ -809,7 +1100,7 @@ impl Machine<'_, '_> {
         }
         let cols = self.align_widths(a.maxfields);
         let rows: Vec<(&[i32], i32)> = a.rows.iter().map(|r| (&r.fields[..], r.tag)).collect();
-        let s = align_shifts(dw, &cols, &rows, mintagsep);
+        let Some(s) = align_shifts(dw, &cols, &rows, mintagsep, a.level) else { return self.not_native("an alignment's shifts dividing by zero") };
         if s.drops {
             return self.not_native("an align tag that goes below its row");
         }
@@ -818,10 +1109,14 @@ impl Machine<'_, '_> {
         }
         let skip = |k: usize| Glue { width: if k == 0 { s.eqnshift } else if k % 2 == 1 { 0 } else { s.alignsep }, ..Glue::default() };
         let tags: Vec<bool> = a.rows.iter().map(|r| r.tag > 0).collect();
+        let qeds: Vec<bool> = a.rows.iter().map(|r| r.qed).collect();
         // `\omit\kern-\alignsep@`, then with a tag `\place@tag`: `\kern-\tagshift@
-        // \llap{\boxz@}`.
+        // \llap{\boxz@}`; a `\qedhere` row's `\qed@tag`: `\llap{\boxz@}\kern-\tabskip`.
         self.align_retab(&skip, a.maxfields, |m: &mut Self, r, old| {
             let kern = |w: i32| Node { sub: 1, ..Node::new(Kind::Kern, w) };
+            if qeds.get(r).copied().unwrap_or(false) {
+                return vec![m.llap(&old), kern(-s.alignsep)];
+            }
             let mut new = vec![kern(-s.alignsep)];
             if tags.get(r).copied().unwrap_or(false) {
                 new.push(kern(-s.tagshift));
@@ -869,13 +1164,13 @@ impl Machine<'_, '_> {
     /// `\vtop`, `\vbox` or `\vcenter`, `\spread@equation`, and the `\ialign`: for
     /// `aligned` `\start@aligned`'s two periodic templates, `\tabskip\alignsep@` (10pt,
     /// `\minalignsep`) after each pair; for `gathered` one, `\hfil\strut@$\m@th
-    /// \displaystyle##$\hfil`. Inside an `align`, `gather`, `multline`, `eqnarray` or another
-    /// `aligned` it is not native.
+    /// \displaystyle##$\hfil`. Inside an `align`, `gather`, `multline` or `eqnarray` it is
+    /// not native; inside another `aligned` or `gathered` that one waits for its end.
     pub(super) fn aligned_begin(&mut self, gather: bool) {
         if self.mode != Mode::Math {
             return self.not_native("aligned outside a formula");
         }
-        if self.doc.as_ref().is_some_and(|d| d.align.is_some() || d.eqnarray.is_some() || d.aligned.is_some()) {
+        if self.doc.as_ref().is_some_and(|d| d.align.is_some() || d.eqnarray.is_some() || d.aligned.as_ref().is_some_and(|a| a.kind == AlignedKind::Split)) {
             return self.not_native("aligned inside another alignment");
         }
         self.begin_group(SEMI_SIMPLE_GROUP);
@@ -900,11 +1195,15 @@ impl Machine<'_, '_> {
         if let Some(doc) = self.doc.as_mut() {
             doc.endpe = false;
             let kind = if gather { AlignedKind::Gathered } else { AlignedKind::Aligned };
-            doc.aligned = Some(AmsAligned { kind, column: 0, tabs, skip: 0 });
+            let outer = doc.aligned.take().map(Box::new);
+            doc.aligned = Some(AmsAligned { kind, column: 0, tabs, skip: 0, outer });
         }
         self.open_box(group, Ctx::Shift(0), false, 0, false);
-        self.reset_strut_box();
-        self.open_up_jot();
+        // `\spread@equation` lets itself to `\@empty` once run: an inner one does nothing.
+        if self.doc.as_ref().and_then(|d| d.aligned.as_ref()).is_none_or(|a| a.outer.is_none()) {
+            self.reset_strut_box();
+            self.open_up_jot();
+        }
         // `\ialign`: `\everycr{}\tabskip\z@skip`.
         {
             let reg = param!("everycr");
@@ -922,6 +1221,62 @@ impl Machine<'_, '_> {
         let v = self.e.toks.store(&[close, av, Token::cs(END_TEMPLATE_ID)]);
         let sep = Glue { width: MIN_ALIGN_SEP, ..Glue::default() };
         self.init_align_periodic(u, [v, v], [Glue::default(), Glue::default(), sep]);
+    }
+
+    /// mathtools' `\newcases` environments (`dcases`, `rcases`, `drcases`, their starred
+    /// forms, `cases*`), `\MT_start_cases:nnnn{\quad}{lpre}{rpre}{delim}`: `\left delim
+    /// \vcenter\bgroup\Let@\chardef\dspbrk@context\@ne\restore@math@cr\spread@equation
+    /// \ialign\bgroup\strut@ lpre&\quad\strut@ rpre\crcr`, each preamble `$\m@th
+    /// (\displaystyle)##$\hfil`, a starred one's right column text, `##\hfil`. The
+    /// `\vcenter`'s start (`rt@mtcases`) is `mt_cases_init`; `\strut@` is `rt@strutbox`.
+    pub(super) fn mt_cases_begin(&mut self, name: &str) {
+        if self.mode != Mode::Math {
+            return self.not_native("mathtools' cases outside a formula");
+        }
+        self.begin_group(SEMI_SIMPLE_GROUP);
+        if let Some(doc) = self.doc.as_mut() {
+            doc.endpe = false;
+        }
+        let display = name.starts_with('d');
+        let text = name.ends_with('*');
+        let cs = |i: usize| self.named_cs(i);
+        let (open, shift, param) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::MathShift, '$'), Token::char(Cat::Param, '#'));
+        let left = if name.starts_with("dc") || name == "cases*" { cs(named!("lbrace")) } else { Token::char(Cat::Other, '.') };
+        let mut t = vec![cs(named!("left")), left, cs(named!("vcenter")), open, self.doc_id(doc!("rt@mtcases"))];
+        self.ialign_tokens(&mut t);
+        let strut = self.doc_id(doc!("rt@strutbox"));
+        let formula = |t: &mut Vec<Token>| {
+            t.extend([strut, shift, cs(named!("mathsurround"))]);
+            t.extend(super::ZERO_PT);
+            if display {
+                t.push(cs(named!("displaystyle")));
+            }
+            t.extend([param, shift, cs(named!("hfil"))]);
+        };
+        formula(&mut t);
+        t.extend([Token::char(Cat::AlignTab, '&'), cs(named!("quad"))]);
+        if text {
+            t.extend([strut, param, cs(named!("hfil"))]);
+        } else {
+            formula(&mut t);
+        }
+        t.push(cs(named!("crcr")));
+        self.back_list(&t);
+    }
+
+    /// The `\vcenter`'s start in mathtools' cases: `\Let@` (`\\` is `\math@cr` with
+    /// `\math@cr@@@` the `\cr`), `\spread@equation` (`\reset@strut@`, `\openup\jot`).
+    pub(super) fn mt_cases_init(&mut self) {
+        self.let_math_cr();
+        if !self.spread_is_done() {
+            self.reset_strut_box();
+            self.open_up_jot();
+        }
+    }
+
+    /// `\strut@`: `\copy\strut@box`.
+    pub(super) fn copy_strut(&mut self) {
+        self.build_copy_register(STRUT_BOX);
     }
 
     /// Whether `\\` is `\math@cr` of an `aligned` or `gathered`.
@@ -1029,7 +1384,10 @@ impl Machine<'_, '_> {
     /// The alignment's `}` and the box's; for `split` its `\vbox`'s and then `\rendsplit@`'s
     /// `\vcenter{\boxz@}` (`centertags`, amsmath's default).
     pub(super) fn aligned_finish(&mut self) {
-        let split = self.doc.as_mut().and_then(|d| d.aligned.take()).is_some_and(|a| a.kind == AlignedKind::Split);
+        let Some(doc) = self.doc.as_mut() else { return };
+        let a = doc.aligned.take();
+        let split = a.as_ref().is_some_and(|a| a.kind == AlignedKind::Split);
+        doc.aligned = a.and_then(|a| a.outer).map(|b| *b);
         self.fin_align();
         self.package();
         if split {
@@ -1061,7 +1419,7 @@ impl Machine<'_, '_> {
                 if t == Token::cs(end) && env == "split" && inner == 0 {
                     break;
                 }
-                if !matches!(env.as_str(), "array" | "cases" | "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix") {
+                if !matches!(env.as_str(), "array" | "cases" | "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix") && !super::MT_CASES.contains(&env.as_str()) && !super::MT_MATRICES.contains(&env.as_str()) {
                     return self.not_native("an environment inside split");
                 }
                 if t == Token::cs(end) {
@@ -1105,7 +1463,7 @@ impl Machine<'_, '_> {
         self.reset_strut_box();
         self.open_up_jot();
         if let Some(doc) = self.doc.as_mut() {
-            doc.align = Some(Box::new(AmsAlign { starred: !numbered, kind: AmsKind::Gather, split: true, math_start: 0, math_open: false, maxfields: 2, tabs, eqnsw: numbered, dtp: true, eqpen: pen, skip: 0, rows: Vec::new(), row: Row::default() }));
+            doc.align = Some(Box::new(AmsAlign { tags: [0, 0], ml_tag: (0, 0), starred: !numbered, kind: AmsKind::Gather, split: true, math_start: 0, math_open: false, maxfields: 2, level: 1, tabs, eqnsw: numbered, dtp: true, eqpen: pen, skip: 0, rows: Vec::new(), row: Row::default() }));
         }
         self.open_box(VCENTER_GROUP, Ctx::Shift(0), false, 0, false);
         let mut t = vec![self.doc_id(AL_START), self.doc_id(doc!("rt@splitopen"))];
@@ -1123,7 +1481,7 @@ impl Machine<'_, '_> {
         self.begin_group(SEMI_SIMPLE_GROUP);
         let tabs = self.doc.as_ref().map_or(0, |d| d.tabs.len());
         if let Some(doc) = self.doc.as_mut() {
-            doc.aligned = Some(AmsAligned { kind: AlignedKind::Split, column: 0, tabs, skip: 0 });
+            doc.aligned = Some(AmsAligned { kind: AlignedKind::Split, column: 0, tabs, skip: 0, outer: None });
         }
         self.open_box(VCENTER_GROUP, Ctx::Shift(0), false, 0, false);
         self.open_box(VBOX_GROUP, Ctx::Shift(0), false, 0, false);
@@ -1165,7 +1523,7 @@ mod tests {
     fn two_columns_centre_and_split_the_room() {
         // A 345pt display and columns of 5pt and 18pt: the room left is split in two.
         let pt = 65536;
-        let s = align_shifts(345 * pt, &[5 * pt, 18 * pt], &[(&[5 * pt, 18 * pt], 0)], pt);
+        let s = align_shifts(345 * pt, &[5 * pt, 18 * pt], &[(&[5 * pt, 18 * pt], 0)], pt, 1).unwrap();
         assert_eq!(s.eqnshift, (345 - 23) * pt / 2);
         assert_eq!(s.alignsep, s.eqnshift);
         assert_eq!(s.tagshift, 23 * pt + s.eqnshift - 345 * pt);

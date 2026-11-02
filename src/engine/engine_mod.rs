@@ -5,6 +5,73 @@
 //! is ours: flat typed arrays indexed by number, a static parameter table, one save stack.
 //! The expander drives it; layout reads it.
 
+/// `Codec` (`engine_snapshot`) for a struct, each field in declaration order, for the
+/// engine copied to disk (`engine_resume::Kept::store`). Every field is named, so one added
+/// later is a compile error here until it is written or listed after `;` as scratch (not
+/// written, `Default` when read back).
+macro_rules! codec_struct {
+    ($t:ty { $($f:ident),* $(,)? $(; $($s:ident),* $(,)?)? }) => {
+        #[cfg(feature = "oracle")]
+        impl $crate::engine::engine_snapshot::Codec for $t {
+            fn put(&self, w: &mut $crate::engine::engine_snapshot::Writer) {
+                let Self { $($f,)* $($($s: _,)*)? } = self;
+                $($crate::engine::engine_snapshot::Codec::put($f, w);)*
+            }
+            fn take(r: &mut $crate::engine::engine_snapshot::Reader) -> Option<Self> {
+                $(let $f = $crate::engine::engine_snapshot::Codec::take(r)?;)*
+                Some(Self { $($f,)* $($($s: Default::default(),)*)? })
+            }
+        }
+    };
+}
+
+/// `Codec` for an enum of unit variants: its variant's index, one byte.
+macro_rules! codec_enum {
+    ($t:ty { $($v:ident),+ $(,)? }) => {
+        #[cfg(feature = "oracle")]
+        impl $crate::engine::engine_snapshot::Codec for $t {
+            fn put(&self, w: &mut $crate::engine::engine_snapshot::Writer) {
+                let all: &[$t] = &[$(<$t>::$v),+];
+                let i = all.iter().position(|v| v == self).unwrap_or(0);
+                w.u8(i as u8);
+            }
+            fn take(r: &mut $crate::engine::engine_snapshot::Reader) -> Option<Self> {
+                let all: &[$t] = &[$(<$t>::$v),+];
+                all.get(r.u8()? as usize).copied()
+            }
+        }
+    };
+}
+
+/// `Codec` for an enum with data: the index given before each variant, one byte, then its
+/// fields in order. The match is exhaustive, so a variant added later is a compile error here.
+macro_rules! codec_data_enum {
+    ($t:ty { $($i:literal $v:ident $(( $($tf:ident),* ))? $({ $($sf:ident),* })?),+ $(,)? }) => {
+        #[cfg(feature = "oracle")]
+        impl $crate::engine::engine_snapshot::Codec for $t {
+            fn put(&self, w: &mut $crate::engine::engine_snapshot::Writer) {
+                match self {
+                    $(Self::$v $(( $($tf),* ))? $({ $($sf),* })? => {
+                        w.u8($i);
+                        $($($crate::engine::engine_snapshot::Codec::put($tf, w);)*)?
+                        $($($crate::engine::engine_snapshot::Codec::put($sf, w);)*)?
+                    })+
+                }
+            }
+            fn take(r: &mut $crate::engine::engine_snapshot::Reader) -> Option<Self> {
+                Some(match r.u8()? {
+                    $($i => {
+                        $($(let $tf = $crate::engine::engine_snapshot::Codec::take(r)?;)*)?
+                        $($(let $sf = $crate::engine::engine_snapshot::Codec::take(r)?;)*)?
+                        Self::$v $(( $($tf),* ))? $({ $($sf),* })?
+                    })+
+                    _ => return None,
+                })
+            }
+        }
+    };
+}
+
 pub mod engine_assign;
 pub mod engine_align;
 pub mod engine_box;
@@ -93,6 +160,8 @@ pub struct Engine {
     pub glyph_unicode: engine_tounicode::GlyphUnicode,
 }
 
+codec_struct!(Engine { eqtb, names, cs, toks, fonts, nodes, hyph, glyph_unicode });
+
 impl Engine {
     /// A checkpoint's copy of the engine (`engine_checkpoint`): its big arrays frozen, each
     /// sharing the chunks that did not change since the last checkpoint (`engine_chunk`);
@@ -112,6 +181,20 @@ impl Engine {
     pub fn thaw(&self) -> Engine {
         let Engine { eqtb, names, cs, toks, fonts, nodes, hyph, glyph_unicode } = self;
         Engine { eqtb: eqtb.thaw(), names: names.clone(), cs: cs.thaw(), toks: toks.thaw(), fonts: fonts.thaw(), nodes: nodes.thaw(), hyph: hyph.clone(), glyph_unicode: glyph_unicode.clone() }
+    }
+
+    /// [`Engine::thaw`] into a live engine, its buffers kept: what it holds unchanged since
+    /// the checkpoint it shares chunks with is not copied again (`Chunked::thaw_into`).
+    pub fn thaw_into(&self, live: &mut Engine) {
+        let Engine { eqtb, names, cs, toks, fonts, nodes, hyph, glyph_unicode } = self;
+        eqtb.thaw_into(&mut live.eqtb);
+        live.names.clone_from(names);
+        cs.thaw_into(&mut live.cs);
+        toks.thaw_into(&mut live.toks);
+        fonts.thaw_into(&mut live.fonts);
+        nodes.thaw_into(&mut live.nodes);
+        live.hyph.clone_from(hyph);
+        live.glyph_unicode.clone_from(glyph_unicode);
     }
 }
 

@@ -288,7 +288,7 @@ impl Cache {
             Some(run) => run.resume(SPACING, p, q, self.src.len(), src.len()),
             None => (Marks::new(SPACING), None),
         };
-        let out = super::scan_from(src, &mut |_| false, start.as_ref().map(|(s, at)| (s, *at)), Some(&mut marks));
+        let out = super::scan_from(src, &mut |_, _| false, start.as_ref().map(|(s, at)| (s, *at)), Some(&mut marks));
         if checking() {
             let full = super::scan(src);
             if full.map(str::len) != out.map(str::len) {

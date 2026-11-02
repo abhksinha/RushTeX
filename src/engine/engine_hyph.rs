@@ -61,11 +61,23 @@ pub struct Hyph {
     spare: Word,
 }
 
+// The built tries, the memo of words hyphenated and the scratch word are caches, made again
+// from the patterns when needed.
+codec_struct!(Hyph { patterns, exceptions, ready, seen; tries, memo, memo_key, spare });
+
 impl Hyph {
     /// A copy without the memo of words hyphenated (a cache that refills), for a checkpoint.
     pub fn without_memo(&self) -> Hyph {
         let Hyph { patterns, exceptions, ready, seen, tries, memo: _, memo_key: _, spare: _ } = self;
         Hyph { patterns: patterns.clone(), exceptions: exceptions.clone(), ready: *ready, seen: seen.clone(), tries: tries.clone(), memo: HashMap::default(), memo_key: Vec::new(), spare: Word::default() }
+    }
+
+    /// Whether the two hold the same patterns and exceptions, their caches aside (what a
+    /// copy on disk keeps, `engine_resume`).
+    #[cfg(feature = "oracle")]
+    pub fn same_tables(&self, other: &Hyph) -> bool {
+        let Hyph { patterns, exceptions, ready, seen, tries: _, memo: _, memo_key: _, spare: _ } = self;
+        *patterns == other.patterns && *exceptions == other.exceptions && *ready == other.ready && *seen == other.seen
     }
 
     /// A word's replacement list, once read, back to make the next one in.
@@ -258,7 +270,27 @@ impl Tree {
     fn pack(&self) -> Trie {
         let mut slots: Vec<u64> = vec![0; 256];
         let mut taken: Vec<bool> = vec![false; 256];
-        let mut free = 1;
+        // The lowest slot at or after `i` that holds no character: `next[i]` is `i` for such
+        // a slot, else a slot further on (path-halved), with one sentinel past the end. The
+        // first-fit scan jumps over bases whose first child's slot is taken instead of
+        // stepping one base at a time, so it finds the same base (§953 `first_fit` keeps a
+        // free list for the same reason).
+        let mut next: Vec<u32> = (0..=256).collect();
+        fn find(next: &mut [u32], mut i: usize) -> usize {
+            while next[i] as usize != i {
+                next[i] = next[next[i] as usize];
+                i = next[i] as usize;
+            }
+            i
+        }
+        fn grow(slots: &mut Vec<u64>, taken: &mut Vec<bool>, next: &mut Vec<u32>, n: usize) {
+            if slots.len() < n {
+                let old = slots.len();
+                slots.resize(n, 0);
+                taken.resize(n, false);
+                next.extend(old as u32 + 1..=n as u32);
+            }
+        }
         let mut queue = std::collections::VecDeque::from([(0u32, 0usize)]);
         while let Some((node, slot)) = queue.pop_front() {
             let (at, k) = (self.first[node as usize] as usize, self.count[node as usize] as usize);
@@ -266,16 +298,14 @@ impl Tree {
                 continue;
             }
             let kids = &self.chars[at..at + k];
-            while free < slots.len() && slots[free] >> CHAR_SHIFT != 0 {
-                free += 1;
-            }
-            let mut base = free.saturating_sub(kids[0] as usize).max(1);
+            let c0 = kids[0] as usize;
+            let free = find(&mut next, 1);
+            let mut base = free.saturating_sub(c0).max(1);
             loop {
-                if slots.len() < base + 256 {
-                    slots.resize(base + 256, 0);
-                    taken.resize(base + 256, false);
-                }
-                if !taken[base] && kids.iter().all(|&c| slots[base + c as usize] >> CHAR_SHIFT == 0) {
+                grow(&mut slots, &mut taken, &mut next, base + 256);
+                base = find(&mut next, base + c0) - c0;
+                grow(&mut slots, &mut taken, &mut next, base + 256);
+                if !taken[base] && kids[1..].iter().all(|&c| slots[base + c as usize] >> CHAR_SHIFT == 0) {
                     break;
                 }
                 base += 1;
@@ -286,6 +316,7 @@ impl Tree {
                 let child = self.to[at + i];
                 let s = base + c as usize;
                 slots[s] = (c as u64 + 1) << CHAR_SHIFT | (self.ops[child as usize] as u64) << 32;
+                next[s] = s as u32 + 1;
                 queue.push_back((child, s));
             }
         }

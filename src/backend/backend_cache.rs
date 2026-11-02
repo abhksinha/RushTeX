@@ -56,8 +56,8 @@ impl<K: std::hash::Hash + Eq, V: Clone> Memo<K, V> {
 /// embedded program's stream, `/Length1` and `/Length2`, and `/FontBBox`.
 pub(crate) type PreparedFont = (Option<Vec<u8>>, Option<(Vec<u8>, [usize; 2], [i32; 4])>);
 
-/// A PNG as written: width, height, bits per component, the colour space's PDF text, the
-/// compressed image and the compressed soft mask.
+/// A PNG as written: width, height, bits per component, the colour space's PDF text (and a
+/// copied stream's `/DecodeParms`), the compressed image and the compressed soft mask.
 pub(crate) type PreparedImage = std::rc::Rc<(u32, u32, u8, Vec<u8>, Vec<u8>, Option<Vec<u8>>)>;
 
 #[derive(Default)]
@@ -68,12 +68,18 @@ struct Caches {
     images: Memo<u128, PreparedImage>,
     files: Memo<Box<str>, std::rc::Rc<Vec<u8>>>,
     pages: Memo<u128, std::rc::Rc<ShippedDone>>,
+    forms: Memo<u128, PreparedForm>,
 }
+
+/// An included PDF page as `write_form` wrote it: its objects and the next object number.
+pub(crate) type PreparedForm = std::rc::Rc<(Vec<(i32, Vec<u8>)>, i32)>;
 
 /// A page as its walk shipped it (`engine_ship::ship_page`): its content stream, the
 /// characters it used per PDF font, and the font sharing and colour stacks after it.
 pub struct ShippedDone {
     pub content: Vec<u8>,
+    /// `content`'s [`stream_key`].
+    pub stream: u128,
     pub used: Vec<[u64; 4]>,
     pub base: Vec<u16>,
     pub colors: crate::engine::engine_color::ColorStacks,
@@ -88,7 +94,7 @@ pub struct PdfCache {
     /// bytes now.
     carried_job: Cell<bool>,
     c: RefCell<Caches>,
-    last: Cell<[(u32, u32, usize); 6]>,
+    last: Cell<[(u32, u32, usize); 7]>,
 }
 
 impl PdfCache {
@@ -102,7 +108,7 @@ impl PdfCache {
     pub fn sweep(&self) {
         let gen = self.gen.get();
         let mut c = self.c.borrow_mut();
-        let last = [c.streams.sweep(gen), c.prepared.sweep(gen), c.fonts.sweep(gen), c.images.sweep(gen), c.files.sweep(gen), c.pages.sweep(gen)];
+        let last = [c.streams.sweep(gen), c.prepared.sweep(gen), c.fonts.sweep(gen), c.images.sweep(gen), c.files.sweep(gen), c.pages.sweep(gen), c.forms.sweep(gen)];
         self.last.set(last);
         if std::env::var_os("RT_TIME").is_some() {
             for (what, (h, m, n)) in Self::NAMES.iter().zip(last) {
@@ -111,7 +117,7 @@ impl PdfCache {
         }
     }
 
-    const NAMES: [&'static str; 6] = ["streams", "font subsets", "fonts", "images", "carried files", "shipped pages"];
+    const NAMES: [&'static str; 7] = ["streams", "font subsets", "fonts", "images", "carried files", "shipped pages", "included pages"];
 
     /// The last compile's hits, misses and entries kept, per cache.
     pub fn last_counts(&self) -> Vec<(&'static str, (u32, u32, usize))> {
@@ -192,6 +198,14 @@ impl PdfCache {
 
     pub(crate) fn put_image(&self, key: u128, v: PreparedImage) {
         self.c.borrow_mut().images.map.insert(key, (v, self.gen.get()));
+    }
+
+    pub(crate) fn form(&self, key: u128) -> Option<PreparedForm> {
+        self.c.borrow_mut().forms.get(&key, self.gen.get())
+    }
+
+    pub(crate) fn put_form(&self, key: u128, v: PreparedForm) {
+        self.c.borrow_mut().forms.map.insert(key, (v, self.gen.get()));
     }
 }
 

@@ -140,7 +140,13 @@ impl Machine<'_, '_> {
     /// register number if it needs one.
     pub(super) fn register_of(&mut self, m: Meaning) -> Option<Reg> {
         match m {
-            Meaning::Reg(r) => Some(r),
+            Meaning::Reg(r) => {
+                // §236: `\time` (20), `\day`, `\month`, `\year` (23), set from the job's date.
+                if r.region == Region::Int && (20..24).contains(&r.slot) {
+                    self.e.eqtb.watch.touch();
+                }
+                Some(r)
+            }
             Meaning::Prim(Prim::Count) => Some(self.scan_register(Region::Int)),
             Meaning::Prim(Prim::Dimen) => Some(self.scan_register(Region::Dimen)),
             Meaning::Prim(Prim::Skip) => Some(self.scan_register(Region::Glue)),

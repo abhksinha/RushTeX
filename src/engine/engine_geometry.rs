@@ -48,6 +48,10 @@ pub struct Geometry {
     /// since the native job does not keep whether the class named a paper (with none,
     /// `\Gm@setdefaultpaper` takes the swapped one and clears the swap).
     pub class_landscape: bool,
+    /// `\Gm@bindingoffset` (`bindingoffset`): `\Gm@@process` takes it from the layout width
+    /// and adds it to `\oddsidemargin` (the even pages keep their margin). `\geometry` keeps
+    /// it; `\newgeometry` (`\Gm@initnewgm`) starts from zero.
+    pub binding: i32,
 }
 
 /// What a key does.
@@ -72,6 +76,8 @@ enum Key {
     /// `landscape` (true) and `portrait` (false, the reverse): a change of
     /// `\ifGm@landscape` reverses `\ifGm@swap@papersize`.
     Landscape(bool),
+    /// `bindingoffset`: `\Gm@setlength\Gm@bindingoffset{#1}`.
+    Binding,
     /// `includehead`, `includefoot`, `includeheadfoot` as bits 1 and 2.
     Include(u8),
     /// `nohead`, `nofoot`, `noheadfoot`: `\Gm@setlength` of `\headheight` and `\headsep`
@@ -122,6 +128,7 @@ fn key(name: &str) -> Option<Key> {
         "footskip" | "foot" => Key::Head(2),
         "footnotesep" => Key::Footins,
         "columnsep" => Key::ColumnSep,
+        "bindingoffset" => Key::Binding,
         "landscape" => Key::Landscape(true),
         "portrait" => Key::Landscape(false),
         "verbose" | "pdftex" | "marginparwidth" | "marginpar" | "marginparsep" => Key::None,
@@ -284,6 +291,7 @@ impl Geometry {
                 }
                 Key::Head(i) => self.head[i] = Some(len(value.ok_or("a geometry option")?).ok_or("a geometry length")?),
                 Key::Footins => self.footins = Some(len(value.ok_or("a geometry option")?).ok_or("a geometry length")?),
+                Key::Binding => self.binding = len(value.ok_or("a geometry option")?).ok_or("a geometry length")?,
                 Key::ColumnSep => self.columnsep = Some(len(value.ok_or("a geometry option")?).ok_or("a geometry length")?),
                 Key::None if value.is_some_and(|v| len(v).is_none()) => return Err("a geometry length"),
                 Key::None => {}
@@ -316,6 +324,8 @@ impl Geometry {
     pub fn process(&mut self, head: [i32; 3], twoside: bool) -> ([i32; 5], [i32; 3]) {
         let [hh, hs, fs] = [0, 1, 2].map(|i| self.head[i].unwrap_or(head[i]));
         let [pw, ph] = self.page();
+        // `\addtolength\Gm@layoutwidth{-\Gm@bindingoffset}` before `\Gm@adjustbody`.
+        let pw = pw - self.binding;
         // `\Gm@adjustbody`.
         if self.body[0] {
             self.len[W] = self.len[TW].or(self.len[W]).or(Some(scale(pw, self.scale[0])));
@@ -332,6 +342,8 @@ impl Geometry {
         let at = |s: usize| self.len[s].unwrap_or(0);
         let odd = at(L) - INCH;
         let even = if twoside { at(R) - INCH } else { odd };
+        // `\advance\oddsidemargin\Gm@bindingoffset`, after `\evensidemargin` is set.
+        let odd = odd + self.binding;
         let (mut height, mut top) = (at(H), at(T) - INCH);
         if self.include[0] {
             height -= hh + hs;

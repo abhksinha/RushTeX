@@ -41,6 +41,8 @@ pub struct XImage {
     pub pdf: Option<PdfPage>,
 }
 
+codec_struct!(XImage { obj, file, dims, attr, group, wanted, pdf });
+
 /// An included PDF page: its number, the page box (0 media to 4 art), its size and the
 /// box's lower left corner in sp (writeimg.c `bp2int`), and `/Rotate`.
 #[derive(PartialEq, Debug, Clone)]
@@ -51,6 +53,8 @@ pub struct PdfPage {
     pub orig: [i32; 2],
     pub rotate: i64,
 }
+
+codec_struct!(PdfPage { page, page_box, size, orig, rotate });
 
 /// writeimg.c `bp2int`: big points (a C `float`) to sp, C `round`.
 fn bp2int(p: f32) -> i32 {
@@ -204,15 +208,39 @@ impl PdfDoc {
     /// The images shown, as `write_png` writes them: the image, then its soft mask, numbered
     /// from `*next`; and the transparency group. With a `--watch` session's `cache`, a PNG
     /// whose file bytes (and `\pdfimagehicolor`) an earlier recompile wrote is not decoded and
-    /// compressed again; the file is still read, so it stays one the session watches.
+    /// compressed again, nor an included PDF page parsed and copied again whose file bytes,
+    /// page, box, attributes and object numbers an earlier one had; the file is still read,
+    /// so it stays one the session watches.
     pub fn write_images(&self, read: &dyn Fn(&str) -> Option<Vec<u8>>, hicolor: bool, objs: &mut Vec<(i32, Vec<u8>)>, next: &mut i32, cache: Option<&crate::backend::backend_cache::PdfCache>) {
         let mut deflate = DeflateCompressor::new();
         for im in self.images.iter().filter(|i| i.wanted) {
             if let Some(p) = &im.pdf {
-                let Some(mut f) = read(&im.file).and_then(PdfFile::open) else { continue };
+                let Some(bytes) = read(&im.file) else { continue };
+                let key = cache.map(|_| {
+                    let mut h = crate::backend::backend_hash::ContentHasher::new();
+                    h.u64(4);
+                    h.bytes(&bytes);
+                    h.u64(p.page as u64);
+                    h.u64(p.page_box as u64);
+                    h.bytes(im.attr.as_bytes());
+                    h.u64(im.attr.len() as u64);
+                    h.bytes(im.file.as_bytes());
+                    h.u64(((im.obj as u32 as u64) << 32) | *next as u32 as u64);
+                    h.finish()
+                });
+                if let Some(done) = cache.zip(key).and_then(|(c, k)| c.form(k)) {
+                    objs.extend(done.0.iter().cloned());
+                    *next = done.1;
+                    continue;
+                }
+                let Some(mut f) = PdfFile::open(bytes) else { continue };
                 f.load_object_streams();
                 let spec = FormSpec { page: p.page, page_box: p.page_box, attr: im.attr.as_bytes(), file_name: &im.file };
+                let at = objs.len();
                 write_form(&f, &spec, im.obj, objs, next);
+                if let (Some(c), Some(k)) = (cache, key) {
+                    c.put_form(k, std::rc::Rc::new((objs[at..].to_vec(), *next)));
+                }
                 continue;
             }
             let Some(bytes) = read(&im.file) else { continue };
@@ -230,7 +258,7 @@ impl PdfDoc {
             let made = match hit {
                 Some(made) => made,
                 None => {
-                    let Some(img) = png_to_pdf(&bytes, hicolor) else { continue };
+                    let Some(img) = png_to_pdf(&bytes, hicolor, true) else { continue };
                     let pack = |deflate: &mut DeflateCompressor, data: &[u8]| {
                         let mut packed = Vec::new();
                         deflate.compress_zlib(data, &mut packed);
@@ -250,7 +278,18 @@ impl PdfDoc {
                             s
                         }
                     };
-                    let data = pack(&mut deflate, &img.data);
+                    // A copied PNG stream (`copy_png`): its row filters for the reader to undo.
+                    let mut space = space;
+                    if let Some(colors) = img.copied {
+                        space.extend_from_slice(b"\n/DecodeParms << /Colors ");
+                        print_int(&mut space, colors as i64);
+                        space.extend_from_slice(b" /Columns ");
+                        print_int(&mut space, img.width as i64);
+                        space.extend_from_slice(b" /BitsPerComponent ");
+                        print_int(&mut space, img.bits as i64);
+                        space.extend_from_slice(b" /Predictor 10 >>");
+                    }
+                    let data = if img.copied.is_some() { img.data } else { pack(&mut deflate, &img.data) };
                     let mask = img.smask.as_ref().map(|m| pack(&mut deflate, m));
                     let made = std::rc::Rc::new((img.width, img.height, img.bits, space, data, mask));
                     if let (Some(c), Some(k)) = (cache, key) {

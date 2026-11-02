@@ -17,6 +17,7 @@
 
 use super::super::engine_catcode::Cat;
 use super::super::engine_node::{Kind, Node};
+use super::super::engine_prim::Meaning;
 use super::super::engine_run::{Machine, Mode};
 use super::super::engine_token::Token;
 use super::fancy::HEAD_BOX;
@@ -170,8 +171,73 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// The document's `\markboth{left}{right}` (`both`) or `\markright{right}`, of text the
+    /// head can typeset ([`Self::plain_mark_text`]).
+    pub(super) fn mark_command(&mut self, both: bool) {
+        let mut left = Vec::new();
+        if both {
+            self.read_arg(&mut left);
+        }
+        let mut right = Vec::new();
+        self.read_arg(&mut right);
+        if !Self::plain_mark_text(&left) || !Self::plain_mark_text(&right) {
+            // `\mark_insert:nn`'s `\unrestored@protected@xdef` (ltmarks.dtx): the document's
+            // parameterless macros expanded, a robust command and `\ ` kept for the head.
+            let simple = self.doc.as_ref().is_some_and(|d| d.fancy.is_none() && !d.koma && !d.memoir);
+            match (simple, self.mark_expand(&left), self.mark_expand(&right)) {
+                (true, Some(l), Some(r)) => (left, right) = (l, r),
+                _ => return self.not_native("a mark that is not plain text"),
+            }
+        }
+        if both {
+            self.mark_both(&left, &right);
+        } else {
+            self.mark_right(&right);
+        }
+    }
+
+    /// A mark's text as `\protected@xdef` leaves it: each parameterless macro of the
+    /// document's (not `\protected`) replaced by its text, until letters, other characters,
+    /// spaces, braces, `\ ` and the font commands `\texttt`, `\textbf`, `\textit`, `\emph`
+    /// remain (robust: `\protect\texttt` typesets as `\texttt` in the head). `None` otherwise.
+    fn mark_expand(&self, text: &[Token]) -> Option<Vec<Token>> {
+        let mut todo: Vec<Token> = text.iter().rev().copied().collect();
+        let mut out = Vec::with_capacity(text.len());
+        let mut steps = 0;
+        while let Some(t) = todo.pop() {
+            let Some(id) = t.cs_id() else {
+                if !matches!(t.cat(), Some(Cat::Letter | Cat::Other | Cat::Space | Cat::BeginGroup | Cat::EndGroup)) {
+                    return None;
+                }
+                out.push(t);
+                continue;
+            };
+            if let Meaning::Macro(m) = self.e.eqtb.meaning(id) {
+                steps += 1;
+                let body = self.e.toks.get(m.text);
+                if steps > 64 || m.flags & super::super::engine_prim::PROTECTED != 0 || body.first() != Some(&Token::END_MATCH) {
+                    return None;
+                }
+                todo.extend(body[1..].iter().rev());
+                continue;
+            }
+            if !matches!(self.e.cs.name(id), " " | "texttt" | "textbf" | "textit" | "emph") {
+                return None;
+            }
+            out.push(t);
+        }
+        Some(out)
+    }
+
+    /// `\markright{arg}` whose argument is not empty as tokens (`\tl_if_empty:nF` reads it
+    /// unexpanded) though its text may be: `2e-right` and `2e-right-nonempty` both.
+    pub(super) fn mark_right_tokens(&mut self, right: &[Token]) {
+        self.latex_mark(RIGHT, right);
+        self.latex_mark(RIGHT_NONEMPTY, right);
+    }
+
     /// `\MakeUppercase{text}` as a mark keeps it.
-    fn uppercase_mark(&mut self, text: &[Token]) -> Vec<Token> {
+    pub(super) fn uppercase_mark(&mut self, text: &[Token]) -> Vec<Token> {
         let mut t = vec![Token::cs(self.e.cs.intern("MakeUppercase   "))];
         t.extend(self.tex_tokens("[]{"));
         t.extend_from_slice(text);
@@ -181,7 +247,7 @@ impl Machine<'_, '_> {
 
     /// Whether marks are text the head can typeset: letters, other characters and spaces
     /// (a UTF-8 character, a command or math in a title declines).
-    fn plain_mark_text(text: &[Token]) -> bool {
+    pub(super) fn plain_mark_text(text: &[Token]) -> bool {
         text.iter().all(|t| t.cs_id().is_none() && matches!(t.cat(), Some(Cat::Letter | Cat::Other | Cat::Space)))
     }
 
@@ -196,7 +262,7 @@ impl Machine<'_, '_> {
         let mut text = Vec::new();
         if !number.is_empty() {
             // `\@chapapp`: `\appendixname` after `\appendix`.
-            let chapapp = if self.doc.as_ref().is_some_and(|d| d.appendix) { "Appendix" } else { "Chapter" };
+            let chapapp = self.head_name(if self.doc.as_ref().is_some_and(|d| d.appendix) { super::babel::HEAD_APPENDIX } else { super::babel::HEAD_CHAPTER });
             text = self.tex_tokens(&format!("{chapapp}\\ {number}. \\ "));
         }
         text.extend_from_slice(title);
@@ -217,7 +283,7 @@ impl Machine<'_, '_> {
         if !Self::plain_mark_text(title) {
             return self.not_native("book: a section title whose mark is not plain text");
         }
-        let mut text = self.tex_tokens(&format!("{number}. \\ "));
+        let mut text = if number.is_empty() { Vec::new() } else { self.tex_tokens(&format!("{number}. \\ ")) };
         text.extend_from_slice(title);
         let mark = self.uppercase_mark(&text);
         self.mark_right(&mark);
@@ -238,6 +304,13 @@ impl Machine<'_, '_> {
     /// `\__mark_value:nn{n}{text}` unwrapped, `\MakeUppercase[]{…}` applied to letters.
     /// `None` when no mark of the class was ever put.
     pub(super) fn page_mark_text(&mut self, class: u32, first: bool) -> Option<Vec<Token>> {
+        let (body, upper) = self.page_mark_parts(class, first)?;
+        Some(body.into_iter().map(|t| if upper && t.cat() == Some(Cat::Letter) { Token::char(Cat::Letter, t.chr().to_ascii_uppercase()) } else { t }).collect())
+    }
+
+    /// The page's mark text of `class` before [`Self::page_mark_text`] uppercases it: the
+    /// argument of a leading `\MakeUppercase` and `true`, or the whole text and `false`.
+    pub(super) fn page_mark_parts(&mut self, class: u32, first: bool) -> Option<(Vec<Token>, bool)> {
         let span = self.page.mark(class, if first { 1 } else { 2 })?;
         let list = self.e.toks.get(span).to_vec();
         // `\__mark_value:nn`, `{`, the number, `}`, `{`, text, `}`.
@@ -246,7 +319,7 @@ impl Machine<'_, '_> {
         let text = list.get(close + 2..list.len().saturating_sub(1))?;
         let upper = text.first().and_then(|t| t.cs_id()).is_some_and(|id| self.e.cs.name(id) == "MakeUppercase   ");
         let body = if upper { text.get(4..text.len().saturating_sub(1))? } else { text };
-        Some(body.iter().map(|&t| if upper && t.cat() == Some(Cat::Letter) { Token::char(Cat::Letter, t.chr().to_ascii_uppercase()) } else { t }).collect())
+        Some((body.to_vec(), upper))
     }
 
     /// book's `headings` head of page `page` into [`HEAD_BOX`] as tokens: `\begingroup

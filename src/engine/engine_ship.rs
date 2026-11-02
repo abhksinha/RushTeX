@@ -132,6 +132,10 @@ struct Walk<'a> {
     matrices: Vec<[f64; 6]>,
     saves: Vec<usize>,
     last_rect: [i32; 4],
+    /// Each [`what::PGF_GLUE`] placed: its glue's index and width, its box's index and shift;
+    /// and such a glue's, until the box after it.
+    pgf: Vec<(u32, i32, u32, i32)>,
+    pgf_y: Option<(u32, i32)>,
 }
 
 /// Each word entry the ship has written, as its runs of characters: a run is the shift
@@ -156,6 +160,8 @@ pub struct WordShip {
     keys: Vec<u128>,
 }
 
+codec_struct!(WordShip { recs, runs, chars, bytes, direct, keys });
+
 /// An entry's runs, `runs[start..end]`, made for font `font` at `pdf_font_size` `size`,
 /// and the characters it uses (`pdf_char_marked`).
 #[derive(PartialEq, Debug, Clone, Copy, Default)]
@@ -167,6 +173,8 @@ struct ShipRec {
     size: i64,
     used: [u64; 4],
 }
+
+codec_struct!(ShipRec { font, made, start, end, size, used });
 
 /// One run, read whole.
 #[derive(PartialEq, Debug, Clone, Copy)]
@@ -182,6 +190,8 @@ struct Run {
     chars: (u32, u32),
     bytes: (u32, u32),
 }
+
+codec_struct!(Run { shift, first, first_w, width, adv, drift, chars, bytes });
 
 impl WordShip {
     /// Entry `id`'s record for font `f` at `size`, made from `items` (their codes through
@@ -259,6 +269,7 @@ struct Walked {
     images: Vec<(u32, i32)>,
     forms: Vec<(u32, i32)>,
     positions: Vec<(i32, i32)>,
+    pgf: Vec<(u32, i32, u32, i32)>,
 }
 
 /// `set_rect_dimens`: the rectangle of an annotation or destination with dimensions `dims`
@@ -590,7 +601,13 @@ impl Walk<'_> {
                 }
                 // §623
                 Kind::Box => {
-                    let inner = self.nodes.boxes[n.a as usize];
+                    let mut inner = self.nodes.boxes[n.a as usize];
+                    // After a [`what::PGF_GLUE`]: `\raise` by the page y less this baseline's.
+                    // Its `shift` holds that page y until then.
+                    if let Some((glue, width)) = self.pgf_y.take() {
+                        inner.shift = -(inner.shift - (self.page_height - base_line as i64) as i32);
+                        self.pgf.push((glue, width, n.a as u32, inner.shift));
+                    }
                     if inner.list.0 != inner.list.1 {
                         self.box_out(&inner, cur_h, base_line + inner.shift);
                     }
@@ -604,7 +621,11 @@ impl Walk<'_> {
                 }
                 // §625
                 Kind::Glue => {
-                    let g = self.nodes.glue(n);
+                    let mut g = self.nodes.glue(n);
+                    if n.sub == what::PGF_GLUE {
+                        g.width = n.b - cur_h;
+                        self.pgf_y = Some((n.a as u32, g.width));
+                    }
                     let mut rule_wd = g.width - cur_g;
                     stretched(&g, g_sign, g_order, b.glue_set, &mut cur_g, &mut cur_glue);
                     rule_wd += cur_g;
@@ -885,6 +906,9 @@ fn stretched(g: &Glue, sign: Sign, order: u8, set: f64, cur_g: &mut i32, cur_glu
     }
 }
 
+/// `\pdfpageresources`' slot (`engine_tables`).
+const PDF_PAGE_RESOURCES: u32 = 11;
+
 impl Machine<'_, '_> {
     /// pdfTeX's `pdf_ship_out` of box `b` as a page: its size, origin and content stream.
     /// Returns where its `\pdfsavepos`s are.
@@ -901,14 +925,43 @@ impl Machine<'_, '_> {
             0 => bx.height + bx.depth + 2 * v_offset,
             h => h,
         };
-        self.check_virtual_fonts(b);
+        // A session's kept page whose tree the last run shipped: its walks' findings
+        // (`ShipMemo`), checked against new walks with `RT_SHIP_CHECK=1`.
+        let same = self.ship_memo.as_ref().and_then(|s| s.same().cloned());
+        let fonts = match &same {
+            Some(p) => self.check_page_fonts(b, &p.fonts),
+            None if self.ship_memo.is_some() => self.check_page_fonts(b, &[]),
+            None => {
+                self.check_virtual_fonts(b);
+                Vec::new()
+            }
+        };
         // A session's cache (`backend_cache`) keys the page by everything its walk reads; a
         // page whose walk would touch the document's objects (links, destinations, images,
         // forms, `\pdfrefobj`, `\pdfsavepos`) has no key.
+        // A kept page the last run found to have no key has none now.
         let key = self.pdf_cache.and_then(|_| {
             self.classify_fonts();
-            self.ship_key(&bx, [width, height, h_offset, v_offset])
+            match &same {
+                Some(p) => p.tree.and_then(|t| self.ship_key(&bx, [width, height, h_offset, v_offset], Some(t))),
+                None => self.ship_key(&bx, [width, height, h_offset, v_offset], None),
+            }
         });
+        if let (Some(p), true) = (&same, super::engine_page::ship_check()) {
+            let mut all = Vec::new();
+            self.all_page_fonts(b, &mut all);
+            let tree = self.pdf_cache.and_then(|_| self.ship_key(&bx, [width, height, h_offset, v_offset], None)).map(|k| k.1);
+            assert!(all == p.fonts && tree == p.tree, "RT_SHIP_CHECK: kept page {} is not the tree the last run shipped", self.ship_memo.as_ref().map_or(0, |s| s.at));
+        }
+        if let Some(s) = self.ship_memo.as_mut() {
+            let tree = key.map(|k| k.1);
+            let (fonts, whats, pgf_glue) = match same {
+                Some(p) => (p.fonts, p.whats, p.pgf_glue),
+                None => (fonts, true, None),
+            };
+            s.note(super::engine_checkpoint::PageMemo { tree, fonts, whats, pgf_glue });
+        }
+        let key = key.map(|k| k.0);
         // `pdf_last_page`: the page's object, made now unless a `goto page` asked for it.
         let page_obj = self.pdf_doc.page_obj(self.page.pdf.len() as i32 + 1);
         if let (Some(c), Some(k)) = (self.pdf_cache, key) {
@@ -922,7 +975,8 @@ impl Machine<'_, '_> {
                 }
                 self.page.font_base.clone_from(&d.base);
                 self.colors = d.colors.clone();
-                self.page.pdf.push(ShippedPage { id: page_obj, width, height, content: d.content.clone(), ..Default::default() });
+                let resources = self.page_resources();
+                self.page.pdf.push(ShippedPage { id: page_obj, width, height, content: d.content.clone(), stream: Some(d.stream), resources, ..Default::default() });
                 return Vec::new();
             }
         }
@@ -933,6 +987,7 @@ impl Machine<'_, '_> {
             std::mem::replace(&mut self.page.font_used, vec![[0; 4]; n])
         });
         let w = self.walk_box(bx, Some(page_obj), height, h_offset, bx.height + v_offset);
+        let mut stream = None;
         if let (Some(mut live), Some(c), Some(k)) = (live, self.pdf_cache, key) {
             let own = std::mem::take(&mut self.page.font_used);
             if live.len() < own.len() {
@@ -942,14 +997,17 @@ impl Machine<'_, '_> {
                 u.iter_mut().zip(o).for_each(|(u, o)| *u |= o);
             }
             self.page.font_used = live;
-            c.put_page(k, crate::backend::backend_cache::ShippedDone { content: w.content.clone(), used: own, base: self.page.font_base.clone(), colors: self.colors.clone() });
+            let s = crate::backend::backend_cache::stream_key(&w.content);
+            stream = Some(s);
+            c.put_page(k, crate::backend::backend_cache::ShippedDone { content: w.content.clone(), stream: s, used: own, base: self.page.font_base.clone(), colors: self.colors.clone() });
         }
         for &(obj, link, rect) in &w.annots {
             self.pdf_doc.write_link(link, obj, rect, height);
         }
         self.ship_forms(&w.forms);
         let annots = w.annots.iter().map(|a| a.0).collect();
-        self.page.pdf.push(ShippedPage { id: page_obj, width, height, content: w.content, annots, group: w.group, images: w.images, forms: w.forms });
+        let resources = self.page_resources();
+        self.page.pdf.push(ShippedPage { id: page_obj, width, height, content: w.content, annots, group: w.group, images: w.images, forms: w.forms, stream, resources });
         w.positions
     }
 
@@ -959,7 +1017,7 @@ impl Machine<'_, '_> {
     /// sharing of PDF fonts so far, PK scales, virtual fonts, the colour stacks, and the
     /// box's whole tree with its whatsits' texts. `None` when the walk would touch the
     /// document's objects or positions.
-    fn ship_key(&mut self, bx: &BoxRec, dims: [i32; 4]) -> Option<u128> {
+    fn ship_key(&mut self, bx: &BoxRec, dims: [i32; 4], tree: Option<u128>) -> Option<(u128, u128)> {
         use crate::backend::backend_hash::ContentHasher;
         let fonts = &self.e.fonts;
         let (mut n, mut fp) = self.page.ship_fonts;
@@ -1006,10 +1064,24 @@ impl Machine<'_, '_> {
         h.u64(self.page.font_used.len() as u64);
         self.colors.digest(&mut h);
         dims.iter().for_each(|&d| h.u64(d as u32 as u64));
-        let mut keys = std::mem::take(&mut self.page.word_ship.keys);
-        let ok = self.hash_box(bx, &mut h, &mut keys);
-        self.page.word_ship.keys = keys;
-        ok.then(|| h.finish())
+        // The tree by content, hashed apart so a kept page's can be the last run's
+        // (`ShipMemo`).
+        let tree = match tree {
+            Some(t) => t,
+            None => {
+                let mut t = ContentHasher::new();
+                let mut keys = std::mem::take(&mut self.page.word_ship.keys);
+                let ok = self.hash_box(bx, &mut t, &mut keys);
+                self.page.word_ship.keys = keys;
+                if !ok {
+                    return None;
+                }
+                t.finish()
+            }
+        };
+        h.u64(tree as u64);
+        h.u64((tree >> 64) as u64);
+        Some((h.finish(), tree))
     }
 
     /// Box `bx`'s tree into `h` as the walk reads it (`ship_key`); false at a whatsit that
@@ -1039,6 +1111,8 @@ impl Machine<'_, '_> {
                     h.u64(head | r[0] as u32 as u64);
                     h.u64(((r[1] as u32 as u64) << 32) | r[2] as u32 as u64);
                 }
+                // Placed where the page ships: no key.
+                Kind::Glue if n.sub == what::PGF_GLUE => return false,
                 Kind::Glue => {
                     let g = nodes.glue(n);
                     h.u64(head | g.width as u32 as u64);
@@ -1061,8 +1135,12 @@ impl Machine<'_, '_> {
                         let items = nodes.words.items(id as u32);
                         let mut w = crate::backend::backend_hash::ContentHasher::new();
                         w.u64(items.len() as u64);
+                        // A discretionary's texts are never shipped (`real_word` passes over it), and
+                        // its `a` is an index into the word store's own table, which differs
+                        // between two arenas holding the same word: it is left out.
                         for m in items {
-                            w.u64(((m.kind as u64) << 56) | ((m.font as u64) << 32) | m.a as u32 as u64);
+                            let a = if m.kind == Kind::Disc { 0 } else { m.a as u32 as u64 };
+                            w.u64(((m.kind as u64) << 56) | ((m.font as u64) << 32) | a);
                         }
                         keys[id] = w.finish() | 1;
                     }
@@ -1092,6 +1170,18 @@ impl Machine<'_, '_> {
 
     /// The forms a page or form showed that are not shipped yet (pdfTeX's `Write out
     /// pending forms`).
+    /// `\pdfpageresources` as the page ships (pdftex.web `pdf_page_resources`, its tokens
+    /// as `\showthe` prints them).
+    fn page_resources(&self) -> Vec<u8> {
+        let span = self.e.eqtb.toks(crate::engine::Reg { region: crate::engine::Region::Toks, slot: PDF_PAGE_RESOURCES });
+        let mut text = self.print_list(span);
+        // A natively loaded pgf sets none: its setup's resources.
+        if text.is_empty() {
+            text = self.pdf_doc.pgf_page_resources().unwrap_or_default();
+        }
+        text.chars().map(|c| c as u32 as u8).collect()
+    }
+
     fn ship_forms(&mut self, forms: &[(u32, i32)]) {
         for &(n, _) in forms {
             if !self.pdf_doc.forms[n as usize - 1].shipped {
@@ -1139,7 +1229,7 @@ impl Machine<'_, '_> {
             me.show(me.e.toks.get(super::engine_token::Span { start: a as u32, end: b as u32 }), &mut s);
             s
         };
-        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, info: &self.e.fonts.info, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out, page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, word_ship: &mut word_ship, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new(), positions: Vec::new(), matrices: Vec::new(), saves: Vec::new(), last_rect: [0; 4] };
+        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, info: &self.e.fonts.info, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out, page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, word_ship: &mut word_ship, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new(), positions: Vec::new(), matrices: Vec::new(), saves: Vec::new(), last_rect: [0; 4], pgf: Vec::new(), pgf_y: None };
         // `pdf_out_colorstack_startpage`, at the page's origin.
         if page.is_some() {
             for (mode, s) in walk.colors.page_start() {
@@ -1148,7 +1238,12 @@ impl Machine<'_, '_> {
         }
         walk.box_out(&bx, h, v);
         walk.text.end_text(&mut walk.out);
-        let walked = Walked { content: walk.out, annots: walk.annots, group: walk.group, images: walk.images, forms: walk.forms, positions: walk.positions };
+        let walked = Walked { content: walk.out, annots: walk.annots, group: walk.group, images: walk.images, forms: walk.forms, positions: walk.positions, pgf: walk.pgf };
+        // The placed node texts' glue and shifts, written back (`what::PGF_GLUE`).
+        for &(glue, width, bx, shift) in &walked.pgf {
+            self.e.nodes.glues[glue as usize].width = width;
+            self.e.nodes.boxes[bx as usize].shift = shift;
+        }
         self.page.font_base = base;
         self.page.font_used = used;
         self.page.font_pk = pk;
@@ -1167,6 +1262,16 @@ impl Machine<'_, '_> {
             return;
         }
         if self.page.map_names.is_none() {
+            let map = self.read_file.as_ref().and_then(|r| r("pdftex.map")).unwrap_or_default();
+            self.page.map_names = Some(crate::backend::backend_ship::map_names(&map));
+        }
+        // A new font the map lacks: the map is read again, as the job's map may have changed
+        // to the installation's since (a font outside the TFM table, `engine_doc::run_with`).
+        // A font the map truly lacks (a bitmap font) is new at one shipout only; `\nullfont`
+        // has no line and needs none.
+        let names = self.page.map_names.as_deref().unwrap_or(&[]);
+        let lacks = self.e.fonts.list.iter().skip(self.page.font_pk.len()).any(|f| f.expand == 0 && !f.name.is_empty() && f.name.as_ref() != "nullfont" && names.binary_search(&crate::backend::backend_ship::fnv(f.name.as_bytes())).is_err() && crate::backend::backend_cm_fonts::program_by_name(&f.name).is_none());
+        if lacks {
             let map = self.read_file.as_ref().and_then(|r| r("pdftex.map")).unwrap_or_default();
             self.page.map_names = Some(crate::backend::backend_ship::map_names(&map));
         }

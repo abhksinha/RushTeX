@@ -88,6 +88,8 @@ pub(super) enum Field {
     Mlist(u32, u32),
 }
 
+codec_data_enum!(Field { 0 Empty, 1 Char { fam, c }, 2 TextChar { fam, c }, 3 Box(a), 4 Mlist(a, b) });
+
 /// §681–§688: one noad. A fraction keeps its numerator in `supscr` and denominator in
 /// `subscr` (as TeX does); a choice keeps its four lists in `nucleus`, `supscr`, `subscr`
 /// and `extra`; an accent keeps its accent character in `extra`.
@@ -108,6 +110,8 @@ pub(super) struct Noad {
     pub hlist: (u32, u32),
 }
 
+codec_struct!(Noad { kind, sub, nucleus, supscr, subscr, extra, delims, thickness, hlist });
+
 impl Noad {
     pub(super) fn new(kind: u8) -> Noad {
         Noad { kind, ..Noad::default() }
@@ -121,6 +125,8 @@ pub(super) struct MathState {
     pub size: u32,
     pub mu: i32,
 }
+
+codec_struct!(MathState { style, size, mu });
 
 /// §702 style changes.
 pub(super) fn cramped(s: u8) -> u8 {
@@ -772,7 +778,7 @@ impl Machine<'_, '_> {
 
     /// The kern for `next` in the lig/kern program of `c` in `f`, or its ligature step:
     /// `Ok(Some(kern))`, `Err((op, rem))`, or `Ok(None)` when there is neither (§545).
-    fn lig_kern_step(&self, f: u16, c: u8, next: u8) -> Result<Option<i32>, (u8, u8)> {
+    pub(super) fn lig_kern_step(&self, f: u16, c: u8, next: u8) -> Result<Option<i32>, (u8, u8)> {
         let font = &self.e.fonts.list[f as usize];
         let Some(mut a) = font.metrics.lig_kern_start(c) else { return Ok(None) };
         let (prog, _) = font.metrics.lig_kern();

@@ -21,7 +21,7 @@ use super::Engine;
 pub struct MachineState {
     kernel: Option<Box<super::engine_kernel::Kernel>>,
     pub(super) doc: Option<Box<super::engine_doc::Doc>>,
-    input: Input<'static>,
+    pub(super) input: Input<'static>,
     out: Vec<Token>,
     nest: Vec<super::engine_node::Level>,
     cur: Vec<super::engine_node::Node>,
@@ -80,14 +80,30 @@ pub struct MachineState {
     line_reads: u32,
 }
 
+// On disk only from an engine run (`Machine::save`: no `kernel` or `doc` bound), so those two
+// are not written; the store reads its bytes back and compares before keeping them.
+codec_struct!(MachineState { input, out, nest, cur, start, aux, prev_graf, frames, last_badness, after_group, recent, recent_at, trace, aligns, aligning, cancel_boundary, page, insert_numbers, adjust, adjust_out, mode_zero, clang, disc_saved, pdf_doc, last_match, vf, colors, delim, just_box, noads, math_saved, math, typeset, in_csname, expansions, errors, halted, error_count, box_warnings, conds, mode, inner, after_assignment, job_name, reads, writes, closed, log, interaction, groups, max_expansions, dont_expand, text_run, words, collect_at, run_index, line_reads; kernel, doc });
+
+impl MachineState {
+    /// Whether the two are equal but for the token trail kept for error messages (`recent`)
+    /// and the count of expansions (the loop guard): what two runs of `\everyjob` at dates
+    /// with numbers of different lengths differ in (`engine_resume::Redate::probe`).
+    pub fn same_but_counters(&self, other: &MachineState) -> bool {
+        let mut a = self.clone();
+        (a.recent, a.recent_at, a.expansions) = (other.recent, other.recent_at, other.expansions);
+        a == *other
+    }
+}
+
 impl Machine<'_, '_> {
     /// The machine's state without its borrows, at the top of the main loop with only the
-    /// document's file open (`None` otherwise: a file `\input` opened is read from an offset
-    /// of its own). The scratch buffers are empty there and are not kept.
-    pub(super) fn save_state(&self) -> Option<MachineState> {
+    /// document's file open, or with `nested` also inside files `\input` opened that can be
+    /// read again by name (`Input::detach`; `None` otherwise). The scratch buffers are empty
+    /// there and are not kept.
+    pub(super) fn save_state(&self, nested: bool) -> Option<MachineState> {
         // Every field is named, so a new field must be placed here (kept or scratch).
-        let Machine { kernel, doc, e: _, input, out, collect: _, pattern: _, break_pool: _, def: _, nest, cur, start, aux, prev_graf, frames, last_badness, after_group, recent, recent_at, trace, aligns, aligning, cancel_boundary, page, insert_numbers, adjust, adjust_out, mode_zero, clang, disc_saved, pdf_doc, last_match, vf, colors, delim, just_box, noads, math_saved, math, typeset, in_csname, name_buf: _, expansions, errors, halted, error_count, conds, mode, inner, after_assignment, read_file: _, job_name, reads, writes, closed, log, interaction, groups, max_expansions, dont_expand, lig_buf: _, text_run, words, collect_at, collect_buf: _, dead_buf: _, #[cfg(all(test, feature = "oracle"))] used_cs: _, #[cfg(feature = "mprof")] mprof: _, run_index, checkpoints: _, pdf_cache: _, stop_at_document: _, paused: _, box_warnings, stop_at_aux: _, line_reads } = self;
-        let input = input.detach()?;
+        let Machine { kernel, doc, e: _, input, out, collect: _, pattern: _, break_pool: _, def: _, nest, cur, start, aux, prev_graf, frames, last_badness, after_group, recent, recent_at, trace, aligns, aligning, cancel_boundary, page, insert_numbers, adjust, adjust_out, mode_zero, clang, disc_saved, pdf_doc, last_match, vf, colors, delim, just_box, noads, math_saved, math, typeset, in_csname, name_buf: _, expansions, errors, halted, error_count, conds, mode, inner, after_assignment, read_file: _, job_name, reads, writes, closed, log, interaction, groups, max_expansions, dont_expand, lig_buf: _, text_run, words, collect_at, collect_buf: _, dead_buf: _, #[cfg(all(test, feature = "oracle"))] used_cs: _, #[cfg(feature = "mprof")] mprof: _, run_index, checkpoints: _, ship_memo: _, pdf_cache: _, stop_at_document: _, paused: _, box_warnings, stop_at_aux: _, line_reads } = self;
+        let input = input.detach(nested)?;
         Some(MachineState { kernel: kernel.clone(), doc: doc.clone(), input, out: out.clone(), nest: nest.clone(), cur: cur.clone(), start: *start, aux: *aux, prev_graf: *prev_graf, frames: frames.clone(), last_badness: *last_badness, after_group: after_group.clone(), recent: *recent, recent_at: *recent_at, trace: *trace, aligns: aligns.clone(), aligning: *aligning, cancel_boundary: *cancel_boundary, page: page.clone(), insert_numbers: insert_numbers.clone(), adjust: adjust.clone(), adjust_out: adjust_out.clone(), mode_zero: *mode_zero, clang: *clang, disc_saved: disc_saved.clone(), pdf_doc: pdf_doc.clone(), last_match: last_match.clone(), vf: vf.clone(), colors: colors.clone(), delim: *delim, just_box: *just_box, noads: noads.clone(), math_saved: math_saved.clone(), math: *math, typeset: *typeset, in_csname: *in_csname, expansions: *expansions, errors: errors.clone(), halted: *halted, error_count: *error_count, box_warnings: *box_warnings, conds: conds.clone(), mode: *mode, inner: *inner, after_assignment: *after_assignment, job_name: job_name.clone(), reads: reads.clone(), writes: writes.clone(), closed: closed.clone(), log: log.clone(), interaction: *interaction, groups: groups.clone(), max_expansions: *max_expansions, dont_expand: *dont_expand, text_run: text_run.clone(), words: words.clone(), collect_at: *collect_at, run_index: *run_index, line_reads: *line_reads })
     }
 
@@ -187,6 +203,8 @@ pub(super) fn new_arena() -> u64 {
 pub(super) struct Checkpoints {
     /// A checkpoint is due: take one at the next main-loop top.
     pub(super) due: bool,
+    /// The last run's live engine, whose buffers a resume thaws into (`Engine::thaw_into`).
+    pub(super) spare: Option<Box<super::Engine>>,
     /// Pages output so far, and up to which of them every page gets a checkpoint (else every
     /// [`EVERY`]-th): a run resumed after an edit takes them densely just past it, where
     /// the next edit most likely falls.
@@ -218,6 +236,71 @@ pub(super) struct Checkpoints {
     pub(super) arena: u64,
     /// A graft cannot hold for the rest of this run ([`converged`]).
     pub(super) graft_off: bool,
+    /// The kept pages as the last run's `finish_contents` shipped them, and as this run's
+    /// does ([`ShipMemo`]); after a cutoff, the end of the kept pages this run typeset
+    /// (`resumed_pages..fresh_end`; without a cutoff every page from `resumed_pages` on).
+    pub(super) old_ship: ShipMemo,
+    pub(super) ship: ShipMemo,
+    pub(super) fresh_end: Option<usize>,
+}
+
+/// A watch session's kept pages (`Doc::deferred`, shipped at the end by `finish_contents`)
+/// as a run shipped them: per page, what the walks of its tree found, and the contents'
+/// page numbers they were shipped with. A later run whose page is the same tree (a page
+/// before its resume point, or after its cutoff: the arena places are the last run's, not
+/// written since) takes them instead of walking the tree three times
+/// (`check_virtual_fonts`, `ship_key`, `out_whats`).
+#[derive(Default)]
+pub(super) struct ShipMemo {
+    pub(super) pages: Vec<Option<PageMemo>>,
+    pub(super) toc_pages: Vec<Option<i32>>,
+    /// The kept pages holding the contents' page-number boxes (`lines_holding`).
+    pub(super) toc_roots: Vec<usize>,
+}
+
+/// One kept page's tree, as its walks found it: its hash by content (`ship_key`'s, without
+/// the fonts' and colours' state, which is hashed again each time; `None` for a page with
+/// no key, whose walk touches the document's objects), its fonts in the order
+/// `check_virtual_fonts` meets them, whether it holds a whatsit (`out_whats`), and whether
+/// it holds pgf's glue (`pgf_glue_in`; `None` when not looked for).
+#[derive(Clone)]
+pub(super) struct PageMemo {
+    pub(super) tree: Option<u128>,
+    pub(super) fonts: Vec<u16>,
+    pub(super) whats: bool,
+    pub(super) pgf_glue: Option<bool>,
+}
+
+/// `finish_contents` in a watch session: the last run's [`ShipMemo`], this run's being made,
+/// the kept pages this run typeset (`fresh`, whose trees are new), and the page shipping now.
+pub(super) struct ShipRun {
+    pub(super) old: ShipMemo,
+    pub(super) new: ShipMemo,
+    pub(super) fresh: std::ops::Range<usize>,
+    pub(super) at: usize,
+}
+
+impl ShipRun {
+    /// The last run's walks of the kept page shipping now, when its tree is the same.
+    pub(super) fn same(&self) -> Option<&PageMemo> {
+        if self.fresh.contains(&self.at) {
+            return None;
+        }
+        self.old.pages.get(self.at)?.as_ref()
+    }
+
+    /// This run's walks of the kept page shipping now, as noted so far.
+    pub(super) fn noted(&mut self) -> Option<&mut PageMemo> {
+        self.new.pages.get_mut(self.at)?.as_mut()
+    }
+
+    /// Notes this run's walks of the kept page shipping now.
+    pub(super) fn note(&mut self, p: PageMemo) {
+        if self.new.pages.len() <= self.at {
+            self.new.pages.resize(self.at + 1, None);
+        }
+        self.new.pages[self.at] = Some(p);
+    }
 }
 
 /// Pages between checkpoints outside the dense stretch, so taking them stays a small part
@@ -231,6 +314,18 @@ impl Checkpoints {
     pub(super) fn page_out(&mut self, collect_at: &mut u32) {
         self.outputs += 1;
         if (self.outputs <= self.dense_until || self.outputs.is_multiple_of(EVERY)) && !self.due {
+            self.due = true;
+            self.collect_at = std::mem::replace(collect_at, 0);
+        }
+    }
+
+    /// The body begins (`\begin{document}`) in a run from the class: a checkpoint there, and
+    /// one at each of the first pages, so an edit in the body's first pages (the title,
+    /// the abstract, the first section) starts there instead of from the class and its
+    /// preamble.
+    pub(super) fn body_starts(&mut self, collect_at: &mut u32) {
+        if self.outputs == 0 && self.snaps.is_empty() && !self.due {
+            self.dense_until = self.dense_until.max(EVERY - 1);
             self.due = true;
             self.collect_at = std::mem::replace(collect_at, 0);
         }
@@ -257,6 +352,8 @@ pub struct Stamped {
     hash: u128,
 }
 
+codec_struct!(Stamped { path, stamp, hash });
+
 /// What changes whenever a file's bytes do: device, inode, size, modification and change
 /// times (ns). The change time is set by the kernel on every write, rename or `chmod` and
 /// cannot be set back, so a file whose bytes changed has a new stamp, unless it changed
@@ -270,13 +367,15 @@ pub struct Stamp {
     ctime: i128,
 }
 
+codec_struct!(Stamp { dev, ino, len, mtime, ctime });
+
 /// How close to the moment a file was hashed its times may be and its hash still be kept:
 /// 2 s covers the coarsest granularity of a time stamp in use (FAT; HFS+ 1 s, APFS and ext4
 /// 1 ns).
 const RACY_NS: i128 = 2_000_000_000;
 
 #[cfg(unix)]
-fn stamp_of(path: &std::path::Path) -> Option<Stamp> {
+pub fn stamp_of(path: &std::path::Path) -> Option<Stamp> {
     use std::os::unix::fs::MetadataExt;
     let m = std::fs::metadata(path).ok()?;
     let ns = |s: i64, n: i64| s as i128 * 1_000_000_000 + n as i128;
@@ -284,7 +383,7 @@ fn stamp_of(path: &std::path::Path) -> Option<Stamp> {
 }
 
 #[cfg(not(unix))]
-fn stamp_of(_: &std::path::Path) -> Option<Stamp> {
+pub fn stamp_of(_: &std::path::Path) -> Option<Stamp> {
     None
 }
 
@@ -346,7 +445,7 @@ impl Machine<'_, '_> {
     pub(super) fn snapshot(&mut self) -> Option<Snap> {
         let pdf = std::mem::take(&mut self.page.pdf);
         let word_ship = std::mem::take(&mut self.page.word_ship);
-        let state = self.save_state();
+        let state = self.save_state(false);
         let pdf_len = pdf.len();
         self.page.pdf = pdf;
         self.page.word_ship = word_ship;
@@ -406,6 +505,8 @@ impl<'a> Machine<'_, 'a> {
         let old_arena = old.arena;
         let pdf_len = new.pdf_len;
         c.cut_page = Some(new.outputs);
+        // The kept pages this run typeset; the last run's after them are taken whole.
+        c.fresh_end = Some(new.state.doc.as_ref().map_or(0, |d| d.deferred.len()).max(c.resumed_pages));
         let mut later = c.old.split_off(cut.at + 1);
         match cut.how {
             Splice::Patch(edits, words) => {
@@ -419,14 +520,14 @@ impl<'a> Machine<'_, 'a> {
                         o.engine.nodes = o.engine.nodes.patched(&edits, &words);
                     }
                 }
-                *self.e = engine.thaw();
+                engine.thaw_into(self.e);
                 c.arena = fin.arena;
             }
             // The last run's later checkpoints take this run's pages the same way (one that
             // cannot is dropped, with those after it).
             Splice::Graft(engine, pages) => {
-                *self.e = engine.thaw();
-                let words = new.engine.nodes.words.thaw();
+                engine.thaw_into(self.e);
+                let words = new.engine.nodes.words.thawed();
                 let resumed = c.resumed_pages;
                 let lineage = new_arena();
                 let mut kept = Vec::with_capacity(later.len());
@@ -463,7 +564,11 @@ impl<'a> Machine<'_, 'a> {
             o.state.expansions = (o.state.expansions as i64 + extra).clamp(0, u32::MAX as i64) as u32;
             c.snaps.push(o);
         }
-        *c.log.borrow_mut() = std::mem::take(&mut c.old_log);
+        // The last run's reads to the end of the body: what it read later (`finish_contents`,
+        // the PDF's images) this run reads again.
+        let mut log = std::mem::take(&mut c.old_log);
+        log.truncate(fin.reads);
+        *c.log.borrow_mut() = log;
         c.outputs = fin.outputs;
         self.checkpoints = Some(c);
     }
@@ -587,11 +692,11 @@ fn converged(new: &Snap, old: &mut Snap, fin: &Snap, new_text: &str, old_text: &
         *graft_off = true;
         return None;
     }
-    if new_pages.is_empty() || !a.same_outside(new_pages, b, &old_pages, &toc, (&a.words.thaw(), &b.words.thaw()), &[(&new.state.cur, &old.state.cur), (&new.state.page.list, &old.state.page.list)]) {
+    if new_pages.is_empty() || !a.same_outside(new_pages, b, &old_pages, &toc, (&a.words.thawed(), &b.words.thawed()), &[(&new.state.cur, &old.state.cur), (&new.state.page.list, &old.state.page.list)]) {
         return None;
     }
     let fin_pages = fin.state.doc.as_ref()?.deferred.get(resumed..resumed + new_pages.len())?;
-    let e = grafted(&fin.engine, fin_pages, new, new_pages, &a.words.thaw())?;
+    let e = grafted(&fin.engine, fin_pages, new, new_pages, &a.words.thawed())?;
     Some(Splice::Graft(Box::new(e), new_pages.to_vec()))
 }
 

@@ -73,9 +73,7 @@ impl Writer {
 
     pub fn all<T: Codec>(&mut self, items: &[T]) {
         self.count(items.len());
-        for x in items {
-            x.put(self);
-        }
+        T::put_all(items, self);
     }
 }
 
@@ -96,11 +94,21 @@ impl<'b> Reader<'b> {
         Some(b)
     }
 
+    #[inline]
     pub fn u8(&mut self) -> Option<u8> {
-        self.take::<1>().map(|b| b[0])
+        let b = *self.bytes.get(self.at)?;
+        self.at += 1;
+        Some(b)
     }
 
+    #[inline]
     pub fn var(&mut self) -> Option<u64> {
+        // Most numbers are one byte.
+        let b = *self.bytes.get(self.at)?;
+        if b < 0x80 {
+            self.at += 1;
+            return Some(b as u64);
+        }
         let mut v = 0u64;
         for shift in (0..64).step_by(7) {
             let b = self.u8()?;
@@ -151,11 +159,28 @@ impl<'b> Reader<'b> {
 
     pub fn all<T: Codec>(&mut self) -> Option<Vec<T>> {
         let n = self.count()?;
-        (0..n).map(|_| T::take(self)).collect()
+        T::take_all(self, n)
     }
 
     fn done(&self) -> bool {
         self.at == self.bytes.len()
+    }
+
+    /// Whether every byte was read.
+    pub fn at_end(&self) -> bool {
+        self.done()
+    }
+
+    /// How many bytes were read.
+    pub fn position(&self) -> usize {
+        self.at
+    }
+
+    /// The next `n` bytes.
+    pub fn slice(&mut self, n: usize) -> Option<&'b [u8]> {
+        let b = self.bytes.get(self.at..self.at.checked_add(n)?)?;
+        self.at += n;
+        Some(b)
     }
 }
 
@@ -163,6 +188,22 @@ impl<'b> Reader<'b> {
 pub trait Codec: Sized {
     fn put(&self, w: &mut Writer);
     fn take(r: &mut Reader) -> Option<Self>;
+
+    /// `items` one after another (bytes are copied whole).
+    fn put_all(items: &[Self], w: &mut Writer) {
+        for x in items {
+            x.put(w);
+        }
+    }
+
+    /// [`Codec::put_all`]'s `n` items read back.
+    fn take_all(r: &mut Reader, n: usize) -> Option<Vec<Self>> {
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            v.push(Self::take(r)?);
+        }
+        Some(v)
+    }
 }
 
 impl Codec for i32 {
@@ -180,6 +221,14 @@ impl Codec for u8 {
     }
     fn take(r: &mut Reader) -> Option<Self> {
         r.u8()
+    }
+    fn put_all(items: &[u8], w: &mut Writer) {
+        w.bytes.extend_from_slice(items);
+    }
+    fn take_all(r: &mut Reader, n: usize) -> Option<Vec<u8>> {
+        let b = r.bytes.get(r.at..r.at + n)?.to_vec();
+        r.at += n;
+        Some(b)
     }
 }
 
@@ -387,26 +436,373 @@ impl Codec for BoxRec {
     }
 }
 
-impl Codec for [i32; 2] {
-    fn put(&self, w: &mut Writer) {
-        w.i32(self[0]);
-        w.i32(self[1]);
-    }
-    fn take(r: &mut Reader) -> Option<Self> {
-        Some([r.i32()?, r.i32()?])
-    }
-}
-
-impl Codec for [i32; 3] {
+/// Arrays element by element (`[i32; 2]` writes as two `i32`s, as formats always had it).
+impl<T: Codec, const N: usize> Codec for [T; N] {
     fn put(&self, w: &mut Writer) {
         for v in self {
-            w.i32(*v);
+            v.put(w);
         }
     }
     fn take(r: &mut Reader) -> Option<Self> {
-        Some([r.i32()?, r.i32()?, r.i32()?])
+        let v = (0..N).map(|_| T::take(r)).collect::<Option<Vec<T>>>()?;
+        v.try_into().ok()
     }
 }
+
+// The engine copied to disk where a preamble ends (`engine_resume::Kept::store`): the rest of
+// the machine's types, each written whole (`codec_struct!` names every field, so a field
+// added later is a compile error until it is written or called scratch).
+
+impl Codec for bool {
+    fn put(&self, w: &mut Writer) {
+        w.u8(*self as u8);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        match r.u8()? {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        }
+    }
+}
+
+impl Codec for i8 {
+    fn put(&self, w: &mut Writer) {
+        w.u8(*self as u8);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        Some(r.u8()? as i8)
+    }
+}
+
+impl Codec for i16 {
+    fn put(&self, w: &mut Writer) {
+        w.i32(*self as i32);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.i32()?.try_into().ok()
+    }
+}
+
+impl Codec for u64 {
+    fn put(&self, w: &mut Writer) {
+        w.var(*self);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.var()
+    }
+}
+
+impl Codec for i64 {
+    fn put(&self, w: &mut Writer) {
+        w.var(((*self << 1) ^ (*self >> 63)) as u64);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        let z = r.var()?;
+        Some((z >> 1) as i64 ^ -((z & 1) as i64))
+    }
+}
+
+impl Codec for usize {
+    fn put(&self, w: &mut Writer) {
+        w.var(*self as u64);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.var()?.try_into().ok()
+    }
+}
+
+impl Codec for u128 {
+    fn put(&self, w: &mut Writer) {
+        w.bytes.extend_from_slice(&self.to_le_bytes());
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.take().map(u128::from_le_bytes)
+    }
+}
+
+impl Codec for i128 {
+    fn put(&self, w: &mut Writer) {
+        w.bytes.extend_from_slice(&self.to_le_bytes());
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.take().map(i128::from_le_bytes)
+    }
+}
+
+impl Codec for f64 {
+    fn put(&self, w: &mut Writer) {
+        w.u64(self.to_bits());
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.u64().map(f64::from_bits)
+    }
+}
+
+impl Codec for f32 {
+    fn put(&self, w: &mut Writer) {
+        w.u32(self.to_bits());
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.u32().map(f32::from_bits)
+    }
+}
+
+impl Codec for char {
+    fn put(&self, w: &mut Writer) {
+        w.u32(*self as u32);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        char::from_u32(r.u32()?)
+    }
+}
+
+impl Codec for () {
+    fn put(&self, _: &mut Writer) {}
+    fn take(_: &mut Reader) -> Option<Self> {
+        Some(())
+    }
+}
+
+impl Codec for String {
+    fn put(&self, w: &mut Writer) {
+        w.str(self);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.str()
+    }
+}
+
+impl Codec for std::borrow::Cow<'static, str> {
+    fn put(&self, w: &mut Writer) {
+        w.str(self);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.str().map(std::borrow::Cow::Owned)
+    }
+}
+
+impl Codec for std::path::PathBuf {
+    fn put(&self, w: &mut Writer) {
+        w.raw(self.as_os_str().as_encoded_bytes());
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        // The bytes `as_encoded_bytes` gave on this platform; a path is only read back by the
+        // build that wrote it (the file's header names the executable).
+        String::from_utf8(r.raw()?).ok().map(std::path::PathBuf::from)
+    }
+}
+
+impl<T: Codec> Codec for Vec<T> {
+    fn put(&self, w: &mut Writer) {
+        w.all(self);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.all()
+    }
+}
+
+impl<T: Codec> Codec for Option<T> {
+    fn put(&self, w: &mut Writer) {
+        match self {
+            None => w.u8(0),
+            Some(v) => {
+                w.u8(1);
+                v.put(w);
+            }
+        }
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        match r.u8()? {
+            0 => Some(None),
+            1 => Some(Some(T::take(r)?)),
+            _ => None,
+        }
+    }
+}
+
+impl<T: Codec> Codec for Box<T> {
+    fn put(&self, w: &mut Writer) {
+        (**self).put(w);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        T::take(r).map(Box::new)
+    }
+}
+
+impl<T: Codec> Codec for std::rc::Rc<T> {
+    fn put(&self, w: &mut Writer) {
+        (**self).put(w);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        T::take(r).map(std::rc::Rc::new)
+    }
+}
+
+impl<T: Codec> Codec for std::sync::Arc<T> {
+    fn put(&self, w: &mut Writer) {
+        (**self).put(w);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        T::take(r).map(std::sync::Arc::new)
+    }
+}
+
+impl<T: Codec + Clone> Codec for super::engine_chunk::Chunked<T> {
+    fn put(&self, w: &mut Writer) {
+        w.all(self);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.all::<T>().map(Into::into)
+    }
+}
+
+impl<K: Codec + Eq + std::hash::Hash, V: Codec, S: std::hash::BuildHasher + Default> Codec for HashMap<K, V, S> {
+    // In the order of the keys' bytes, not the map's (which differs from one process, or one
+    // map, to the next): equal maps write equal bytes.
+    fn put(&self, w: &mut Writer) {
+        w.count(self.len());
+        let mut entries: Vec<(Vec<u8>, &V)> = self
+            .iter()
+            .map(|(k, v)| {
+                let mut kw = Writer::default();
+                k.put(&mut kw);
+                (kw.bytes, v)
+            })
+            .collect();
+        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        for (k, v) in entries {
+            w.bytes.extend_from_slice(&k);
+            v.put(w);
+        }
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        let n = r.count()?;
+        (0..n).map(|_| Some((K::take(r)?, V::take(r)?))).collect()
+    }
+}
+
+impl<K: Codec + Ord, V: Codec> Codec for std::collections::BTreeMap<K, V> {
+    fn put(&self, w: &mut Writer) {
+        w.count(self.len());
+        for (k, v) in self {
+            k.put(w);
+            v.put(w);
+        }
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        let n = r.count()?;
+        (0..n).map(|_| Some((K::take(r)?, V::take(r)?))).collect()
+    }
+}
+
+impl<K: Codec + Eq + std::hash::Hash, S: std::hash::BuildHasher + Default> Codec for std::collections::HashSet<K, S> {
+    // In the order of the keys' bytes, as a map's.
+    fn put(&self, w: &mut Writer) {
+        w.count(self.len());
+        let mut keys: Vec<Vec<u8>> = self
+            .iter()
+            .map(|k| {
+                let mut kw = Writer::default();
+                k.put(&mut kw);
+                kw.bytes
+            })
+            .collect();
+        keys.sort_unstable();
+        for k in keys {
+            w.bytes.extend_from_slice(&k);
+        }
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        let n = r.count()?;
+        (0..n).map(|_| K::take(r)).collect()
+    }
+}
+
+impl Codec for Box<str> {
+    fn put(&self, w: &mut Writer) {
+        w.str(self);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.str().map(String::into_boxed_str)
+    }
+}
+
+impl<T: Codec> Codec for Box<[T]> {
+    fn put(&self, w: &mut Writer) {
+        w.all(self);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.all().map(Vec::into_boxed_slice)
+    }
+}
+
+impl<T: Codec> Codec for std::rc::Rc<[T]> {
+    fn put(&self, w: &mut Writer) {
+        w.all(self);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        r.all::<T>().map(Into::into)
+    }
+}
+
+/// A value made once on first use (a cache), written when it was made.
+impl<T: Codec> Codec for std::cell::OnceCell<T> {
+    fn put(&self, w: &mut Writer) {
+        match self.get() {
+            None => w.u8(0),
+            Some(v) => {
+                w.u8(1);
+                v.put(w);
+            }
+        }
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        let c = std::cell::OnceCell::new();
+        if let Some(v) = <Option<T> as Codec>::take(r)? {
+            let _ = c.set(v);
+        }
+        Some(c)
+    }
+}
+
+impl Codec for super::engine_color::ColorStacks {
+    fn put(&self, w: &mut Writer) {
+        self.0.put(w);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        Some(super::engine_color::ColorStacks(Codec::take(r)?))
+    }
+}
+
+impl Codec for super::engine_catcode::CatTable {
+    fn put(&self, w: &mut Writer) {
+        w.bytes.extend_from_slice(&self.0);
+    }
+    fn take(r: &mut Reader) -> Option<Self> {
+        Some(super::engine_catcode::CatTable(r.take::<256>()?))
+    }
+}
+
+codec_struct!(crate::backend::backend_ship::ShippedPage { id, width, height, content, annots, group, images, forms, stream, resources });
+codec_struct!(crate::backend::backend_ship::ShippedForm { id, width, height, content, images, forms, attr, resources });
+
+macro_rules! codec_tuple {
+    ($($t:ident $i:tt),+) => {
+        impl<$($t: Codec),+> Codec for ($($t,)+) {
+            fn put(&self, w: &mut Writer) {
+                $(self.$i.put(w);)+
+            }
+            fn take(r: &mut Reader) -> Option<Self> {
+                Some(($($t::take(r)?,)+))
+            }
+        }
+    };
+}
+codec_tuple!(A 0, B 1);
+codec_tuple!(A 0, B 1, C 2);
+codec_tuple!(A 0, B 1, C 2, D 3);
+codec_tuple!(A 0, B 1, C 2, D 3, E 4);
 
 /// The node arena: every list, box record, glue specification and rule (§1311 dumps the
 /// dynamic memory the same way, whole).
@@ -506,6 +902,13 @@ fn fingerprint() -> u64 {
 }
 
 impl Engine {
+    /// Whether `other` (this engine written whole and read back, `engine_resume`) is the
+    /// same: every table equal, the hyphenation tables but for their caches.
+    pub fn same_on_disk(&self, other: &Engine) -> bool {
+        let Engine { eqtb, names, cs, toks, fonts, nodes, hyph, glyph_unicode } = self;
+        *eqtb == other.eqtb && *names == other.names && *cs == other.cs && *toks == other.toks && *fonts == other.fonts && *nodes == other.nodes && hyph.same_tables(&other.hyph) && *glyph_unicode == other.glyph_unicode
+    }
+
     /// Copies the token lists still in use into a fresh arena, so the lists of every
     /// redefined macro are dropped. Lists shared by several meanings stay shared. Only safe
     /// between documents or at `\dump`, when nothing being read refers into the arena.

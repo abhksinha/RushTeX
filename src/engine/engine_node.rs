@@ -81,6 +81,8 @@ pub struct InsRec {
     pub list: (u32, u32),
 }
 
+codec_struct!(InsRec { n, height, depth, split_top, float_cost, list });
+
 /// One node (§133).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Node {
@@ -145,6 +147,27 @@ pub struct Nodes {
     /// so the leak audit names the line that leaks.
     #[cfg(feature = "ownership-check")]
     pub origin: Origins,
+}
+
+// `work` and `copy_buf` are scratch, empty between commands.
+#[cfg(feature = "oracle")]
+impl super::engine_snapshot::Codec for Nodes {
+    fn put(&self, w: &mut super::engine_snapshot::Writer) {
+        let Nodes { list, boxes, glues, rules, lig_chars, words, discs, inserts, free, work: _, copy_buf: _, #[cfg(feature = "ownership-check")] origin: _ } = self;
+        list.put(w);
+        boxes.put(w);
+        glues.put(w);
+        rules.put(w);
+        lig_chars.put(w);
+        words.put(w);
+        discs.put(w);
+        inserts.put(w);
+        free.put(w);
+    }
+    fn take(r: &mut super::engine_snapshot::Reader) -> Option<Self> {
+        use super::engine_snapshot::Codec;
+        Some(Nodes { list: Codec::take(r)?, boxes: Codec::take(r)?, glues: Codec::take(r)?, rules: Codec::take(r)?, lig_chars: Codec::take(r)?, words: Codec::take(r)?, discs: Codec::take(r)?, inserts: Codec::take(r)?, free: Codec::take(r)?, ..Default::default() })
+    }
 }
 
 #[cfg(feature = "ownership-check")]
@@ -325,6 +348,8 @@ pub struct Free {
     pub inserts: Vec<u32>,
 }
 
+codec_struct!(Free { spans, ligs, boxes, glues, rules, discs, inserts });
+
 impl Default for Free {
     fn default() -> Free {
         Free { spans: std::array::from_fn(|_| Vec::new()), ligs: std::array::from_fn(|_| Vec::new()), boxes: Vec::new(), glues: Vec::new(), rules: Vec::new(), discs: Vec::new(), inserts: Vec::new() }
@@ -375,7 +400,7 @@ impl Nodes {
         let mut e = NodeEdits { list: take(&self.list, &new.list)?, boxes: take(&self.boxes, &new.boxes)?, glues: take(&self.glues, &new.glues)?, rules: take(&self.rules, &new.rules)?, lig_chars: take(&self.lig_chars, &new.lig_chars)?, discs: take(&self.discs, &new.discs)?, inserts: take(&self.inserts, &new.inserts)? };
         // The word tables: an id both have whose entries differ makes each word node naming it
         // a difference too (the runs' tables part where the edit's words were entered).
-        let stores = (self.words != new.words).then(|| (self.words.thaw(), new.words.thaw()));
+        let stores = (self.words != new.words).then(|| (self.words.thawed(), new.words.thawed()));
         if let Some((a, b)) = &stores {
             let n = a.recs.len().min(b.recs.len());
             let changed: Vec<bool> = (0..n).map(|i| !a.same_entry(i as u32, b, i as u32)).collect();
@@ -394,40 +419,39 @@ impl Nodes {
         if e.is_empty() {
             return Some(e);
         }
+        // The free places as sorted, merged ranges, each edit looked up in them (an array the
+        // size of each table, made and zeroed at every cutoff test, was 7% of a save).
         let f = &self.free;
-        let blocks = |starts: &[Vec<u32>], len: usize| {
-            let mut free = vec![false; len];
-            for (c, v) in starts.iter().enumerate() {
-                for &s in v {
-                    let s = s as usize;
-                    free[s.min(len)..(s + class_len(c)).min(len)].fill(true);
+        fn merged(mut v: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+            v.sort_unstable();
+            let mut out: Vec<(usize, usize)> = Vec::with_capacity(v.len());
+            for (s, e) in v {
+                match out.last_mut() {
+                    Some(l) if s <= l.1 => l.1 = l.1.max(e),
+                    _ => out.push((s, e)),
                 }
             }
-            free
-        };
-        let ids = |v: &[u32], len: usize| {
-            let mut free = vec![false; len];
-            for &i in v {
-                if let Some(x) = free.get_mut(i as usize) {
-                    *x = true;
-                }
+            out
+        }
+        let blocks = |starts: &[Vec<u32>]| merged(starts.iter().enumerate().flat_map(|(c, v)| v.iter().map(move |&s| (s as usize, s as usize + class_len(c)))).collect());
+        let ids = |v: &[u32]| merged(v.iter().map(|&i| (i as usize, i as usize + 1)).collect());
+        fn keep<T>(e: &mut Vec<(usize, T)>, free: impl FnOnce() -> Vec<(usize, usize)>) {
+            if e.is_empty() {
+                return;
             }
-            free
-        };
-        fn keep<T>(e: &mut Vec<(usize, T)>, free: &[bool]) {
-            e.retain(|(i, _)| !free.get(*i).copied().unwrap_or(false));
+            let free = free();
+            e.retain(|(i, _)| {
+                let k = free.partition_point(|s| s.0 <= *i);
+                !(k > 0 && *i < free[k - 1].1)
+            });
         }
-        if !e.list.is_empty() {
-            keep(&mut e.list, &blocks(&f.spans, self.list.count()));
-        }
-        if !e.lig_chars.is_empty() {
-            keep(&mut e.lig_chars, &blocks(&f.ligs, self.lig_chars.count()));
-        }
-        keep(&mut e.boxes, &ids(&f.boxes, self.boxes.count()));
-        keep(&mut e.glues, &ids(&f.glues, self.glues.count()));
-        keep(&mut e.rules, &ids(&f.rules, self.rules.count()));
-        keep(&mut e.discs, &ids(&f.discs, self.discs.count()));
-        keep(&mut e.inserts, &ids(&f.inserts, self.inserts.count()));
+        keep(&mut e.list, || blocks(&f.spans));
+        keep(&mut e.lig_chars, || blocks(&f.ligs));
+        keep(&mut e.boxes, || ids(&f.boxes));
+        keep(&mut e.glues, || ids(&f.glues));
+        keep(&mut e.rules, || ids(&f.rules));
+        keep(&mut e.discs, || ids(&f.discs));
+        keep(&mut e.inserts, || ids(&f.inserts));
         if let Some((a, b)) = &stores {
             e.list.retain(|(i, n)| match self.list.at(*i) {
                 Some(o) if n.kind == Kind::Word && o.kind == Kind::Word && (o.sub, o.font, o.b) == (n.sub, n.font, n.b) => !a.same_entry(o.a as u32, b, n.a as u32),
@@ -443,7 +467,7 @@ impl Nodes {
         let mut words = self.words.clone();
         let mut list = std::borrow::Cow::Borrowed(&e.list);
         if e.list.iter().any(|(_, n)| n.kind == Kind::Word) {
-            let (mut to, from) = (self.words.thaw(), from.thaw());
+            let (mut to, from) = (self.words.thaw(), from.thawed());
             let mut copied: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
             list = std::borrow::Cow::Owned(e.list.iter().map(|&(i, n)| match n.kind {
                 Kind::Word => (i, Node { a: *copied.entry(n.a).or_insert_with(|| to.copy_entry(&from, n.a as u32) as i32), ..n }),
@@ -856,6 +880,21 @@ impl Nodes {
         Nodes { list: list.thaw(), boxes: boxes.thaw(), glues: glues.thaw(), rules: rules.thaw(), lig_chars: lig_chars.thaw(), words: words.thaw(), discs: discs.thaw(), inserts: inserts.thaw(), free: free.clone(), ..Default::default() }
     }
 
+    /// [`Nodes::thaw`] into a live one, its buffers kept (`Chunked::thaw_into`).
+    pub fn thaw_into(&self, live: &mut Nodes) {
+        let Nodes { list, boxes, glues, rules, lig_chars, words, discs, inserts, free, work: _, copy_buf: _, #[cfg(feature = "ownership-check")] origin: _ } = self;
+        let mut was = std::mem::take(live);
+        list.thaw_into(&mut was.list);
+        boxes.thaw_into(&mut was.boxes);
+        glues.thaw_into(&mut was.glues);
+        rules.thaw_into(&mut was.rules);
+        lig_chars.thaw_into(&mut was.lig_chars);
+        words.thaw_into(&mut was.words);
+        discs.thaw_into(&mut was.discs);
+        inserts.thaw_into(&mut was.inserts);
+        *live = Nodes { list: was.list, boxes: was.boxes, glues: was.glues, rules: was.rules, lig_chars: was.lig_chars, words: was.words, discs: was.discs, inserts: was.inserts, free: free.clone(), ..Default::default() };
+    }
+
     /// The nodes of a finished list.
     #[inline]
     pub fn get(&self, list: (u32, u32)) -> &[Node] {
@@ -1239,6 +1278,8 @@ pub struct Level {
     /// e-TeX's `delim_ptr` (math lists only): where the last `\left` or `\middle` sits.
     pub delim: i32,
 }
+
+codec_struct!(Level { mode, inner, clang, start, aux, prev_graf, delim });
 
 /// §212 `ignore_depth`: `prev_depth` after a rule, so no interline glue comes next.
 pub const IGNORE_DEPTH: i32 = -65_536_000;

@@ -47,6 +47,16 @@ pub(super) const SAVE_POS: u8 = 20;
 /// computes it from the position `\pdfsavepos` saved (`\pgf@shape@interpictureshift`). To
 /// TeX it is a literal: `\showbox` prints `\whatsit5`.
 pub(super) const PGF_POINT: u8 = 21;
+/// lastpage's mark before the stand-in digit of `\pageref{LastPage}` (`engine_lastpage`):
+/// taken out of the kept pages before they ship, so it never reaches the PDF.
+pub(super) const LASTPAGE: u8 = 22;
+/// A glue's subtype (not a whatsit's): the `\hskip\pgf@pt@x` of `\pgfsys@hboxsynced` placing
+/// a node's text in a `remember picture` picture (`engine_tikz_node`). Its node's `b` is the
+/// page x the text goes to, and the box after it holds in its `shift` the page y (measured up
+/// from the foot); the ship walk sets the glue's width and the box's shift from where the
+/// glue is, as pgf computes them from the position `\pdfsavepos` saved, and writes them back
+/// so the page's `\showbox` shows them.
+pub(super) const PGF_GLUE: u8 = 90;
 
 /// pgfsys.code.tex `\pgf@sys@bp`: `\pgf@x=0.99627\pgf@x` (TeX's `xn_over_d(x, 65292, 2^16)`,
 /// §455) printed by `\the` without `pt` (§103).
@@ -281,12 +291,17 @@ impl Machine<'_, '_> {
     /// `late` does the `\pdfliteral shipout`s, before the page is walked; otherwise the
     /// files are written, after it, each `\pdfsavepos` taking the next of `positions` (in
     /// the walk's order, which is this one's) for `\pdflastxpos` and `\pdflastypos`.
-    pub(super) fn out_whats(&mut self, b: u32, late: bool, positions: &mut std::slice::Iter<(i32, i32)>) {
+    /// Says whether it met a whatsit that does something (`ShipMemo`): not one it passes
+    /// over (a literal, a special, a colour), nor, while the kept pages ship at the end, an
+    /// `.aux` entry (`shipped_entry` took it when the page was built).
+    pub(super) fn out_whats(&mut self, b: u32, late: bool, positions: &mut std::slice::Iter<(i32, i32)>) -> bool {
         let (start, end) = self.e.nodes.boxes[b as usize].list;
+        let mut met = false;
         for i in start..end {
             let n = self.e.nodes.list[i as usize];
+            met |= n.kind == Kind::Whatsit && matches!(n.sub, SAVE_POS | OPEN | CLOSE | WRITE | LATE_LITERAL) && !(n.sub == WRITE && n.font == NULL_STREAM && self.replaying());
             match (n.kind, n.sub) {
-                (Kind::Box, _) => self.out_whats(n.a as u32, late, positions),
+                (Kind::Box, _) => met |= self.out_whats(n.a as u32, late, positions),
                 (Kind::Whatsit, SAVE_POS) if !late => {
                     if let Some(&p) = positions.next() {
                         self.pdf_doc.last_pos = p;
@@ -296,7 +311,8 @@ impl Machine<'_, '_> {
                 (Kind::Whatsit, LATE_LITERAL) if !late => {}
                 (Kind::Whatsit, OPEN | CLOSE) => {
                     let k = n.font as usize;
-                    if let Some(w) = self.writes[k].take() {
+                    // a0poster's `\closeout` of the stream the native job keeps no file for.
+                    if let Some(w) = self.writes.get_mut(k).and_then(Option::take) {
                         self.closed.push(w);
                     }
                     if n.sub == OPEN {
@@ -324,6 +340,7 @@ impl Machine<'_, '_> {
                 _ => {}
             }
         }
+        met
     }
 }
 

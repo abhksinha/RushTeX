@@ -10,12 +10,39 @@ use super::engine_prim::{Meaning, Prim, ELSE_CODE, FI_CODE, IF_CODE, OR_CODE};
 use super::engine_run::{Machine, Mode, X};
 use super::engine_token::Token;
 
+/// Whether `pass_text` passes over `t` without a change of level: not an `\if...`, `\else`,
+/// `\or` or `\fi` by meaning ([`Machine::meaning`]; an active character past 255 is left to
+/// it).
+#[inline(always)]
+#[cfg_attr(feature = "mprof", allow(dead_code))]
+fn passable(eqtb: &super::engine_eqtb::Eqtb, t: Token) -> bool {
+    let id = match t.cs_id() {
+        Some(id) => id,
+        None if t.cat() == Some(Cat::Active) => match t.chr() as u32 {
+            c @ 0..=255 => c,
+            _ => return false,
+        },
+        None => return true,
+    };
+    match eqtb.meaning(id) {
+        Meaning::Prim(p) => !p.is_if() && p.fi_or_else().is_none(),
+        _ => true,
+    }
+}
+
 impl Machine<'_, '_> {
     /// §494 `pass_text`: skips to the `\else`, `\or` or `\fi` of the current level and
     /// returns its code (`FI_CODE` at the end of the input, after an error).
     fn pass_text(&mut self) -> u8 {
         let mut level = 0u32;
         loop {
+            // The tokens of the top token list that cannot change `level`, passed over in one
+            // step; the macro profiler counts each token read, so not with it.
+            #[cfg(not(feature = "mprof"))]
+            if !self.halted {
+                let eqtb = &self.e.eqtb;
+                self.input.skip_while(&self.e.toks, |t| passable(eqtb, t));
+            }
             let Some(t) = self.get_token() else {
                 self.error("Incomplete \\if; all text was ignored after line");
                 return FI_CODE;

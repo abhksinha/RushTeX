@@ -63,6 +63,20 @@ impl<'e, 'a> Machine<'e, 'a> {
     /// `None` when something follows the glue in the argument, which the native job does not
     /// lower.
     pub(super) fn glue_arg(&mut self, arg: &[Token]) -> Option<Glue> {
+        // `\stretch{#1}` alone (latex.ltx: `\z@ \@plus #1fill\relax`), `#1` a decimal.
+        if let (Some(&first), Some(id)) = (arg.first(), self.e.cs.get("stretch")) {
+            if first == Token::cs(id) {
+                let inner = match arg.get(1..)? {
+                    [open, mid @ .., close] if open.cat() == Some(super::engine_catcode::Cat::BeginGroup) && close.cat() == Some(super::engine_catcode::Cat::EndGroup) => mid,
+                    _ => return None,
+                };
+                if inner.is_empty() || !inner.iter().all(|t| t.cs_id().is_none() && (t.chr().is_ascii_digit() || t.chr() == '.')) {
+                    return None;
+                }
+                let x: String = inner.iter().map(|t| t.chr()).collect();
+                return super::engine_scan::scan_glue(&format!("0pt plus {x}fill"), 0, 0, &|_| None);
+            }
+        }
         let relax = Token::cs(self.e.cs.get("relax")?);
         let mut list = Vec::with_capacity(arg.len() + 1);
         list.extend_from_slice(arg);

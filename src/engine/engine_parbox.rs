@@ -35,6 +35,10 @@ pub(super) struct Saved {
     /// A minipage (its lists count from depth zero, `\@mplistdepth`) opened inside a
     /// list or trivlist.
     nested: bool,
+    /// The group level of the box's text (`bare_center`).
+    level: u16,
+    /// A minipage.
+    minipage: bool,
 }
 
 /// Where a box goes: outer position, height and inner position (`\@iiiparbox#1#2[#3]`).
@@ -121,8 +125,9 @@ impl Machine<'_, '_> {
             self.begin_group(SEMI_SIMPLE_GROUP);
         }
         self.set_dimen_named(param!("hsize"), width);
+        let level = self.e.eqtb.level();
         let doc = self.doc.as_mut().expect("a native document");
-        doc.pbox.push(Saved { nobreak: doc.nobreak, noskipsec: doc.noskipsec, cr_base: doc.cr_base, pos: at.pos, height: at.height, inner: at.inner, nested: minipage && !doc.lists.is_empty() });
+        doc.pbox.push(Saved { nobreak: doc.nobreak, noskipsec: doc.noskipsec, cr_base: doc.cr_base, pos: at.pos, height: at.height, inner: at.inner, nested: minipage && !doc.lists.is_empty(), level, minipage });
         (doc.nobreak, doc.noskipsec, doc.cr_base) = (false, false, doc.lists.len());
         self.par_box_restore();
     }
@@ -225,6 +230,15 @@ impl Machine<'_, '_> {
         self.unskip();
         if let Some(doc) = self.doc.as_mut() {
             doc.floats.minipage = false;
+            // A bare `\flushleft`'s trivlist (`bare_center`): never ended, its settings go
+            // with the box's group.
+            if doc.lists.len() > doc.cr_base {
+                if doc.inlabel {
+                    return self.not_native("a bare \\flushleft with no text after it");
+                }
+                let base = doc.cr_base;
+                doc.lists.truncate(base);
+            }
         }
         self.after_color_group(|m| {
             m.package();
@@ -234,6 +248,20 @@ impl Machine<'_, '_> {
             m.begin_group(SEMI_SIMPLE_GROUP);
             m.outer_box(s);
         });
+    }
+
+    /// `\flushleft`, `\flushright` or `\center` as a command (latex.ltx `\def\flushleft{
+    /// \trivlist \raggedright\item\relax}`, no `\begin`) at the top of a minipage's text: its
+    /// `\endflushleft` never runs, the minipage's `\egroup` undoes its settings
+    /// (`minipage_close_box` drops its list). Elsewhere, inside a list of the box, or in a
+    /// group of the box's text, not native.
+    pub(super) fn bare_center(&mut self, kind: usize) {
+        let level = self.e.eqtb.level();
+        let ok = self.doc.as_ref().is_some_and(|d| d.pbox.last().is_some_and(|s| s.minipage && s.level == level) && d.lists.len() == d.cr_base);
+        if !ok || self.mode != Mode::Vertical {
+            return self.not_native("\\flushleft, \\flushright or \\center as a command outside a minipage's top");
+        }
+        self.center(kind);
     }
 
     /// `\fbox{text}`: `\leavevmode \setbox\@tempboxa\hbox{\color@begingroup
@@ -279,7 +307,7 @@ impl Machine<'_, '_> {
             return;
         }
         if self.next_is('(') {
-            return self.not_native("\\makebox in a picture");
+            return self.picture_makebox(false);
         }
         if !self.next_is('[') {
             let t = self.named_cs(named!("mbox"));
@@ -417,7 +445,7 @@ impl Machine<'_, '_> {
             return;
         }
         if self.next_is('(') {
-            return self.not_native("\\framebox in a picture");
+            return self.picture_makebox(true);
         }
         if !self.next_is('[') {
             let t = self.doc_id(doc!("fbox"));
@@ -493,7 +521,7 @@ impl Machine<'_, '_> {
     /// A length of `\@begin@tempboxa`'s box (`\raisebox`, `\framebox`): `\width`, `\height`,
     /// `\depth` (`\def\height{\ht\@tempboxa}`) become `\wd`, `\ht`, `\dp` of it;
     /// `\totalheight`, a register set once, declines.
-    fn box_length(&mut self, arg: Vec<Token>) -> Option<i32> {
+    pub(super) fn box_length(&mut self, arg: Vec<Token>) -> Option<i32> {
         let mut t = Vec::with_capacity(arg.len() + 8);
         for tok in arg {
             let prim = match tok.cs_id().map(|id| self.e.cs.name(id)) {

@@ -33,6 +33,8 @@ pub(super) enum Ctx {
     Ship,
 }
 
+codec_data_enum!(Ctx { 0 Shift(a), 1 Set { n, global }, 2 Leaders(a), 3 Ship });
+
 /// An open box: its context, its `to`/`spread` size (§645 `scan_spec`), and its group.
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub(super) struct BoxFrame {
@@ -41,6 +43,8 @@ pub(super) struct BoxFrame {
     size: i32,
     group: u8,
 }
+
+codec_struct!(BoxFrame { ctx, exact, size, group });
 
 /// §1058 glue of `\hfil` and its kin: (stretch, stretch order, shrink, shrink order).
 pub(super) fn fil_glue(p: Prim) -> Glue {

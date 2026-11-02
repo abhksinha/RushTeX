@@ -66,8 +66,22 @@ fn main() -> ExitCode {
         return match std::fs::read(&input_path) {
             Ok(bytes) => {
                 let source_content: String = bytes.iter().map(|&b| char::from(b)).collect();
+                // The `\input` and `\include` files too, as the native job reads them.
+                let dir = input_path.parent().map(Path::to_path_buf).unwrap_or_default();
+                let source_content = rushtex::engine::engine_doc::splice_inputs(&source_content, &mut |name: &str| std::fs::read(dir.join(name)).ok().map(|b| b.iter().map(|&b| char::from(b)).collect())).into_owned();
+                let source_content = rushtex::engine::engine_doc::splice_comments(&source_content).into_owned();
                 let bbl = std::fs::read(input_path.with_extension("bbl")).ok().map(|b| b.iter().map(|&b| char::from(b)).collect::<String>());
-                let source_content = rushtex::engine::engine_doc::splice_bibliography(&source_content, bbl.as_deref());
+                if loads_package(&source_content, "biblatex") && bbl.is_some() {
+                    println!("biblatex with a .bbl");
+                }
+                // The document's own style files read as its preamble (`splice_local_styles`).
+                let dir = input_path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+                let local_style = |name: &str| std::fs::read(dir.join(name)).ok().map(|b| b.iter().map(|&b| char::from(b)).collect::<String>());
+                let own = rushtex::engine::engine_doc::splice_local_styles(&source_content, &local_style);
+                if let Err(why) = &own {
+                    println!("{why}");
+                }
+                let source_content = rushtex::engine::engine_doc::splice_bibliography(own.as_deref().unwrap_or(&source_content), bbl.as_deref());
                 for what in rushtex::engine::engine_doc::native_blockers(&source_content) {
                     println!("{what}");
                 }
@@ -85,19 +99,38 @@ fn main() -> ExitCode {
         eprintln!("{message}");
         return ExitCode::from(1);
     }
+    // A watch session's streams use the fast deflate encoder (a save's latency over the
+    // PDF's size), a one-shot compile the strong one: one mode for the whole process, so
+    // a session's cached streams and its idle check agree. `RT_FAST_DEFLATE=1` (not in the
+    // help) makes a one-shot compile use the fast one, for the edit-fuzz test's fresh
+    // compiles (`parity-testing incr`), which are compared byte for byte with a session's.
+    if watch || replay || env::var_os("RT_FAST_DEFLATE").is_some() {
+        rushtex::backend::backend_deflate::set_fast();
+    }
     if watch {
         return watch_and_compile(&input_path, &output, format_path.as_deref());
     }
     if replay {
         return watch_replay(&input_path, &output, format_path.as_deref());
     }
-    compile(&input_path, &output, format_path.as_deref(), None)
+    let code = compile(&input_path, &output, format_path.as_deref(), None);
+    #[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
+    if let Some(w) = SNAPSHOT_WRITE.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let _ = w.join();
+    }
+    code
 }
 
 /// How often `--watch` looks at the source's modification time and size: a look is one
-/// `stat`, so the delay a save waits for is kept small.
+/// `stat` per watched file, so the delay a save waits for is kept small. For
+/// [`WATCH_BUSY`] after a compile (while the document is being edited) it looks every
+/// [`WATCH_POLL_BUSY`], since half the interval is what a save waits on average.
 #[cfg(not(target_arch = "wasm32"))]
 const WATCH_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+#[cfg(not(target_arch = "wasm32"))]
+const WATCH_POLL_BUSY: std::time::Duration = std::time::Duration::from_millis(1);
+#[cfg(not(target_arch = "wasm32"))]
+const WATCH_BUSY: std::time::Duration = std::time::Duration::from_secs(30);
 /// How long a changed source must stay unchanged before it is compiled: an editor that
 /// truncates the file and then writes it is not compiled half written.
 #[cfg(not(target_arch = "wasm32"))]
@@ -126,8 +159,11 @@ struct Warm {
     /// The native job's checkpoints of the last compile, to start the next one from the last
     /// checkpoint before the first changed byte (`engine_doc::run_session`).
     native: std::cell::RefCell<rushtex::engine::engine_doc::Session>,
-    /// The PDF the last compile wrote, for the idle check (`watch_and_compile`).
+    /// The PDF the last compile wrote, for the idle check (`watch_and_compile`), and the
+    /// output file's modification time and size once written: a compile giving the same
+    /// bytes leaves a file still so untouched (`compile`).
     written: Option<Vec<u8>>,
+    written_stamp: Option<(std::time::SystemTime, u64)>,
     #[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
     kpse: std::cell::OnceCell<Option<rushtex::engine::engine_host::Kpse>>,
     /// The format undumped, with its file and that file's size and modification time: each
@@ -164,6 +200,8 @@ fn watch_and_compile(input: &Path, output: &Path, format_path: Option<&Path>) ->
     // running, with the generation it checks.
     let mut generation = 0u64;
     let mut idle_from: Option<std::time::Instant> = None;
+    // When the last compile ended: the watch looks more often for a while after it.
+    let mut busy_from = std::time::Instant::now();
     let mut check: Option<(std::thread::JoinHandle<Option<Vec<u8>>>, u64)> = None;
     eprintln!("[WATCH] {} -> {} (Ctrl-C to stop)", input.display(), output.display());
     loop {
@@ -196,7 +234,17 @@ fn watch_and_compile(input: &Path, output: &Path, format_path: Option<&Path>) ->
         }
         if now[0].is_some() && now != seen {
             loop {
-                std::thread::sleep(WATCH_SETTLE);
+                // A file's modification time is when it was last written: one written longer
+                // than the settle time ago has stayed unchanged that long already. A time in
+                // the future (another clock) or in whole seconds (a file system that keeps no
+                // finer times, as FAT) waits the whole settle time.
+                let fine = |t: std::time::SystemTime| t.duration_since(std::time::UNIX_EPOCH).is_ok_and(|d| d.subsec_nanos() != 0);
+                let since = |s: &Option<(Option<std::time::SystemTime>, u64)>| s.and_then(|(t, _)| t.filter(|&t| fine(t))?.elapsed().ok()).unwrap_or_default();
+                let quiet = now.iter().zip(seen.iter().chain(std::iter::repeat(&None))).filter(|(a, b)| a != b).map(|(a, _)| since(a)).min().unwrap_or_default();
+                if quiet >= WATCH_SETTLE {
+                    break;
+                }
+                std::thread::sleep(WATCH_SETTLE - quiet);
                 let again = stamps(&files);
                 if again == now {
                     break;
@@ -210,6 +258,7 @@ fn watch_and_compile(input: &Path, output: &Path, format_path: Option<&Path>) ->
             }
             compile(input, output, format_path, Some(&mut warm));
             generation += 1;
+            busy_from = std::time::Instant::now();
             idle_from = Some(std::time::Instant::now());
             // The files read beside the document: by name (`local`), or found there by the
             // engine's file search.
@@ -226,7 +275,7 @@ fn watch_and_compile(input: &Path, output: &Path, format_path: Option<&Path>) ->
             // The source as it was when compiled: a save during the compile compiles again.
             seen = std::iter::once(now[0]).chain(stamps(&files[1..])).collect();
         }
-        std::thread::sleep(WATCH_POLL);
+        std::thread::sleep(if busy_from.elapsed() < WATCH_BUSY { WATCH_POLL_BUSY } else { WATCH_POLL });
     }
 }
 
@@ -289,9 +338,14 @@ fn compile(input: &Path, output: &Path, format_path: Option<&Path>, mut warm: Op
             return code;
         }
     };
-    let (code, written) = finish(output, &built.pdf, &built.report, built.failed, built.pages, start_time, &built.path);
+    let stamp = || std::fs::metadata(output).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
+    // A session's compile giving the PDF on disk again (a save that changed nothing it
+    // reads) does not write it again.
+    let same = warm.as_deref().is_some_and(|w| w.written.as_deref() == Some(&built.pdf[..]) && w.written_stamp.is_some() && w.written_stamp == stamp());
+    let (code, written) = finish(output, (!same).then_some(&built.pdf[..]), &built.report, built.failed, built.pages, start_time, &built.path);
     // What a session wrote, for its idle check (`watch_and_compile`).
     if let Some(w) = warm {
+        w.written_stamp = written.then(stamp).flatten();
         w.written = written.then_some(built.pdf);
     }
     code
@@ -355,7 +409,7 @@ fn build(input: &Path, format_path: Option<&Path>, warm: Option<&mut Warm>, star
     };
     let source: String = match std::fs::read(input) {
         // pdfTeX reads each byte as one character code.
-        Ok(bytes) => bytes.iter().map(|&b| char::from(b)).collect(),
+        Ok(bytes) => latin1(bytes),
         Err(err) => {
             eprintln!("{}", explain(&format!("The input file '{}' cannot be read: {err}.", input.display())));
             return Err(ExitCode::from(1));
@@ -363,17 +417,47 @@ fn build(input: &Path, format_path: Option<&Path>, warm: Option<&mut Warm>, star
     };
     let job_name = input.file_stem().and_then(|s| s.to_str()).unwrap_or("texput");
     let now = rushtex::engine::engine_doc::run_date();
+    // The style files of the document's own beside it, spliced into its preamble
+    // (`engine_doc::splice_local_styles`), and its `\input` and `\include` files spliced into
+    // it (`engine_doc::splice_inputs`): a watch session looks at each name asked for, there
+    // or not, so adding, editing or removing one compiles again. The engine reads the files
+    // itself.
+    let local_style = |name: &str| {
+        let path = doc_dir.as_deref().unwrap_or(Path::new(".")).join(name);
+        if let Some(w) = warm {
+            w.deps.borrow_mut().push(path.clone());
+        }
+        std::fs::read(&path).ok().map(latin1)
+    };
+    let native_source = rushtex::engine::engine_doc::splice_inputs(&source, &mut |name: &str| local_style(name));
+    let native_source = rushtex::engine::engine_doc::splice_comments(&native_source).into_owned();
+    let own_style = rushtex::engine::engine_doc::splice_local_styles(&native_source, &local_style);
     // `RT_ENGINE=1` runs the engine on the format instead, as the oracle.
     let why = if std::env::var_os("RT_ENGINE").is_some() {
         "RT_ENGINE=1".to_string()
+    } else if let Err(why) = &own_style {
+        let why = why.clone();
+        if std::env::var_os("RT_NATIVE_WHY").is_some() {
+            eprintln!("native job declined: {why}");
+        }
+        why
+    } else if loads_package(&native_source, "biblatex") && read(&format!("{job_name}.bbl")).is_some() {
+        // The native biblatex has every key missing (`engine_biblatex`): with a `.bbl`
+        // (biber's or BibTeX's) pdfLaTeX prints the entries, so the document runs on the engine.
+        let why = "biblatex with a .bbl".to_string();
+        if std::env::var_os("RT_NATIVE_WHY").is_some() {
+            eprintln!("native job declined: {why}");
+        }
+        why
     } else {
         // `RT_TIME=1`: the job's phases (`engine_doc::run`).
         if std::env::var_os("RT_TIME").is_some() {
             eprintln!("{:8.3} ms  before the job (paths, source)", start_time.elapsed().as_secs_f64() * 1e3);
         }
         // `\bibliography` reads `\jobname.bbl` where the engine's file search finds it.
-        let bbl = if source.contains("\\bibliography") { read(&format!("{job_name}.bbl")).map(|b| b.iter().map(|&b| char::from(b)).collect::<String>()) } else { None };
-        let spliced = rushtex::engine::engine_doc::splice_bibliography(&source, bbl.as_deref());
+        let bbl = if native_source.contains("\\bibliography") { read(&format!("{job_name}.bbl")).map(latin1) } else { None };
+        let own: &str = own_style.as_deref().unwrap_or(&native_source);
+        let spliced = rushtex::engine::engine_doc::splice_bibliography(own, bbl.as_deref());
         let run = match warm {
             Some(w) => {
                 // Where `read` finds a file, by presence alone (`engine_doc::run_session`): a
@@ -408,19 +492,21 @@ fn build(input: &Path, format_path: Option<&Path>, warm: Option<&mut Warm>, star
     #[cfg(not(all(feature = "oracle", not(target_arch = "wasm32"))))]
     {
         let _ = (format_path, why);
-        eprintln!("{}", explain(&format!("This document uses something RushTeX cannot compile on its own yet, and this build of RushTeX has no TeX engine to fall back on. rushtex --native-gaps {} lists what.", input.display())));
+        let line = rushtex::engine::engine_explain::other_engine(&source).unwrap_or_else(|| format!("This document uses something RushTeX cannot compile on its own yet, and this build of RushTeX has no TeX engine to fall back on. rushtex --native-gaps {} lists what.", input.display()));
+        eprintln!("{}", explain(&line));
         Err(ExitCode::from(1))
     }
     #[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
     {
-        use rushtex::engine::{engine_host, engine_job};
+        use rushtex::engine::{engine_host, engine_job, engine_resume};
         let Some(fmt_path) = format_path.map(Path::to_path_buf).or_else(|| cache.as_ref().map(|c| c.join("pdflatex.rfmt"))) else {
             let _ = why;
             eprintln!("{}", explain("This document uses something RushTeX cannot compile on its own yet, so it runs on TeX Live's LaTeX, whose format RushTeX keeps in a cache folder, but there is none: set RUSHTEX_CACHE or HOME, or give the format with --fmt."));
             return Err(ExitCode::from(1));
         };
         if kpse().is_none() {
-            eprintln!("{}", explain(&format!("This document uses something RushTeX cannot compile on its own yet, so it needs TeX Live, which was not found (kpsewhich is not on the PATH). Install TeX Live, or leave out what RushTeX does not take yet: rushtex --native-gaps {} lists it.", input.display())));
+            let line = rushtex::engine::engine_explain::other_engine(&source).unwrap_or_else(|| format!("This document uses something RushTeX cannot compile on its own yet, so it needs TeX Live, which was not found (kpsewhich is not on the PATH). Install TeX Live, or leave out what RushTeX does not take yet: rushtex --native-gaps {} lists it.", input.display()));
+            eprintln!("{}", explain(&line));
             return Err(ExitCode::from(1));
         }
         // The format is read again for each run (from the OS cache) and dropped once
@@ -459,10 +545,53 @@ fn build(input: &Path, format_path: Option<&Path>, warm: Option<&mut Warm>, star
                     let locate = |name: &str| (!name.starts_with('/')).then(|| doc_dir.as_deref().unwrap_or(Path::new(".")).join(name)).filter(|p| p.is_file()).or_else(|| kpse()?.locate(name));
                     kept.as_ref().and_then(|(_, _, e)| engine_job::run_kept(&|| Some(e.clone()), &source, &opts, &read, &locate, &mut inspect, &mut runs))
                 }
-                None => engine_job::run(&load, &source, &opts, &read, &mut |_| {}, &mut inspect),
+                // A one-shot run starts from this document's engine copied after its preamble
+                // by an earlier run, kept on disk (`engine_resume::Kept`), when what the
+                // preamble read is unchanged; and leaves its own copies there.
+                None => match snapshot_file(cache.as_deref(), input, job_name, &fmt_path) {
+                    Some((path, key)) => {
+                        let t = std::time::Instant::now();
+                        let mut kept = engine_resume::Kept::load(&path, key).unwrap_or_default();
+                        if env::var_os("RT_SNAP").is_some() {
+                            eprintln!("[SNAP] disk: {} copies read in {:.2} ms", kept.runs.len() + usize::from(kept.aux.is_some()), t.elapsed().as_secs_f64() * 1e3);
+                        }
+                        let locate = |name: &str| (!name.starts_with('/')).then(|| doc_dir.as_deref().unwrap_or(Path::new(".")).join(name)).filter(|p| p.is_file()).or_else(|| kpse()?.locate(name));
+                        let job = engine_job::run_kept(&|| rushtex::engine::Engine::undump(&load()?), &source, &opts, &read, &locate, &mut inspect, &mut kept);
+                        if job.is_some() {
+                            let t = std::time::Instant::now();
+                            kept.stamp_all(&locate, &read);
+                            let stamped = t.elapsed().as_secs_f64() * 1e3;
+                            // The copies are encoded here (the engine stays on this thread),
+                            // checked, differenced and written on another while the PDF is
+                            // written; `main` waits for it before the process ends.
+                            let pending = kept.prepare(&path, key, &fmt_path);
+                            if env::var_os("RT_SNAP").is_some() {
+                                eprintln!("[SNAP] disk: stamped in {stamped:.2} ms, prepared in {:.2} ms", t.elapsed().as_secs_f64() * 1e3 - stamped);
+                            }
+                            let keep = env::var("RT_SNAP_KEEP").ok().and_then(|v| v.parse().ok()).unwrap_or(SNAPSHOTS_KEPT);
+                            match pending {
+                                Some(p) => *SNAPSHOT_WRITE.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::thread::spawn(move || p.finish(keep))),
+                                None => {
+                                    if let Some(dir) = path.parent() {
+                                        engine_resume::prune(dir, keep, key);
+                                    }
+                                }
+                            }
+                        }
+                        job
+                    }
+                    None => engine_job::run(&load, &source, &opts, &read, &mut |_| {}, &mut inspect),
+                },
             };
             if let Some(job) = job {
-                let report = seen.take().map_or_else(String::new, |s| s.report(&job.errors, input, &source));
+                let mut report = seen.take().map_or_else(String::new, |s| s.report(&job.errors, input, &source));
+                // A document for XeLaTeX, LuaLaTeX or `--shell-escape` gets one line saying so in
+                // place of TeX's errors (`engine_explain::other_engine`); `RT_TEX_LOG=1` keeps them.
+                if !job.errors.is_empty() && std::env::var_os("RT_TEX_LOG").is_none() {
+                    if let Some(line) = rushtex::engine::engine_explain::other_engine(&source) {
+                        report = format!("[ERROR] {line}\n");
+                    }
+                }
                 return Ok(Built { path: format!("engine job: {} runs", job.runs), pdf: job.pdf, failed: !job.errors.is_empty(), report, pages: job.pages });
             }
             if attempt == 1 {
@@ -491,12 +620,53 @@ fn build(input: &Path, format_path: Option<&Path>, warm: Option<&mut Warm>, star
     }
 }
 
+/// Whether the source loads package `name` with `\usepackage` or `\RequirePackage`
+/// (latex.ltx `\@fileswithoptions`: an optional `[options]`, then a braced comma list, the
+/// spaces and line ends around each name dropped; both may run over several lines). A comment
+/// (`%` not after a backslash) ends its line, so a word in the text or a load commented out
+/// does not count. Cheap: the source is only rebuilt when it holds the name at all.
+fn loads_package(source: &str, name: &str) -> bool {
+    if !source.contains(name) {
+        return false;
+    }
+    let text: String = source.lines().map(|line| line.char_indices().find(|&(i, c)| c == '%' && !line[..i].ends_with('\\')).map_or(line, |(i, _)| &line[..i])).collect::<Vec<_>>().join("\n");
+    ["\\usepackage", "\\RequirePackage"].iter().any(|cmd| {
+        text.match_indices(cmd).any(|(i, _)| {
+            let mut rest = text[i + cmd.len()..].trim_start();
+            if let Some(r) = rest.strip_prefix('[') {
+                let Some(k) = r.find(']') else { return false };
+                rest = r[k + 1..].trim_start();
+            }
+            rest.strip_prefix('{').and_then(|r| r.find('}').map(|k| &r[..k])).is_some_and(|list| list.split(',').any(|p| p.trim() == name))
+        })
+    })
+}
+
+/// File bytes as pdfTeX reads them, each byte one character code: a text all ASCII is
+/// taken as it is, another copied by ASCII runs with each byte above 127 mapped (a watch
+/// session reads the source at every save; a character at a time cost 3M instructions on
+/// master.tex).
+fn latin1(bytes: Vec<u8>) -> String {
+    if bytes.is_ascii() {
+        return String::from_utf8(bytes).unwrap_or_default();
+    }
+    let mut out = String::with_capacity(bytes.len() + bytes.iter().filter(|&&b| b >= 0x80).count());
+    let mut rest = &bytes[..];
+    while let Some(k) = rest.iter().position(|&b| b >= 0x80) {
+        out.push_str(std::str::from_utf8(&rest[..k]).unwrap_or_default());
+        out.push(char::from(rest[k]));
+        rest = &rest[k + 1..];
+    }
+    out.push_str(std::str::from_utf8(rest).unwrap_or_default());
+    out
+}
+
 /// The job's PDF written, then its error report, the path that ran (`RT_NATIVE_WHY=1`) and
 /// the line a finished compilation prints. The PDF comes first: a reader that stops reading
 /// standard error (`| grep -m1`) must not keep it from being written. Also says whether the
 /// PDF was written.
-fn finish(output: &Path, pdf: &[u8], report: &str, failed: bool, pages: usize, start_time: std::time::Instant, path: &str) -> (ExitCode, bool) {
-    if let Err(err) = write_pdf(output, pdf) {
+fn finish(output: &Path, pdf: Option<&[u8]>, report: &str, failed: bool, pages: usize, start_time: std::time::Instant, path: &str) -> (ExitCode, bool) {
+    if let Some(Err(err)) = pdf.map(|pdf| write_pdf(output, pdf)) {
         eprintln!("{err}");
         return (ExitCode::from(1), false);
     }
@@ -557,6 +727,29 @@ impl Seen {
         let run = engine_explain::Run { file: &file, dir: &dir, source, log: &self.log, defined: &self.defined };
         engine_explain::report(errors, &run) + &engine_explain::warnings(&self.log, self.box_warnings)
     }
+}
+
+/// How many documents' engine copies the cache keeps (`engine_resume::prune`; `RT_SNAP_KEEP`
+/// sets another number): each file is one document's copies, a few to some tens of MB.
+#[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
+const SNAPSHOTS_KEPT: usize = 8;
+
+/// The thread writing this compile's engine copies (`engine_resume::Pending::finish`), which
+/// `main` joins before the process ends: the file is renamed into place whole or not at all.
+#[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
+static SNAPSHOT_WRITE: std::sync::Mutex<Option<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(None);
+
+/// Where a one-shot engine run of `input` keeps its copies after the preamble, and what they
+/// are valid for (`engine_resume::disk_path`, `disk_key`): in `<cache>/snapshots`. `None`
+/// with no cache folder, or with `RT_SNAP_DISK=0`.
+#[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
+fn snapshot_file(cache: Option<&Path>, input: &Path, job_name: &str, fmt: &Path) -> Option<(PathBuf, u128)> {
+    if env::var_os("RT_SNAP_DISK").is_some_and(|v| v == "0") {
+        return None;
+    }
+    let dir = cache?.join("snapshots");
+    let key = rushtex::engine::engine_resume::disk_key(fmt)?;
+    Some((rushtex::engine::engine_resume::disk_path(&dir, input, job_name), key))
 }
 
 /// `RUSHTEX_CACHE`, else `$XDG_CACHE_HOME/rushtex`, else `~/.cache/rushtex`: where the
@@ -694,5 +887,20 @@ fn fonts_command(args: &[String]) -> ExitCode {
             eprintln!("usage: rushtex fonts list | rushtex fonts install --from <dir>");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::loads_package;
+
+    #[test]
+    fn loads_package_reads_the_loads_not_the_words() {
+        assert!(loads_package("\\usepackage[backend=biber,\n  style=numeric]{biblatex}", "biblatex"));
+        assert!(loads_package("\\usepackage{csquotes, biblatex }", "biblatex"));
+        assert!(loads_package("\\RequirePackage{biblatex}", "biblatex"));
+        assert!(!loads_package("BibLaTeX and biblatex are named in the text.", "biblatex"));
+        assert!(!loads_package("% \\usepackage{biblatex}\n\\usepackage{natbib}", "biblatex"));
+        assert!(!loads_package("50\\% \\usepackage{biblatexx}", "biblatex"));
     }
 }

@@ -29,6 +29,9 @@ pub enum ColorSpace {
 }
 
 /// An image ready for a PDF XObject: rows of samples, and the soft mask when there is one.
+/// With `copied`, `data` is the file's IDAT stream as it is (zlib, PNG row filters), to be
+/// written with `/DecodeParms` `/Predictor 10` and `/Colors` `copied`, as pdfTeX's
+/// `copy_png` writes it.
 #[derive(Debug, Clone)]
 pub struct PdfImage {
     pub width: u32,
@@ -37,6 +40,7 @@ pub struct PdfImage {
     pub space: ColorSpace,
     pub data: Vec<u8>,
     pub smask: Option<Vec<u8>>,
+    pub copied: Option<u8>,
 }
 
 const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
@@ -77,12 +81,13 @@ fn be32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
 
-/// `read_png_info`: the size, `round(0.0254 · pixels per metre)` when `pHYs` is given, and
-/// whether the colour type carries alpha.
+/// `read_png_info`: the size, `round(0.0254 · pixels per metre)` when `pHYs` gives its unit as
+/// the metre (unit byte 1; libpng's `png_get_x_pixels_per_meter` is 0 for unit 0, an aspect
+/// ratio only, and pdfTeX then takes 72 dpi), and whether the colour type carries alpha.
 pub fn png_info(png: &[u8]) -> Option<PngInfo> {
     let c = chunks(png)?;
     let (x_res, y_res) = match c.phys {
-        Some(p) if p.len() >= 9 => ((0.0254 * be32(&p[0..4]) as f64).round() as i32, (0.0254 * be32(&p[4..8]) as f64).round() as i32),
+        Some(p) if p.len() >= 9 && p[8] == 1 => ((0.0254 * be32(&p[0..4]) as f64).round() as i32, (0.0254 * be32(&p[4..8]) as f64).round() as i32),
         _ => (0, 0),
     };
     Some(PngInfo { width: be32(&c.ihdr[0..4]), height: be32(&c.ihdr[4..8]), x_res, y_res, alpha: c.ihdr[9] & 4 != 0 })
@@ -212,9 +217,10 @@ fn decode_rows(c: &Chunks, width: usize, height: usize, bits: u8, channels: usiz
     Some(out)
 }
 
-/// `write_png` without the `copy_png` shortcut (whose pixels are the same): the PDF image of
-/// a PNG file. `hicolor` keeps 16-bit samples.
-pub fn png_to_pdf(png: &[u8], hicolor: bool) -> Option<PdfImage> {
+/// `write_png`: the PDF image of a PNG file. `hicolor` keeps 16-bit samples; with `copy`, an
+/// image `copy_png` takes is its IDAT data as it is (the same pixels, smaller and not
+/// compressed again), else the rows are decoded.
+pub fn png_to_pdf(png: &[u8], hicolor: bool, copy: bool) -> Option<PdfImage> {
     let c = chunks(png)?;
     let (width, height) = (be32(&c.ihdr[0..4]) as usize, be32(&c.ihdr[4..8]) as usize);
     let (bits, color, interlaced) = (c.ihdr[8], c.ihdr[9], c.ihdr[12] == 1);
@@ -225,13 +231,23 @@ pub fn png_to_pdf(png: &[u8], hicolor: bool) -> Option<PdfImage> {
         6 => 4,
         _ => return None,
     };
+    let trns = c.trns.filter(|t| !t.is_empty());
+    // writepng.c's `copy_png`: a non-interlaced gray, RGB or palette image of at most 8 bits
+    // with no transparency has its IDAT data copied, the rows' filters left to the reader.
+    if copy && !interlaced && matches!(color, 0 | 2 | 3) && bits <= 8 && trns.is_none() && (color != 3 || !c.plte.is_empty()) {
+        let space = match color {
+            0 => ColorSpace::Gray,
+            2 => ColorSpace::Rgb,
+            _ => ColorSpace::Indexed(c.plte.to_vec()),
+        };
+        return Some(PdfImage { width: width as u32, height: height as u32, bits, space, data: c.idat, smask: None, copied: Some(channels as u8) });
+    }
     let rows = decode_rows(&c, width, height, bits, channels, interlaced)?;
     let stride = (width * channels * bits as usize).div_ceil(8);
     // libpng's transformations: `png_set_tRNS_to_alpha` (a palette is expanded to RGB, a
     // low-depth gray to 8 bits) and `png_set_strip_16` (the high byte).
     let out_bits = if bits == 16 && !hicolor { 8 } else { bits };
     let scale = |v: u16| if bits == 16 && !hicolor { v >> 8 } else { v };
-    let trns = c.trns.filter(|t| !t.is_empty());
     // Samples go straight from the decoded rows into the colour and mask streams: `n`
     // colour samples per pixel, two bytes each when `wide`.
     let (mut data, mut smask) = (Vec::new(), Vec::new());
@@ -309,11 +325,11 @@ pub fn png_to_pdf(png: &[u8], hicolor: bool) -> Option<PdfImage> {
                 _ => ColorSpace::Indexed(c.plte.to_vec()),
             };
             let data = if bits == 16 && !hicolor { rows.chunks(2).map(|p| p[0]).collect() } else { rows };
-            return Some(PdfImage { width: width as u32, height: height as u32, bits: out_bits, space, data, smask: None });
+            return Some(PdfImage { width: width as u32, height: height as u32, bits: out_bits, space, data, smask: None, copied: None });
         }
         _ => return None,
     };
-    Some(PdfImage { width: width as u32, height: height as u32, bits: bits_out, space, data, smask: has_alpha.then_some(smask) })
+    Some(PdfImage { width: width as u32, height: height as u32, bits: bits_out, space, data, smask: has_alpha.then_some(smask), copied: None })
 }
 
 #[cfg(test)]
@@ -347,7 +363,7 @@ mod tests {
     fn rgba_splits_into_rgb_and_soft_mask() {
         // Two rows: filter None, then Sub (each byte adds the one a pixel to the left).
         let raw = [0, 10, 20, 30, 255, 1, 2, 3, 128, 1, 5, 5, 5, 0, 1, 1, 1, 10];
-        let img = png_to_pdf(&png(2, 2, 8, 6, 0, &[], &raw), false).expect("decodes");
+        let img = png_to_pdf(&png(2, 2, 8, 6, 0, &[], &raw), false, false).expect("decodes");
         assert_eq!(img.space, ColorSpace::Rgb);
         assert_eq!(img.data, [10, 20, 30, 1, 2, 3, 5, 5, 5, 6, 6, 6]);
         assert_eq!(img.smask.as_deref(), Some(&[255, 128, 0, 10][..]));
@@ -359,11 +375,11 @@ mod tests {
     fn paeth_up_average_and_sixteen_bits() {
         // 1×2 gray 16-bit: rows 0x1234, then Up (+0x0101) giving 0x1335; high bytes kept.
         let raw = [0, 0x12, 0x34, 2, 0x01, 0x01];
-        let img = png_to_pdf(&png(1, 2, 16, 0, 0, &[], &raw), false).expect("decodes");
+        let img = png_to_pdf(&png(1, 2, 16, 0, 0, &[], &raw), false, false).expect("decodes");
         assert_eq!((img.bits, img.data.as_slice()), (8, &[0x12, 0x13][..]));
         // 2×3 gray 8-bit with Average and Paeth rows.
         let raw = [0, 100, 50, 3, 10, 10, 4, 1, 1];
-        let img = png_to_pdf(&png(2, 3, 8, 0, 0, &[], &raw), false).expect("decodes");
+        let img = png_to_pdf(&png(2, 3, 8, 0, 0, &[], &raw), false, false).expect("decodes");
         assert_eq!(img.data, [100, 50, 60, 65, 61, 66]);
     }
 
@@ -376,7 +392,7 @@ mod tests {
             plain.push(0);
             plain.push(r[0] << 7 | r[1] << 6 | r[2] << 5);
         }
-        let flat = png_to_pdf(&png(3, 3, 1, 0, 0, &[], &plain), false).expect("plain");
+        let flat = png_to_pdf(&png(3, 3, 1, 0, 0, &[], &plain), false, false).expect("plain");
         let mut raw = Vec::new();
         for (x0, y0, dx, dy) in [(0usize, 0usize, 8usize, 8usize), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)] {
             let (pw, ph) = (3usize.saturating_sub(x0).div_ceil(dx), 3usize.saturating_sub(y0).div_ceil(dy));
@@ -392,7 +408,7 @@ mod tests {
                 raw.push(byte);
             }
         }
-        let laced = png_to_pdf(&png(3, 3, 1, 0, 1, &[], &raw), false).expect("interlaced");
+        let laced = png_to_pdf(&png(3, 3, 1, 0, 1, &[], &raw), false, false).expect("interlaced");
         assert_eq!(laced.data, flat.data);
     }
 }
@@ -405,7 +421,7 @@ mod corpus_check {
     #[ignore]
     fn png_dump() {
         let Ok(path) = std::env::var("RT_PNG") else { return };
-        let img = super::png_to_pdf(&std::fs::read(&path).expect("file"), false).expect("decodes");
+        let img = super::png_to_pdf(&std::fs::read(&path).expect("file"), false, false).expect("decodes");
         let out = std::env::var("RT_PNG_OUT").expect("RT_PNG_OUT");
         std::fs::write(format!("{out}.data"), &img.data).expect("write");
         std::fs::write(format!("{out}.mask"), img.smask.unwrap_or_default()).expect("write");

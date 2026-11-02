@@ -53,6 +53,8 @@ pub struct Vf {
     pub digest: u128,
 }
 
+codec_struct!(Vf { locals, packets, code, direct, digest });
+
 /// [`Vf::digest`].
 fn vf_digest(locals: &[(u32, u16)], packets: &[(u32, u32)], code: &[u8]) -> u128 {
     let mut h = crate::backend::backend_hash::ContentHasher::new();
@@ -73,6 +75,8 @@ pub struct VfTable {
     state: Vec<u32>,
     vfs: Vec<Vf>,
 }
+
+codec_struct!(VfTable { state, vfs });
 
 impl VfTable {
     /// The virtual font of font `f`, if it is one.
@@ -266,6 +270,22 @@ impl Machine<'_, '_> {
     pub(super) fn check_virtual_fonts(&mut self, b: u32) {
         let mut todo = Vec::new();
         self.page_fonts(b, &mut todo);
+        self.check_fonts(todo);
+    }
+
+    /// [`Self::check_virtual_fonts`] of a kept page whose fonts, in the order the walk meets
+    /// them, are `fonts` (`ShipMemo`); with `fonts` empty they are found and given back.
+    pub(super) fn check_page_fonts(&mut self, b: u32, fonts: &[u16]) -> Vec<u16> {
+        let mut all = Vec::new();
+        if fonts.is_empty() {
+            self.all_page_fonts(b, &mut all);
+        }
+        let todo = if fonts.is_empty() { &all } else { fonts }.iter().copied().filter(|&f| !self.vf.checked(f)).collect();
+        self.check_fonts(todo);
+        all
+    }
+
+    fn check_fonts(&mut self, mut todo: Vec<u16>) {
         while let Some(f) = todo.pop() {
             if !self.vf.checked(f) {
                 self.load_vf(f, &mut todo);
@@ -283,6 +303,20 @@ impl Machine<'_, '_> {
                 Kind::Char | Kind::Lig | Kind::Word if !self.vf.checked(n.font) && !todo.contains(&n.font) => todo.push(n.font),
                 Kind::Box => self.page_fonts(n.a as u32, todo),
                 Kind::Glue if (100..110).contains(&n.sub) => self.page_fonts(n.b as u32, todo),
+                _ => {}
+            }
+        }
+    }
+
+    /// Every font of the characters in box `b`, in [`Self::page_fonts`]' order.
+    pub(super) fn all_page_fonts(&self, b: u32, all: &mut Vec<u16>) {
+        let nodes = &self.e.nodes;
+        let list = nodes.boxes[b as usize].list;
+        for n in nodes.get(list) {
+            match n.kind {
+                Kind::Char | Kind::Lig | Kind::Word if all.last() != Some(&n.font) && !all.contains(&n.font) => all.push(n.font),
+                Kind::Box => self.all_page_fonts(n.a as u32, all),
+                Kind::Glue if (100..110).contains(&n.sub) => self.all_page_fonts(n.b as u32, all),
                 _ => {}
             }
         }

@@ -6,7 +6,7 @@
 //! Here the preamble is the same steps as data: [`mkpream`] runs `\@mkpream`'s class
 //! automaton over the column specification once and gives each column its ⟨u⟩ and ⟨v⟩
 //! steps ([`Cell`]). The alignment is made with a constructed preamble
-//! (`init_align_with`) whose templates are one native each (`\rt@tabu`, `\rt@tabv`),
+//! (`init_align_cols`) whose templates are one native each (`\rt@tabu`, `\rt@tabv`),
 //! which run the steps of the entry's column. The rest of `\@array` and `\endtabular` are
 //! builder calls.
 
@@ -67,6 +67,12 @@ pub(super) enum Cell {
     /// is a step of its own). The kernel's `\@startpbox` and `\@endpbox` (`false`) have no
     /// colour group and no `\everypar`.
     PEnd(bool),
+    /// array.sty's `m{w}` (`true`, `\setbox\ar@mcellbox\vbox`) or `b{w}` (`\vbox`) entry
+    /// start: [`Cell::PStart`]'s `\@startpbox{w}` in a `\vbox`.
+    MbStart(i32, bool),
+    /// `m`'s `\hfil` (from `\@endpbox`) and `\ar@align@mcell`: the box taller than
+    /// `\strutbox` is lowered by half its height less `\@arstrutbox`'s plus `\baselineskip`.
+    MAlign,
     /// array.sty's `\textonly@unskip`: `\ifhmode\unskip\fi`.
     HUnskip,
     /// The tokens of a `>{...}`, `<{...}`, `!{...}` or `@{...}`, read in place: the steps
@@ -184,6 +190,9 @@ pub(super) struct Tab {
     mc: Option<Preamble>,
     /// An `array` (math entries, `\@arraycr`), not a `tabular`.
     pub(super) math: bool,
+    /// amsmath's `cases` or a matrix: `\let\@ifnextchar\new@ifnextchar`, so `\\` looks for
+    /// its `*` and `[` without skipping spaces.
+    pub(super) ams: bool,
     /// Built by array.sty's `\@mkpream` ([`mkpream_pkg`]); `strut` is then the depth of the
     /// pending `\do@row@strut`, 0 for none.
     pub(super) pkg: bool,
@@ -198,8 +207,13 @@ pub(super) struct Tab {
     resume: (bool, u16, u16, u8),
     /// The tokens a siunitx `S` entry collected ([`Cell::SiBegin`]).
     si: Vec<Token>,
-    /// colortbl's `\CT@start`: `\CT@row@color` before the table, which `\CT@end` puts back.
-    ct_save: Option<String>,
+    /// colortbl's `\CT@start`: `\CT@row@color` and `\CT@arc@` before the table, which
+    /// `\CT@end` puts back.
+    ct_save: (Option<String>, Option<String>),
+    /// The entry's `\CT@column@color` (its `>{\columncolor{c}}`) and the tabular's
+    /// `\CT@cell@color` (`\cellcolor`), both drawn and cleared at the entry's end.
+    pub(super) ct_col: Option<String>,
+    pub(super) ct_cell: Option<String>,
 }
 
 /// One item of a column specification as `\@tfor` reads it: a character, or a braced
@@ -582,6 +596,8 @@ pub(super) fn mkpream_widths(spec: &[u8], math: bool, widths: &[i32], toks: &[Sp
     let mut list: Vec<Result<Cell, u8>> = vec![Ok(Cell::Strut)];
     let mut first_amp = true;
     let mut last = 4u8;
+    // The paragraph column waiting for its width: `p`, `m` or `b`.
+    let mut pkind = b'p';
     let acol = if math { Cell::ArrayAcol } else { Cell::Acol };
     // `\@addamp`.
     fn add_amp(list: &mut Vec<Result<Cell, u8>>, first: &mut bool) {
@@ -595,12 +611,13 @@ pub(super) fn mkpream_widths(spec: &[u8], math: bool, widths: &[i32], toks: &[Sp
         if last == 10 {
             let Item::Group(g) = item else { return None };
             let w = *widths.get(std::str::from_utf8(g).ok()?.parse::<usize>().ok()?)?;
+            // colortbl's `\@classz` keeps array.sty's entries inside its `\hbox` (colortbl.sty:45).
             if ct {
                 list.push(Ok(Cell::CtOpen));
             }
-            list.push(Ok(Cell::PStart(w, true)));
+            list.push(Ok(if pkind == b'p' { Cell::PStart(w, true) } else { Cell::MbStart(w, pkind == b'm') }));
             list.extend(before.take().map(|t| Ok(Cell::Toks(t))));
-            list.extend([Ok(Cell::Ignore), Err(SHARP), Ok(Cell::Unskip), Err(AFTER), Ok(Cell::PEnd(true)), Ok(Cell::Hfil), Ok(Cell::RowStrut)]);
+            list.extend([Ok(Cell::Ignore), Err(SHARP), Ok(Cell::Unskip), Err(AFTER), Ok(Cell::PEnd(true)), Ok(if pkind == b'm' { Cell::MAlign } else { Cell::Hfil }), Ok(Cell::RowStrut)]);
             if ct {
                 list.push(Ok(Cell::CtClose));
             }
@@ -638,7 +655,10 @@ pub(super) fn mkpream_widths(spec: &[u8], math: bool, widths: &[i32], toks: &[Sp
                 b'c' => (0, 0),
                 b'l' => (0, 1),
                 b'r' => (0, 2),
-                b'p' if !math => (10, 4),
+                b'p' | b'm' | b'b' if !math => {
+                    pkind = c;
+                    (10, 4)
+                }
                 b'|' => (1, 0),
                 b'@' => (7, 0),
                 b'>' if !math && before.is_none() => (9, 0),
@@ -778,18 +798,19 @@ pub(super) fn spec_cols(spec: &str, array: bool, x: bool, si: bool, types: &[(u8
     } else {
         spec
     };
-    // `\NC@ecs`: an `\extracolsep` becomes tabskip glue, which the steps do not set.
-    if spec.contains("extracolsep") {
+    // `\extracolsep` only as an `@{...}`'s first item: tabskip glue the preamble's scan
+    // sets ([`Machine::tabular_tabskips`]).
+    if spec.match_indices("extracolsep").any(|(k, _)| !spec[..k].ends_with("@{\\")) {
         return None;
     }
     let (b, mut out) = (spec.as_bytes(), Vec::with_capacity(spec.len()));
     let (mut n, mut m) = (0, 0);
     let mut i = 0;
     while i < b.len() {
-        if b.get(i + 1) == Some(&b'{') && matches!(b[i], b'p' | b'>' | b'<' | b'!' | b'@') {
+        if b.get(i + 1) == Some(&b'{') && matches!(b[i], b'p' | b'm' | b'b' | b'>' | b'<' | b'!' | b'@') {
             let k = super::balanced(&spec[i + 2..])?;
             out.push(b[i]);
-            if b[i] == b'p' {
+            if matches!(b[i], b'p' | b'm' | b'b') {
                 out.extend(format!("{{{n}}}").bytes());
                 n += 1;
             } else if k == 0 {
@@ -1008,11 +1029,14 @@ impl Machine<'_, '_> {
         self.read_arg(&mut spec);
         let pkg = self.array_pkg();
         let ct = self.colortbl();
+        if let Some(doc) = self.doc.as_mut() {
+            doc.tab_ecs.clear();
+        }
         let pre = self.spec_widths(&spec, pkg).and_then(|(s, w, t)| if pkg { mkpream_widths(&s, false, &w, &t, ct) } else { mkpream_kernel(&s, false, &w, &t) });
         let Some(pre) = pre else { return self.not_native("tabular preamble") };
         let Some(doc) = self.doc.as_mut() else { return };
         let (lists, pboxes) = (doc.lists.len(), doc.pbox.len());
-        doc.tabs.push(Tab { pre, lists, skip: Glue::default(), strut: 0, mc: None, math: false, pkg, pcell: (false, false), resume: (false, 0, 0, 0), pboxes, si: Vec::new(), ct_save: doc.ct_row.clone() });
+        doc.tabs.push(Tab { pre, lists, skip: Glue::default(), strut: 0, mc: None, math: false, pkg, pcell: (false, false), resume: (false, 0, 0, 0), pboxes, si: Vec::new(), ct_save: (doc.pkg.ct.row.clone(), doc.pkg.ct.arc.clone()), ct_col: None, ct_cell: None, ams: false });
         let group = match pos {
             Some('t') => VTOP_GROUP,
             Some('b') => VBOX_GROUP,
@@ -1062,13 +1086,23 @@ impl Machine<'_, '_> {
         let Some(pre) = (if pkg { mkpream_pkg(spec, true) } else { mkpream_array(spec) }) else { return self.not_native("array preamble") };
         let Some(doc) = self.doc.as_mut() else { return };
         let (lists, pboxes) = (doc.lists.len(), doc.pbox.len());
-        doc.tabs.push(Tab { pre, lists, skip: Glue::default(), strut: 0, mc: None, math: true, pkg, pcell: (false, false), resume: (false, 0, 0, 0), pboxes, si: Vec::new(), ct_save: doc.ct_row.clone() });
+        doc.tabs.push(Tab { pre, lists, skip: Glue::default(), strut: 0, mc: None, math: true, pkg, pcell: (false, false), resume: (false, 0, 0, 0), pboxes, si: Vec::new(), ct_save: (doc.pkg.ct.row.clone(), doc.pkg.ct.arc.clone()), ct_col: None, ct_cell: None, ams: false });
         doc.tab_group = match pos {
             Some('t') => VTOP_GROUP,
             Some('b') => VBOX_GROUP,
             _ => VCENTER_GROUP,
         };
         self.tabular_array();
+    }
+
+    /// amsmath's `cases` and matrices (mathtools' `matrix*` too): `\@ifnextchar` let to
+    /// `\new@ifnextchar` (mathtools' `\MH_nospace_ifnextchar:Nnn`), then the `array`.
+    pub(super) fn ams_array_open(&mut self, spec: &[u8]) {
+        let n = self.doc.as_ref().map_or(0, |d| d.tabs.len());
+        self.array_open_spec(None, spec);
+        if let Some(t) = self.doc.as_mut().and_then(|d| d.tabs.get_mut(n)) {
+            t.ams = true;
+        }
     }
 
     /// amsmath's `\hskip -\arraycolsep` on either side of a matrix.
@@ -1130,10 +1164,33 @@ impl Machine<'_, '_> {
         let v = [self.doc_id(TAB_V), Token::cs(END_TEMPLATE_ID)];
         let (u, v) = (self.e.toks.store(&u), self.e.toks.store(&v));
         // `tabular*`'s `\halign to`.
+        let tabskips = self.tabular_tabskips(n);
         match self.doc.as_mut().and_then(|d| d.tab_to.take()) {
-            Some(w) => self.init_align_cols(&vec![(u, v); n], vec![Glue::default(); n + 1], true, w),
-            None => self.init_align_with(n, u, v),
+            Some(w) => self.init_align_cols(&vec![(u, v); n], tabskips, true, w),
+            None => self.init_align_cols(&vec![(u, v); n], tabskips, false, 0),
         }
+    }
+
+    /// The tabskip glue around the `n` columns as the preamble's scan leaves it (§777):
+    /// `\ialign`'s `\tabskip\z@skip` first, after column `j` the value an `@{\extracolsep}`
+    /// in its templates set, and `\@array`'s `\tabskip\z@skip` before the `\cr` last.
+    fn tabular_tabskips(&mut self, n: usize) -> Vec<Glue> {
+        let mut out = vec![Glue::default(); n + 1];
+        let Some(doc) = self.doc.as_mut() else { return out };
+        let ecs = std::mem::take(&mut doc.tab_ecs);
+        let Some(pre) = doc.tabs.last().map(|t| &t.pre).filter(|_| !ecs.is_empty()) else { return out };
+        let mut cur = Glue::default();
+        for (j, col) in pre.cols.iter().enumerate().take(n.saturating_sub(1)) {
+            for op in &pre.ops[col[0] as usize..col[2] as usize] {
+                if let Cell::Toks(s) = op {
+                    if let Some(&(_, g)) = ecs.iter().find(|e| e.0 == *s) {
+                        cur = g;
+                    }
+                }
+            }
+            out[j + 1] = cur;
+        }
+        out
     }
 
     /// `\arraystretch` as the factor of `\arraystretch\ht\strutbox`: 1 unless the document
@@ -1213,6 +1270,22 @@ impl Machine<'_, '_> {
                     return;
                 }
                 continue;
+            }
+            // The entry's `}` (`\d@llarend`, colortbl's inner `\egroup`) after a `\color` in
+            // it: the group's `\aftergroup\reset@color` comes back at once (§1065), before
+            // the steps after it, which then go on from `Tab::resume`.
+            if matches!(op, Cell::Close | Cell::CtClose) && self.colored() {
+                if let Some(t) = self.doc.as_mut().and_then(|d| d.tabs.last_mut()) {
+                    t.resume = (mc, i as u16 + 1, b, 0);
+                }
+                let then: super::Native = if op == Cell::Close { |m| m.cell_resume() } else { |m| { m.ct_close_box(); m.cell_resume() } };
+                if let Some(d) = self.doc.as_mut() {
+                    d.steps.push(vec![super::Op::Call(then)]);
+                }
+                let step = self.doc_id(super::STEP);
+                self.input.back(step);
+                self.end_group(SIMPLE_GROUP);
+                return;
             }
             self.cell_step(op);
         }
@@ -1341,10 +1414,12 @@ impl Machine<'_, '_> {
     /// subtype 110 holding the rule's index, as `scan_box` makes them).
     pub(super) fn cline_rule(&mut self) {
         let w = self.rw(R_ARRAYRULEWIDTH);
-        let r = self.e.nodes.rule_node([RUNNING, w, 0]);
-        let mut n = self.e.nodes.glue_node(fil_glue(Prim::Hfill), 110);
-        n.b = r.a;
-        self.cur.push(n);
+        self.ct_arc_rule(|m| {
+            let r = m.e.nodes.rule_node([RUNNING, w, 0]);
+            let mut n = m.e.nodes.glue_node(fil_glue(Prim::Hfill), 110);
+            n.b = r.a;
+            m.cur.push(n);
+        });
     }
 
     fn cell_step(&mut self, op: Cell) {
@@ -1401,7 +1476,11 @@ impl Machine<'_, '_> {
             Cell::MathOff => self.after_math(),
             Cell::ArrayAcol => hskip(self, self.rw(R_ARRAYCOLSEP)),
             Cell::Quad => self.build_quad(),
-            Cell::VLine => self.build_rule([self.rw(R_ARRAYRULEWIDTH), RUNNING, RUNNING]),
+            // colortbl's `\@arrayrule`: `{\CT@arc@\vline}`.
+            Cell::VLine => {
+                let w = self.rw(R_ARRAYRULEWIDTH);
+                self.ct_arc_rule(|m| m.build_rule([w, RUNNING, RUNNING]));
+            }
             Cell::RowStrut => {
                 let d = self.doc.as_mut().and_then(|d| d.tabs.last_mut()).map_or(0, |t| std::mem::take(&mut t.strut));
                 if d > 0 {
@@ -1432,6 +1511,34 @@ impl Machine<'_, '_> {
             // \@width\z@ \@height\z@ \@depth\dp#1`, which in vertical mode starts a paragraph
             // (§1090). [`Self::run_cells`] runs it, as the steps after it may wait.
             Cell::PEnd(_) => {}
+            Cell::MbStart(w, _) => {
+                self.open_box(VBOX_GROUP, Ctx::Shift(0), false, 0, false);
+                if self.colored() {
+                    self.begin_group(SEMI_SIMPLE_GROUP);
+                }
+                self.set_dimen_named(param!("hsize"), w);
+                if let Some(d) = self.doc.as_mut() {
+                    let saved = (std::mem::take(&mut d.nobreak), std::mem::take(&mut d.noskipsec));
+                    if let Some(t) = d.tabs.last_mut() {
+                        t.pcell = saved;
+                    }
+                }
+                self.par_box_restore();
+                self.set_everypar(super::P_CELL);
+            }
+            Cell::MAlign => {
+                let Some(b) = self.cur.pop() else { return };
+                let n = self.e.nodes.glue_node(fil_glue(Prim::Hfil), 0);
+                self.cur.push(n);
+                let ht = self.e.nodes.boxes[b.a as usize].height;
+                if ht > self.strut_height() {
+                    let ar = self.e.eqtb.box_reg(ARSTRUT_BOX).map_or(0, |b| self.e.nodes.boxes[b as usize].height);
+                    let d = ht - ar + self.glue_param(BASELINE_SKIP).width;
+                    // `\lower.5\dimen@`: §455's `xn_over_d` of the fraction 32768.
+                    self.e.nodes.boxes[b.a as usize].shift = crate::backend::scaled::xn_over_d(d, 32768, 0x10000);
+                }
+                self.cur.push(b);
+            }
         }
     }
 
@@ -1441,23 +1548,25 @@ impl Machine<'_, '_> {
     /// `\reset@color` (the pop); then the zero-width rule as tall as the entry and the entry.
     fn ct_close(&mut self) {
         self.end_group(SIMPLE_GROUP);
+        self.ct_close_box();
+    }
+
+    /// [`Self::ct_close`] after its inner group: the box's `\egroup`, the colours, the entry.
+    fn ct_close_box(&mut self) {
         self.package();
         let Some(b) = self.e.eqtb.box_reg(0) else { return };
         let r = self.e.nodes.boxes[b as usize];
-        let color = self.doc.as_ref().and_then(|d| d.ct_row.clone());
-        if let Some(spec) = color {
-            let Some(lit) = self.color_literal(None, &spec, false) else { return self.not_native("a colour the native job does not know") };
+        // `\CT@column@color \CT@row@color \CT@cell@color`, each `\CT@color` a push.
+        let (col, cell) = self.doc.as_mut().and_then(|d| d.tabs.last_mut()).map_or((None, None), |t| (t.ct_col.take(), t.ct_cell.take()));
+        let row = self.doc.as_ref().and_then(|d| d.pkg.ct.row.clone());
+        let colors: Vec<String> = [col, row, cell].into_iter().flatten().collect();
+        if !colors.is_empty() {
             self.begin_group(SEMI_SIMPLE_GROUP);
-            let Some(doc) = self.doc.as_mut() else { return };
-            let i = match doc.colors.iter().position(|c| *c == lit) {
-                Some(i) => i,
-                None => {
-                    doc.colors.push(lit.clone());
-                    doc.colors.len() - 1
+            for c in &colors {
+                if !self.ct_push(c) {
+                    return;
                 }
-            };
-            self.e.eqtb.set_word(super::CURRENT_COLOR, i as i32 + 1, false);
-            self.color_stack(Some(&lit));
+            }
             let sep = self.rw(R_TABCOLSEP);
             self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, -sep) });
             // `\vrule` with no size: 0.4pt wide, its height and depth the row's.
@@ -1469,7 +1578,9 @@ impl Machine<'_, '_> {
             let n = self.e.nodes.glue_node(Glue { width: -r.width, stretch: -65536, stretch_order: 2, ..Glue::default() }, 0);
             self.cur.push(n);
             self.end_group(SEMI_SIMPLE_GROUP);
-            self.color_stack(None);
+            for _ in &colors {
+                self.color_stack(None);
+            }
         }
         self.build_rule([0, r.height, RUNNING]);
         self.cur.extend_from_slice(self.e.nodes.get(r.list));
@@ -1486,12 +1597,12 @@ impl Machine<'_, '_> {
         let k = self.e.eqtb.word(super::ROWCOLORS);
         let Some(doc) = self.doc.as_mut() else { return };
         if k <= 0 {
-            doc.ct_row = None;
+            doc.pkg.ct.row = None;
             return;
         }
-        let Some((first, odd, even)) = doc.ct_specs.get(k as usize - 1).cloned() else { return };
-        doc.ct_num += 1;
-        doc.ct_row = if doc.ct_num < first { None } else if doc.ct_num % 2 != 0 { odd } else { even };
+        let Some((first, odd, even)) = doc.pkg.ct.specs.get(k as usize - 1).cloned() else { return };
+        doc.pkg.ct.num += 1;
+        doc.pkg.ct.row = if doc.pkg.ct.num < first { None } else if doc.pkg.ct.num % 2 != 0 { odd } else { even };
     }
 
     /// colortbl's `\rowcolors{first}{odd}{even}`: `\global\rownum\z@`, the colours for the
@@ -1511,9 +1622,9 @@ impl Machine<'_, '_> {
         let Ok(first) = first.trim().parse::<i32>() else { return self.not_native("\\rowcolors with a first row that is not a number") };
         let color = |c: String| (!c.trim().is_empty()).then(|| c.trim().to_string());
         let Some(doc) = self.doc.as_mut() else { return };
-        doc.ct_specs.push((first, color(odd), color(even)));
-        doc.ct_num = 0;
-        let k = doc.ct_specs.len() as i32;
+        doc.pkg.ct.specs.push((first, color(odd), color(even)));
+        doc.pkg.ct.num = 0;
+        let k = doc.pkg.ct.specs.len() as i32;
         self.e.eqtb.set_word(super::ROWCOLORS, k, false);
         self.ignore_spaces();
     }
@@ -1631,7 +1742,8 @@ impl Machine<'_, '_> {
         }
         let (a, b) = ((f / 10) as usize, (f % 10) as usize);
         let s: Option<Vec<u8>> = toks.iter().map(|t| (t.cs_id().is_none() && t.cat() == Some(Cat::Other)).then(|| t.chr() as u8)).collect();
-        let parts = s.as_deref().and_then(super::siunitx::number).filter(|(i, d)| i.len() <= a && d.len() <= b).map(|(i, d)| (i.to_vec(), d.to_vec()));
+        // Parts under five digits: no digit groups (`group-minimum-digits`).
+        let parts = s.as_deref().and_then(super::siunitx::number).filter(|(i, d)| i.len() <= 4 && d.len() <= 4).map(|(i, d)| (i.to_vec(), d.to_vec()));
         let Some((int, dec)) = parts else {
             self.not_native("an S entry the native path does not take");
             return true;
@@ -1639,7 +1751,10 @@ impl Machine<'_, '_> {
         let eights = [b'8'; 9];
         let wi = self.si_width(&eights[..a], &[]);
         let wd = if b == 0 { Some(0) } else { self.si_width(&[], &eights[..b]) };
-        let (Some(wi), Some(wd)) = (wi, wd) else {
+        // A part wider than its model (`\__siunitx_table_print_format_auxii:w`): the integer
+        // is set to the model's width behind an `\hss`; the decimal part's `carry` goes negative.
+        let wide = self.si_width(&int, &[]).zip(wi).map(|(w, wi)| w > wi);
+        let (Some(wi), Some(wd), Some(wide)) = (wi, wd, wide) else {
             self.not_native("an S entry the native path does not take");
             return true;
         };
@@ -1650,6 +1765,9 @@ impl Machine<'_, '_> {
         self.build_hbox_to(wi, |m| {
             m.build_glue(fil, true);
             m.build_glue(fil, true);
+            if wide {
+                m.build_glue(fil_glue(Prim::Hss), true);
+            }
             ok = m.si_formula(&int, &[]);
         });
         let wdec = self.si_math_box(&[], &dec).and_then(|_| self.cur.last().map(|n| self.e.nodes.boxes[n.a as usize].width));
@@ -1751,8 +1869,21 @@ impl Machine<'_, '_> {
         }
         self.after_math();
         self.input.align_state += 1;
-        let _ = self.next_is('*');
-        let arg = if self.next_is('[') { Some(self.bracket_arg()) } else { None };
+        let ams = self.doc.as_ref().and_then(|d| d.tabs.last()).is_some_and(|t| t.ams);
+        let next_is = |m: &mut Self, c: char| {
+            if !ams {
+                return m.next_is(c);
+            }
+            // `\new@ifnextchar`: the next token itself, a space too.
+            let Some(t) = m.get_token() else { return false };
+            let hit = t == Token::char(Cat::Other, c);
+            if !hit {
+                m.input.back(t);
+            }
+            hit
+        };
+        let _ = next_is(self, '*');
+        let arg = if next_is(self, '[') { Some(self.bracket_arg()) } else { None };
         self.input.align_state -= 1;
         let cr = Token::cs(self.doc.as_ref().map_or(0, |d| d.cr_id));
         let mut tail = Vec::new();
@@ -1847,6 +1978,14 @@ impl Machine<'_, '_> {
                 self.hline();
                 Some(false)
             }
+            k if k == doc!("rt@rowcolor") => {
+                self.row_color();
+                Some(false)
+            }
+            k if k == doc!("rt@arrayrulecolor") => {
+                self.arrayrule_color_row();
+                Some(false)
+            }
             k if k == super::BT_RULES[5] => self.cmidrule(),
             k if super::BT_RULES.contains(&k) => {
                 self.bt_rule(super::BT_RULES.iter().position(|&r| r == k).unwrap_or(0));
@@ -1905,7 +2044,7 @@ impl Machine<'_, '_> {
         self.begin_group(NO_ALIGN_GROUP);
         self.normal_paragraph();
         let w = self.rw(R_ARRAYRULEWIDTH);
-        self.build_rule([RUNNING, w, 0]);
+        self.ct_arc_rule(|m| m.build_rule([RUNNING, w, 0]));
         if let Some(t) = self.get_token() {
             let again = self.meaning(t) == Meaning::Doc(HLINE as u16);
             self.input.back(t);
@@ -1993,7 +2132,9 @@ impl Machine<'_, '_> {
         if lt {
             return self.bt_lt_rule();
         }
-        self.build_rule([RUNNING, get(self, BT_THIS_WIDTH), 0]);
+        // `{\CT@arc@\hrule\@height\@thisrulewidth}`.
+        let w = get(self, BT_THIS_WIDTH);
+        self.ct_arc_rule(|m| m.build_rule([RUNNING, w, 0]));
         self.bt_end(r, true);
     }
 
@@ -2130,11 +2271,13 @@ impl Machine<'_, '_> {
     pub(super) fn cmid_leaders(&mut self) {
         let Some(r) = self.doc.as_ref().and_then(|d| d.booktabs) else { return };
         let w = self.e.eqtb.word(r[super::BT_THIS_WIDTH]);
-        let rule = self.e.nodes.rule_node([RUNNING, w, 0]);
-        let mut n = self.e.nodes.glue_node(fil_glue(Prim::Hfill), 110);
-        n.b = rule.a;
-        self.cur.push(n);
-        self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, 0) });
+        self.ct_arc_rule(|m| {
+            let rule = m.e.nodes.rule_node([RUNNING, w, 0]);
+            let mut n = m.e.nodes.glue_node(fil_glue(Prim::Hfill), 110);
+            n.b = rule.a;
+            m.cur.push(n);
+            m.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, 0) });
+        });
     }
 
     /// `\@xcmidrule`: after another `\cmidrule`, `\vskip-\@thisrulewidth`; before
@@ -2202,7 +2345,7 @@ impl Machine<'_, '_> {
                 i += k + 1;
                 continue;
             }
-            if matches!(c, 'p' | '>' | '<' | '!' | '@') && spec.get(i).is_some_and(|n| n.cat() == Some(Cat::BeginGroup)) {
+            if matches!(c, 'p' | 'm' | 'b' | '>' | '<' | '!' | '@') && spec.get(i).is_some_and(|n| n.cat() == Some(Cat::BeginGroup)) {
                 let mut depth = 0;
                 let start = i + 1;
                 while i < spec.len() {
@@ -2217,8 +2360,44 @@ impl Machine<'_, '_> {
                     }
                 }
                 let mut arg = spec[start..i - 1].to_vec();
+                // `@{\extracolsep{x}...}`: the kernel's `\@addtopreamble` expands it to
+                // `\tabskip x\relax` (array.sty's `\NC@ecs` the same), whose assignment the
+                // preamble's scan takes (§782), leaving `\relax` in the template.
+                let ecs = self.e.cs.intern("extracolsep");
+                if c == '@' && arg.first().and_then(|t| t.cs_id()) == Some(ecs) {
+                    let k = match arg.get(1) {
+                        Some(t) if t.cat() == Some(Cat::BeginGroup) => {
+                            let mut depth = 0;
+                            arg.iter().skip(1).position(|t| {
+                                match t.cat() {
+                                    Some(Cat::BeginGroup) => depth += 1,
+                                    Some(Cat::EndGroup) => depth -= 1,
+                                    _ => {}
+                                }
+                                depth == 0
+                            })? + 1
+                        }
+                        _ => return None,
+                    };
+                    let mut x = arg[2..k].to_vec();
+                    x.push(relax);
+                    self.back_list(&x);
+                    let g = self.scan_glue(false);
+                    if self.get_token() != Some(relax) {
+                        return None;
+                    }
+                    arg.splice(..=k, [relax]);
+                    if array {
+                        arg.push(relax);
+                    }
+                    let span = self.e.toks.store(&arg);
+                    self.doc.as_mut()?.tab_ecs.push((span, g));
+                    bytes.extend(format!("@{{t{}}}", toks.len()).bytes());
+                    toks.push(span);
+                    continue;
+                }
                 bytes.push(c as u8);
-                if c != 'p' {
+                if !matches!(c, 'p' | 'm' | 'b') {
                     if arg.is_empty() {
                         bytes.extend(b"{}");
                         continue;
@@ -2284,7 +2463,7 @@ impl Machine<'_, '_> {
     pub(super) fn longtable_begin(&mut self) {
         // colortbl's row colours in a longtable (each chunk's `\LT@bchunk` runs the
         // preamble's `\cr` again): not native yet.
-        if self.e.eqtb.word(super::ROWCOLORS) > 0 || self.doc.as_ref().is_some_and(|d| d.ct_row.is_some()) {
+        if self.e.eqtb.word(super::ROWCOLORS) > 0 || self.doc.as_ref().is_some_and(|d| d.pkg.ct.row.is_some()) {
             return self.not_native("colortbl: row colours in a longtable");
         }
         self.par();
@@ -2362,8 +2541,9 @@ impl Machine<'_, '_> {
             let r = super::R_FIGURE + 1;
             let n = self.rw(r) + 1;
             self.set_rw(r, n, true);
-            let prefix = self.doc.as_ref().map_or(String::new(), |d| d.the_prefix[1].clone());
-            self.store_current_label(&format!("{prefix}{n}"));
+            let Some(text) = self.float_the(1, n) else { return self.not_native("a \\thetable the native job cannot read") };
+            self.store_current_label(&text);
+            self.cref_step("table");
             // hyperref's patch of `\LT@array`: `\hyper@makecurrent{table}`.
             if self.hyper() {
                 // report: `\theHtable` is `\theHchapter.\the\value{table}` (`float_href`).
@@ -2386,7 +2566,7 @@ impl Machine<'_, '_> {
         let spec = spec.to_vec();
         let ct = self.colortbl();
         let pre = self.spec_widths(&spec, pkg).and_then(|(s, w, t)| if pkg { mkpream_widths(&s, false, &w, &t, ct) } else { mkpream_kernel(&s, false, &w, &t) });
-        let Some(mut pre) = pre else { return self.not_native("longtable preamble") };
+        let Some(mut pre) = pre.filter(|_| self.doc.as_mut().is_some_and(|d| std::mem::take(&mut d.tab_ecs).is_empty())) else { return self.not_native("longtable preamble") };
         // Without array.sty, `\@startpbox` is `\vtop\LT@startpbox` and `\@endpbox` is
         // `\LT@endpbox`: array.sty's colour group and `\everypar`.
         for op in pre.ops.iter_mut() {
@@ -2423,7 +2603,7 @@ impl Machine<'_, '_> {
         }
         let Some(doc) = self.doc.as_mut() else { return };
         let (lists, pboxes) = (doc.lists.len(), doc.pbox.len());
-        doc.tabs.push(Tab { pre, lists, skip: Glue::default(), strut: 0, mc: None, math: false, pkg, pcell: (false, false), resume: (false, 0, 0, 0), pboxes, si: Vec::new(), ct_save: doc.ct_row.clone() });
+        doc.tabs.push(Tab { pre, lists, skip: Glue::default(), strut: 0, mc: None, math: false, pkg, pcell: (false, false), resume: (false, 0, 0, 0), pboxes, si: Vec::new(), ct_save: (doc.pkg.ct.row.clone(), doc.pkg.ct.arc.clone()), ct_col: None, ct_cell: None, ams: false });
         let depth = doc.tabs.len();
         let Some(lt) = doc.lt.as_mut() else { return };
         (lt.left, lt.right, lt.depth, lt.chunk, lt.head) = (left, right, depth, 0, None);
@@ -2455,7 +2635,7 @@ impl Machine<'_, '_> {
     }
 
     /// Whether the innermost `tabular` is a longtable's.
-    fn in_longtable(&self) -> bool {
+    pub(super) fn in_longtable(&self) -> bool {
         self.doc.as_ref().is_some_and(|d| d.lt.as_ref().is_some_and(|l| l.depth == d.tabs.len()))
     }
 
@@ -2853,11 +3033,15 @@ impl Machine<'_, '_> {
         let math = t.math;
         // `\endarray`'s `\CT@end` (colortbl).
         if let Some(d) = self.doc.as_mut() {
-            d.ct_row = t.ct_save;
+            (d.pkg.ct.row, d.pkg.ct.arc) = t.ct_save;
         }
         if !math {
             self.after_math();
             self.package();
+            // threeparttable's table: its box's end, then `\end`'s group.
+            if self.tpt_phase() == super::threeparttable::IN_TABLE && self.doc.as_ref().is_some_and(|d| d.tabs.is_empty()) {
+                return self.tpt_table_close();
+            }
             self.end_group(SEMI_SIMPLE_GROUP);
         }
     }

@@ -2,6 +2,7 @@
 //! document entries, appended as the pdfTeX primitives hpdftex.def runs would append them.
 
 use super::super::engine_node::{BoxRec, Kind, Node};
+use super::super::engine_catcode::Cat;
 use super::super::engine_token::Token;
 use super::Glue;
 use super::super::engine_run::Machine;
@@ -27,18 +28,38 @@ pub(super) struct HyperOpts {
     /// `pdfauthor`, `pdftitle`, `pdfsubject`, `pdfcreator`, `pdfproducer`, `pdfkeywords` as
     /// `\pdfstringdef` wrote them, in `\PDF@FinishDoc`'s order.
     info: [Option<String>; 6],
+    /// `pdfborder` (`\@pdfborder`, `0 0 1` by default): a link's `/Border` without
+    /// `colorlinks` or `hidelinks`.
+    border: String,
+    /// `bookmarksopen`: `\Hy@writebookmark`'s `count` positive (open) at every level
+    /// (`bookmarksopenlevel` is `\maxdimen`).
+    open: bool,
+    /// `pdfstartview` (`Fit` by default): the view of the catalog's `/OpenAction`.
+    view: String,
+    /// `pdfpagemode` (`UseOutlines` with bookmarks, hyperref's default).
+    mode: String,
+    /// `bookmarksnumbered`: `\numberline` is `\Hy@numberline` (`#1 `) in the bookmark
+    /// titles, not `\@gobble` (hpdftex.def:1651).
+    numbered: bool,
+    /// `pdfdisplaydoctitle`: `/DisplayDocTitle true` in the catalog's `/ViewerPreferences`.
+    doctitle: bool,
+    /// `pdfusetitle`: `\Hy@UseMaketitleInfos` fills an empty `pdftitle` and `pdfauthor`
+    /// from `\title` and `\author` (hyperref.sty:6215-6278).
+    pub(super) usetitle: bool,
 }
 
 impl Default for HyperOpts {
     fn default() -> Self {
-        Self { hide: false, colorlinks: false, colors: ["red", "green", "magenta"].map(String::from), info: Default::default() }
+        Self { hide: false, colorlinks: false, colors: ["red", "green", "magenta"].map(String::from), info: Default::default(), border: "0 0 1".into(), open: false, view: "Fit".into(), mode: "UseOutlines".into(), numbered: false, doctitle: false, usetitle: false }
     }
 }
 
 const INFO_KEYS: [&str; 6] = ["pdfauthor", "pdftitle", "pdfsubject", "pdfcreator", "pdfproducer", "pdfkeywords"];
 
 /// `\pdfstringdef` of plain text (hyperref's `unicode`): `\376\377`, then each character as
-/// `\000c`, a space `\000\040`. Text with characters it escapes or changes is `None`.
+/// `\000c`, a space `\000\040`; a UTF-8 character of the BMP (the source's bytes, one to a
+/// `char`, as for bookmark titles) both UTF-16BE bytes as octal escapes (`bookmark_char`).
+/// Text with characters it escapes or changes is `None`.
 fn pdf_string(v: &str) -> Option<String> {
     if v.is_empty() {
         return Some(String::new());
@@ -46,6 +67,8 @@ fn pdf_string(v: &str) -> Option<String> {
     if v.contains("--") || v.contains("``") || v.contains("''") || v.contains("  ") {
         return None;
     }
+    let bytes = v.chars().map(|c| u8::try_from(c as u32)).collect::<Result<Vec<u8>, _>>().ok()?;
+    let v = String::from_utf8(bytes).ok()?;
     let mut out = String::from("\\376\\377");
     for c in v.chars() {
         match c {
@@ -55,6 +78,8 @@ fn pdf_string(v: &str) -> Option<String> {
                 out.push_str("\\000");
                 out.push(c);
             }
+            // U+00A0 is utf8.def's `\nobreakspace`, which `\pdfstringdef` changes.
+            c if c > '\u{a0}' && c <= '\u{ffff}' => bookmark_char(c, &mut out),
             _ => return None,
         }
     }
@@ -187,10 +212,20 @@ impl Machine<'_, '_> {
     pub(super) fn hyper_begin_document(&mut self) {
         // hpdftex.def's `\pdflinkmargin1pt` (global, at load: no preamble box holds a link).
         self.e.eqtb.set_word(param!("pdflinkmargin"), 65536, true);
-        self.add_catalog("/PageMode/UseOutlines", Some((1, "/Fit")));
-        self.add_catalog("", None);
-        // `\PDF@FinishDoc`: `/Producer` only when set (pdfTeX writes its own).
-        let info = self.doc.as_ref().map(|d| d.hy.info.clone()).unwrap_or_default();
+        let (mode, view) = self.doc.as_ref().map(|d| (d.pkg.hy.mode.clone(), d.pkg.hy.view.clone())).unwrap_or_default();
+        self.add_catalog(&format!("/PageMode/{mode}"), Some((1, &format!("/{view}"))));
+        // `\PDF@SetupDoc`'s second `\pdfcatalog`: `/ViewerPreferences<<\Hy@temp>>` when
+        // `\Hy@temp` is not empty.
+        let doctitle = self.doc.as_ref().is_some_and(|d| d.pkg.hy.doctitle);
+        self.add_catalog(if doctitle { "/ViewerPreferences<</DisplayDocTitle true>>" } else { "" }, None);
+        // `\PDF@FinishDoc`: `\Hy@UseMaketitleInfos`, then `/Producer` only when set (pdfTeX
+        // writes its own).
+        if self.doc.as_ref().is_some_and(|d| d.pkg.hy.usetitle) {
+            if let Err(what) = self.use_title() {
+                return self.not_native(what);
+            }
+        }
+        let info = self.doc.as_ref().map(|d| d.pkg.hy.info.clone()).unwrap_or_default();
         let field = |i: usize, default: &str| info[i].clone().unwrap_or_else(|| default.to_string());
         let mut text = format!("/Author({})/Title({})/Subject({})/Creator({})", field(0, ""), field(1, ""), field(2, ""), field(3, "LaTeX with hyperref"));
         if let Some(p) = &info[4] {
@@ -199,7 +234,9 @@ impl Machine<'_, '_> {
         text.push_str(&format!("/Keywords({})", field(5, "")));
         self.add_info(&text);
         // hyperref's `\addcontentsline` writes no bookmark while `\@currentHref` is empty.
-        let entries: Option<Vec<(usize, String, String)>> = self.doc.as_ref().and_then(|d| d.contents.as_ref()).map(|t| t.iter().filter(|e| e.number != "#").map(|e| (e.level, e.number.clone(), e.title.clone())).collect());
+        // An entry past the bookmarks' depth writes none; an unnumbered heading's ("" with an
+        // anchor) links to its `section*.N` ("#href").
+        let entries: Option<Vec<(usize, String, String)>> = self.doc.as_ref().and_then(|d| d.contents.as_ref()).map(|t| t.iter().filter(|e| e.number != "#" && e.level < super::LOF && self.bookmark_level(e.level)).map(|e| (e.level, if e.href.is_empty() { e.number.clone() } else { format!("#{}", e.href) }, e.title.clone())).collect());
         if let Some(entries) = entries {
             if let Err(what) = self.bookmarks(&entries) {
                 return self.not_native(what);
@@ -207,6 +244,82 @@ impl Machine<'_, '_> {
         }
         self.append_dest("Doc-Start".to_string());
         self.cur.push(Node::new(Kind::Penalty, 10000));
+    }
+
+    /// `\Hy@UseMaketitleString` for `title` and `author`: an empty `\@pdftitle` or
+    /// `\@pdfauthor` becomes `\pdfstringdef` of the argument `\title` or `\author` gave, with
+    /// `\\` (and `\newline`) `\Hy@newline@title` (` #1`) or `\Hy@newline@author` (`, #1`),
+    /// `\and` `; ` and `\thanks` gobbled. hyperref captures them as `\title` runs and writes
+    /// Info at the first shipout; here they are read at `\begin{document}`, so a `\title` or
+    /// `\author` in the body declines (`store`), as do a class with its own title commands
+    /// and authblk.
+    fn use_title(&mut self) -> Result<(), &'static str> {
+        let Some(doc) = self.doc.as_ref() else { return Ok(()) };
+        // amsart's `\title` and `\author` are its own (`ams_title`); the letter classes have none.
+        if doc.ams.is_some() || doc.letter.is_some() || doc.authblk.is_some() {
+            return Err("hyperref: pdfusetitle under amsart, a letter class, or authblk");
+        }
+        let args = [doc.stored[0].clone(), doc.stored[1].clone()];
+        for (arg, sep, slot) in [(&args[0], " ", 1), (&args[1], ", ", 0)] {
+            if self.doc.as_ref().is_some_and(|d| d.pkg.hy.info[slot].as_deref().is_some_and(|v| !v.is_empty())) {
+                continue;
+            }
+            let mut text = String::new();
+            let mut i = 0;
+            while i < arg.len() {
+                let t = arg[i];
+                i += 1;
+                if t.cs_id().is_none() {
+                    match t.cat() {
+                        Some(Cat::BeginGroup | Cat::EndGroup) => {}
+                        Some(Cat::Space) => text.push(' '),
+                        _ => text.push(t.chr()),
+                    }
+                    continue;
+                }
+                match self.name_of(t).as_str() {
+                    "\\\\" | "\\newline" => {
+                        if arg.get(i).is_some_and(|n| n.cs_id().is_none() && matches!(n.chr(), '[' | '*')) {
+                            return Err("hyperref: pdfusetitle with \\\\[ or \\\\*");
+                        }
+                        // `#1` is the next argument: spaces before it are skipped.
+                        while arg.get(i).is_some_and(|n| n.cat() == Some(Cat::Space)) {
+                            i += 1;
+                        }
+                        text.push_str(sep);
+                    }
+                    "\\and" => text.push_str("; "),
+                    "\\thanks" => {
+                        // `\@gobble`: one argument.
+                        while arg.get(i).is_some_and(|n| n.cat() == Some(Cat::Space)) {
+                            i += 1;
+                        }
+                        if arg.get(i).is_some_and(|n| n.cat() == Some(Cat::BeginGroup)) {
+                            let mut depth = 0;
+                            while let Some(n) = arg.get(i) {
+                                i += 1;
+                                match n.cat() {
+                                    Some(Cat::BeginGroup) => depth += 1,
+                                    Some(Cat::EndGroup) => depth -= 1,
+                                    _ => {}
+                                }
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    _ => return Err("hyperref: pdfusetitle with a command in \\title or \\author"),
+                }
+            }
+            let v = pdf_string(&text).ok_or("hyperref: a document property with characters \\pdfstringdef changes")?;
+            if let Some(d) = self.doc.as_mut() {
+                d.pkg.hy.info[slot] = Some(v);
+            }
+        }
+        Ok(())
     }
 
     /// `\hyper@anchorstart{name}` in vertical mode (`\new@pdflink`): `\Hy@SaveLastskip`,
@@ -253,21 +366,73 @@ impl Machine<'_, '_> {
         self.e.eqtb.set_toks(super::CURRENT_HREF, span, global);
     }
 
+    /// A bookmark title holding math, as `\pdfstringdef` reads its tokens (checked against
+    /// pdfLaTeX's `.out`): math shifts, `^`, `_` and braces in math go ("Token not allowed
+    /// ... removing"), as does an unexpandable `\mathchardef` command (`\beta`, `\leq`) with
+    /// the spaces its name swallowed; every other space token stays, the first and the last
+    /// too (`$\beta$ x` is " x"). An empty result is an empty string without the mark.
+    fn bookmark_math(&self, title: &str) -> Result<String, &'static str> {
+        const NOT: &str = "hyperref: a bookmark title that is not plain text";
+        let mut out = String::new();
+        let (mut math, mut space) = (false, false);
+        let mut chars = title.chars().peekable();
+        while let Some(c) = chars.next() {
+            let was_space = std::mem::take(&mut space);
+            match c {
+                ' ' | '\n' | '\t' => {
+                    if !was_space {
+                        out.push_str("\\000\\040");
+                    }
+                    space = true;
+                }
+                '$' if chars.peek() == Some(&'$') => return Err(NOT),
+                '$' => math = !math,
+                '^' | '_' | '{' | '}' if math => {}
+                '\\' => {
+                    let mut word = String::new();
+                    while let Some(&l) = chars.peek().filter(|l| l.is_ascii_alphabetic()) {
+                        word.push(l);
+                        chars.next();
+                    }
+                    if !math || word.is_empty() || self.si_math_char(&word).is_none() {
+                        return Err(NOT);
+                    }
+                    while chars.peek().is_some_and(|l| matches!(l, ' ' | '\t' | '\n')) {
+                        chars.next();
+                    }
+                }
+                'A'..='Z' | 'a'..='z' | '0'..='9' | '!' | '(' | ')' | '*' | '+' | ',' | '-' | '.' | '/' | ':' | ';' | '<' | '=' | '>' | '?' | '[' | ']' | '|' => bookmark_char(c, &mut out),
+                _ => return Err(NOT),
+            }
+        }
+        if math {
+            return Err(NOT);
+        }
+        Ok(if out.is_empty() { out } else { format!("\\376\\377{out}") })
+    }
+
     /// `\ReadBookmarks` at `\begin{document}`: one `\pdfoutline goto name{anchor} count-n
     /// {title}` per contents entry, in order, n its direct children, the title as
     /// `\pdfstringdef` makes it (UTF-16BE with its mark, in octal escapes). `Err` for what is
-    /// not ported: a title that is not plain text, a level jump.
+    /// not ported: a title that is not plain text.
     pub(super) fn bookmarks(&mut self, entries: &[(usize, String, String)]) -> Result<(), &'static str> {
         let report = self.doc.as_ref().is_some_and(|d| d.report);
-        let mut prev = None;
+        // `\@@writetorep`'s level check (hpdftex.def): the first bookmark keeps its level
+        // (it sets `\Hy@levelcheck`); a later one more than one below the last is "level
+        // fixed" to the last plus one. A bookmark's parent is the last at its level less one
+        // (`\Parent<n>`), so its children are the bookmarks after it one level below, up to
+        // one at its level or above.
+        let mut levels: Vec<usize> = Vec::with_capacity(entries.len());
         for (level, _, _) in entries {
-            if *level > prev.map_or(0, |p: usize| p + 1) {
-                return Err("hyperref: a bookmark level jump");
-            }
-            prev = Some(*level);
+            let fixed = match levels.last() {
+                Some(&p) if *level > p + 1 => p + 1,
+                _ => *level,
+            };
+            levels.push(fixed);
         }
-        for (i, (level, number, title)) in entries.iter().enumerate() {
-            let children = entries[i + 1..].iter().take_while(|e| e.0 > *level).filter(|e| e.0 == level + 1).count() as i32;
+        for (i, (_, number, title)) in entries.iter().enumerate() {
+            let level = &levels[i];
+            let children = levels[i + 1..].iter().take_while(|&&l| l > *level).filter(|&&l| l == level + 1).count() as i32;
             let mut text = String::from("\\376\\377");
             let mut space = false;
             // The source's bytes, one to a character: UTF-8 (`\usepackage[utf8]{inputenc}`, the
@@ -276,16 +441,55 @@ impl Machine<'_, '_> {
             let Some(title) = bytes.ok().and_then(|b| String::from_utf8(b).ok()) else {
                 return Err("hyperref: a bookmark title that is not plain text");
             };
-            let mut chars = title.trim().chars();
+            // `\pdfstringdef`'s `\HyPsd@Subst`s (hyperref.sty): `---` `\textemdash`, `--`
+            // `\textendash`, ``!` `` and ``?` `` the inverted marks.
+            // `\Hy@numberline`'s `#1 ` before the entry's text.
+            let title = if self.doc.as_ref().is_some_and(|d| d.pkg.hy.numbered) && !number.is_empty() { format!("{number} {title}") } else { title };
+            let title = title.replace("---", "\u{2014}").replace("--", "\u{2013}").replace("!`", "\u{a1}").replace("?`", "\u{bf}");
+            if title.contains('$') {
+                let text = self.bookmark_math(&title)?;
+                let Some(name) = heading_href(report, entries[i].0, number) else {
+                    return Err("hyperref: a heading number that is not arabic");
+                };
+                let open = self.doc.as_ref().is_some_and(|d| d.pkg.hy.open);
+                self.append_outline(&name, if open { children } else { -children }, &text);
+                continue;
+            }
+            let mut chars = title.chars().peekable();
+            // The open arguments of `\texttt{..}` and its kin, which `\pdfstringdef` lets to
+            // `\@firstofone` (hyperref.sty's `\HyPsd@Init`): their braces go, the text stays.
+            let mut open = 0u32;
             while let Some(c) = chars.next() {
                 let c = match c {
                     ' ' | '\n' => {
                         space = true;
                         continue;
                     }
+                    '}' if open > 0 => {
+                        open -= 1;
+                        continue;
+                    }
+                    // `\pdfstringdef` expands the text: a group's braces go (`{[}`).
+                    '{' => continue,
+                    '}' if open == 0 => continue,
                     // `\&` and its kin are their characters.
                     '\\' => match chars.next() {
                         Some(c @ ('&' | '%' | '#' | '$' | '_')) => c,
+                        Some(c) if c.is_ascii_alphabetic() => {
+                            let mut word = String::from(c);
+                            while let Some(&l) = chars.peek().filter(|l| l.is_ascii_alphabetic()) {
+                                word.push(l);
+                                chars.next();
+                            }
+                            while chars.peek() == Some(&' ') {
+                                chars.next();
+                            }
+                            if !matches!(word.as_str(), "emph" | "textnormal" | "textrm" | "textsf" | "texttt" | "textbf" | "textmd" | "textit" | "textsc" | "textsl" | "textup") || chars.next() != Some('{') {
+                                return Err("hyperref: a bookmark title that is not plain text");
+                            }
+                            open += 1;
+                            continue;
+                        }
                         _ => return Err("hyperref: a bookmark title that is not plain text"),
                     },
                     'A'..='Z' | 'a'..='z' | '0'..='9' | '!' | '"' | '\'' | '(' | ')' | '*' | '+' | ',' | '-' | '.' | '/' | ':' | ';' | '<' | '=' | '>' | '?' | '@' | '[' | ']' | '`' | '|' => c,
@@ -297,10 +501,20 @@ impl Machine<'_, '_> {
                 }
                 bookmark_char(c, &mut text);
             }
-            let Some(name) = heading_href(report, *level, number) else {
+            // Every space token stays, the first and the last too (pdfLaTeX's `.out`: `{ends }`
+            // is "ends ", `{\texttt{a }}` "a "); an empty title is an empty string, no mark.
+            if space {
+                text.push_str("\\000\\040");
+            }
+            if text == "\\376\\377" {
+                text.clear();
+            }
+            let Some(name) = heading_href(report, entries[i].0, number) else {
                 return Err("hyperref: a heading number that is not arabic");
             };
-            self.append_outline(&name, -children, &text);
+            // `\@bookmarkopenstatus`: `-` unless `bookmarksopen`.
+            let open = self.doc.as_ref().is_some_and(|d| d.pkg.hy.open);
+            self.append_outline(&name, if open { children } else { -children }, &text);
         }
         Ok(())
     }
@@ -342,6 +556,15 @@ impl Machine<'_, '_> {
         self.begin_group(super::SIMPLE_GROUP);
     }
 
+    /// A caption's entry in a list of figures or tables: the link to its anchor
+    /// (`\contentsline`'s fourth argument), as [`Self::toc_link_start`].
+    pub(super) fn toc_link_start_named(&mut self, name: String) {
+        let Some(doc) = self.doc.as_mut() else { return };
+        doc.link = Some((LINK, name));
+        self.start_link();
+        self.begin_group(super::SIMPLE_GROUP);
+    }
+
     /// The group's end and `\pdfendlink` of [`Self::toc_link_start`].
     pub(super) fn toc_link_end(&mut self) {
         self.end_group(super::SIMPLE_GROUP);
@@ -358,9 +581,9 @@ impl Machine<'_, '_> {
         };
         // `\Hy@setpdfborder` (`0 0 0` under `hidelinks` and `colorlinks`),
         // `\Hy@setpdfhighlight`, `/C[\CurrentBorderColor]`.
-        let border = if doc.hy.hide || doc.hy.colorlinks { 0 } else { 1 };
-        let attr = format!("/Border[0 0 {border}]/H/I/C[{}]", BORDER_COLORS[kind]);
-        let color = doc.hy.colorlinks.then(|| doc.hy.colors[kind].clone());
+        let border = if doc.pkg.hy.hide || doc.pkg.hy.colorlinks { "0 0 0" } else { doc.pkg.hy.border.as_str() };
+        let attr = format!("/Border[{border}]/H/I/C[{}]", BORDER_COLORS[kind]);
+        let color = doc.pkg.hy.colorlinks.then(|| doc.pkg.hy.colors[kind].clone());
         match target {
             // `\hyper@linkurl`'s `user{/Subtype/Link/A<<…/S/URI…>>}`.
             Err(uri) => self.append_uri_link(&attr, &uri),
@@ -375,7 +598,7 @@ impl Machine<'_, '_> {
     /// `\pdfendlink`.
     pub(super) fn end_link(&mut self) {
         // `\Hy@endcolorlink`'s `\endgroup`: the colour's `\reset@color`.
-        if self.doc.as_ref().is_some_and(|d| d.hy.colorlinks) {
+        if self.doc.as_ref().is_some_and(|d| d.pkg.hy.colorlinks) {
             self.color_stack(None);
         }
         self.cur.push(Node { kind: Kind::Whatsit, sub: super::super::engine_pdfdoc::END_LINK, font: 0, a: 0, b: 0 });
@@ -398,6 +621,11 @@ impl Machine<'_, '_> {
             let mut t = self.tex_tokens("\\penalty10000 \\smash{\\raise\\baselineskip\\hbox{");
             t.push(self.doc_id(super::ANCHOR));
             t.extend(self.tex_tokens("}}\\kern0pt "));
+            // Under cleveref the display has one more empty box here than hyperref's own
+            // target gives (measured against pdfLaTeX's box dump, `engine_cleveref`).
+            if self.doc.as_ref().is_some_and(|d| d.pkg.cref.is_some()) {
+                t.extend(self.tex_tokens("\\hbox{}"));
+            }
             return self.back_list(&t);
         }
         if self.doc.as_ref().is_some_and(|d| d.eq_within.is_some()) {
@@ -410,7 +638,10 @@ impl Machine<'_, '_> {
 
     /// `\refstepcounter{equation}` with hyperref: the counter, `\@currentlabel`, and
     /// `\@currentHref` `equation.\theHequation` (`theorem_href`'s form), whose name it returns.
-    fn equation_anchor_step(&mut self) -> Option<String> {
+    pub(super) fn equation_anchor_step(&mut self) -> Option<String> {
+        if self.koma_front_numbers("an equation number") || self.equation_before_chapter() {
+            return None;
+        }
         let doc = self.doc.as_mut()?;
         if doc.appendix {
             self.not_native("hyperref: an equation in the appendix");
@@ -420,11 +651,42 @@ impl Machine<'_, '_> {
         let counters: Vec<u32> = doc.counters.iter().map(|&c| c as u32).collect();
         // hyperref's `\theHequation` is `\arabic{equation}`: a prefixed `\theequation` names no anchor.
         // report's `\@addtoreset{equation}{chapter}`: `\theHchapter.` first (latex.ltx).
-        let name = super::theorem_href("equation", &counters, doc.eq_within.or(doc.report.then_some(0)), doc.equation as u32);
+        // In `subequations`, `\theHparentequation\alph{equation}`.
+        let name = match &doc.sub_eq_h {
+            Some(h) => format!("equation.{h}{}", super::alph(doc.equation, b'a').collect::<String>()),
+            None => super::theorem_href("equation", &counters, doc.eq_within.or(doc.report.then_some(0)), doc.equation as u32),
+        };
+        let e = doc.equation;
+        if self.doc.as_ref().is_some_and(|d| d.sub_eq.is_none()) && self.own_float_the(2, e).is_none() {
+            self.not_native("a \\theequation the native job cannot read");
+            return None;
+        }
         let n = self.equation_text();
         self.store_current_label(&n);
+        self.cref_step("equation");
         self.set_current_href(&name);
         Some(name)
+    }
+
+    /// `subequations` under hyperref: its `cmd/subequations/before` hook (`\stepcounter
+    /// {equation}\protected@edef\theHparentequation{\theHequation}\addtocounter{equation}
+    /// {-1}`), amsmath's `\refstepcounter{equation}` with its `\MakeLinkTarget` anchor where
+    /// it stands (`vertical_anchor`, or raised in a paragraph), and the `after` hook's
+    /// `\def\theHequation{\theHparentequation\alph{equation}}` (`Doc::sub_eq_h`). Not native
+    /// in math. Under cleveref the steps are `equation_step`'s (`cref_step`).
+    pub(super) fn subequations_anchor(&mut self) {
+        if self.mode == super::super::engine_run::Mode::Math {
+            return self.not_native("hyperref: subequations in math");
+        }
+        let Some(name) = self.equation_anchor_step() else { return };
+        if self.mode == super::super::engine_run::Mode::Vertical {
+            self.vertical_anchor(name.clone());
+        } else {
+            self.raised_target(name.clone());
+        }
+        if let Some(doc) = self.doc.as_mut() {
+            doc.sub_eq_h = Some(name["equation.".len()..].to_string());
+        }
     }
 
     /// amsmath's `\incr@eqnum` in a display's tag (`\make@display@tag`): with hyperref the
@@ -435,6 +697,12 @@ impl Machine<'_, '_> {
             return self.equation_step();
         }
         let Some(name) = self.equation_anchor_step() else { return };
+        self.raised_target(name);
+    }
+
+    /// `\__hyp_target_raise:n` of an anchor in horizontal mode, as nodes: `\penalty\@M`, the
+    /// smashed `\raise\normalbaselineskip\hbox{dest}`, `\kern0pt`, the space factor kept.
+    pub(super) fn raised_target(&mut self, name: String) {
         let bs = match self.e.eqtb.word(super::NORMAL_BASELINE) {
             0 => self.glue_param(super::BASELINE_SKIP).width,
             v => v,
@@ -518,28 +786,62 @@ impl Machine<'_, '_> {
                 Some("false") => Ok(false),
                 _ => Err("hyperref: an option value that is not true or false"),
             };
+            // A name, or xcolor's `c!p!c2` expression (`\Hy@colorlink` gives it to `\color`
+            // as is); `hyper_colors` computes it at `\begin{document}`, declining without xcolor.
             let name = || match value {
-                Some(v) if !v.is_empty() && v.chars().all(|c| c.is_ascii_alphabetic()) => Ok(v.to_string()),
+                Some(v) if v.starts_with(|c: char| c.is_ascii_alphabetic()) && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '!' || c == '.') => Ok(v.to_string()),
                 _ => Err("hyperref: a link colour that is not a colour name"),
             };
             match key {
                 "pdftex" | "final" if value.is_none() => {}
                 "hidelinks" if value.is_none() => {
-                    doc.hy.hide = true;
-                    doc.hy.colorlinks = false;
+                    doc.pkg.hy.hide = true;
+                    doc.pkg.hy.colorlinks = false;
                 }
-                "colorlinks" => doc.hy.colorlinks = flag()?,
-                "linkcolor" => doc.hy.colors[LINK] = name()?,
-                "citecolor" => doc.hy.colors[CITE] = name()?,
-                "urlcolor" => doc.hy.colors[URL_LINK] = name()?,
-                "allcolors" => doc.hy.colors = [name()?, name()?, name()?],
+                "colorlinks" => doc.pkg.hy.colorlinks = flag()?,
+                "linkcolor" => doc.pkg.hy.colors[LINK] = name()?,
+                "citecolor" => doc.pkg.hy.colors[CITE] = name()?,
+                "urlcolor" => doc.pkg.hy.colors[URL_LINK] = name()?,
+                "allcolors" => doc.pkg.hy.colors = [name()?, name()?, name()?],
                 // Kinds and anchors the native job does not link.
                 "filecolor" | "anchorcolor" | "menucolor" | "runcolor" => {
                     name()?;
                 }
+                // hyperref's defaults under pdfTeX (`unicode` since 2022, `bookmarks`,
+                // `pdfpagelabels`); `breaklinks` changes nothing pdfTeX writes (it breaks a
+                // link's annotation at line ends either way).
+                "unicode" | "bookmarks" | "pdfpagelabels" | "breaklinks" => {
+                    if !flag()? {
+                        return Err("hyperref: a default option turned off");
+                    }
+                }
+                "bookmarksopen" => doc.pkg.hy.open = flag()?,
+                "bookmarksnumbered" => doc.pkg.hy.numbered = flag()?,
+                "pdfdisplaydoctitle" => doc.pkg.hy.doctitle = flag()?,
+                "pdfusetitle" => doc.pkg.hy.usetitle = flag()?,
+                // `plainpages=false`, hyperref's default: page anchors `page.<\thepage>`.
+                "plainpages" => {
+                    if flag()? {
+                        return Err("hyperref: plainpages");
+                    }
+                }
+                // `\define@key{Hyp}{pdfborder}{\def\@pdfborder{#1}}`: written as given.
+                "pdfborder" => match value {
+                    Some(v) if !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == ' ' || c == '.') => doc.pkg.hy.border = v.split_whitespace().collect::<Vec<_>>().join(" "),
+                    _ => return Err("hyperref: a pdfborder that is not numbers"),
+                },
+                // `\Hy@pstringdef\@pdfstartview{#1}`, a view without its coordinates.
+                "pdfstartview" => match value.map(|v| v.trim_start_matches('/')) {
+                    Some(v @ ("Fit" | "FitH" | "FitV" | "FitB" | "FitBH" | "FitBV")) => doc.pkg.hy.view = v.to_string(),
+                    _ => return Err("hyperref: a pdfstartview with coordinates"),
+                },
+                "pdfpagemode" => match value {
+                    Some(v @ ("UseNone" | "UseOutlines" | "UseThumbs" | "FullScreen" | "UseOC" | "UseAttachments")) => doc.pkg.hy.mode = v.to_string(),
+                    _ => return Err("hyperref: a pdfpagemode hyperref does not know"),
+                },
                 k if INFO_KEYS.contains(&k) => {
                     let i = INFO_KEYS.iter().position(|&x| x == k).unwrap_or(0);
-                    doc.hy.info[i] = Some(value.and_then(pdf_string).ok_or("hyperref: a document property with characters \\pdfstringdef changes")?);
+                    doc.pkg.hy.info[i] = Some(value.and_then(pdf_string).ok_or("hyperref: a document property with characters \\pdfstringdef changes")?);
                 }
                 _ => return Err("hyperref: an option the native job does not take"),
             }
@@ -565,19 +867,19 @@ impl Machine<'_, '_> {
     /// hyperref's `\begin{document}` options: with `colorlinks`, `\RequirePackage{color}` and
     /// each link colour's literal.
     pub(super) fn hyper_colors(&mut self) {
-        if !self.doc.as_ref().is_some_and(|d| d.hy.colorlinks) {
+        if !self.doc.as_ref().is_some_and(|d| d.pkg.hy.colorlinks) {
             return;
         }
         if !self.colored() {
             self.load_package("color");
         }
         for k in [LINK, CITE, URL_LINK] {
-            let Some(name) = self.doc.as_ref().map(|d| d.hy.colors[k].clone()) else { return };
+            let Some(name) = self.doc.as_ref().map(|d| d.pkg.hy.colors[k].clone()) else { return };
             let Some(lit) = self.color_literal(None, &name, false) else {
                 return self.not_native("hyperref: a link colour the native job does not know");
             };
             if let Some(doc) = self.doc.as_mut() {
-                doc.hy.colors[k] = lit;
+                doc.pkg.hy.colors[k] = lit;
             }
         }
     }

@@ -19,6 +19,8 @@ enum State {
     NewLine,
 }
 
+codec_enum!(State { MidLine, SkipBlanks, NewLine });
+
 /// The tokenizer over one source text.
 #[derive(PartialEq, Clone, Debug)]
 pub struct Lexer<'a> {
@@ -40,6 +42,8 @@ pub struct Lexer<'a> {
     /// e-TeX's `eof_seen`: `\everyeof` has been inserted at this file's end.
     pub eof_seen: bool,
 }
+
+codec_struct!(Lexer<'static> { src, next_line, buf, loc, state, par, invalid, end_after_line, line, eof_seen });
 
 impl<'a> Lexer<'a> {
     pub fn new(src: impl Into<Cow<'a, str>>) -> Self {
@@ -64,6 +68,11 @@ impl<'a> Lexer<'a> {
             Cow::Borrowed(s) => s,
             Cow::Owned(_) => "",
         }
+    }
+
+    /// The text read so far, to the next unread line, borrowed or owned.
+    pub fn read_text(&self) -> &str {
+        &self.src[..self.next_line.min(self.src.len())]
     }
 
     /// Moves the read offset by `d`.

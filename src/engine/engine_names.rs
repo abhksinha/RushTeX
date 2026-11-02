@@ -53,6 +53,8 @@ pub struct Names {
     next: [u32; 4],
 }
 
+codec_struct!(Names { user, next });
+
 impl Default for Names {
     fn default() -> Self {
         Self { user: HashMap::new(), next: [11; 4] }

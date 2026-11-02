@@ -21,7 +21,7 @@ pub const CS_FLAG: u32 = 1 << 31;
 /// §358 `dont_expand`: a token `\noexpand` put back. It lives in the input only; reading it
 /// clears the flag (see `Machine::get_token`).
 pub const DONT_EXPAND: u32 = 1 << 30;
-const CHAR_BITS: u32 = 21;
+pub(super) const CHAR_BITS: u32 = 21;
 const CHAR_MASK: u32 = (1 << CHAR_BITS) - 1;
 
 /// One token.
@@ -101,14 +101,29 @@ pub struct CsTable {
     par: Option<u32>,
 }
 
-/// FNV-1a over the name's bytes.
+codec_struct!(CsTable { text, spans, slots, par });
+
+/// The name's bytes hashed eight at a time (a multiply and fold per word, the length in
+/// the seed), the high bits folded into the low ones the table's mask keeps. Names are
+/// interned from every control sequence the lexer reads and every `\csname`.
 #[inline]
 fn hash(name: &str) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in name.as_bytes() {
-        h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+    const K: u64 = 0x9e37_79b9_7f4a_7c15;
+    let b = name.as_bytes();
+    let mut h = (b.len() as u64).wrapping_mul(K);
+    let (words, rest) = b.as_chunks::<8>();
+    for &w in words {
+        h = (h ^ u64::from_le_bytes(w)).wrapping_mul(K).rotate_left(29);
     }
-    h
+    if !rest.is_empty() {
+        let mut x = 0u64;
+        for (i, &c) in rest.iter().enumerate() {
+            x |= (c as u64) << (8 * i);
+        }
+        h = (h ^ x).wrapping_mul(K).rotate_left(29);
+    }
+    h = (h ^ h >> 32).wrapping_mul(K);
+    h ^ h >> 29
 }
 
 impl CsTable {
@@ -120,6 +135,13 @@ impl CsTable {
 
     pub fn thaw(&self) -> CsTable {
         CsTable { text: self.text.clone(), spans: self.spans.thaw(), slots: self.slots.thaw(), par: self.par }
+    }
+
+    pub fn thaw_into(&self, live: &mut CsTable) {
+        live.text.clone_from(&self.text);
+        self.spans.thaw_into(&mut live.spans);
+        self.slots.thaw_into(&mut live.slots);
+        live.par = self.par;
     }
 
     /// The names and their spans; the hash table is rebuilt on load.
@@ -168,15 +190,22 @@ impl CsTable {
         &self.text[a as usize..b as usize]
     }
 
-    /// The slot `name` occupies, or the empty slot where it would go.
+    /// The slot `name` occupies, or the empty slot where it would go. Names are compared as
+    /// bytes (equal bytes are equal names).
     fn probe(&self, name: &str) -> usize {
         let mask = self.slots.len() - 1;
         let mut i = hash(name) as usize & mask;
+        let (text, name) = (self.text.as_bytes(), name.as_bytes());
         loop {
             match self.slots[i] {
                 0 => return i,
-                v if self.name(v - 1) == name => return i,
-                _ => i = (i + 1) & mask,
+                v => {
+                    let (a, b) = self.spans[v as usize - 1];
+                    if text.get(a as usize..b as usize) == Some(name) {
+                        return i;
+                    }
+                    i = (i + 1) & mask;
+                }
             }
         }
     }
@@ -257,6 +286,8 @@ pub struct Tokens {
     toks: super::engine_chunk::Chunked<Token>,
 }
 
+codec_struct!(Tokens { toks });
+
 impl Tokens {
     /// A checkpoint's copy, sharing what did not change since the last one, and a live copy
     /// of one (`engine_chunk`).
@@ -266,6 +297,10 @@ impl Tokens {
 
     pub fn thaw(&self) -> Tokens {
         Tokens { toks: self.toks.thaw() }
+    }
+
+    pub fn thaw_into(&self, live: &mut Tokens) {
+        self.toks.thaw_into(&mut live.toks);
     }
 
     #[cfg(feature = "oracle")]

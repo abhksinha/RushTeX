@@ -147,8 +147,11 @@ fn subrs(t: &[u8], at: usize) -> Option<Vec<(std::ops::Range<usize>, std::ops::R
 /// directly, numbers below `n`: `callsubr` with its number, and hint replacement's `n 1 3
 /// callothersubr pop callsubr` (writet1.c `cs_mark`). Each charstring is read with a stack
 /// of its own, so what it calls does not depend on who calls it: the calls form a graph,
-/// and what a glyph needs is what it reaches.
-fn calls(cs: &[u8], len_iv: usize, n: usize, out: &mut Vec<u32>) {
+/// and what a glyph needs is what it reaches. The one subroutine that reads its caller's
+/// stack, hint replacement's (`forwards`, `k 4 callsubr`), counts as a call of `k` too, as
+/// `cs_mark` follows it with the stack shared.
+fn calls(cs: &[u8], len_iv: usize, forwards: &[bool], out: &mut Vec<u32>) {
+    let n = forwards.len();
     let mut stack: Vec<i32> = Vec::new();
     let mut ps: Vec<i32> = Vec::new();
     let mut i = len_iv;
@@ -177,6 +180,11 @@ fn calls(cs: &[u8], len_iv: usize, n: usize, out: &mut Vec<u32>) {
                 let Some(k) = stack.pop().and_then(|k| usize::try_from(k).ok()) else { return };
                 if k < n && !out.contains(&(k as u32)) {
                     out.push(k as u32);
+                }
+                if let Some(j) = forwards.get(k).filter(|&&f| f).and_then(|_| stack.last()).and_then(|&j| usize::try_from(j).ok()).filter(|&j| j < n) {
+                    if !out.contains(&(j as u32)) {
+                        out.push(j as u32);
+                    }
                 }
             }
             12 => {
@@ -426,11 +434,14 @@ pub fn index(t: &[u8]) -> Option<Index> {
     let mut order: Vec<u32> = (0..list.len() as u32).collect();
     order.sort_by(|&a, &b| t[list[a as usize].name.clone()].cmp(&t[list[b as usize].name.clone()]));
     let (mut call_at, mut pool) = (Vec::with_capacity(sub.len() + list.len() + 1), Vec::new());
+    // The hint replacement subroutine (Type 1's Subrs 4, `1 3 callothersubr pop callsubr`):
+    // it calls the number its caller left on the stack.
+    let forwards: Vec<bool> = sub.iter().map(|e| t.get(e.1.clone()).and_then(|cs| cs.get(len_iv..)).is_some_and(|b| b.starts_with(&[140, 142, 12, 16, 12, 17, 10]))).collect();
     for cs in sub.iter().map(|e| &e.1).chain(list.iter().map(|e| &e.cs)) {
         call_at.push(pool.len() as u32);
         let mut c = Vec::new();
         if !sub.is_empty() && !cs.is_empty() {
-            calls(&t[cs.clone()], len_iv, sub.len(), &mut c);
+            calls(&t[cs.clone()], len_iv, &forwards, &mut c);
         }
         pool.extend(c);
     }
@@ -505,9 +516,23 @@ pub fn subset_with(t: &[u8], ix: &Index, used: &[&str], ready: bool) -> Option<V
                 }
             }
         }
+        // `t1_flush_cs`: the array ends at the last subroutine used (`subr_max + 1`, at least
+        // the four always kept), its `/Subrs` count rewritten; past it nothing is written.
+        let max = (0..ns).rev().find(|&k| marked[k] && ix.sub[k][1] > ix.sub[k][0]).unwrap_or(0);
+        let first = ix.sub.iter().find(|s| s[1] > s[0]).map_or(0, |s| s[0] as usize);
+        if let Some(at) = t[..first].windows(6).rposition(|w| w == b"/Subrs") {
+            let n = token(t, skip_space(t, at + 6));
+            push_scanned(&mut out, &t[..n.start]);
+            crate::backend::backend_pdftex::print_int(&mut out, (max + 1).max(4.min(ns)) as i64);
+            from = n.end;
+        }
         for (k, &[l0, l1, c0, c1]) in ix.sub.iter().enumerate() {
             let (line, cs) = (l0 as usize..l1 as usize, c0 as usize..c1 as usize);
             if line.is_empty() {
+                continue;
+            }
+            if k > max.max(3) {
+                from = line.end;
                 continue;
             }
             push_scanned(&mut out, &t[from..line.start]);

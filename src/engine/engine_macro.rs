@@ -23,6 +23,50 @@ fn cat_of(t: Token) -> Option<Cat> {
     }
 }
 
+/// [`Input::take_while`] on machine `$m` while its run goes on: the tokens of the top token
+/// list that a scanner would push unchanged, in one copy; the number moved. Not with the
+/// macro profiler, which counts each token read.
+///
+/// [`Input::take_while`]: super::engine_input::Input::take_while
+macro_rules! take_while {
+    ($m:ident, $out:expr, $depth:expr, $keep:expr) => {{
+        #[cfg(not(feature = "mprof"))]
+        let n = if $m.halted { 0 } else { $m.input.take_while(&$m.e.toks, $out, $depth, $keep) };
+        #[cfg(feature = "mprof")]
+        let n = {
+            let _ = &$keep;
+            0usize
+        };
+        n
+    }};
+}
+
+/// Whether an expanded text (§478 `get_x_for_text`) gives `t` back as it read it, neither a
+/// macro to expand (`\protected` ones are kept) nor an expandable primitive, and its scanner
+/// pushes it: a parameter character only when `param` (a general text; a macro body reads
+/// `#` itself). An active character past 255 is left to the scanner.
+#[inline(always)]
+fn kept_expanded(eqtb: &super::engine_eqtb::Eqtb, t: Token, param: bool) -> bool {
+    use super::engine_prim::{Meaning, PROTECTED};
+    let id = match t.cs_id() {
+        Some(id) => id,
+        None => match t.cat() {
+            Some(Cat::Active) => match t.chr() as u32 {
+                c @ 0..=255 => c,
+                _ => return false,
+            },
+            Some(Cat::Param) => return param,
+            _ => return true,
+        },
+    };
+    match eqtb.meaning(id) {
+        Meaning::Macro(mac) => mac.flags & PROTECTED != 0,
+        Meaning::Prim(p) => !p.expandable(),
+        Meaning::Native(i) => !super::engine_native::native_expands(i),
+        _ => true,
+    }
+}
+
 impl Machine<'_, '_> {
     /// §473 `scan_toks(true, expand)`: a macro's parameter text and body, after the name.
     /// With `expand` (`\edef`, `\xdef`), the body is expanded as it is read (§478), except
@@ -73,12 +117,14 @@ impl Machine<'_, '_> {
         let mut depth = 1u32;
         loop {
             let t = if expand {
+                take_while!(self, &mut def, Some(&mut depth), |t| kept_expanded(&self.e.eqtb, t, false));
                 match self.get_x_for_text(&mut def) {
                     Some(t) => t,
                     None if self.input_ended() => break,
                     None => continue,
                 }
             } else {
+                take_while!(self, &mut def, Some(&mut depth), |t| cat_of(t) != Some(Cat::Param));
                 match self.get_token() {
                     Some(t) => t,
                     None => break,
@@ -189,12 +235,14 @@ impl Machine<'_, '_> {
         let mut depth = 1u32;
         loop {
             let t = if expand {
+                take_while!(self, &mut buf, Some(&mut depth), |t| kept_expanded(&self.e.eqtb, t, true));
                 match self.get_x_for_text(&mut buf) {
                     Some(t) => t,
                     None if self.input_ended() => break,
                     None => continue,
                 }
             } else {
+                take_while!(self, &mut buf, Some(&mut depth), |_: Token| true);
                 match self.get_token() {
                     Some(t) => t,
                     None => break,
@@ -292,6 +340,12 @@ impl Machine<'_, '_> {
             let start = args.len();
             let mut m = 0u32;
             'scan: loop {
+                // §392: a delimited argument's tokens before its delimiter's first token, a
+                // brace or a `\par` it may not hold, each one more token of it.
+                if s == Some(r) && !is_match_like(pattern[r]) {
+                    let delim = pattern[r];
+                    m += take_while!(self, args, None, |t| t != delim && (long || Some(t) != par)) as u32;
+                }
                 let Some(t) = self.get_token() else {
                     self.error(format!("File ended while scanning use of {}", self.show_one(name)));
                     return None;
@@ -358,6 +412,7 @@ impl Machine<'_, '_> {
                         let mut depth = 1u32;
                         args.push(t);
                         loop {
+                            take_while!(self, args, Some(&mut depth), |t| long || Some(t) != par);
                             let Some(u) = self.get_token() else {
                                 self.error(format!("File ended while scanning use of {}", self.show_one(name)));
                                 return None;

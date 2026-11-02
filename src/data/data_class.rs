@@ -23,6 +23,9 @@
 //!   [`SIZE_ROW`] words: `\baselineskip`, the display skips it sets and the `\@listi` it
 //!   defines (each with a mask of the glues it sets, see [`SizeRow`]);
 //! - `lists`: `\@listii` to `\@listvi`, a mask and four glues each;
+//! - `fontdims` (optional): per font whose parameters a class changed (IEEEtran's
+//!   `\@IEEEtunefonts` sets `\fontdimen2` to `4` of its Times fonts), (font index, parameter
+//!   number, value) for each parameter that differs from the font's TFM;
 //! - `optkeys`, `optrows`, `optdiffs`: per combination of the parameter-only options
 //!   ([`option_key`]), the words that differ from the table, as (section, index, value):
 //!   section 0 `ints`, 1 `dimens`, 2 `glues`, 3 `class`, 4 `regs`.
@@ -130,6 +133,7 @@ pub struct ClassTable<'a> {
     opt_keys: U32s<'a>,
     opt_rows: U32s<'a>,
     opt_diffs: U32s<'a>,
+    font_dims: U32s<'a>,
 }
 
 impl<'a> ClassTable<'a> {
@@ -150,8 +154,9 @@ impl<'a> ClassTable<'a> {
             opt_keys: b.u32s("optkeys")?,
             opt_rows: b.u32s("optrows")?,
             opt_diffs: b.u32s("optdiffs")?,
+            font_dims: b.u32s("fontdims").unwrap_or_default(),
         };
-        let sound = t.size_names.lines().count() == SIZE_COMMANDS.len() && t.size_names.lines().all(|l| l.split('\t').count() == 3) && t.sizes.len() == SIZE_ROW * SIZE_COMMANDS.len() && t.lists.len() == 5 * 21 && t.opt_rows.len() == t.opt_keys.len() + 1 && t.opt_diffs.len().is_multiple_of(3) && t.glues.len().is_multiple_of(5) && t.codes.len() == 5 * 256 && t.cats.len() == 256 && t.class.len() == CLASS_DIMENS.len() + CLASS_FLAGS.len() && t.font_nums.len() == 4 * t.fonts.lines().count() && t.fonts.lines().all(|l| l.contains('\t')) && t.regs.len() == 7 * CLASS_REGS.len();
+        let sound = t.size_names.lines().count() == SIZE_COMMANDS.len() && t.size_names.lines().all(|l| l.split('\t').count() == 3) && t.sizes.len() == SIZE_ROW * SIZE_COMMANDS.len() && t.lists.len() == 5 * 21 && t.opt_rows.len() == t.opt_keys.len() + 1 && t.opt_diffs.len().is_multiple_of(3) && t.glues.len().is_multiple_of(5) && t.codes.len() == 5 * 256 && t.cats.len() == 256 && t.class.len() == CLASS_DIMENS.len() + CLASS_FLAGS.len() && t.font_nums.len() == 4 * t.fonts.lines().count() && t.fonts.lines().all(|l| l.contains('\t')) && t.regs.len() == 7 * CLASS_REGS.len() && t.font_dims.len().is_multiple_of(3);
         sound.then_some(t)
     }
 
@@ -161,6 +166,12 @@ impl<'a> ClassTable<'a> {
             let n = |k: usize| self.font_nums.get(4 * i + k) as i32;
             ClassFont { tfm, ident, size: n(0), hyphen_char: n(1), skew_char: n(2), current: n(3) != 0 }
         })
+    }
+
+    /// The parameters the class set on its fonts: (index in [`Self::fonts`], parameter
+    /// number from 1, value).
+    pub fn font_dims(&self) -> impl Iterator<Item = (usize, usize, i32)> + '_ {
+        (0..self.font_dims.len() / 3).map(|i| (self.font_dims.get(3 * i) as usize, self.font_dims.get(3 * i + 1) as usize, self.font_dims.get(3 * i + 2) as i32))
     }
 
     /// The value of the [`CLASS_DIMENS`] entry `name`, in scaled points.
@@ -237,25 +248,80 @@ static SCRARTCL_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-s
 
 static AMSART_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-amsart.rtdb"), include_bytes!("../../assets/tables/class-amsart-11pt.rtdb"), include_bytes!("../../assets/tables/class-amsart-12pt.rtdb")];
 static MEMOIR_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-memoir.rtdb"), include_bytes!("../../assets/tables/class-memoir-11pt.rtdb"), include_bytes!("../../assets/tables/class-memoir-12pt.rtdb")];
+/// KOMA-Script's `scrreprt` (`rushtex-gen class --class scrreprt`): scrartcl's type area and
+/// sizes, with report's counters (`\c@chapter` and the resets under it).
+static SCRREPRT_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-scrreprt.rtdb"), include_bytes!("../../assets/tables/class-scrreprt-11pt.rtdb"), include_bytes!("../../assets/tables/class-scrreprt-12pt.rtdb")];
+
+static IEEETRAN_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-IEEEtran.rtdb"), include_bytes!("../../assets/tables/class-IEEEtran-11pt.rtdb"), include_bytes!("../../assets/tables/class-IEEEtran-12pt.rtdb")];
+/// KOMA-Script's `scrlttr2` (`rushtex-gen class --class scrlttr2`): typearea's page at each
+/// size with DIN.lco loaded at the end of the class; the option bit 32 is `parskip=half`
+/// there (`option_key`'s `draft`).
+static SCRLTTR2_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-scrlttr2.rtdb"), include_bytes!("../../assets/tables/class-scrlttr2-11pt.rtdb"), include_bytes!("../../assets/tables/class-scrlttr2-12pt.rtdb")];
+/// KOMA-Script's `scrbook` (`rushtex-gen class --class scrbook`): scrreprt's table two-sided
+/// by default (bit 16 off is `oneside`), with the `bk1x.clo` sizes.
+static SCRBOOK_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-scrbook.rtdb"), include_bytes!("../../assets/tables/class-scrbook-11pt.rtdb"), include_bytes!("../../assets/tables/class-scrbook-12pt.rtdb")];
+
+/// a0poster.cls (v1.22b, `rushtex-gen class --class a0poster`): article with the poster's
+/// paper, margins and size commands. Its paper options stand in [`A0_PAPERS`] for
+/// [`PAPERS`]' and `portrait` for `landscape` (the class's default is landscape); a size
+/// option changes nothing the class sets, so the three tables are alike.
+/// screenplay.cls (v1.6, `rushtex-gen class --class screenplay`): article at 12pt with its
+/// own page, courier and `myheadings`. It takes no option, so the three tables are alike.
+static SCREENPLAY_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-screenplay.rtdb"), include_bytes!("../../assets/tables/class-screenplay-11pt.rtdb"), include_bytes!("../../assets/tables/class-screenplay-12pt.rtdb")];
+
+static A0POSTER_BLOBS: [&[u8]; 3] = [include_bytes!("../../assets/tables/class-a0poster.rtdb"), include_bytes!("../../assets/tables/class-a0poster-11pt.rtdb"), include_bytes!("../../assets/tables/class-a0poster-12pt.rtdb")];
+
+/// extsizes' extarticle.cls (v1.0, `rushtex-gen class --class extarticle`): article.cls of
+/// 1996 with the sizes of [`EXT_SIZES`] (`size8.clo` .. `size20.clo`).
+static EXTARTICLE_BLOBS: [&[u8]; 8] = [include_bytes!("../../assets/tables/class-extarticle.rtdb"), include_bytes!("../../assets/tables/class-extarticle-11pt.rtdb"), include_bytes!("../../assets/tables/class-extarticle-12pt.rtdb"), include_bytes!("../../assets/tables/class-extarticle-8pt.rtdb"), include_bytes!("../../assets/tables/class-extarticle-9pt.rtdb"), include_bytes!("../../assets/tables/class-extarticle-14pt.rtdb"), include_bytes!("../../assets/tables/class-extarticle-17pt.rtdb"), include_bytes!("../../assets/tables/class-extarticle-20pt.rtdb")];
+
+/// The size options of extsizes' classes: article's three first, so that index 0 is the
+/// default (`10pt`) for every class.
+pub const EXT_SIZES: [&str; 8] = ["10pt", "11pt", "12pt", "8pt", "9pt", "14pt", "17pt", "20pt"];
+
+/// The size options of class `cls` of [`CLASSES`], by [`class_size`]'s index.
+pub fn class_sizes(cls: usize) -> &'static [&'static str] {
+    if cls == EXTARTICLE { &EXT_SIZES } else { &CLASS_SIZES }
+}
+
+/// a0poster's paper options by [`option_key`]'s paper index (the sixth repeats the default).
+pub const A0_PAPERS: [&str; 6] = ["a0b", "a0", "a1", "a2", "a3", "a0b"];
 
 /// The classes with a table, by [`class_size`]'s index: `article`, `report`
 /// (`rushtex-gen class --class report`), `letter` (`--class letter`), `book`
-/// (`--class book`), `scrartcl` (`--class scrartcl`), `amsart` (`--class amsart`), `memoir` (`--class memoir`).
-pub const CLASSES: [&str; 7] = ["article", "report", "letter", "book", "scrartcl", "amsart", "memoir"];
+/// (`--class book`), `scrartcl` (`--class scrartcl`), `amsart` (`--class amsart`), `memoir` (`--class memoir`),
+/// `IEEEtran` (`--class IEEEtran`), `scrreprt` (`--class scrreprt`), `scrlttr2` (`--class scrlttr2`),
+/// `a0poster` (`--class a0poster`), `extarticle` (`--class extarticle`), `scrbook` (`--class scrbook`),
+/// `screenplay` (`--class screenplay`).
+pub const CLASSES: [&str; 14] = ["article", "report", "letter", "book", "scrartcl", "amsart", "memoir", "IEEEtran", "scrreprt", "scrlttr2", "a0poster", "extarticle", "scrbook", "screenplay"];
 /// [`CLASSES`]'s index of scrartcl.
 pub const SCRARTCL: usize = 4;
 /// [`CLASSES`]'s index of amsart.
 pub const AMSART: usize = 5;
 /// [`CLASSES`]'s index of memoir.
 pub const MEMOIR: usize = 6;
+/// IEEEtran.cls (V1.8b), `2026-10-31-w8-journal-classes.md`.
+pub const IEEETRAN: usize = 7;
+/// [`CLASSES`]'s index of scrreprt.
+pub const SCRREPRT: usize = 8;
+/// [`CLASSES`]'s index of scrlttr2 (`2026-11-01-w9-scrlttr2.md`).
+pub const SCRLTTR2: usize = 9;
+/// [`CLASSES`]'s index of a0poster.
+pub const A0POSTER: usize = 10;
+/// [`CLASSES`]'s index of screenplay.
+pub const SCREENPLAY: usize = 13;
+/// [`CLASSES`]'s index of extarticle.
+pub const EXTARTICLE: usize = 11;
+/// [`CLASSES`]'s index of scrbook (`2026-11-01-w9-scrbook.md`).
+pub const SCRBOOK: usize = 12;
 
-/// Class `cls` of [`CLASSES`] at size option `i` of [`CLASS_SIZES`]. A register letter.cls
+/// Class `cls` of [`CLASSES`] at size option `i` of its [`class_sizes`]. A register letter.cls
 /// does not allocate (the float counters and skips) has region 3 in [`ClassTable::reg`].
 pub fn class_size(cls: usize, i: usize) -> Option<&'static ClassTable<'static>> {
-    static TABLES: [[std::sync::OnceLock<Option<ClassTable<'static>>>; 3]; CLASSES.len()] = [const { [const { std::sync::OnceLock::new() }; 3] }; CLASSES.len()];
-    static BLOBS: [&[&[u8]; 3]; CLASSES.len()] = [&ARTICLE_BLOBS, &REPORT_BLOBS, &LETTER_BLOBS, &BOOK_BLOBS, &SCRARTCL_BLOBS, &AMSART_BLOBS, &MEMOIR_BLOBS];
-    let blobs = BLOBS.get(cls)?;
-    TABLES.get(cls)?.get(i)?.get_or_init(|| Blob::new(blobs[i]).and_then(|b| ClassTable::from_blob(&b))).as_ref()
+    static TABLES: [[std::sync::OnceLock<Option<ClassTable<'static>>>; EXT_SIZES.len()]; CLASSES.len()] = [const { [const { std::sync::OnceLock::new() }; EXT_SIZES.len()] }; CLASSES.len()];
+    static BLOBS: [&[&[u8]]; CLASSES.len()] = [&ARTICLE_BLOBS, &REPORT_BLOBS, &LETTER_BLOBS, &BOOK_BLOBS, &SCRARTCL_BLOBS, &AMSART_BLOBS, &MEMOIR_BLOBS, &IEEETRAN_BLOBS, &SCRREPRT_BLOBS, &SCRLTTR2_BLOBS, &A0POSTER_BLOBS, &EXTARTICLE_BLOBS, &SCRBOOK_BLOBS, &SCREENPLAY_BLOBS];
+    let blob = BLOBS.get(cls)?.get(i)?;
+    TABLES.get(cls)?.get(i)?.get_or_init(|| Blob::new(blob).and_then(|b| ClassTable::from_blob(&b))).as_ref()
 }
 
 // ---- Generation -------------------------------------------------------------------------
@@ -281,6 +347,8 @@ pub struct GenClass {
     pub lists: Vec<i32>,
     /// Per option combination: its key and its differences.
     pub options: Vec<(u32, Vec<[u32; 3]>)>,
+    /// (font index, parameter number, value): the parameters differing from the TFM's.
+    pub font_dims: Vec<[i32; 3]>,
 }
 
 #[cfg(any(test, feature = "gen"))]
@@ -305,6 +373,9 @@ pub fn write(w: &mut super::data_blob::BlobWriter, g: &GenClass) {
     }
     w.u32s("optrows", &rows);
     w.u32s("optdiffs", &g.options.iter().flat_map(|o| o.1.iter().flatten().copied()).collect::<Vec<_>>());
+    if !g.font_dims.is_empty() {
+        w.u32s("fontdims", &u(&g.font_dims.concat()));
+    }
 }
 
 #[cfg(test)]

@@ -262,6 +262,26 @@ impl Machine<'_, '_> {
                 // A pgf path literal is a `\pdfliteral` to TeX.
                 let sub = if n.sub == super::engine_whatsit::PGF_POINT { super::engine_whatsit::LITERAL } else { n.sub };
                 out.push_str(&format!("\\whatsit{sub}"));
+                // A debugging aid, not TeX's: with `RT_LITDUMP` set, a literal's, special's or
+                // colour push's text follows in braces, so a page dump matches pdfLaTeX's page
+                // stream literal by literal. A pgf point prints its page point (pt) and operator,
+                // so it never matches the engine's picture-local literal text: compare pages
+                // holding a native `tikzpicture` without `RT_LITDUMP`.
+                static LIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                if *LIT.get_or_init(|| std::env::var_os("RT_LITDUMP").is_some()) {
+                    use super::engine_whatsit as what;
+                    if n.sub == what::PGF_POINT {
+                        out.push_str("{@");
+                        print_scaled(n.a, out);
+                        out.push(',');
+                        print_scaled(n.b, out);
+                        out.push_str(&format!(" {}}}", n.font as u8 as char));
+                    } else if what::holds_tokens(n.sub) && n.sub != what::OPEN && n.sub != what::WRITE {
+                        out.push('{');
+                        self.show(self.e.toks.get(super::engine_token::Span { start: n.a as u32, end: n.b as u32 }), out);
+                        out.push('}');
+                    }
+                }
             }
             Kind::Noad => {}
         }

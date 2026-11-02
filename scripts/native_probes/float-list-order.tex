@@ -1,0 +1,20 @@
+% Native: the floats of declines/float-list-order.tex with a \clearpage before the [H]
+% floats, so every list entry is shipped in source order (the order check does not fire).
+\documentclass{article}
+\usepackage{float}
+\begin{document}
+\listoffigures
+\listoftables
+\section{Floats}
+A first figure, set at the top of a page.
+\begin{figure}[t]\centering\rule{4cm}{2cm}\caption{A top figure.}\end{figure}
+A starred figure too tall for the top of a page, which waits for a page of floats.
+\begin{figure*}\centering\rule{4cm}{.75\textheight}\caption{A starred figure.}\end{figure*}
+A table for the bottom of the page.
+\begin{table}[b]\centering\begin{tabular}{cc}a & b\\ c & d\end{tabular}\caption{A bottom table.}\end{table}
+\clearpage
+Now two floats set where they stand.
+\begin{figure}[H]\centering\rule{4cm}{1cm}\caption{A figure set here.}\end{figure}
+\begin{table}[H]\centering\begin{tabular}{cc}e & f\end{tabular}\caption{A table set here.}\end{table}
+Text after them.
+\end{document}

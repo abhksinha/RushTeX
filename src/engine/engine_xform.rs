@@ -24,6 +24,8 @@ pub struct XForm {
     pub shipped: bool,
 }
 
+codec_struct!(XForm { obj, box_rec, dims, attr, resources, shipped });
+
 impl Machine<'_, '_> {
     /// The form commands among the long-tail primitives; `false` for any other.
     pub(super) fn xform_command(&mut self, name: &str, immediate: bool) -> bool {

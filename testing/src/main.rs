@@ -2307,6 +2307,52 @@ fn ours_pdf(tex: &Path) -> Result<PathBuf, String> {
     Ok(pdf)
 }
 
+/// `zero --bbl`: the document as a user has it after BibTeX or biber. A template-corpus slug
+/// (or a `.tex` path) is copied to target/parity/bbl/<slug>/ as `<slug>.tex` (one reference
+/// cache name per template, not `main`), pdfLaTeX runs once to write the `.aux` (or biblatex's
+/// `.bcf`), then biber or BibTeX writes the `.bbl`; the run's other files are removed so both
+/// sides start from the source and that `.bbl` only.
+fn bbl_doc(doc: &str) -> Result<PathBuf, String> {
+    let p = Path::new(doc);
+    let (dir, main) = if p.extension().is_some_and(|x| x == "tex") { (p.parent().unwrap_or(Path::new(".")).to_path_buf(), p.file_name().unwrap().to_os_string()) } else { (root().join("template-corpus").join(doc), "main.tex".into()) };
+    let slug = if main == "main.tex" { dir.canonicalize().map_err(|e| format!("{doc}: {e}"))?.file_name().unwrap().to_string_lossy().into_owned() } else { stem(p) };
+    let work = out_dir().join("bbl").join(&slug);
+    let _ = std::fs::remove_dir_all(&work);
+    copy_tree(&dir, &work).map_err(|e| format!("{doc}: {e}"))?;
+    let tex = work.join(format!("{slug}.tex"));
+    std::fs::rename(work.join(&main), &tex).map_err(|e| e.to_string())?;
+    let log = work.join("bbl-run.log");
+    let run = |c: &mut Command| run_until(c.current_dir(&work).envs(FIXED_DATE), &log, std::time::Duration::from_secs(120));
+    run(Command::new("pdflatex").args(["-interaction=nonstopmode", "-no-shell-escape"]).arg(&tex));
+    let aux = std::fs::read(work.join(format!("{slug}.aux"))).unwrap_or_default();
+    if work.join(format!("{slug}.bcf")).exists() {
+        run(Command::new("biber").arg(&slug));
+    } else if aux.windows(8).any(|w| w == b"\\bibdata") {
+        run(Command::new("bibtex").arg(&slug));
+    }
+    for e in ["aux", "bcf", "run.xml", "blg", "log", "out", "toc", "lof", "lot", "pdf"] {
+        let _ = std::fs::remove_file(work.join(format!("{slug}.{e}")));
+    }
+    let _ = std::fs::remove_file(&log);
+    if !work.join(format!("{slug}.bbl")).is_file() {
+        return Err(format!("{slug}: no .bbl after pdflatex and bibtex/biber"));
+    }
+    // The reference is always made afresh: `ref_pdf`'s cache keys on the name and the source's
+    // mtime, which the copy keeps (macOS clones it), so a reference made without this `.bbl` (or
+    // with another one) would be reused.
+    let _ = std::fs::remove_file(out_dir().join("ref").join(format!("{slug}.pdf")));
+    Ok(tex)
+}
+
+/// Whether the release binary's native job accepts `tex` (`RT_NATIVE_WHY=1` says so).
+fn native_accepted(tex: &Path) -> bool {
+    let log = tex.with_extension("why.log");
+    let mut c = Command::new(rushtex());
+    c.arg(tex.file_name().unwrap()).args(["-o", "/dev/null"]).current_dir(tex.parent().unwrap()).env("RT_NATIVE_WHY", "1");
+    run_until(&mut c, &log, std::time::Duration::from_secs(120));
+    std::fs::read(&log).is_ok_and(|b| b.windows(19).any(|w| w == b"native job accepted"))
+}
+
 // ---- parallel work, results printed in order ----------------------------------------------------
 
 /// `f` over `items` on `jobs` threads; each result is handed to `done` in the items' order as
@@ -2409,7 +2455,7 @@ fn zero_each(o: &Opts, mut each: impl FnMut(&str, Option<bool>) + Send) {
         o.jobs,
         |d| -> (String, Option<bool>) {
             let r = guarded(|| {
-                let tex = source(d)?;
+                let tex = if o.has("bbl") { bbl_doc(d)? } else { source(d)? };
                 let s = stem(&tex);
                 let refp = ref_pdf(&tex)?;
                 let mut ours = ours_path(&tex);
@@ -2443,7 +2489,14 @@ fn zero_each(o: &Opts, mut each: impl FnMut(&str, Option<bool>) + Send) {
                         line += &format!(" pages {}", py_list(&pages));
                     }
                 }
-                let ok = marks_ok && st_ok && px_ok;
+                // With --bbl the document must also stay on the native job: a fixture that
+                // falls back to the engine no longer checks the native bibliography.
+                let mut native_ok = true;
+                if o.has("bbl") {
+                    native_ok = native_accepted(&tex);
+                    line += if native_ok { "  | native" } else { "  | NOT NATIVE" };
+                }
+                let ok = marks_ok && st_ok && px_ok && native_ok;
                 Ok((format!("{}{line}", if ok { "ZERO  " } else { "      " }), Some(ok)))
             });
             match r {
@@ -2986,7 +3039,7 @@ fn baselines(page: &[Glyph], min_size: f64) -> Vec<(f64, f64, String)> {
 // ---- command line ----------------------------------------------------------------------------------
 
 const USAGE: &str = "usage: parity-testing COMMAND [DOC..] [--all] [--build] [--cached] [--pixels] [--dpi N] [--why N] [-j N]
-commands: zero [--why PAGE], score [--save-baseline] [--tol T] [--dx PAGE:DX], exact [-v],
+commands: zero [--why PAGE] [--bbl (bibtex/biber first, native required)], score [--save-baseline] [--tol T] [--dx PAGE:DX], exact [-v],
   rank DOC [-n N], lines DOC PAGE [--all] [--cached], miss DOC PAGE [--dx DX], boxes DOC PAGE [--all],
   tj DOC PAGE [--width N], repro DOC [A B] [--body TEXT] [--name N] [--trace pages|lists] [--all],
   glyphs PDF, bench (bench -h), incr DOC.. [--edits N] [--seed S] [-v]";
@@ -3019,9 +3072,11 @@ fn main() {
                 println!("{}", if cmd == "bench" { BENCH_USAGE } else { USAGE });
                 return;
             }
-            f if f.starts_with('-') => {
-                o.flags.insert(f.trim_start_matches('-').into(), String::new());
+            "--bbl" | "--save-baseline" | "-v" => {
+                o.flags.insert(a.trim_start_matches('-').into(), String::new());
             }
+            // A mistyped or retired option must not run something else silently.
+            f if f.starts_with('-') => die(&format!("unknown option {f}\n{}", if cmd == "bench" { BENCH_USAGE } else { USAGE })),
             d => o.docs.push(d.into()),
         }
         i += 1;
@@ -3800,11 +3855,15 @@ fn bench_report_in(tex: &Path, runs: usize, rush: &Path, work: &Path) -> Result<
     let (mut fit, mut all_native, mut boxes) = (Vec::new(), true, Vec::new());
     for n in [1usize, 4, 10] {
         let f = work.join(format!("scale{n}.tex"));
-        let copies: String = (0..n).map(|i| if i == 0 { rest.to_string() } else { rename_keys(rest, i) }).collect();
+        // The lists stay in the first copy only: each `\@starttoc` takes a new `\write`, and at
+        // x10 pdfLaTeX ran out of its sixteen ("No room for a new \write", a broken list).
+        let lists = |t: String| ["\\tableofcontents", "\\listoffigures", "\\listoftables", "\\lstlistoflistings"].iter().fold(t, |t, c| t.replace(c, ""));
+        let copies: String = (0..n).map(|i| if i == 0 { rest.to_string() } else { lists(rename_keys(rest, i)) }).collect();
         latin1_write(&f, &format!("{pre}\\begin{{document}}{head}{copies}\\end{{document}}\n")).map_err(|e| e.to_string())?;
         let out = work.join(format!("scale{n}-rush.pdf"));
         let cmd: Vec<std::ffi::OsString> = vec![os(rush), os(&f), "-o".into(), os(&out)];
-        all_native &= accepted(&cmd);
+        let on = accepted(&cmd);
+        all_native &= on;
         let probe = Command::new("zsh").arg(root().join("scripts/native_probes.sh")).arg(&f).args(["-n", "0"]).current_dir(root()).env("RT_BIN", rush).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
         boxes.push(format!("x{n} {}", if probe.lines().last().is_some_and(|l| l.ends_with("identical")) { "identical" } else { "DIFFERS" }));
         let (ri, _) = median_of(&refs(&cmd), work, runs);
@@ -3813,15 +3872,21 @@ fn bench_report_in(tex: &Path, runs: usize, rush: &Path, work: &Path) -> Result<
             let _ = Command::new("pdflatex").arg("-interaction=batchmode").arg(&f).current_dir(work).envs(FIXED_DATE).output();
         }
         let (pi, _) = median_of(&refs(&latex), work, runs);
-        fit.push((pdf_pages(&out) as f64, ri, pdf_pages(&work.join(format!("scale{n}.pdf"))) as f64, pi));
+        fit.push((pdf_pages(&out) as f64, ri, pdf_pages(&work.join(format!("scale{n}.pdf"))) as f64, pi, n, on));
     }
+    // The line through the native copies only: a copy on the engine costs what the engine
+    // does, and a fit through it says nothing of the native job (a negative intercept).
+    let used: Vec<_> = fit.iter().filter(|f| f.5).collect();
+    let engine: Vec<String> = fit.iter().filter(|f| !f.5).map(|f| format!("x{}", f.4)).collect();
+    let fitted = used.len() >= 2;
     let line = |xs: &[f64], ys: &[f64]| {
         let (mx, my) = (xs.iter().sum::<f64>() / xs.len() as f64, ys.iter().sum::<f64>() / ys.len() as f64);
         let slope = xs.iter().zip(ys).map(|(x, y)| (x - mx) * (y - my)).sum::<f64>() / xs.iter().map(|x| (x - mx).powi(2)).sum::<f64>().max(1.0);
         (slope, my - slope * mx)
     };
-    let (r_slope, r_icpt) = line(&fit.iter().map(|f| f.0).collect::<Vec<_>>(), &fit.iter().map(|f| f.1).collect::<Vec<_>>());
-    let (p_slope, p_icpt) = line(&fit.iter().map(|f| f.2).collect::<Vec<_>>(), &fit.iter().map(|f| f.3).collect::<Vec<_>>());
+    let (r_slope, r_icpt) = line(&used.iter().map(|f| f.0).collect::<Vec<_>>(), &used.iter().map(|f| f.1).collect::<Vec<_>>());
+    let (p_slope, p_icpt) = line(&used.iter().map(|f| f.2).collect::<Vec<_>>(), &used.iter().map(|f| f.3).collect::<Vec<_>>());
+    let fit_row = |name: &str, r: f64, p: f64| if fitted { (name.to_string(), millions(r), millions(p), ratio(r, p, "less", "more")) } else { (name.to_string(), "skipped".into(), "skipped".into(), String::new()) };
 
     // The output against pdfLaTeX's, `zero --pixels` (glyphs, paths, links, pixels at 300
     // dpi), its line for the document.
@@ -3855,8 +3920,8 @@ fn bench_report_in(tex: &Path, runs: usize, rush: &Path, work: &Path) -> Result<
         ("Wall time, 1 run".into(), format!("{r_wall:.1} ms"), format!("{p_wall:.1} ms"), ratio(r_wall, p_wall, "less", "more")),
         ("Peak RAM (RSS)".into(), mb(r_rss), mb(p_rss), ratio(r_rss as f64, p_rss as f64, "less", "more")),
         ("PDF size".into(), format!("{rk:.1} KB"), format!("{pk:.1} KB"), ratio(rk, pk, "smaller", "larger")),
-        ("Fixed cost (fit intercept)".into(), millions(r_icpt), millions(p_icpt), ratio(r_icpt, p_icpt, "less", "more")),
-        ("Cost per page (fit slope)".into(), millions(r_slope), millions(p_slope), ratio(r_slope, p_slope, "less", "more")),
+        fit_row("Fixed cost (fit intercept)", r_icpt, p_icpt),
+        fit_row("Cost per page (fit slope)", r_slope, p_slope),
         ("Same preamble, one-word body".into(), millions(rb_ins), millions(pb_ins), ratio(rb_ins, pb_ins, "less", "more")),
         ("  its CPU / wall time".into(), format!("{rb_cpu:.1}/{rb_wall:.1} ms"), format!("{pb_cpu:.0}/{pb_wall:.0} ms"), String::new()),
         ("OS process floor (/usr/bin/true)".into(), millions(os_ins), millions(os_ins), String::new()),
@@ -3867,7 +3932,10 @@ fn bench_report_in(tex: &Path, runs: usize, rush: &Path, work: &Path) -> Result<
     }
     println!("{}", "-".repeat(84));
     let pts: Vec<String> = [1, 4, 10].iter().zip(&fit).map(|(n, f)| format!("x{n}: {} p {} / {} p {}", f.0, millions(f.1), f.2, millions(f.3))).collect();
-    println!(" Fit points (RushTeX / pdfLaTeX): {}{}", pts.join("; "), if all_native { "" } else { "  [a RushTeX variant ran on the ENGINE]" });
+    println!(" Fit points (RushTeX / pdfLaTeX): {}", pts.join("; "));
+    if !all_native {
+        println!(" {}: {} ran on the engine",if fitted { "Fit through the native copies only" } else { "Fit skipped" }, engine.join(", "));
+    }
     println!(" Box check of the copies against the engine: {}", boxes.join(", "));
     println!("{rule}");
     Ok(())
@@ -5035,7 +5103,118 @@ fn incr_paragraph(rng: &mut Rng, sentences: usize) -> Vec<u8> {
 }
 
 /// The kinds of edit, each with its weight in the draw.
-const INCR_KINDS: [(&str, usize); 13] = [("insert word", 10), ("delete word", 8), ("replace word", 10), ("add paragraph", 8), ("remove paragraph", 6), ("section title", 7), ("input file", 10), ("several spots", 10), ("page", 8), ("title", 4), ("label", 8), ("undo", 6), ("save unchanged", 3)];
+const INCR_KINDS: [(&str, usize); 15] = [("local style", 2), ("insert word", 10), ("delete word", 8), ("replace word", 10), ("add paragraph", 8), ("remove paragraph", 6), ("section title", 7), ("input file", 10), ("several spots", 10), ("page", 8), ("title", 4), ("label", 8), ("undo", 6), ("save unchanged", 3), ("other file", 8)];
+
+/// The extensions of the files beside a document that its compile reads and an edit of
+/// kind "other file" changes ([`incr_file_edit`]).
+const INCR_FILE_EXTS: [&str; 6] = ["png", "pdf", "jpg", "jpeg", "bbl", "bib"];
+
+/// A file beside the document that is not TeX source: its path in the folder, its bytes,
+/// and whether it is there (an edit removes it and puts it back).
+struct IncrFile {
+    name: String,
+    bytes: Vec<u8>,
+    there: bool,
+}
+
+/// The files under `dir` with an extension of [`INCR_FILE_EXTS`] (the test's own PDFs left
+/// out), with paths relative to the folder (`rel`), sorted.
+fn incr_files(dir: &Path, rel: &str, out: &mut Vec<IncrFile>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut es: Vec<_> = rd.flatten().collect();
+    es.sort_by_key(|e| e.file_name());
+    for e in es {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let r = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
+            incr_files(&e.path(), &r, out);
+        } else if !name.starts_with("incr-") && Path::new(&name).extension().is_some_and(|x| INCR_FILE_EXTS.contains(&x.to_string_lossy().to_ascii_lowercase().as_str())) {
+            if let Ok(bytes) = std::fs::read(e.path()) {
+                out.push(IncrFile { name: r, bytes, there: true });
+            }
+        }
+    }
+}
+
+/// A package the document loads copied beside it from the TeX tree, or that copy removed:
+/// a document with a style file of its own runs on the engine (rushtex's `splice_local_styles`).
+fn incr_local_style(work: &Path, main: &[u8], rng: &mut Rng) -> Option<String> {
+    let text = String::from_utf8_lossy(main);
+    let pre = &text[..text.find("\\begin{document}").unwrap_or(text.len())];
+    let names: Vec<&str> = pre.match_indices("\\usepackage").filter_map(|(k, _)| {
+        let r = &pre[k + "\\usepackage".len()..];
+        let r = r.strip_prefix('[').map_or(r, |o| o.find(']').map_or("", |e| &o[e + 1..]));
+        let r = r.strip_prefix('{')?;
+        Some(r[..r.find('}')?].split(',').next()?.trim())
+    }).filter(|n| !n.is_empty()).collect();
+    if let Some(there) = names.iter().map(|n| format!("{n}.sty")).find(|f| work.join(f).is_file()) {
+        let _ = std::fs::remove_file(work.join(&there));
+        return Some(format!("the local {there} removed"));
+    }
+    let name = names.get(rng.below(names.len().max(1)))?;
+    let out = Command::new("kpsewhich").arg(format!("{name}.sty")).output().ok()?;
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    std::fs::copy(&path, work.join(format!("{name}.sty"))).ok()?;
+    Some(format!("{name}.sty copied beside the document"))
+}
+
+/// An edit of a file beside the document that is not TeX source: two pictures of one kind
+/// swap their bytes, a file is removed or put back, a word of a `.bbl` or `.bib` is
+/// replaced, or a file is written again with the same bytes (a new stamp only).
+fn incr_file_edit(work: &Path, files: &mut [IncrFile], rng: &mut Rng) -> Option<String> {
+    if files.is_empty() {
+        return None;
+    }
+    let ext = |n: &str| Path::new(n).extension().map_or(String::new(), |x| x.to_string_lossy().to_ascii_lowercase());
+    let i = rng.below(files.len());
+    let write = |f: &IncrFile| {
+        let _ = std::fs::write(work.join(&f.name), &f.bytes);
+    };
+    match rng.below(4) {
+        _ if !files[i].there => {
+            files[i].there = true;
+            write(&files[i]);
+            Some(format!("{} put back", files[i].name))
+        }
+        0 => {
+            let pairs: Vec<usize> = (0..files.len()).filter(|&j| j != i && files[j].there && ext(&files[j].name) == ext(&files[i].name) && files[j].bytes != files[i].bytes).collect();
+            let j = *pairs.get(rng.below(pairs.len().max(1)))?;
+            let b = std::mem::take(&mut files[i].bytes);
+            files[i].bytes = std::mem::replace(&mut files[j].bytes, b);
+            write(&files[i]);
+            write(&files[j]);
+            Some(format!("{} and {} swap their bytes", files[i].name, files[j].name))
+        }
+        1 => {
+            files[i].there = false;
+            let _ = std::fs::remove_file(work.join(&files[i].name));
+            Some(format!("{} removed", files[i].name))
+        }
+        2 if matches!(ext(&files[i].name).as_str(), "bbl" | "bib") => {
+            let b = &files[i].bytes;
+            let mut words = Vec::new();
+            let mut s = 0;
+            for (k, c) in b.iter().chain(std::iter::once(&b' ')).enumerate() {
+                if !c.is_ascii_alphabetic() {
+                    if k - s >= 4 {
+                        words.push((s, k - s));
+                    }
+                    s = k + 1;
+                }
+            }
+            let &(s, n) = words.get(rng.below(words.len().max(1)))?;
+            let new = rng.word();
+            let old = String::from_utf8_lossy(&b[s..s + n]).into_owned();
+            files[i].bytes.splice(s..s + n, new.bytes());
+            write(&files[i]);
+            Some(format!("in {}, {old} replaced by {new}", files[i].name))
+        }
+        _ => {
+            write(&files[i]);
+            Some(format!("{} written again with the same bytes", files[i].name))
+        }
+    }
+}
 
 /// The edits a save in several spots, or in an `\input` file, is made of.
 const INCR_SMALL: [&str; 4] = ["insert word", "delete word", "replace word", "add paragraph"];
@@ -5212,10 +5391,12 @@ fn write_tree(dir: &Path, tree: &IncrTree, old: Option<&[Vec<u8>]>) {
     }
 }
 
-/// A fresh one-shot compile of `main` in `work`: its PDF, or `None` when it wrote none.
+/// A fresh one-shot compile of `main` in `work`: its PDF, or `None` when it wrote none. It
+/// uses the watch session's fast deflate encoder (`RT_FAST_DEFLATE`), so the two compare
+/// byte for byte.
 fn incr_fresh(rush: &Path, work: &Path, main: &str) -> Option<Vec<u8>> {
     let _ = std::fs::remove_file(work.join(INCR_FRESH_PDF));
-    let _ = Command::new(rush).arg(main).args(["-o", INCR_FRESH_PDF]).current_dir(work).envs(FIXED_DATE).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let _ = Command::new(rush).arg(main).args(["-o", INCR_FRESH_PDF]).current_dir(work).envs(FIXED_DATE).env("RT_FAST_DEFLATE", "1").stdout(Stdio::null()).stderr(Stdio::null()).status();
     std::fs::read(work.join(INCR_FRESH_PDF)).ok()
 }
 
@@ -5273,6 +5454,8 @@ fn incr_doc(rush: &Path, tex: &Path, edits: usize, seed: u64, verbose: bool) -> 
     let (mut watch_s, mut fresh_s) = (0f64, 0f64);
     let (mut first_w, mut first_f) = (0f64, 0f64);
     let total: usize = INCR_KINDS.iter().map(|k| k.1).sum();
+    let mut files = Vec::new();
+    incr_files(&work, "", &mut files);
     for step in 0..=edits {
         let before = tree.texts.clone();
         // Save 0 is the first compile; each later one follows an edit.
@@ -5307,6 +5490,8 @@ fn incr_doc(rush: &Path, tex: &Path, edits: usize, seed: u64, verbose: bool) -> 
                         .collect();
                     (!done.is_empty()).then(|| format!("{} spot{} in one save: {}", done.len(), if done.len() == 1 { "" } else { "s" }, done.join("; ")))
                 }
+                "other file" => incr_file_edit(&work, &mut files, &mut rng),
+                "local style" => incr_local_style(&work, &tree.texts[0], &mut rng),
                 "undo" | "input file" => None,
                 k => incr_edit(&mut tree, 0, k, &mut rng),
             };

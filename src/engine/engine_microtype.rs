@@ -18,6 +18,8 @@ pub struct Codes {
     pub ef: [i16; 256],
 }
 
+codec_struct!(Codes { lp, rp, ef });
+
 /// A font's expansion links (pdftex.web `pdf_font_blink`, `elink`, `stretch`, `shrink`,
 /// `step`, `auto_expand`); font 0 (`null_font`) means none.
 #[derive(PartialEq, Clone, Copy, Default, Debug)]
@@ -33,12 +35,16 @@ pub struct Expand {
     pub auto: bool,
 }
 
+codec_struct!(Expand { blink, elink, stretch, shrink, step, auto });
+
 /// The side table, indexed by font.
 #[derive(PartialEq, Default, Clone)]
 pub struct Micro {
     codes: Vec<Option<Box<Codes>>>,
     expand: Vec<Expand>,
 }
+
+codec_struct!(Micro { codes, expand });
 
 impl std::fmt::Debug for Micro {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

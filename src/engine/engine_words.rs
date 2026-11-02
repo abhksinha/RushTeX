@@ -40,6 +40,8 @@ pub struct WordRec {
     pub disc: bool,
 }
 
+codec_struct!(WordRec { start, end, width, height, depth, disc });
+
 /// Every entry's nodes; a ligature's `b` is where its characters start in `ligs`. A
 /// hyphenated form's discretionary has its `a` in `discs`, whose pre- and post-break
 /// texts are ranges of `items` too.
@@ -58,6 +60,8 @@ pub struct WordStore {
     stack: Vec<Node>,
 }
 
+codec_struct!(WordStore { recs, items, ligs, discs, brk, rows, stack });
+
 /// One discretionary of a hyphenated form, as §869 and §840 read it, all widths natural
 /// (no glue in a word, so no stretch or shrink): read whole, one row per break.
 #[derive(PartialEq, Clone, Copy, Debug, Default)]
@@ -75,6 +79,8 @@ pub struct BreakRow {
     pub flags: u8,
 }
 
+codec_struct!(BreakRow { before, pre, rep, post, at, flags });
+
 impl BreakRow {
     /// An empty pre-break text: `\exhyphenpenalty`, no pre-break width (§869).
     pub const PRE_EMPTY: u8 = 1;
@@ -83,6 +89,9 @@ impl BreakRow {
     /// The replaced nodes reach the form's end: what §840 then reads is the paragraph's.
     pub const ENDS_WORD: u8 = 4;
 }
+
+/// A live copy of a frozen word store, by its chunk lists' addresses ([`WordStore::thawed`]).
+type ThawedCopy = ([Option<usize>; 6], std::rc::Rc<WordStore>);
 
 impl WordStore {
     /// A checkpoint's copy, sharing what did not change since the last one, and a live copy
@@ -95,6 +104,42 @@ impl WordStore {
     pub fn thaw(&self) -> WordStore {
         let WordStore { recs, items, ligs, discs, brk, rows, stack: _ } = self;
         WordStore { recs: recs.thaw(), items: items.thaw(), ligs: ligs.thaw(), discs: discs.thaw(), brk: brk.thaw(), rows: rows.thaw(), stack: Vec::new() }
+    }
+
+    /// A live copy of this frozen store to read, shared with the last few asked for: the
+    /// cutoff tests of a save thaw the same checkpoints' stores again and again. A copy
+    /// holds the chunk lists it is keyed by, so a key is never reused while it is kept.
+    pub fn thawed(&self) -> std::rc::Rc<WordStore> {
+        thread_local! {
+            static THAWED: std::cell::RefCell<Vec<ThawedCopy>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        let key = [self.recs.frozen_id(), self.items.frozen_id(), self.ligs.frozen_id(), self.discs.frozen_id(), self.brk.frozen_id(), self.rows.frozen_id()];
+        if key.iter().any(Option::is_none) {
+            return std::rc::Rc::new(self.thaw());
+        }
+        THAWED.with_borrow_mut(|c| {
+            if let Some(k) = c.iter().position(|(k, _)| *k == key) {
+                let hit = c.remove(k);
+                c.push(hit);
+            } else {
+                if c.len() == 4 {
+                    c.remove(0);
+                }
+                c.push((key, std::rc::Rc::new(self.thaw())));
+            }
+            c.last().map(|(_, w)| w.clone()).unwrap_or_else(|| unreachable!())
+        })
+    }
+
+    pub fn thaw_into(&self, live: &mut WordStore) {
+        let WordStore { recs, items, ligs, discs, brk, rows, stack: _ } = self;
+        recs.thaw_into(&mut live.recs);
+        items.thaw_into(&mut live.items);
+        ligs.thaw_into(&mut live.ligs);
+        discs.thaw_into(&mut live.discs);
+        brk.thaw_into(&mut live.brk);
+        rows.thaw_into(&mut live.rows);
+        live.stack.clear();
     }
 
     #[inline]
@@ -359,11 +404,16 @@ pub struct Words {
     /// `hyphenate_word`'s lists, kept for their room.
     temp: Vec<Node>,
     made: Vec<Node>,
+    /// An empty word store, swapped with the machine's while `hyphenate_word` writes into
+    /// it (`mem::take` made a fresh store, six shared-chunk allocations, per new form).
+    spare: WordStore,
     check: bool,
     nodes: bool,
     /// Per entry, language and hyphen minima: what §894–§903 make of the word.
     forms: HashMap<u64, Form, WordHash>,
 }
+
+codec_struct!(Words { map, short, short_key, key, run, temp, made, check, nodes, forms; spare });
 
 #[derive(PartialEq, Clone, Copy)]
 enum Form {
@@ -375,11 +425,13 @@ enum Form {
     Again,
 }
 
+codec_data_enum!(Form { 0 Whole, 1 Word(a), 2 Again });
+
 impl Default for Words {
     fn default() -> Self {
         let check = std::env::var_os("RT_WORD_CHECK").is_some_and(|v| v == "1");
         let nodes = std::env::var_os("RT_WORD_NODES").is_none_or(|v| v != "0");
-        Words { map: HashMap::default(), short: HashMap::default(), short_key: None, key: Vec::new(), run: Vec::new(), temp: Vec::new(), made: Vec::new(), check, nodes, forms: HashMap::default() }
+        Words { map: HashMap::default(), short: HashMap::default(), short_key: None, key: Vec::new(), run: Vec::new(), temp: Vec::new(), made: Vec::new(), spare: WordStore::default(), check, nodes, forms: HashMap::default() }
     }
 }
 
@@ -672,7 +724,8 @@ impl Machine<'_, '_> {
         self.words.temp = temp;
         let fonts = &self.e.fonts;
         let dims = |n: &Node| u8::try_from(n.a).ok().and_then(|c| fonts.dims(n.font, c)).unwrap_or_default();
-        let mut ws = std::mem::take(&mut self.e.nodes.words);
+        std::mem::swap(&mut self.e.nodes.words, &mut self.words.spare);
+        let ws = &mut self.words.spare;
         let marks = ws.marks();
         let form = ws.capture(&self.e.nodes, &nodes, &dims).map_or(Form::Again, Form::Word);
         let form = match (known, form) {
@@ -691,7 +744,7 @@ impl Machine<'_, '_> {
                 form
             }
         };
-        self.e.nodes.words = ws;
+        std::mem::swap(&mut self.e.nodes.words, &mut self.words.spare);
         match form {
             Form::Word(id) => {
                 // The entry holds the form; the nodes made for it go.

@@ -184,6 +184,8 @@ pub struct Machine<'e, 'a> {
     /// A watch session's checkpoints of this run (`engine_checkpoint`); `None` in a
     /// one-shot run, which takes none.
     pub(super) checkpoints: Option<Box<super::engine_checkpoint::Checkpoints>>,
+    /// A watch session's kept pages as the last run shipped them (`finish_contents`).
+    pub(super) ship_memo: Option<Box<super::engine_checkpoint::ShipRun>>,
     /// `--watch` (`engine_resume`): [`Machine::run`] returns, `paused`, where the preamble
     /// ends: at `\document`'s last token, `\ignorespaces`, read again when the run goes on.
     pub stop_at_document: bool,
@@ -207,6 +209,8 @@ pub enum Mode {
     Math,
 }
 
+codec_enum!(Mode { Vertical, Horizontal, Math });
+
 /// A token with the meaning it had when read (§297 `cur_cmd`/`cur_chr`).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct X {
@@ -217,7 +221,7 @@ pub(super) struct X {
 impl<'e, 'a> Machine<'e, 'a> {
     pub fn new(e: &'e mut Engine, src: &'a str) -> Self {
         let late_literals = e.nodes.list.iter().any(|n| n.kind == super::engine_node::Kind::Whatsit && n.sub == super::engine_whatsit::LATE_LITERAL);
-        let mut m = Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), box_warnings: [0; 2], halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, pdf_cache: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), text_run: None, words: Default::default(), break_pool: Default::default(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), dead_buf: Vec::new(), kernel: None, doc: None, #[cfg(all(test, feature = "oracle"))] used_cs: Vec::new(), #[cfg(feature = "mprof")] mprof: Default::default(), run_index: 1, stop_at_document: false, stop_at_aux: false, line_reads: 0, paused: false, checkpoints: None };
+        let mut m = Machine { e, input: Input::new(src), out: Vec::new(), collect: Vec::new(), pattern: Vec::new(), def: Vec::new(), nest: Vec::new(), cur: Vec::new(), start: 0, aux: 0, prev_graf: 0, frames: Vec::new(), last_badness: 0, after_group: Vec::new(), recent: [Token(0); 16], recent_at: 0, trace: false, aligns: Vec::new(), aligning: false, cancel_boundary: false, page: Default::default(), insert_numbers: Vec::new(), adjust: None, adjust_out: None, mode_zero: false, clang: 0, disc_saved: Vec::new(), pdf_doc: Default::default(), last_match: Default::default(), vf: Default::default(), colors: Default::default(), delim: -1, just_box: 0, noads: Vec::new(), math_saved: Vec::new(), math: Default::default(), typeset: false, in_csname: 0, name_buf: String::new(), expansions: 0, errors: Vec::new(), box_warnings: [0; 2], halted: false, error_count: 0, conds: Vec::new(), mode: Mode::Vertical, inner: false, after_assignment: None, read_file: None, pdf_cache: None, job_name: String::from("texput"), reads: Default::default(), writes: Default::default(), closed: Vec::new(), log: String::new(), interaction: 3, groups: Vec::new(), max_expansions: MAX_EXPANSIONS, dont_expand: false, lig_buf: Vec::new(), text_run: None, words: Default::default(), break_pool: Default::default(), collect_at: super::engine_gc::MIN_COLLECT, collect_buf: Vec::new(), dead_buf: Vec::new(), kernel: None, doc: None, #[cfg(all(test, feature = "oracle"))] used_cs: Vec::new(), #[cfg(feature = "mprof")] mprof: Default::default(), run_index: 1, stop_at_document: false, stop_at_aux: false, line_reads: 0, paused: false, checkpoints: None, ship_memo: None };
         m.page.late_literals = late_literals;
         m
     }
@@ -682,9 +686,10 @@ impl<'e, 'a> Machine<'e, 'a> {
                 // The preamble's end (`engine_resume`): latex.ltx's `\document` ends
                 // `\global\let\@nodocument\relax \global\let\do\noexpand
                 // \UseOneTimeHook{begindocument/end}\ignorespaces`, so with `\@nodocument`
-                // now `\relax` and only the document open, this is its last token and no byte
-                // of the body has been read; it is read again when the run goes on.
-                if self.stop_at_document && self.e.cs.get("@nodocument").is_some_and(|id| self.e.eqtb.meaning(id) == Meaning::Prim(Prim::Relax)) && self.input.at_base() {
+                // now `\relax` and only files open (the document, and any file `\input` that
+                // holds `\begin{document}`), this is its last token and no byte of the body
+                // has been read; it is read again when the run goes on.
+                if self.stop_at_document && self.e.cs.get("@nodocument").is_some_and(|id| self.e.eqtb.meaning(id) == Meaning::Prim(Prim::Relax)) && self.input.at_file_top(true) {
                     self.stop_at_document = false;
                     self.paused = true;
                     self.input.back(x.t);
@@ -1070,10 +1075,10 @@ impl<'e, 'a> Machine<'e, 'a> {
             },
             None => {}
         }
-        match self.open_file(&name) {
-            Some(text) => {
+        match self.open_file_named(&name) {
+            Some((text, origin)) => {
                 self.input.trim();
-                self.input.push_file(text);
+                self.input.push_file(text, origin);
                 #[cfg(feature = "mprof")]
                 self.input.mark_document(super::engine_mprof::document_file(&name));
             }
@@ -1092,7 +1097,7 @@ impl<'e, 'a> Machine<'e, 'a> {
             s = s.replace(nl, "\n");
         }
         self.input.trim();
-        self.input.push_file(s);
+        self.input.push_file(s, None);
         #[cfg(feature = "mprof")]
         self.input.mark_document(false);
     }
@@ -1417,7 +1422,7 @@ mod tests {
 }
 
 /// Howard Hinnant's days-to-civil conversion (proleptic Gregorian calendar).
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(super) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);

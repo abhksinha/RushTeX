@@ -65,9 +65,9 @@ pub fn english() -> Option<&'static HyphTable<'static>> {
 
 /// The other languages babel selects natively (`engine_babel`), each `hyph-<name>.rtdb`
 /// (`rushtex-gen hyph`), with its number from the format's `\l@<name>` in section `lang`.
-pub const LANGUAGES: [&str; 3] = ["ukenglish", "portuguese", "spanish"];
+pub const LANGUAGES: [&str; 7] = ["ukenglish", "portuguese", "spanish", "ngerman", "italian", "french", "german"];
 
-static LANGUAGE_BLOBS: [&[u8]; LANGUAGES.len()] = [include_bytes!("../../assets/tables/hyph-ukenglish.rtdb"), include_bytes!("../../assets/tables/hyph-portuguese.rtdb"), include_bytes!("../../assets/tables/hyph-spanish.rtdb")];
+static LANGUAGE_BLOBS: [&[u8]; LANGUAGES.len()] = [include_bytes!("../../assets/tables/hyph-ukenglish.rtdb"), include_bytes!("../../assets/tables/hyph-portuguese.rtdb"), include_bytes!("../../assets/tables/hyph-spanish.rtdb"), include_bytes!("../../assets/tables/hyph-ngerman.rtdb"), include_bytes!("../../assets/tables/hyph-italian.rtdb"), include_bytes!("../../assets/tables/hyph-french.rtdb"), include_bytes!("../../assets/tables/hyph-german.rtdb")];
 
 /// [`LANGUAGES`]`[k]`'s table, checked on first use; `None` if it is not a table of this build.
 pub fn language(k: usize) -> Option<&'static HyphTable<'static>> {

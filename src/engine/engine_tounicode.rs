@@ -16,6 +16,22 @@ pub struct GlyphUnicode {
     carried: Option<&'static crate::data::data_glyphs::GlyphTable<'static>>,
 }
 
+// The carried table by whether it is under `pairs`; it is the binary's own.
+#[cfg(feature = "oracle")]
+impl super::engine_snapshot::Codec for GlyphUnicode {
+    fn put(&self, w: &mut super::engine_snapshot::Writer) {
+        let GlyphUnicode { pairs, carried } = self;
+        pairs.put(w);
+        carried.is_some().put(w);
+    }
+    fn take(r: &mut super::engine_snapshot::Reader) -> Option<Self> {
+        use super::engine_snapshot::Codec;
+        let pairs = Codec::take(r)?;
+        let carried = if bool::take(r)? { Some(crate::data::data_glyphs::carried()?) } else { None };
+        Some(GlyphUnicode { pairs, carried })
+    }
+}
+
 impl std::fmt::Debug for GlyphUnicode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GlyphUnicode").field("pairs", &self.pairs.len()).field("carried", &self.carried.map(|t| t.len())).finish()

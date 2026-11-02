@@ -616,3 +616,62 @@ impl Machine<'_, '_> {
         self.font_declaration(Change::Shape("sc"), false);
     }
 }
+
+/// amsart.cls's natives, in `Meaning::Doc` order after the kernel's (`engine_doc::DOC_PARTS`).
+pub(super) const NATIVES: &[(&str, super::Native)] = &[
+    ("curraddr", |m| m.ams_address(CURRADDR)),
+    ("email", |m| m.ams_address(EMAIL)),
+    ("urladdr", |m| m.ams_address(URLADDR)),
+    ("keywords", |m| m.ams_keywords(false)),
+    ("subjclass", |m| m.ams_subjclass()),
+    ("rt@amsabsitem", |m| m.ams_abstract_item()),
+    ("rt@amsabsend2", |m| m.ams_abstract_end2()),
+    ("rt@amsfn", |m| m.ams_fn_setup()),
+    ("rt@amsfnend", |m| m.ams_fn_end()),
+    ("rt@amsmark", |m| m.ams_mark(0)),
+    ("rt@amsupprep", |m| m.ams_upprep()),
+    ("rt@amsauthors", |m| m.ams_authors()),
+    ("rt@amsendauthors", |m| m.end_trivlist()),
+    ("rt@amssetabstract", |m| m.ams_set_abstract()),
+    ("rt@amstitleend", |m| m.ams_title_end()),
+    ("rt@amsbigskip", |m| m.ams_big_skip()),
+];
+
+/// amsart.cls's commands in place of the kernel's (`engine_doc::class_hooks`).
+pub(super) const HOOKS: super::ClassHooks = super::ClassHooks {
+    // amsart.cls: `\RequirePackage{amsmath}` (with `leqno`), `{amsfonts}`, and its own
+    // copy of amsthm.
+    setup: |m, _| {
+        if let Some(doc) = m.doc.as_mut() {
+            doc.ams = Some(Box::new(Ams::new()));
+        }
+        for p in ["amsmath", "amsfonts", "amsthm"] {
+            m.load_package(p);
+        }
+    },
+    tie: |m| m.ams_tie(),
+    title: |m| m.ams_title(),
+    author: |m| m.ams_author(),
+    date: |m| m.ams_keywords(true),
+    make_title: |m| m.ams_make_title(),
+    address: |m| m.ams_address(ADDRESS),
+    ..super::KERNEL_HOOKS
+};
+
+/// amsart.cls's own front-matter commands (`engine_amsart`), only under it (its `\address` is letter.cls's name too, `LETTER_ONLY`).
+pub(super) const AMS_ONLY: &[&str] = &["curraddr", "email", "urladdr", "keywords", "subjclass"];
+/// The packages a native amsart document may load: math and graphics, which leave the
+/// class's page, title, heading, footnote and citation code alone.
+pub(super) const AMS_PACKAGES: &[&str] = &["amsmath", "amssymb", "amsfonts", "amsthm", "graphicx", "mathtools", "bm", "url"];
+/// What amsart.cls defines otherwise than article.cls and the native job does not take yet,
+/// or what it does not define: under amsart these stop. Its lists (`\makelabel` with
+/// `\upshape`, labels `(1)`), footnotes (`\@makefnmark` raised .9ex, `\footnoterule`
+/// 5pc), floats (`\@makecaption`), run-in numbered `\subsection`s, `thebibliography`,
+/// `\sloppy` (`\emergencystretch3em`), `\frenchspacing`, the skip amounts
+/// (`\@adjustvertspacing`), `\tableofcontents` (`\@tocline`), `\appendix`, `\part`,
+/// `\markboth`, its `\thanks` and `\dedicatory`, `\swapnumbers`, `\newtheoremstyle`,
+/// and amsmath's numbered displays and `\tag` (tags on the left under `leqno`).
+pub(super) const AMS_LACKS: &[&str] = &["subsection", "subsubsection", "paragraph", "subparagraph", "part", "appendix", "tableofcontents", "listoffigures", "listoftables", "footnote", "footnotemark", "footnotetext", "thanks", "caption", "markboth", "markright", "sloppy", "fussy", "frenchspacing", "nonfrenchspacing", "smallskip", "medskip", "bigskip", "bibitem", "newblock", "pagestyle", "thispagestyle", "dedicatory", "swapnumbers", "newtheoremstyle", "tag", "printindex", "contrib"];
+/// The environments of [`AMS_LACKS`]: lists, floats, numbered displays (amsmath under
+/// `leqno`), `thebibliography`, `titlepage`.
+pub(super) const AMS_LACKS_ENVS: &[&str] = &["itemize", "enumerate", "description", "verse", "quote", "quotation", "figure", "table", "figure*", "table*", "thebibliography", "titlepage", "equation", "align", "gather", "multline", "eqnarray", "eqnarray*", "flalign", "alignat", "split", "theindex"];

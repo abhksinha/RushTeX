@@ -51,6 +51,7 @@ pub struct KernelTable<'a> {
     blocked: &'a str,
     lets: &'a str,
     accents: &'a str,
+    codes: &'a str,
 }
 
 /// One entry of the math version `normal` (section `mathfont`).
@@ -115,6 +116,9 @@ impl<'a> KernelTable<'a> {
         }, accents: match b.section("accents") {
             Some(p) => std::str::from_utf8(p).ok()?,
             None => "",
+        }, codes: match b.section("codes") {
+            Some(p) => std::str::from_utf8(p).ok()?,
+            None => "",
         } };
         (t.chars.lines().all(|l| parse(l).is_some()) && t.ops.lines().all(|l| parse_op(l).is_some()) && t.delims.lines().all(|l| parse_delim(l).is_some()) && t.macros.lines().all(|l| parse_macro(l).is_some()) && t.mathfonts.lines().all(|l| parse_math_font(l).is_some())).then_some(t)
     }
@@ -141,6 +145,18 @@ impl<'a> KernelTable<'a> {
     /// with `\accentclass@` 7.
     pub fn accents(&self) -> impl Iterator<Item = (&'a str, u32)> + '_ {
         self.accents.lines().filter_map(|l| l.split_once('\t').and_then(|(n, v)| Some((n, v.parse().ok()?))))
+    }
+
+    /// A package's codes (section `codes`): `m` a character's `\mathcode`, `d` its
+    /// `\delcode`, `g` a math glue parameter (slot 15 to 17: `\thinmuskip`, `\medmuskip`,
+    /// `\thickmuskip`) as width, stretch, shrink and their two orders.
+    pub fn codes(&self) -> impl Iterator<Item = (char, u32, Vec<i32>)> + '_ {
+        self.codes.lines().filter_map(|l| {
+            let mut f = l.split('\t');
+            let kind = f.next()?.chars().next()?;
+            let at = f.next()?.parse().ok()?;
+            Some((kind, at, f.map(|v| v.parse().ok()).collect::<Option<Vec<i32>>>()?))
+        })
     }
 
     /// The math version `normal`: symbol fonts in family order, and the math alphabets.
@@ -223,7 +239,10 @@ pub fn kernel() -> Option<&'static KernelTable<'static>> {
 }
 
 /// The packages with a native table (`rushtex-gen natpkg`), by name.
-static PACKAGES: [(&str, &[u8]); 29] = [("amsbsy", include_bytes!("../../assets/tables/pkg-amsbsy.rtdb")), ("amsfonts", include_bytes!("../../assets/tables/pkg-amsfonts.rtdb")), ("amsgen", include_bytes!("../../assets/tables/pkg-amsgen.rtdb")), ("amsmath", include_bytes!("../../assets/tables/pkg-amsmath.rtdb")), ("amsopn", include_bytes!("../../assets/tables/pkg-amsopn.rtdb")), ("amssymb", include_bytes!("../../assets/tables/pkg-amssymb.rtdb")), ("amstext", include_bytes!("../../assets/tables/pkg-amstext.rtdb")), ("mathrsfs", include_bytes!("../../assets/tables/pkg-mathrsfs.rtdb")), ("bm", include_bytes!("../../assets/tables/pkg-bm.rtdb")), ("textcomp", include_bytes!("../../assets/tables/pkg-textcomp.rtdb")), ("dcolumn", include_bytes!("../../assets/tables/pkg-dcolumn.rtdb")), ("float", include_bytes!("../../assets/tables/pkg-float.rtdb")), ("enumitem", include_bytes!("../../assets/tables/pkg-enumitem.rtdb")), ("keyval", include_bytes!("../../assets/tables/pkg-keyval.rtdb")), ("calc", include_bytes!("../../assets/tables/pkg-calc.rtdb")), ("mhsetup", include_bytes!("../../assets/tables/pkg-mhsetup.rtdb")), ("mathtools", include_bytes!("../../assets/tables/pkg-mathtools.rtdb")), ("enumerate", include_bytes!("../../assets/tables/pkg-enumerate.rtdb")), ("lmodern", include_bytes!("../../assets/tables/pkg-lmodern.rtdb")), ("pgfrcs", include_bytes!("../../assets/tables/pkg-pgfrcs.rtdb")), ("pgfsys", include_bytes!("../../assets/tables/pkg-pgfsys.rtdb")), ("pgfcore", include_bytes!("../../assets/tables/pkg-pgfcore.rtdb")), ("pgfcomp-version-0-65", include_bytes!("../../assets/tables/pkg-pgfcomp-version-0-65.rtdb")), ("pgfcomp-version-1-18", include_bytes!("../../assets/tables/pkg-pgfcomp-version-1-18.rtdb")), ("pgf", include_bytes!("../../assets/tables/pkg-pgf.rtdb")), ("pgfkeys", include_bytes!("../../assets/tables/pkg-pgfkeys.rtdb")), ("pgfmath", include_bytes!("../../assets/tables/pkg-pgfmath.rtdb")), ("pgffor", include_bytes!("../../assets/tables/pkg-pgffor.rtdb")), ("tikz", include_bytes!("../../assets/tables/pkg-tikz.rtdb"))];
+static PACKAGES: [(&str, &[u8]); 53] = [("amsbsy", include_bytes!("../../assets/tables/pkg-amsbsy.rtdb")), ("amsfonts", include_bytes!("../../assets/tables/pkg-amsfonts.rtdb")), ("amsgen", include_bytes!("../../assets/tables/pkg-amsgen.rtdb")), ("amsmath", include_bytes!("../../assets/tables/pkg-amsmath.rtdb")), ("amsopn", include_bytes!("../../assets/tables/pkg-amsopn.rtdb")), ("amssymb", include_bytes!("../../assets/tables/pkg-amssymb.rtdb")), ("amstext", include_bytes!("../../assets/tables/pkg-amstext.rtdb")), ("mathrsfs", include_bytes!("../../assets/tables/pkg-mathrsfs.rtdb")), ("bm", include_bytes!("../../assets/tables/pkg-bm.rtdb")), ("textcomp", include_bytes!("../../assets/tables/pkg-textcomp.rtdb")), ("dcolumn", include_bytes!("../../assets/tables/pkg-dcolumn.rtdb")), ("float", include_bytes!("../../assets/tables/pkg-float.rtdb")), ("enumitem", include_bytes!("../../assets/tables/pkg-enumitem.rtdb")), ("keyval", include_bytes!("../../assets/tables/pkg-keyval.rtdb")), ("calc", include_bytes!("../../assets/tables/pkg-calc.rtdb")), ("mhsetup", include_bytes!("../../assets/tables/pkg-mhsetup.rtdb")), ("mathtools", include_bytes!("../../assets/tables/pkg-mathtools.rtdb")), ("enumerate", include_bytes!("../../assets/tables/pkg-enumerate.rtdb")), ("lmodern", include_bytes!("../../assets/tables/pkg-lmodern.rtdb")), ("pgfrcs", include_bytes!("../../assets/tables/pkg-pgfrcs.rtdb")), ("pgfsys", include_bytes!("../../assets/tables/pkg-pgfsys.rtdb")), ("pgfcore", include_bytes!("../../assets/tables/pkg-pgfcore.rtdb")), ("pgfcomp-version-0-65", include_bytes!("../../assets/tables/pkg-pgfcomp-version-0-65.rtdb")), ("pgfcomp-version-1-18", include_bytes!("../../assets/tables/pkg-pgfcomp-version-1-18.rtdb")), ("pgf", include_bytes!("../../assets/tables/pkg-pgf.rtdb")), ("pgfkeys", include_bytes!("../../assets/tables/pkg-pgfkeys.rtdb")), ("pgfmath", include_bytes!("../../assets/tables/pkg-pgfmath.rtdb")), ("pgffor", include_bytes!("../../assets/tables/pkg-pgffor.rtdb")), ("tikz", include_bytes!("../../assets/tables/pkg-tikz.rtdb")), ("latexsym", include_bytes!("../../assets/tables/pkg-latexsym.rtdb")), ("dsfont", include_bytes!("../../assets/tables/pkg-dsfont.rtdb")), ("bbm", include_bytes!("../../assets/tables/pkg-bbm.rtdb")), ("stmaryrd", include_bytes!("../../assets/tables/pkg-stmaryrd.rtdb")), ("upgreek", include_bytes!("../../assets/tables/pkg-upgreek.rtdb")), ("esint", include_bytes!("../../assets/tables/pkg-esint.rtdb")), ("bbold", include_bytes!("../../assets/tables/pkg-bbold.rtdb")), ("braket", include_bytes!("../../assets/tables/pkg-braket.rtdb")), ("ifthen", include_bytes!("../../assets/tables/pkg-ifthen.rtdb")), ("nicefrac", include_bytes!("../../assets/tables/pkg-nicefrac.rtdb")), ("units", include_bytes!("../../assets/tables/pkg-units.rtdb")), ("wasysym", include_bytes!("../../assets/tables/pkg-wasysym.rtdb")), ("gensymb", include_bytes!("../../assets/tables/pkg-gensymb.rtdb")), ("cancel", include_bytes!("../../assets/tables/pkg-cancel.rtdb")), ("xfrac", include_bytes!("../../assets/tables/pkg-xfrac.rtdb")), ("apacite", include_bytes!("../../assets/tables/pkg-apacite.rtdb")), ("xkeyval", include_bytes!("../../assets/tables/pkg-xkeyval.rtdb")), ("adjcalc", include_bytes!("../../assets/tables/pkg-adjcalc.rtdb")), ("collectbox", include_bytes!("../../assets/tables/pkg-collectbox.rtdb")), ("trimclip", include_bytes!("../../assets/tables/pkg-trimclip.rtdb")), ("ifoddpage", include_bytes!("../../assets/tables/pkg-ifoddpage.rtdb")), ("varwidth", include_bytes!("../../assets/tables/pkg-varwidth.rtdb")), ("adjustbox", include_bytes!("../../assets/tables/pkg-adjustbox.rtdb")), ("mathpazo", include_bytes!("../../assets/tables/pkg-mathpazo.rtdb"))];
+
+// The pre-scan gives each package one bit of a `u64` beside the kernel's (`package_bit`).
+const _: () = assert!(PACKAGES.len() <= 63);
 
 /// The native table of package `name`, checked on first use; `None` when it has none.
 pub fn package(name: &str) -> Option<&'static KernelTable<'static>> {
@@ -300,6 +319,12 @@ pub fn write_blocked(w: &mut super::data_blob::BlobWriter, names: &[String]) {
 #[cfg(any(test, feature = "gen"))]
 pub fn write_accents(w: &mut super::data_blob::BlobWriter, accents: &[(String, u32)]) {
     w.bytes("accents", accents.iter().map(|(n, v)| format!("{n}\t{v}\n")).collect::<String>().into_bytes());
+}
+
+/// A package's `codes` section: `kind<TAB>index<TAB>value…` per line ([`KernelTable::codes`]).
+#[cfg(any(test, feature = "gen"))]
+pub fn write_codes(w: &mut super::data_blob::BlobWriter, codes: &[(char, u32, Vec<i32>)]) {
+    w.bytes("codes", codes.iter().map(|(k, at, v)| format!("{k}\t{at}{}\n", v.iter().map(|x| format!("\t{x}")).collect::<String>())).collect::<String>().into_bytes());
 }
 
 /// A package's `lets` section: `name<TAB>primitive` per line.

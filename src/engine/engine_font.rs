@@ -41,6 +41,8 @@ pub struct Font {
     present: [u64; 4],
 }
 
+codec_struct!(Font { name, size, design, at, hyphen_char, skew_char, metrics, ident, expand, present });
+
 /// A font's bases in `Fonts::info` and its parameter count.
 #[derive(PartialEq, Clone, Copy, Default)]
 struct FontAt {
@@ -54,6 +56,8 @@ struct FontAt {
     /// [`Font::dims`]' 256 records of four words.
     dims: u32,
 }
+
+codec_struct!(FontAt { width, height, depth, italic, kern, param, params, dims });
 
 impl Font {
     /// Width, height, depth and italic correction of `c`, if it exists (§554), expanded as
@@ -135,6 +139,36 @@ pub enum Metrics {
     File(std::rc::Rc<FileTfm>),
 }
 
+// A pinned font by its table ID, its rows found again in the table (as `Fonts::undump`).
+#[cfg(feature = "oracle")]
+impl super::engine_snapshot::Codec for Metrics {
+    fn put(&self, w: &mut super::engine_snapshot::Writer) {
+        match self {
+            Metrics::None => w.u8(0),
+            Metrics::Table(_, id) => {
+                w.u8(1);
+                w.u32(*id);
+            }
+            Metrics::File(t) => {
+                w.u8(2);
+                t.put(w);
+            }
+        }
+    }
+    fn take(r: &mut super::engine_snapshot::Reader) -> Option<Self> {
+        use super::engine_snapshot::Codec;
+        Some(match r.u8()? {
+            0 => Metrics::None,
+            1 => {
+                let (table, id) = (data_tfm::fonts()?, r.u32()?);
+                (id < table.len() as u32).then(|| Metrics::Table(table.view(id), id))?
+            }
+            2 => Metrics::File(Codec::take(r)?),
+            _ => return None,
+        })
+    }
+}
+
 /// The parts of a TFM file read at run time (§539–§546), in the table's quad layout.
 #[derive(PartialEq)]
 pub struct FileTfm {
@@ -143,6 +177,8 @@ pub struct FileTfm {
     /// In `data_tfm::POOLS` order.
     pools: [Vec<[u8; 4]>; 9],
 }
+
+codec_struct!(FileTfm { bc, design, pools });
 
 impl FileTfm {
     fn new(p: &TfmParts) -> FileTfm {
@@ -263,6 +299,13 @@ impl Fonts {
     pub fn thaw(&self) -> Fonts {
         Fonts { list: self.list.thaw(), info: self.info.thaw(), by_key: self.by_key.clone(), micro: self.micro.clone() }
     }
+
+    pub fn thaw_into(&self, live: &mut Fonts) {
+        self.list.thaw_into(&mut live.list);
+        self.info.thaw_into(&mut live.info);
+        live.by_key.clone_from(&self.by_key);
+        live.micro.clone_from(&self.micro);
+    }
 }
 
 impl Fonts {
@@ -357,6 +400,8 @@ pub struct Fonts {
     /// Protrusion and expansion codes and links (`engine_microtype`); never in a format.
     pub micro: super::engine_microtype::Micro,
 }
+
+codec_struct!(Fonts { list, info, by_key, micro });
 
 /// Arena words reserved past a format's fonts: about 300 fonts of the corpus's average size.
 #[cfg(feature = "oracle")]

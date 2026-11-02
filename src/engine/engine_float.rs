@@ -18,7 +18,7 @@ use super::super::engine_run::{Machine, Mode, SEMI_SIMPLE_GROUP};
 use super::super::engine_token::Token;
 use super::super::engine_value::MAX_DIMEN;
 use super::super::engine_node::RUNNING;
-use super::{Op, COLUMN_WIDTH, COLUMNSEP, COLUMNSEPRULE, DEFAULT_COLOR, R_DBLFLOATSEP, R_DBLTEXTFLOATSEP, R_DBLTOPNUMBER, CAPTION_END, CAPTION_MID, FOOTINS, MINIPAGE, NEWLINE, NORMALSIZE, R_ABOVECAPTIONSKIP, R_BELOWCAPTIONSKIP, R_BOTTOMNUMBER, R_FIGURE, R_FLOATSEP, R_FPBOT, R_FPSEP, R_FPTOP, R_INTEXTSEP, R_TEXTFLOATSEP, R_TOPNUMBER, R_TOTALNUMBER, TEMP_BOX};
+use super::{Op, COLUMN_WIDTH, COLUMNSEP, COLUMNSEPRULE, R_DBLFLOATSEP, R_DBLTEXTFLOATSEP, R_DBLTOPNUMBER, CAPTION_END, CAPTION_MID, FOOTINS, MINIPAGE, NEWLINE, NORMALSIZE, R_ABOVECAPTIONSKIP, R_BELOWCAPTIONSKIP, R_BOTTOMNUMBER, R_FIGURE, R_FLOATSEP, R_FPBOT, R_FPSEP, R_FPTOP, R_INTEXTSEP, R_TEXTFLOATSEP, R_TOPNUMBER, R_TOTALNUMBER, TEMP_BOX};
 
 /// LaTeX's insertion boxes for floats (`\bx@A` to `\bx@R`).
 pub(super) const SLOTS: usize = 18;
@@ -103,7 +103,18 @@ pub(super) struct Floats {
     /// `\@doclearpage`'s loop is running (else `\@startcolumn`'s).
     clearing: bool,
     /// The caption's text (`#3`).
-    caption: Vec<Token>,
+    pub(super) caption: Vec<Token>,
+    /// The open float has had its `\caption` (caption.sty's `\label` refers to it).
+    pub(super) captioned: bool,
+    /// subcaption: a `subfigure` or `subtable` came in this float (`\caption@setsubcaption`'s
+    /// flags), and one came before its `\caption` (flag 4).
+    pub(super) subbed: bool,
+    pub(super) sub_above: bool,
+    /// memoir's `\@memtempa` for this caption: `\vbox to\topskip{}` after the label when the
+    /// caption opens its float (`\prevdepth` at most -99pt), else `\relax`.
+    pub(super) memtempa: bool,
+    /// The caption being made is `\captionof`'s: `\@captype` set for it alone, outside a float.
+    pub(super) of: bool,
     /// float.sty's `[H]`: the open float is set here, not floated (`\@float@HH`).
     here: bool,
     /// The `[H]` box, between `\@endfloatbox` and `\float@endH`'s skips.
@@ -116,6 +127,41 @@ pub(super) struct Floats {
     left: Option<u32>,
     dbltop: Option<(u8, u32)>,
     pub(super) dbltopnum: i32,
+    /// float.sty: `\float@style` (an index of [`FS_NAMES`]), and each type's `\fst@<type>`
+    /// (its style plus one, 0 for a type never restyled) by type bit (figure 0, table 1, the
+    /// `\newfloat`s from 2).
+    style: u8,
+    fst: [u8; 8],
+    /// `\fps@figure`, `\fps@table` (`\floatplacement`); the new types keep theirs.
+    fps: [Vec<u8>; 2],
+    /// The `\newfloat`s, type bit 2 on (`\ftype@<type>` 4, 8, ...).
+    pub(super) types: Vec<NewFloat>,
+    /// `\floatname`s given (`\fname@<type>`), by type name.
+    fnames: Vec<(String, Vec<Token>)>,
+    /// hyperref's `\Hy@float@currentHref`: a restyled float's anchor, made at its first
+    /// caption and set in `\float@makebox`.
+    href: Option<String>,
+}
+
+/// float.sty's styles, `\fs@<name>`.
+pub(super) const FS_NAMES: [&str; 4] = ["plain", "plaintop", "ruled", "boxed"];
+const FS_PLAIN: u8 = 0;
+const FS_PLAINTOP: u8 = 1;
+const FS_RULED: u8 = 2;
+const FS_BOXED: u8 = 3;
+/// float.sty's `\@floatcapt` (`\newsavebox`): a styled float's caption, set globally.
+pub(super) const FLOAT_CAPT: u32 = 32708;
+
+/// A float type of float.sty's `\newfloat{type}{placement}{ext}[within]`.
+#[derive(PartialEq, Clone)]
+pub(super) struct NewFloat {
+    pub(super) name: String,
+    /// `\ext@<type>`, the list file's extension (`lop`).
+    pub(super) ext: String,
+    /// `\fps@<type>`.
+    fps: Vec<u8>,
+    /// Its counter, one of `Doc::own_counters`.
+    pub(super) counter: usize,
 }
 
 impl Default for Floats {
@@ -124,7 +170,7 @@ impl Default for Floats {
         for k in 0..SLOTS as u8 {
             free.push(k);
         }
-        Floats { boxes: [0; SLOTS], count: [0; SLOTS], free, cur: Queue::default(), top: Queue::default(), bot: Queue::default(), mid: Queue::default(), defer: Queue::default(), hold: None, colht: 0, colroom: 0, toproom: 0, botroom: 0, textfloatsheight: 0, topnum: 0, botnum: 0, colnum: 0, penalty: 0, open: 0, captype: 0, savsk: 0, savsf: 0, ignore: false, saved: (false, false, 0), minipage: false, clearing: false, caption: Vec::new(), here: false, here_box: 0, twocol: false, first: true, left: None, dbltop: None, dbltopnum: 0 }
+        Floats { boxes: [0; SLOTS], count: [0; SLOTS], free, cur: Queue::default(), top: Queue::default(), bot: Queue::default(), mid: Queue::default(), defer: Queue::default(), hold: None, colht: 0, colroom: 0, toproom: 0, botroom: 0, textfloatsheight: 0, topnum: 0, botnum: 0, colnum: 0, penalty: 0, open: 0, captype: 0, savsk: 0, savsf: 0, ignore: false, saved: (false, false, 0), minipage: false, clearing: false, caption: Vec::new(), captioned: false, subbed: false, sub_above: false, memtempa: false, of: false, here: false, here_box: 0, twocol: false, first: true, left: None, dbltop: None, dbltopnum: 0, style: FS_PLAIN, fst: [0; 8], fps: [b"tbp".to_vec(), b"tbp".to_vec()], types: Vec::new(), fnames: Vec::new(), href: None }
     }
 }
 
@@ -143,6 +189,17 @@ impl Floats {
     pub(super) fn has_bottom(&self) -> bool {
         !self.bot.is_empty()
     }
+
+    /// Whether top floats wait for the column (`\@toplist`).
+    pub(super) fn has_top(&self) -> bool {
+        !self.top.is_empty()
+    }
+
+    /// placeins' `\edef\@tempa{\@fb@botlist\@deferlist\@dbldeferlist}` is not empty: a float on
+    /// `\@botlist` or `\@deferlist`. `None` in two columns (`\@dbldeferlist`, `\if@firstcolumn`).
+    pub(super) fn held(&self) -> Option<bool> {
+        (!self.twocol).then(|| !(self.bot.is_empty() && self.defer.is_empty()))
+    }
 }
 
 /// article's float parameters that are macros (`\renewcommand\topfraction{.7}`), as
@@ -157,7 +214,7 @@ impl Machine<'_, '_> {
         &mut self.doc.as_mut().expect("a native document").floats
     }
 
-    fn flr(&self) -> &Floats {
+    pub(super) fn flr(&self) -> &Floats {
         &self.doc.as_ref().expect("a native document").floats
     }
 
@@ -232,7 +289,13 @@ impl Machine<'_, '_> {
         if self.mode == Mode::Math || self.inner {
             return self.not_native("a float in a box or a formula");
         }
+        // caption.sty's `\@float@setevery` for a restyled type (`engine_caption`).
+        if let Some(s) = self.styled(ftype).filter(|_| self.caption_pkg()) {
+            self.caption_float_every(s == FS_RULED, s == FS_BOXED);
+        }
         let mut fps: Vec<u8> = Vec::new();
+        // `\@float`: `\@ifnextchar[`, else `[\fps@<type>]`.
+        let deflt = self.type_fps(ftype);
         if self.next_is('[') {
             let arg = self.bracket_arg();
             for t in arg {
@@ -242,6 +305,8 @@ impl Machine<'_, '_> {
                 }
             }
             fps.retain(|c| *c != b' ');
+        } else {
+            fps.clone_from(&deflt);
         }
         // float.sty's `\@xfloat#1[`: `[H]` is `\@float@HH`, the box set in place.
         if fps == b"H" && self.doc.as_ref().is_some_and(|d| d.packages.contains(&"float")) {
@@ -249,7 +314,7 @@ impl Machine<'_, '_> {
         }
         // `\@fpsadddefault`: an empty placement or a lone `!` takes `\fps@<type>` (`tbp`).
         if fps.is_empty() || fps == b"!" {
-            fps.extend_from_slice(b"tbp");
+            fps.extend_from_slice(&deflt);
         }
         let hmode = self.mode == Mode::Horizontal;
         let (savsk, savsf) = if hmode { (self.last_skip().width, self.aux) } else { (0, 0) };
@@ -277,6 +342,7 @@ impl Machine<'_, '_> {
         let f = &mut doc.floats;
         f.count[k as usize] = a + 32 * ftype as i32;
         (f.open, f.captype, f.savsk, f.savsf, f.saved) = (k, ftype, savsk, savsf, saved);
+        (f.captioned, f.subbed, f.sub_above) = (false, false, false);
         f.penalty = if hmode { -10002 } else { -10003 };
         // `\global\setbox\@currbox \color@vbox \normalcolor \vbox\bgroup`.
         self.open_box(VBOX_GROUP, Ctx::Set { n: FLOAT_BOX, global: true }, false, 0, false);
@@ -284,7 +350,7 @@ impl Machine<'_, '_> {
         if self.colored() {
             // `\normalcolor`: `\let\current@color\default@color \set@color`.
             self.e.eqtb.set_word(super::CURRENT_COLOR, 0, false);
-            self.color_stack(Some(super::DEFAULT_COLOR));
+            self.push_default_color();
         }
         self.open_box(VBOX_GROUP, Ctx::Shift(0), false, 0, false);
         // `\hsize\columnwidth \@parboxrestore \@floatboxreset` (`\reset@font \normalsize
@@ -300,6 +366,13 @@ impl Machine<'_, '_> {
             self.setspace_single();
             self.size_command(NORMALSIZE);
         }
+        // caption.sty's `\caption@xfloat`: `\caption@setanchor`, with hyperref `hypcap`'s
+        // anchor (`engine_caption`); a restyled type's is frozen (`\caption@freezeHref`),
+        // made in `\float@makebox`.
+        if self.caption_pkg() && self.hyper() && self.styled(ftype).is_none() {
+            self.caption_hypcap();
+        }
+        self.caption_typed(ftype);
     }
 
     /// float.sty's `\@float@HH#1[H]` in vertical mode, for an unstyled type: `\@captype`,
@@ -314,11 +387,17 @@ impl Machine<'_, '_> {
         (doc.nobreak, doc.noskipsec, doc.cr_base) = (false, false, doc.lists.len());
         let f = &mut doc.floats;
         (f.captype, f.saved, f.here) = (ftype, saved, true);
+        (f.captioned, f.subbed, f.sub_above) = (false, false, false);
+        // `\setbox\@floatcapt=\vbox{}`: an empty caption, not a void one, until `\caption`.
+        let start = self.cur.len();
+        let empty = self.vpack(start, 0, false, MAX_DIMEN);
+        let empty = self.e.nodes.add_box(BoxRec { vertical: true, ..empty });
+        self.e.eqtb.set_box(FLOAT_CAPT, Some(empty), false);
         self.open_box(VBOX_GROUP, Ctx::Set { n: FLOAT_BOX, global: false }, false, 0, false);
         self.begin_group(SEMI_SIMPLE_GROUP);
         if self.colored() {
             self.e.eqtb.set_word(super::CURRENT_COLOR, 0, false);
-            self.color_stack(Some(super::DEFAULT_COLOR));
+            self.push_default_color();
         }
         self.open_box(VBOX_GROUP, Ctx::Shift(0), false, 0, false);
         let w = self.e.eqtb.word(COLUMN_WIDTH);
@@ -327,11 +406,23 @@ impl Machine<'_, '_> {
         self.normal_font();
         self.size_command(NORMALSIZE);
         self.set_minipage();
+        // caption.sty's `\caption@xfloat` (its `\@xfloat`, set at `\begin{document}` over
+        // float.sty's) runs `\@float@HH` and then `\caption@settype` (`\caption@clrflags`)
+        // and `\caption@setanchor` as for any float: `\label` is `\caption@xlabel`, the
+        // sub-caption flags start clear, and with hyperref `hypcap` puts its anchor here.
+        if self.caption_pkg() && self.hyper() && self.styled(ftype).is_none() {
+            self.caption_hypcap();
+        }
+        self.caption_typed(ftype);
     }
 
     /// `\end{figure}` and kin: `\@endfloatbox`, then `\end@float`, then `\end`'s
     /// `\endgroup`.
     pub(super) fn float_close(&mut self) {
+        // subfig's `\end@float` before `\@endfloatbox` (`engine_caption`).
+        if !self.subfloat_float_end() {
+            return;
+        }
         self.run_ops(vec![Op::Par, Op::Call(|m| m.float_box_end())]);
     }
 
@@ -347,6 +438,13 @@ impl Machine<'_, '_> {
         self.package();
         let b = self.e.eqtb.box_reg(FLOAT_BOX).unwrap_or(0);
         self.e.eqtb.replace_box(FLOAT_BOX, None);
+        // float.sty's `\float@end` and `\float@endH`: a restyled type's box made again,
+        // `\float@makebox\columnwidth`.
+        let b = match self.styled(self.flr().captype) {
+            Some(s) => self.float_makebox(b, s),
+            None => b,
+        };
+        self.caption_typed_end();
         let height = self.doc.as_ref().map_or(0, |d| d.class.dimen("textheight"));
         let doc = self.doc.as_mut().expect("a native document");
         (doc.nobreak, doc.noskipsec, doc.cr_base) = doc.floats.saved;
@@ -425,6 +523,14 @@ impl Machine<'_, '_> {
     /// `\the\value{figure}`, or under report (`\@addtoreset{figure}{chapter}`, latex.ltx)
     /// `\theHchapter.\the\value{figure}`.
     pub(super) fn float_href(&self, t: u8, n: i32) -> String {
+        // `\counterwithin{figure}{section}`: hyperref's `\@addtoreset` makes `\theHfigure`
+        // `\theHsection.\the\value{figure}`; made before hyperref, `\thefigure` is read (with
+        // `\@arabic` `\number`): the heading's number either way, outside the appendix.
+        if let Some(d) = self.doc.as_ref().filter(|d| !d.appendix) {
+            if let Some(l) = d.fig_within[t as usize - 1] {
+                return format!("{}.{}.{n}", ["figure", "table"][t as usize - 1], super::heading_number(&d.counters, l as usize, false));
+            }
+        }
         let within = self.doc.as_ref().filter(|d| d.report).map_or(String::new(), |d| format!(".{}", super::hyperref::the_h_top(d.counters[0], d.appendix)));
         format!("{}{within}.{n}", ["figure", "table"][t as usize - 1])
     }
@@ -436,32 +542,146 @@ impl Machine<'_, '_> {
         if t == 0 {
             return self.not_native("\\caption outside a float");
         }
+        // float.sty's `\@float@c@<type>`: a restyled type's caption is `\float@caption`.
+        if self.styled(t).is_some() {
+            return self.float_caption(t);
+        }
+        // threeparttable's `\TPT@caption`: in the table's box it is not native.
+        let tpt = self.tpt_phase();
+        if tpt == super::threeparttable::IN_TABLE {
+            return self.not_native("a \\caption in a threeparttable's table");
+        }
+        // caption's `\TPT@caption` (caption.sty:1432): not native yet.
+        if tpt != 0 && self.caption_pkg() {
+            return self.not_native("caption: a \\caption in a threeparttable");
+        }
+        if self.caption_pkg() {
+            if let Some(what) = self.caption_pkg_refused() {
+                return self.not_native(what);
+            }
+            if self.next_is('*') {
+                return self.not_native("caption: \\caption*");
+            }
+            // subcaption's `\caption@subcaption` in a `subfigure` (`engine_caption`).
+            if self.caption_in_sub() {
+                return self.subcaption();
+            }
+            if self.flr().captioned && self.flr().subbed {
+                return self.not_native("subcaption: a second \\caption in a float with sub-captions");
+            }
+            self.fl().captioned = true;
+        }
         let r = R_FIGURE + t as usize - 1;
-        let n = self.rw(r) + 1;
-        self.set_rw(r, n, true);
+        // caption.sty's `\caption@refstepcounter`: after a `subfigure` the counter has
+        // stepped there (`\caption@@refcounter`: `\refstepcounter` without its step).
+        let stepped = self.caption_pkg() && self.flr().subbed;
+        let n = self.rw(r) + !stepped as i32;
+        if !stepped {
+            self.set_rw(r, n, true);
+            self.caption_sub_reset(t);
+        }
         // hyperref: `\H@refstepcounter` (no anchor here) and `\hyper@makecurrent{figure}`;
         // the anchor goes in the caption text (`caption_tokens`).
         // hyperref names the anchor by `\theHfigure` (`float_href`), not `\thefigure`.
-        let prefix = self.doc.as_ref().map_or(String::new(), |d| d.the_prefix[t as usize - 1].clone());
+        // `\thefigure`: the class's or the document's (`float_the`).
+        let Some(text) = self.float_the(t as usize - 1, n) else { return self.not_native("a \\thefigure or \\thetable the native job cannot read") };
+        // The list of figures' entry (`caption_body`) is `predict`'s, which reads a body's
+        // redefinition with no regard to groups: its number must be this one.
+        let listed = self.doc.as_ref().and_then(|d| d.contents.as_ref().filter(|c| c.iter().any(|e| e.level >= super::LOF)).and_then(|c| c.get(d.toc_seen)));
+        if !self.caption_in_sub() && listed.is_some_and(|e| e.number != text) {
+            return self.not_native("a \\thefigure or \\thetable the pre-scan read differently");
+        }
         if self.hyper() {
-            self.store_current_label(&format!("{prefix}{n}"));
-            let name = self.float_href(t, n);
+            self.store_current_label(&text);
+            // caption.sty: `\caption@makecurrentHref` restores `hypcap`'s anchor.
+            let name = if self.caption_pkg() { self.caption_hc() } else { self.float_href(t, n) };
             self.set_current_href(&name);
         } else {
-            self.set_current_label(&format!("{prefix}{n}"));
+            self.set_current_label(&text);
         }
+        self.cref_step(if t == 1 { "figure" } else { "table" });
         if self.next_is('[') {
             self.bracket_arg();
         }
         let mut text = Vec::new();
         self.read_arg(&mut text);
+        if tpt != 0 {
+            text = self.tpt_caption_text(text);
+            // Before the table it waits for the measure (`engine_threeparttable`).
+            if tpt == super::threeparttable::BEFORE {
+                return self.tpt_hold_caption(text);
+            }
+        }
         self.fl().caption = text;
         self.run_ops(vec![Op::Par, Op::Call(|m| m.caption_body())]);
     }
 
     /// The tokens of `#1: #2` (`\fnum@<type>`: `\figurename\nobreakspace\thefigure`).
-    fn caption_tokens(&mut self, out: &mut Vec<Token>) {
+    pub(super) fn caption_tokens(&mut self, out: &mut Vec<Token>) {
         let t = self.flr().captype;
+        // french3.ldf (`\FBprocess@options`, `\AtBeginDocument`): `\fnum@<type>` is
+        // `{\ifFBfrench\FBfigtabshape\fi\fnum@<type>ORI}` (`\scshape`), and article's
+        // `\@makecaption` is `\FB@makecaption` with `\FBCaption@Separator` `\CaptionSeparator`,
+        // `\space\textendash\space`.
+        let french = self.babel_french();
+        if french {
+            out.push(Token::char(super::Cat::BeginGroup, '{'));
+            out.extend(self.tex_tokens("\\scshape"));
+        }
+        self.fnum_kernel(t, out);
+        if french {
+            out.push(Token::char(super::Cat::EndGroup, '}'));
+            out.push(Token::char(super::Cat::Space, ' '));
+            out.extend(self.tex_tokens("\\textendash"));
+            out.extend([Token::char(super::Cat::Space, ' '), self.named_cs(named!("ignorespaces"))]);
+        } else {
+            out.extend([Token::char(super::Cat::Other, ':'), Token::char(super::Cat::Space, ' '), self.named_cs(named!("ignorespaces"))]);
+        }
+        // hyperref's `\@caption`: `\Hy@raisedlink{\hyper@@anchor{figure.N}{\relax}}` first;
+        // under caption.sty `hypcap` made it at the float's start (`\caption@makeanchor` is
+        // `\@firstofone`).
+        if self.hyper() && !self.caption_pkg() {
+            let n = self.rw(R_FIGURE + t as usize - 1);
+            let name = self.float_href(t, n);
+            let t = self.text_raised_link(name);
+            out.extend(t);
+        }
+        out.extend_from_slice(&self.flr().caption);
+    }
+
+    /// A caption's `\addcontentsline{\ext@<type>}`: with a list of figures or tables the
+    /// write is a contents entry (`LOF`, `LOT`), checked against `predict`'s; else an inert
+    /// `.aux` write.
+    fn caption_contents(&mut self) {
+        let t = self.flr().captype as usize;
+        // A `\newfloat` type's list (`ftype` 4, 8, ..) is `LOF + 2 + k`, `k` its place.
+        let level = if t <= 2 { super::LOF - 1 + t } else { super::LOF + t.ilog2() as usize };
+        match self.doc.as_mut().filter(|d| d.contents.as_ref().is_some_and(|c| c.iter().any(|e| e.level >= super::LOF))) {
+            Some(doc) => {
+                let saved = std::mem::replace(&mut doc.level, level);
+                self.contents_write();
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.level = saved;
+                }
+            }
+            None => self.aux_write(0),
+        }
+    }
+
+    /// The kernel's `\fnum@figure` (`\figurename\nobreakspace\thefigure`) and `\fnum@table`.
+    /// A `\newfloat` type's is float.sty's `\fname@<type>{} \the<type>`, under caption.sty
+    /// too (its default label format, `original`, caption3.sty:744).
+    fn fnum_kernel(&mut self, t: u8, out: &mut Vec<Token>) {
+        if t > 2 {
+            let name = self.flr().types[t.ilog2() as usize - 2].name.clone();
+            match self.flr().fnames.iter().find(|n| n.0 == name) {
+                Some(n) => out.extend_from_slice(&n.1),
+                None => out.extend(name.chars().map(|c| Token::char(super::Cat::Letter, c))),
+            }
+            out.extend([Token::char(super::Cat::BeginGroup, '{'), Token::char(super::Cat::EndGroup, '}'), Token::char(super::Cat::Space, ' ')]);
+            out.push(Token::cs(self.e.cs.intern(&format!("the{name}"))));
+            return;
+        }
         let name = if t == 1 { (named!("figurename"), "Figure") } else { (named!("tablename"), "Table") };
         let id = self.named_id(name.0);
         if matches!(self.e.eqtb.meaning(id), Meaning::Macro(_)) {
@@ -471,32 +691,44 @@ impl Machine<'_, '_> {
         }
         out.push(self.named_cs(named!("nobreakspace")));
         let n = self.rw(R_FIGURE + t as usize - 1);
-        let prefix = self.doc.as_ref().map_or(String::new(), |d| d.the_prefix[t as usize - 1].clone());
-        out.extend(prefix.chars().map(|c| Token::char(if c.is_ascii_alphabetic() { super::Cat::Letter } else { super::Cat::Other }, c)));
-        out.extend(n.to_string().chars().map(|c| Token::char(super::Cat::Other, c)));
-        out.extend([Token::char(super::Cat::Other, ':'), Token::char(super::Cat::Space, ' '), self.named_cs(named!("ignorespaces"))]);
-        // hyperref's `\@caption`: `\Hy@raisedlink{\hyper@@anchor{figure.N}{\relax}}` first.
-        if self.hyper() {
-            let name = self.float_href(t, n);
-            let t = self.text_raised_link(name);
-            out.extend(t);
-        }
-        out.extend_from_slice(&self.flr().caption);
+        // `caption` read the text before (`float_the`).
+        let text = self.float_the(t as usize - 1, n).unwrap_or_default();
+        out.extend(text.chars().map(|c| Token::char(if c.is_ascii_alphabetic() { super::Cat::Letter } else if c == ' ' { super::Cat::Space } else { super::Cat::Other }, c)));
     }
 
     /// The rest of `\@caption`: the `\addcontentsline` write, `\begingroup \@parboxrestore
     /// \if@minipage\@setminipage\fi \normalsize`, and article's `\@makecaption` up to
     /// `\sbox\@tempboxa{#1: #2}`.
-    fn caption_body(&mut self) {
-        self.aux_write(0);
+    pub(super) fn caption_body(&mut self) {
+        if self.doc.as_ref().is_some_and(|d| d.koma) {
+            return self.koma_caption_body();
+        }
+        let sub = self.caption_in_sub();
+        // subcaption's `list=0`: no entry.
+        if !sub {
+            self.caption_contents();
+        }
         self.begin_group(SEMI_SIMPLE_GROUP);
         self.par_box_restore();
         if self.flr().minipage {
             self.set_minipage();
         }
         self.size_command(NORMALSIZE);
-        let g = self.rg(R_ABOVECAPTIONSKIP);
-        self.build_glue(g, false);
+        // caption.sty's `\caption@makecaption` (`engine_caption`).
+        if self.caption_pkg() {
+            return self.caption_open();
+        }
+        // memoir's `\@makecaption` (memoir.cls:5964): `\ifdim\prevdepth>-99\p@ \vskip
+        // \abovecaptionskip \else \def\@memtempa{\vbox to\topskip{}}\fi`.
+        if self.memoir() && self.mode != Mode::Vertical {
+            return self.not_native("memoir: a caption in a paragraph");
+        }
+        let first = self.memoir() && self.aux <= -99 * 65536;
+        self.fl().memtempa = first;
+        if !first {
+            let g = self.rg(R_ABOVECAPTIONSKIP);
+            self.build_glue(g, false);
+        }
         self.open_box(HBOX_GROUP, Ctx::Set { n: TEMP_BOX, global: false }, false, 0, false);
         self.begin_group(SEMI_SIMPLE_GROUP);
         if self.colored() {
@@ -512,12 +744,41 @@ impl Machine<'_, '_> {
     /// `\@makecaption` after the `\sbox`: the caption centred in `\hsize`, or set again as a
     /// paragraph when it is wider.
     pub(super) fn caption_mid(&mut self) {
+        if self.caption_pkg() {
+            return self.caption_measured();
+        }
         self.end_group(SEMI_SIMPLE_GROUP);
         if self.colored() {
             self.color_stack(None);
         }
         self.package();
         let b = self.e.eqtb.box_reg(TEMP_BOX).unwrap_or(0);
+        // memoir's `\@@makecaption`: the measured `{#1: }#2` narrower than `\linewidth` is
+        // set `\centering`, else as it is; both as a paragraph, `{#1: }{#2\par}`
+        // (`\@contnfont`, `\@contdelim` `: `, `\@conttfont`, `\@contcshortstyle`,
+        // `\@contpre`, `\@contpost` and `\@contfinal` are memoir's defaults: nothing).
+        if self.memoir() {
+            let narrow = self.e.nodes.boxes[b as usize].width < self.rw(super::R_LINEWIDTH);
+            let mut list = Vec::new();
+            if narrow {
+                list.push(self.doc_id(doc!("centering")));
+            } else if self.flr().memtempa {
+                return self.not_native("memoir: a wide caption first in its float");
+            }
+            let at = list.len();
+            self.caption_tokens(&mut list);
+            if self.flr().memtempa {
+                // `{#1\@contdelim}\@memtempa{#2..}`: after the label's `: `.
+                let ign = self.named_cs(named!("ignorespaces"));
+                if let Some(k) = list[at..].iter().position(|t| *t == ign) {
+                    let vb = self.tex_tokens("\\vbox to\\topskip{}");
+                    list.splice(at + k..at + k, vb);
+                }
+            }
+            let par = self.doc.as_ref().map_or(0, |d| d.par_id);
+            list.extend([Token::cs(par), self.doc_id(CAPTION_END)]);
+            return self.back_list(&list);
+        }
         let hsize = self.dimen_param(super::super::engine_pack::HSIZE);
         if self.e.nodes.boxes[b as usize].width > hsize {
             let mut list = Vec::new();
@@ -528,6 +789,12 @@ impl Machine<'_, '_> {
         }
         // `\global\@minipagefalse \hb@xt@\hsize{\hfil\box\@tempboxa\hfil}`.
         self.fl().minipage = false;
+        self.centred_temp_box(b, hsize);
+        self.caption_end();
+    }
+
+    /// `\hb@xt@\hsize{\hfil\box\@tempboxa\hfil}` of box `b`, `\@tempboxa`, in a vertical list.
+    fn centred_temp_box(&mut self, b: u32, hsize: i32) {
         self.e.eqtb.replace_box(TEMP_BOX, None);
         let fil = Glue { stretch: 65536, stretch_order: 1, ..Glue::default() };
         let start = self.cur.len();
@@ -539,7 +806,6 @@ impl Machine<'_, '_> {
         let h = self.hpack(start, hsize, true);
         let h = self.e.nodes.add_box(h);
         self.append_to_vlist(h);
-        self.caption_end();
     }
 
     /// `\vskip\belowcaptionskip`, `\@caption`'s `\par`, `\endgroup`.
@@ -548,6 +814,7 @@ impl Machine<'_, '_> {
         self.build_glue(g, false);
         self.par();
         self.end_group(SEMI_SIMPLE_GROUP);
+        self.captionof_end();
     }
 
     // The output routine.
@@ -1072,7 +1339,7 @@ impl Machine<'_, '_> {
         let g = self.e.nodes.glue_node(hfil, 0);
         self.cur.push(g);
         if colored {
-            self.color_stack(Some(DEFAULT_COLOR));
+            self.push_default_color();
         }
         let r = self.e.nodes.rule_node([rule, RUNNING, RUNNING]);
         self.cur.push(r);
@@ -1176,6 +1443,43 @@ impl Machine<'_, '_> {
         cw
     }
 
+    /// A document's `\twocolumn[text]` in two columns (the class's `twocolumn`): its
+    /// `\clearpage`, then `\@topnewpage[text]` (`top_new_page_open`, the text, its end
+    /// without a page style). Without `[text]` (`\@floatplacement` only) or in one column
+    /// (a switch of the column count) it declines.
+    fn twocolumn(&mut self) {
+        if !self.two_columns() || !self.next_is('[') {
+            return self.not_native("\\twocolumn without a top or in one column");
+        }
+        let text = self.bracket_arg();
+        let mut t = vec![self.doc_id(super::NEW_PAGE), self.doc_id(super::CLEAR_PAGE_TAIL), self.doc_id(doc!("rt@topnewpage"))];
+        t.extend(text);
+        if let Some(d) = self.doc.as_mut() {
+            d.steps.push(vec![Op::Call(|m| m.top_new_page_end(false))]);
+        }
+        t.push(self.doc_id(super::STEP));
+        self.back_list(&t);
+    }
+
+    /// `\begin{@twocolumnfalse}` (`\@twocolumnfalse`, local to `\begin`'s group): what
+    /// asks `\if@twocolumn` inside (`\maketitle`, `abstract`) takes one column.
+    pub(super) fn twocolumn_false_begin(&mut self) {
+        self.begin_group(SEMI_SIMPLE_GROUP);
+        let Some(d) = self.doc.as_mut() else { return };
+        d.endpe = false;
+        let was = std::mem::replace(&mut d.floats.twocol, false);
+        d.pkg.twocol_saved.push(was);
+    }
+
+    /// `\end{@twocolumnfalse}`: `\end@twocolumnfalse` is `\relax`; `\end`'s `\endgroup`
+    /// restores the switch.
+    pub(super) fn twocolumn_false_end(&mut self) {
+        let Some(d) = self.doc.as_mut() else { return };
+        let Some(was) = d.pkg.twocol_saved.pop() else { return self.not_native("\\end{@twocolumnfalse} without its begin") };
+        d.floats.twocol = was;
+        self.end_group(SEMI_SIMPLE_GROUP);
+    }
+
     /// `\twocolumn[` after its `\clearpage` (article's `\maketitle` in two columns): the
     /// globals of `\twocolumn`, then `\@topnewpage`'s `\@next\@currbox\@freelist` and
     /// `\global\setbox\@currbox\color@vbox\normalcolor\vbox{\hsize\textwidth\@parboxrestore`.
@@ -1199,7 +1503,7 @@ impl Machine<'_, '_> {
         self.begin_group(SEMI_SIMPLE_GROUP);
         if self.colored() {
             self.e.eqtb.set_word(super::CURRENT_COLOR, 0, false);
-            self.color_stack(Some(super::DEFAULT_COLOR));
+            self.push_default_color();
         }
         self.open_box(VBOX_GROUP, Ctx::Shift(0), false, 0, false);
         self.set_dimen_named(param!("hsize"), width);
@@ -1212,8 +1516,15 @@ impl Machine<'_, '_> {
     /// \global\@colroom\@colht\@floatplacement` (`\@emptycol` below `2.5\baselineskip` is
     /// refused). And article's `\thispagestyle{plain}`.
     pub(super) fn top_new_page_close(&mut self) {
+        self.top_new_page_end(true);
+    }
+
+    /// [`Self::top_new_page_close`], with article's `\thispagestyle{plain}` (`title`) or
+    /// without (a document's own `\twocolumn[...]`).
+    fn top_new_page_end(&mut self, title: bool) {
         if self.mode != Mode::Vertical {
-            return self.run_ops(vec![Op::Par, Op::Call(|m| m.top_new_page_close())]);
+            let then: super::Native = if title { |m| m.top_new_page_end(true) } else { |m| m.top_new_page_end(false) };
+            return self.run_ops(vec![Op::Par, Op::Call(then)]);
         }
         let tfs = self.rg(R_DBLTEXTFLOATSEP);
         self.build_glue(super::neg(tfs), false);
@@ -1233,7 +1544,9 @@ impl Machine<'_, '_> {
         let baseline = self.glue_param(BASELINE_SKIP).width;
         let doc = self.doc.as_mut().expect("a native document");
         (doc.nobreak, doc.noskipsec, doc.cr_base) = doc.floats.saved;
-        doc.special = Some(false);
+        if title {
+            doc.special = Some(false);
+        }
         let f = &mut doc.floats;
         if f.dbltop.is_some() {
             return self.not_native("Float(s) lost");
@@ -1250,3 +1563,443 @@ impl Machine<'_, '_> {
         self.float_placement();
     }
 }
+
+// float.sty's float types and styles: `\newfloat`, `\floatstyle`, `\restylefloat`,
+// `\floatname`, `\floatplacement`, `\float@caption` and `\float@makebox`.
+impl Machine<'_, '_> {
+    /// A restyled type's style (float.sty's `\fst@<type>` is not `\relax`): an index of
+    /// [`FS_NAMES`].
+    pub(super) fn styled(&self, t: u8) -> Option<u8> {
+        let f = &self.doc.as_ref()?.floats;
+        let s = *f.fst.get(t.checked_ilog2()? as usize)?;
+        s.checked_sub(1)
+    }
+
+    /// `\fps@<type>`.
+    fn type_fps(&self, t: u8) -> Vec<u8> {
+        let f = self.flr();
+        match t {
+            1 | 2 => f.fps[t as usize - 1].clone(),
+            _ => f.types.get(t.ilog2() as usize - 2).map_or_else(|| b"tbp".to_vec(), |n| n.fps.clone()),
+        }
+    }
+
+    /// The `\newfloat` type of environment `env` (`type` or `type*`): its `\ftype@<type>`.
+    pub(super) fn new_float_type(&self, env: &str) -> Option<u8> {
+        let name = env.strip_suffix('*').unwrap_or(env);
+        let k = self.doc.as_ref()?.floats.types.iter().position(|t| t.name == name)?;
+        Some(4u8 << k)
+    }
+
+    /// A type named in a float.sty command: figure, table or a `\newfloat`.
+    fn float_type_named(&self, name: &str) -> Option<u8> {
+        match name {
+            "figure" => Some(1),
+            "table" => Some(2),
+            _ if !name.ends_with('*') => self.new_float_type(name),
+            _ => None,
+        }
+    }
+
+    /// float.sty's commands define macros locally (`\def`, `\@namedef`): taken in the
+    /// preamble outside any group, where that lasts.
+    fn float_preamble(&self) -> bool {
+        self.doc.as_ref().is_some_and(|d| !d.body) && self.e.eqtb.level() == 1
+    }
+
+    /// `\floatstyle{style}`: `\def\float@style{#1}` of a style float.sty defines.
+    fn float_style(&mut self) {
+        let mut a = Vec::new();
+        self.read_arg(&mut a);
+        match Self::plain_text(&a).and_then(|s| FS_NAMES.iter().position(|n| *n == s)) {
+            Some(k) if self.float_preamble() => self.fl().style = k as u8,
+            _ => self.not_native("float: \\floatstyle in the body or of another style"),
+        }
+    }
+
+    /// `\restylefloat{type}`: `\fst@<type>` the current style; `\begin{type}` runs it,
+    /// `\caption` is `\float@caption` and `\end{type}` `\float@end`.
+    fn restyle_float(&mut self) {
+        if self.next_is('*') {
+            return self.not_native("float: \\restylefloat*");
+        }
+        let mut a = Vec::new();
+        self.read_arg(&mut a);
+        let t = Self::plain_text(&a).and_then(|s| self.float_type_named(&s));
+        match t {
+            Some(t) if self.float_preamble() => {
+                let f = self.fl();
+                f.fst[t.ilog2() as usize] = f.style + 1;
+            }
+            _ => self.not_native("float: \\restylefloat in the body or of another type"),
+        }
+    }
+
+    /// `\floatname{type}{text}`: `\@namedef{fname@<type>}{text}`, the text kept as tokens.
+    fn float_name(&mut self) {
+        let (mut a, mut text) = (Vec::new(), Vec::new());
+        self.read_arg(&mut a);
+        self.read_arg(&mut text);
+        let Some(name) = Self::plain_text(&a).filter(|s| !s.is_empty() && self.float_preamble()) else { return self.not_native("float: \\floatname in the body or of a type with commands") };
+        let f = self.fl();
+        match f.fnames.iter_mut().find(|n| n.0 == name) {
+            Some(n) => n.1 = text,
+            None => f.fnames.push((name, text)),
+        }
+    }
+
+    /// float.sty's `\listof{type}{title}` (`list_of_float`).
+    fn list_of_cmd(&mut self) {
+        let (mut a, mut title) = (Vec::new(), Vec::new());
+        self.read_arg(&mut a);
+        self.read_arg(&mut title);
+        let Some(ty) = Self::plain_text(&a) else { return self.not_native("float: \\listof of a type with commands") };
+        self.list_of_float(&ty, title);
+    }
+
+    /// `\floatplacement{type}{placement}`: `\@namedef{fps@<type>}{#2}`.
+    fn float_placement_cmd(&mut self) {
+        let (mut a, mut p) = (Vec::new(), Vec::new());
+        self.read_arg(&mut a);
+        self.read_arg(&mut p);
+        let t = Self::plain_text(&a).and_then(|s| self.float_type_named(&s));
+        let p = Self::plain_text(&p).filter(|p| !p.is_empty() && p.bytes().all(|c| b"htbpH!".contains(&c)));
+        match (t, p) {
+            (Some(t), Some(p)) if self.float_preamble() => {
+                let f = self.fl();
+                match t {
+                    1 | 2 => f.fps[t as usize - 1] = p.into_bytes(),
+                    _ => f.types[t.ilog2() as usize - 2].fps = p.into_bytes(),
+                }
+            }
+            _ => self.not_native("float: \\floatplacement in the body or of another type"),
+        }
+    }
+
+    /// `\newfloat{type}{placement}{ext}[within]` in the preamble: `\ext@<type>`,
+    /// `\fps@<type>`, `\fname@<type>` (the type's name unless a `\floatname` came first),
+    /// `\ftype@<type>` (4, 8, ... after figure and table), `\restylefloat{type}`,
+    /// `\fnum@<type>` (`\fname@<type>{} \the<type>`), and its counter: `\newcounter{type}`
+    /// (`\the<type>` `\arabic{type}`), or `\newcounter{type}[within]` with `\the<type>`
+    /// `\the<within>.\arabic{type}` (`\float@newx`).
+    pub(super) fn new_float(&mut self) {
+        let (mut a, mut p, mut x) = (Vec::new(), Vec::new(), Vec::new());
+        self.read_arg(&mut a);
+        self.read_arg(&mut p);
+        self.read_arg(&mut x);
+        let (Some(name), Some(place), Some(ext)) = (Self::plain_text(&a), Self::plain_text(&p), Self::plain_text(&x)) else { return self.not_native("float: \\newfloat with commands") };
+        let fresh = !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphabetic()) && self.float_type_named(&name).is_none() && self.own_counter_named(&name).is_none() && !super::counter::KERNEL_COUNTERS.contains(&name.as_str());
+        if !fresh || !self.float_preamble() || self.flr().types.len() >= 6 || place.is_empty() || !place.bytes().all(|c| b"htbpH!".contains(&c)) || ext.is_empty() || !ext.bytes().all(|c| c.is_ascii_alphanumeric()) {
+            return self.not_native("float: \\newfloat of that type, in the body, or past six types");
+        }
+        let within = if self.next_is('[') {
+            let w = self.bracket_arg();
+            match self.within_counter(&w) {
+                Some(c) => Some((c, w)),
+                None => return self.not_native("float: \\newfloat within a counter not the document's or a heading's"),
+            }
+        } else {
+            None
+        };
+        let k = match within {
+            None => self.make_own_counter(&a, None, None),
+            Some((Ok(o), _)) => self.make_own_counter(&a, Some(o), None),
+            Some((Err(l), _)) => self.make_own_counter(&a, None, Some(l)),
+        };
+        if let Some((_, w)) = within {
+            // `\edef\the#1{\noexpand\the#2.\noexpand\arabic{#1}}`.
+            let wname: String = w.iter().map(|t| t.chr()).collect();
+            let the_w = self.e.cs.intern(&format!("the{wname}"));
+            let mut t = vec![Token::END_MATCH, Token::cs(the_w), Token::char(super::Cat::Other, '.'), self.doc_id(doc!("arabic")), Token::char(super::Cat::BeginGroup, '{')];
+            t.extend(a.iter().copied());
+            t.push(Token::char(super::Cat::EndGroup, '}'));
+            let text = self.e.toks.store(&t);
+            let id = self.e.cs.intern(&format!("the{name}"));
+            self.e.eqtb.set_meaning(id, Meaning::Macro(super::super::engine_prim::Macro { text, flags: 0 }), false);
+        }
+        let f = self.fl();
+        f.types.push(NewFloat { name, ext, fps: place.into_bytes(), counter: k });
+        f.fst[f.types.len() + 1] = f.style + 1;
+    }
+
+    /// float.sty's `\caption` of a restyled type: `\refstepcounter\@captype`, then
+    /// `\@dblarg{\float@caption\@captype}`: `\addcontentsline`, and `\global\setbox
+    /// \@floatcapt\vbox\bgroup\@parboxrestore\normalsize\@fs@capt{\fnum@<type>}{\ignorespaces
+    /// #3}` (`\floatc@ruled` `{\@fs@cfont #1} #2\par`; `\floatc@plain` measures `{\@fs@cfont
+    /// #1:} #2` first). No `\par` before it, unlike the kernel's `\@caption`.
+    fn float_caption(&mut self, t: u8) {
+        if self.flr().of || self.tpt_phase() != 0 || self.memoir() || self.doc.as_ref().is_some_and(|d| d.koma) {
+            return self.not_native("float: a restyled caption with a threeparttable, KOMA or memoir");
+        }
+        let cap = self.caption_pkg();
+        if cap {
+            if let Some(what) = self.caption_pkg_refused() {
+                return self.not_native(what);
+            }
+            if self.next_is('*') {
+                return self.not_native("caption: \\caption*");
+            }
+            if self.caption_in_sub() || self.flr().subbed {
+                return self.not_native("caption: a restyled float with sub-captions");
+            }
+            // Its anchor is not `hypcap`'s `figure.caption.N`, which the references read.
+            if t <= 2 && self.hyper() {
+                return self.not_native("caption: a restyled figure or table with hyperref");
+            }
+            self.fl().captioned = true;
+        }
+        let hyper = self.hyper();
+        if hyper && self.doc.as_ref().is_some_and(|d| d.appendix) {
+            return self.not_native("hyperref: a restyled float's anchor in the appendix");
+        }
+        // hyperref's `\caption`: `\H@refstepcounter\@captype` (the kernel's, no anchor), then
+        // `\Hy@float@caption`: `\hyper@makecurrent{\@captype}` into `\Hy@float@currentHref`
+        // the first time in the float (the anchor goes in `\float@makebox`). caption.sty's
+        // the same through `\caption@refstepcounter` and `\caption@prepareanchor` (its
+        // frozen `hypcap` anchor, `\caption@currentHref`, set by its `\float@makebox` too).
+        let (label, name, href) = if t <= 2 {
+            let r = R_FIGURE + t as usize - 1;
+            let n = self.rw(r) + 1;
+            self.set_rw(r, n, true);
+            let prefix = self.doc.as_ref().map_or(String::new(), |d| d.the_prefix[t as usize - 1].clone());
+            (format!("{prefix}{n}"), (if t == 1 { "figure" } else { "table" }).to_string(), self.float_href(t, n))
+        } else {
+            let k = self.flr().types[t.ilog2() as usize - 2].counter;
+            self.step_own(k, false);
+            let Some(label) = self.own_label(k) else { return self.not_native("\\refstepcounter of a counter whose \\the the native job cannot read") };
+            let name = self.flr().types[t.ilog2() as usize - 2].name.clone();
+            (label, name, self.own_href(k))
+        };
+        if hyper {
+            self.store_current_label(&label);
+            self.cref_step(&name);
+            let href = match cap {
+                true => self.fl().href.insert(href).clone(),
+                false => self.fl().href.get_or_insert(href).clone(),
+            };
+            self.set_current_href(&href);
+        } else {
+            self.set_current_label(&label);
+            self.cref_step(&name);
+        }
+        if self.next_is('[') {
+            self.bracket_arg();
+        }
+        let mut text = Vec::new();
+        self.read_arg(&mut text);
+        // caption.sty's `\caption@@caption`: `\par`, `\caption@beginex` (the contents line),
+        // then the box (`engine_caption`).
+        if cap {
+            self.fl().caption = text;
+            return self.run_ops(vec![
+                Op::Par,
+                Op::Call(|m| {
+                    m.caption_contents();
+                    m.caption_floatcapt();
+                }),
+            ]);
+        }
+        self.caption_contents();
+        // The end of `\float@caption`'s first line (float.sty:131, no `%`) is a space of the
+        // macro's text: interword glue in a paragraph.
+        if self.mode == Mode::Horizontal {
+            self.append_space();
+        }
+        self.open_box(VBOX_GROUP, Ctx::Set { n: FLOAT_CAPT, global: true }, false, 0, false);
+        self.par_box_restore();
+        self.size_command(NORMALSIZE);
+        self.fl().caption = text;
+        let mut list = Vec::new();
+        if self.styled(t) == Some(FS_RULED) {
+            self.float_capt_tokens(t, &mut list);
+            let par = self.doc.as_ref().map_or(0, |d| d.par_id);
+            list.extend([Token::cs(par), self.doc_id(doc!("rt@fcaptend"))]);
+        } else {
+            self.open_box(HBOX_GROUP, Ctx::Set { n: TEMP_BOX, global: false }, false, 0, false);
+            self.float_capt_tokens(t, &mut list);
+            list.push(self.doc_id(doc!("rt@fcaptmid")));
+        }
+        self.back_list(&list);
+    }
+
+    /// `{\@fs@cfont \fnum@<type>} \ignorespaces #3` (`\floatc@ruled`), with a `:` after the
+    /// number in `\floatc@plain`; `\@fs@cfont` is `\bfseries` (ruled, boxed) or `\rmfamily`.
+    fn float_capt_tokens(&mut self, t: u8, out: &mut Vec<Token>) {
+        let s = self.styled(t).unwrap_or(FS_PLAIN);
+        out.push(Token::char(super::Cat::BeginGroup, '{'));
+        out.push(self.doc_id(if s >= FS_RULED { doc!("bfseries") } else { doc!("rmfamily") }));
+        self.fnum_kernel(t, out);
+        if s != FS_RULED {
+            out.push(Token::char(super::Cat::Other, ':'));
+        }
+        out.extend([Token::char(super::Cat::EndGroup, '}'), Token::char(super::Cat::Space, ' '), self.named_cs(named!("ignorespaces"))]);
+        out.extend_from_slice(&self.flr().caption);
+    }
+
+    /// `\floatc@plain` after the measure: `\hbox to\hsize{\hfil\box\@tempboxa\hfil}`, or the
+    /// caption set again as a paragraph when it is wider.
+    fn float_capt_mid(&mut self) {
+        self.package();
+        let b = self.e.eqtb.box_reg(TEMP_BOX).unwrap_or(0);
+        let hsize = self.dimen_param(super::super::engine_pack::HSIZE);
+        if self.e.nodes.boxes[b as usize].width > hsize {
+            let t = self.flr().captype;
+            let mut list = Vec::new();
+            self.float_capt_tokens(t, &mut list);
+            let par = self.doc.as_ref().map_or(0, |d| d.par_id);
+            list.extend([Token::cs(par), self.doc_id(doc!("rt@fcaptend"))]);
+            return self.back_list(&list);
+        }
+        self.centred_temp_box(b, hsize);
+        self.float_capt_end();
+    }
+
+    /// `\@ifnextchar[{\float@ccon}{\egroup}`: the spaces after the caption gobbled, the
+    /// caption's box ended into `\@floatcapt`.
+    fn float_capt_end(&mut self) {
+        if self.next_is('[') {
+            return self.not_native("float: a caption's continuation (\\float@ccon)");
+        }
+        self.package();
+    }
+
+    /// `\float@makebox{\columnwidth}` of a restyled type's box `b`: `\vbox{\hsize=#1
+    /// \@parboxrestore \@fs@pre`, the caption (`\unvbox\@floatcapt`, unless void) above or
+    /// below the box with `\@fs@mid` between, `\par\@fs@post\vskip\z@}`. Nothing in it makes a
+    /// paragraph, so the parameters it sets act only on `\fs@boxed`'s `\hsize`.
+    fn float_makebox(&mut self, b: u32, style: u8) -> u32 {
+        const PT2: i32 = 131072;
+        let capt = self.e.eqtb.box_reg(FLOAT_CAPT);
+        if capt.is_some() {
+            self.e.eqtb.replace_box(FLOAT_CAPT, None);
+        }
+        let kern = |v: i32| Node { sub: 1, ..Node::new(Kind::Kern, v) };
+        let start = self.cur.len();
+        // hyperref's `\float@makebox`: `\hsize=#1\relax\hyper@@anchor{\Hy@float@currentHref}
+        // {\relax}` first in the box, a vertical list empty so far (`\lastnodetype` -1): the
+        // dest and `\nobreak`.
+        // caption.sty's (over float.sty's own `\float@makebox`, not hyperref's): `#1\relax
+        // \caption@defrostHref`, its `hypcap` anchor (`\caption@startanchor`).
+        let cap = self.caption_pkg();
+        if let Some(name) = self.fl().href.take() {
+            if cap {
+                self.caption_start_anchor(name);
+            } else {
+                self.append_dest(name);
+                self.cur.push(Node::new(Kind::Penalty, 10000));
+            }
+        }
+        // caption.sty:885: `\fs@plaintop`'s `\@fs@mid` `\vspace\abovecaptionskip`, `\fs@boxed`'s
+        // `\kern\abovecaptionskip`.
+        let above = self.rg(R_ABOVECAPTIONSKIP).width;
+        match style {
+            // `\fs@ruled`: `\hrule height.8pt depth0pt \kern2pt`, the caption, `\kern2pt\hrule
+            // \kern2pt`, the box, `\kern2pt\hrule`.
+            FS_RULED => {
+                let r = self.e.nodes.rule_node([RUNNING, 52429, 0]);
+                self.cur.extend([r, kern(PT2)]);
+                if let Some(c) = capt {
+                    self.unvbox(c);
+                    let r = self.e.nodes.rule_node([RUNNING, 26214, 0]);
+                    self.cur.extend([kern(PT2), r, kern(PT2)]);
+                }
+                self.unvbox(b);
+                let r = self.e.nodes.rule_node([RUNNING, 26214, 0]);
+                self.cur.extend([kern(PT2), r]);
+            }
+            // `\fs@boxed`: the box framed (`\@fs@pre`), `\kern2pt`, the caption below.
+            FS_BOXED => {
+                let framed = self.fs_boxed(b);
+                self.unvbox(framed);
+                if let Some(c) = capt {
+                    self.cur.push(kern(if cap { above } else { PT2 }));
+                    self.unvbox(c);
+                }
+            }
+            // `\fs@plaintop`: the caption, `\vspace\belowcaptionskip`, the box.
+            FS_PLAINTOP => {
+                if let Some(c) = capt {
+                    self.unvbox(c);
+                    self.makebox_vspace(if cap { R_ABOVECAPTIONSKIP } else { R_BELOWCAPTIONSKIP });
+                }
+                self.unvbox(b);
+            }
+            // `\fs@plain`: the box, `\vspace\abovecaptionskip`, the caption.
+            _ => {
+                self.unvbox(b);
+                if let Some(c) = capt {
+                    self.makebox_vspace(R_ABOVECAPTIONSKIP);
+                    self.unvbox(c);
+                }
+            }
+        }
+        self.build_glue(Glue::default(), true);
+        let v = self.vpack(start, 0, false, MAX_DIMEN);
+        self.e.nodes.add_box(BoxRec { vertical: true, ..v })
+    }
+
+    /// `\vspace{skip}` in vertical mode (`\@vspace`): `\vskip` of the skip
+    /// (`\@vspace@calcify`), then `\vskip\z@skip`.
+    fn makebox_vspace(&mut self, r: usize) {
+        let g = self.rg(r);
+        self.build_glue(g, false);
+        self.build_glue(Glue::default(), false);
+    }
+
+    /// `\fs@boxed`'s `\@fs@pre`: `\setbox\@currbox\vbox{\hbadness10000 \moveleft3.4pt\vbox{
+    /// \advance\hsize by6.8pt \hrule \hbox to\hsize{\vrule\kern3pt \vbox{\kern3pt\box\@currbox
+    /// \kern3pt}\kern3pt\vrule}\hrule}}`. Each box comes first or after a rule, so no
+    /// interline glue.
+    fn fs_boxed(&mut self, b: u32) -> u32 {
+        const PT3: i32 = 196608;
+        let kern = |v: i32| Node { sub: 1, ..Node::new(Kind::Kern, v) };
+        let vbox = |m: &mut Self, start: usize, shift: i32| {
+            let v = m.vpack(start, 0, false, MAX_DIMEN);
+            m.e.nodes.add_box(BoxRec { vertical: true, shift, ..v })
+        };
+        let s = self.cur.len();
+        self.cur.extend([kern(PT3), Node::new(Kind::Box, b as i32), kern(PT3)]);
+        let inner = vbox(self, s, 0);
+        let s = self.cur.len();
+        let w = self.e.eqtb.word(COLUMN_WIDTH) + 445645;
+        let vr = |m: &mut Self| m.e.nodes.rule_node([26214, RUNNING, RUNNING]);
+        let r = vr(self);
+        self.cur.extend([r, kern(PT3), Node::new(Kind::Box, inner as i32), kern(PT3)]);
+        let r = vr(self);
+        self.cur.push(r);
+        let h = self.hpack(s, w, true);
+        let h = self.e.nodes.add_box(h);
+        let s = self.cur.len();
+        let hr = |m: &mut Self| m.e.nodes.rule_node([RUNNING, 26214, 0]);
+        let r = hr(self);
+        self.cur.extend([r, Node::new(Kind::Box, h as i32)]);
+        let r = hr(self);
+        self.cur.push(r);
+        let framed = vbox(self, s, -222822);
+        let s = self.cur.len();
+        self.cur.push(Node::new(Kind::Box, framed as i32));
+        vbox(self, s, 0)
+    }
+}
+
+/// Two columns': article's `\twocolumn[\@maketitle]` natives, in `Meaning::Doc` order after the kernel's (`engine_doc::DOC_PARTS`).
+pub(super) const NATIVES: &[(&str, super::Native)] = &[
+    ("rt@topnewpage", |m| m.top_new_page_open()),
+    ("twocolumn", |m| m.twocolumn()),
+    ("rt@topnewpageend", |m| m.top_new_page_close()),
+    ("rt@notopfloats", |m| m.fl().topnum = 0),
+    // float.sty's commands (`PACKAGE_NATIVES`) and the two halves of `\float@caption`.
+    ("rt@newfloat", |m| m.new_float()),
+    ("rt@floatstyle", |m| m.float_style()),
+    ("rt@restylefloat", |m| m.restyle_float()),
+    ("rt@floatname", |m| m.float_name()),
+    ("rt@floatplacement", |m| m.float_placement_cmd()),
+    ("rt@fcaptmid", |m| m.float_capt_mid()),
+    ("rt@fcaptend", |m| m.float_capt_end()),
+    ("rt@listof", |m| m.list_of_cmd()),
+    // algorithm.sty's `\listofalgorithms`: `\listof{algorithm}{\listalgorithmname}`.
+    ("rt@listofalgorithms", |m| {
+        let title = vec![Token::cs(m.e.cs.intern("listalgorithmname"))];
+        m.list_of_float("algorithm", title);
+    }),
+];

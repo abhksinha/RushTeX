@@ -349,6 +349,9 @@ impl Machine<'_, '_> {
         if self.e.fonts.list[af as usize].dims(a_char, &self.e.fonts.info).is_none() {
             return;
         }
+        // `x:=x_height(f)` before `do_assignments`, which may change `\fontdimen5` (babel's
+        // `\lower@umlaut` restores it there).
+        let x = self.e.fonts.params(af)[4];
         self.do_assignments();
         // §1124: the character to accent.
         let next = self.get_x_token(false);
@@ -364,15 +367,21 @@ impl Machine<'_, '_> {
             },
             None => None,
         };
-        self.build_accent(a_char, af, c);
+        self.build_accent_at(a_char, af, c, x);
     }
 
     /// §1123–§1125 once the accent `a_char` of font `af` and the character `c` of the
     /// current font are known: the accent alone, or over `c` with its kerns.
     pub(super) fn build_accent(&mut self, a_char: u8, af: u16, c: Option<u8>) {
+        let x = self.e.fonts.params(af)[4];
+        self.build_accent_at(a_char, af, c, x);
+    }
+
+    /// [`Machine::build_accent`] with `x` the accent font's x-height as `make_accent` read it.
+    pub(super) fn build_accent_at(&mut self, a_char: u8, af: u16, c: Option<u8>, x: i32) {
         let font = &self.e.fonts.list[af as usize];
         let Some([a, _, _, _]) = font.dims(a_char, &self.e.fonts.info) else { return };
-        let (x, s) = (font.params(&self.e.fonts.info)[4], font.params(&self.e.fonts.info)[0] as f64 / 65536.0);
+        let s = font.params(&self.e.fonts.info)[0] as f64 / 65536.0;
         let f = self.cur_font();
         let font = &self.e.fonts.list[f as usize];
         let q = c.and_then(|c| font.dims(c, &self.e.fonts.info).map(|d| (c, d)));

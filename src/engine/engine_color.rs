@@ -28,6 +28,8 @@ pub struct ColorStack {
     form_saved: Vec<Option<String>>,
 }
 
+codec_struct!(ColorStack { mode, page_start, current, saved, form_current, form_saved });
+
 impl ColorStack {
     fn new(mode: u8, page_start: bool, init: Option<String>) -> Self {
         ColorStack { mode, page_start, current: init.clone(), saved: Vec::new(), form_current: init, form_saved: Vec::new() }

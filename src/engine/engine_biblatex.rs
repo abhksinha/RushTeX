@@ -109,7 +109,7 @@ impl Machine<'_, '_> {
     /// etoolbox, kvoptions, logreq, ifthen and pdftexcmds define nothing the native job
     /// reads), then its commands.
     pub(super) fn biblatex_load(&mut self, opts: &str) {
-        if self.biblatex().is_some() || self.doc.as_ref().is_some_and(|d| d.natbib.is_some()) {
+        if self.biblatex().is_some() || self.doc.as_ref().is_some_and(|d| d.pkg.natbib.is_some()) {
             return self.not_native("biblatex loaded twice or with natbib");
         }
         match Biblatex::options(opts) {
@@ -265,6 +265,18 @@ impl Machine<'_, '_> {
         }
     }
 }
+
+
+/// biblatex's natives, in `Meaning::Doc` order after the kernel's (`engine_doc::DOC_PARTS`).
+pub(super) const NATIVES: &[(&str, super::Native)] = &[
+    ("rt@blxcite", |m| m.blx_cite(Kind::Cite)),
+    ("rt@parencite", |m| m.blx_cite(Kind::Paren)),
+    ("rt@autocite", |m| m.blx_cite(Kind::Auto)),
+    ("rt@textcite", |m| m.blx_cite(Kind::Bare)),
+    ("rt@blxnocite", |m| m.blx_nocite()),
+    ("rt@addbibresource", |m| m.blx_addbibresource()),
+    ("rt@printbibliography", |m| m.blx_printbibliography()),
+];
 
 #[cfg(test)]
 mod tests {

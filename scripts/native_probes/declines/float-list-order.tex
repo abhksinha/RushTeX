@@ -1,0 +1,21 @@
+% Must decline (run on the engine): an [H] float shipped before earlier floats still
+% waiting (a figure* and a [b] table). LaTeX writes a list entry when the float's page is
+% shipped, so pdfLaTeX lists Figure 3 before Figure 2 and Table 2 before Table 1; the
+% native lists are predicted in source order. RT_NATIVE_WHY=1 names the reason.
+\documentclass{article}
+\usepackage{float}
+\begin{document}
+\listoffigures
+\listoftables
+\section{Floats}
+A first figure, set at the top of a page.
+\begin{figure}[t]\centering\rule{4cm}{2cm}\caption{A top figure.}\end{figure}
+A starred figure too tall for the top of a page, which waits for a page of floats.
+\begin{figure*}\centering\rule{4cm}{.75\textheight}\caption{A starred figure.}\end{figure*}
+A table for the bottom of the page.
+\begin{table}[b]\centering\begin{tabular}{cc}a & b\\ c & d\end{tabular}\caption{A bottom table.}\end{table}
+Now two floats set where they stand.
+\begin{figure}[H]\centering\rule{4cm}{1cm}\caption{A figure set here.}\end{figure}
+\begin{table}[H]\centering\begin{tabular}{cc}e & f\end{tabular}\caption{A table set here.}\end{table}
+Text after them.
+\end{document}

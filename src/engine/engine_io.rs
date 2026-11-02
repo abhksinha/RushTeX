@@ -20,6 +20,8 @@ pub struct ReadStream {
     pos: usize,
 }
 
+codec_struct!(ReadStream { text, pos });
+
 impl ReadStream {
     /// §486 `input_ln`: the next line without its end, or `None` at the end of the file.
     fn line(&mut self) -> Option<String> {
@@ -42,6 +44,8 @@ pub struct WriteStream {
     pub name: String,
     pub text: String,
 }
+
+codec_struct!(WriteStream { name, text });
 
 /// The `\newlinechar` parameter slot (tex.web §236 `new_line_char_code`).
 pub(super) const NEW_LINE_CHAR: u32 = 49;
@@ -105,6 +109,27 @@ impl Machine<'_, '_> {
     /// File `name` as text: one character per byte, as pdfTeX reads it.
     pub(super) fn open_file(&self, name: &str) -> Option<String> {
         self.open_bytes(name).map(|b| b.iter().map(|&b| char::from(b)).collect())
+    }
+
+    /// [`Machine::open_file`], with the name `read_file` found it under (`name`, else
+    /// `name.tex`), or `None` for a file this run wrote: what `engine_resume` reads again.
+    /// Each name is asked for once, as [`Machine::open_bytes`] asks.
+    pub(super) fn open_file_named(&self, name: &str) -> Option<(String, Option<String>)> {
+        let local = name.strip_prefix("./").unwrap_or(name);
+        let written = self.closed.iter().any(|w| {
+            let n = w.name.strip_prefix("./").unwrap_or(&w.name);
+            n == local || n.strip_suffix(".tex") == Some(local) || local.strip_suffix(".tex") == Some(n)
+        });
+        let text = |b: Vec<u8>| b.iter().map(|&b| char::from(b)).collect::<String>();
+        if written {
+            return Some((self.open_file(name)?, None));
+        }
+        let read = self.read_file.as_ref()?;
+        if let Some(b) = read(name) {
+            return Some((text(b), Some(name.to_string())));
+        }
+        let tex = format!("{name}.tex");
+        read(&tex).map(|b| (text(b), Some(tex)))
     }
 
     /// §1275 `\openin<n>[=]<file>` and `\closein<n>`.

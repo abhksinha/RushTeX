@@ -23,6 +23,8 @@ enum Arena {
     File,
 }
 
+codec_enum!(Arena { Defs, Scratch, File });
+
 /// A token-list frame (§307 `token_list` state).
 #[derive(PartialEq, Clone, Copy, Debug)]
 struct Frame {
@@ -38,11 +40,17 @@ struct Frame {
     u_template: bool,
 }
 
+codec_struct!(Frame { arena, pos, end, params, scratch_mark, u_template });
+
 /// The input stack.
 #[derive(PartialEq, Clone, Debug)]
 pub struct Input<'a> {
     /// The document, then each file `\input` opened, innermost last (§304 `in_open`).
     files: Vec<Lexer<'a>>,
+    /// For each of `files`, the name its text was read under when it can be read again
+    /// that way (`engine_resume`: a copy taken inside it reads it again on resume); `None`
+    /// for the document, `\scantokens` text and a file this run wrote.
+    origins: Vec<Option<String>>,
     frames: Vec<Frame>,
     scratch: Vec<Token>,
     params: Vec<Span>,
@@ -54,23 +62,63 @@ pub struct Input<'a> {
     doc_files: Vec<bool>,
 }
 
+#[cfg(feature = "oracle")]
+impl super::engine_snapshot::Codec for Input<'static> {
+    fn put(&self, w: &mut super::engine_snapshot::Writer) {
+        let Input { files, origins, frames, scratch, params, align_state, #[cfg(feature = "mprof")] doc_files: _ } = self;
+        files.put(w);
+        origins.put(w);
+        frames.put(w);
+        scratch.put(w);
+        params.put(w);
+        align_state.put(w);
+    }
+    fn take(r: &mut super::engine_snapshot::Reader) -> Option<Self> {
+        use super::engine_snapshot::Codec;
+        Some(Input { files: Codec::take(r)?, origins: Codec::take(r)?, frames: Codec::take(r)?, scratch: Codec::take(r)?, params: Codec::take(r)?, align_state: Codec::take(r)?, #[cfg(feature = "mprof")] doc_files: Vec::new() })
+    }
+}
+
 const NONE: u32 = u32::MAX;
 
 impl<'a> Input<'a> {
     pub fn new(src: &'a str) -> Self {
-        Input { files: vec![Lexer::new(src)], frames: Vec::new(), scratch: Vec::new(), params: Vec::new(), align_state: super::engine_align::ALIGN_IDLE, #[cfg(feature = "mprof")] doc_files: Vec::new() }
+        Input { files: vec![Lexer::new(src)], origins: vec![None], frames: Vec::new(), scratch: Vec::new(), params: Vec::new(), align_state: super::engine_align::ALIGN_IDLE, #[cfg(feature = "mprof")] doc_files: Vec::new() }
     }
 
-    /// The input stack as owned data when the document is the only file open, its text left
-    /// out (`engine_resume`); with [`Input::over`] it reads on over a new text.
-    pub fn detach(&self) -> Option<Input<'static>> {
-        let [base] = &self.files[..] else { return None };
-        Some(Input { files: vec![base.over("")], frames: self.frames.clone(), scratch: self.scratch.clone(), params: self.params.clone(), align_state: self.align_state, #[cfg(feature = "mprof")] doc_files: self.doc_files.clone() })
+    /// The input stack as owned data, its texts left out (`engine_resume`), when the
+    /// document is the only file open or, with `nested`, every file `\input` opened can be
+    /// read again by its name ([`Input::origins`]); with [`Input::over`] (and
+    /// [`Input::refill`] for each file opened) it reads on over new texts.
+    pub fn detach(&self, nested: bool) -> Option<Input<'static>> {
+        if self.files.len() > 1 && !(nested && self.origins[1..].iter().all(Option::is_some)) {
+            return None;
+        }
+        Some(Input { files: self.files.iter().map(|l| l.over("")).collect(), origins: self.origins.clone(), frames: self.frames.clone(), scratch: self.scratch.clone(), params: self.params.clone(), align_state: self.align_state, #[cfg(feature = "mprof")] doc_files: self.doc_files.clone() })
     }
 
     /// A detached input stack reading on over `src`, the document's text.
     pub fn over<'b>(&self, src: &'b str) -> Input<'b> {
-        Input { files: self.files.iter().map(|l| l.over(src)).collect(), frames: self.frames.clone(), scratch: self.scratch.clone(), params: self.params.clone(), align_state: self.align_state, #[cfg(feature = "mprof")] doc_files: self.doc_files.clone() }
+        Input { files: self.files.iter().map(|l| l.over(src)).collect(), origins: self.origins.clone(), frames: self.frames.clone(), scratch: self.scratch.clone(), params: self.params.clone(), align_state: self.align_state, #[cfg(feature = "mprof")] doc_files: self.doc_files.clone() }
+    }
+
+    /// The files `\input` opened, outermost first, by the name each was read under.
+    pub fn opened(&self) -> impl Iterator<Item = Option<&str>> {
+        self.origins[1..].iter().map(Option::as_deref)
+    }
+
+    /// Each file `\input` opened, outermost first: its name and the text read so far (to its
+    /// next unread line); `None` for one that cannot be read again by name.
+    pub fn opened_read(&self) -> Vec<Option<(String, &str)>> {
+        self.files[1..].iter().zip(&self.origins[1..]).map(|(l, o)| o.as_ref().map(|o| (o.clone(), l.read_text()))).collect()
+    }
+
+    /// File level `level` (1 for the first file `\input` opened) reading on over `text`
+    /// from where it was.
+    pub fn refill(&mut self, level: usize, text: String) {
+        if let Some(l) = self.files.get_mut(level) {
+            *l = l.over(text);
+        }
     }
 
     /// Byte offset in the document of its next unread line.
@@ -78,10 +126,16 @@ impl<'a> Input<'a> {
         self.files.first().map_or(0, |l| l.read_to())
     }
 
-    /// Whether only the document is being read: no file `\input` and no token list open.
-    pub fn at_base(&mut self) -> bool {
+    /// Whether a file is being read, no token list open above it: the document alone, or
+    /// with `nested` a file `\input` opened (every one open can be read again by name). The
+    /// lists below a file (the rest of the macro that called `\input`, as expl3's
+    /// `\file_input:n` leaves its pop code there) are read only once the file ends.
+    pub fn at_file_top(&mut self, nested: bool) -> bool {
         self.trim();
-        self.files.len() == 1 && self.frames.is_empty()
+        if self.files.len() == 1 {
+            return self.frames.is_empty();
+        }
+        nested && self.frames.last().is_some_and(|f| f.arena == Arena::File) && self.origins[1..].iter().all(Option::is_some)
     }
 
     /// §324 `end_token_list`: drops the top frame and what it alone used.
@@ -108,9 +162,11 @@ impl<'a> Input<'a> {
         }
     }
 
-    /// §537 `start_input`: `text` is read next, as a file, until its end or `\endinput`.
-    pub fn push_file(&mut self, text: String) {
+    /// §537 `start_input`: `text` is read next, as a file, until its end or `\endinput`;
+    /// `origin` is the name it can be read again under ([`Input::origins`]).
+    pub fn push_file(&mut self, text: String, origin: Option<String>) {
         self.files.push(Lexer::new(text));
+        self.origins.push(origin);
         let i = self.files.len() as u32 - 1;
         self.frames.push(Frame { arena: Arena::File, pos: i, end: i + 1, params: NONE, scratch_mark: NONE, u_template: false });
     }
@@ -183,16 +239,18 @@ impl<'a> Input<'a> {
     /// lists, and `#n` in a macro body.
     #[inline(never)]
     fn next_token_slow(&mut self, defs: &Tokens, eqtb: &Eqtb, names: &mut CsTable) -> Option<Token> {
-        let end_line_char = eqtb.word(Reg { region: Region::Int, slot: super::engine_names::END_LINE_CHAR });
-        let cats = eqtb.cats();
+        // Read only when a file is: most calls end a token list or read a `#n`.
+        let end_line_char = || eqtb.word(Reg { region: Region::Int, slot: super::engine_names::END_LINE_CHAR });
         loop {
             let Some(f) = self.frames.last_mut() else {
-                return self.files[0].next(cats, names, end_line_char);
+                // The document's own text: `\everyjob` is over (`DateWatch`).
+                eqtb.watch.arm();
+                return self.files[0].next(eqtb.cats(), names, end_line_char());
             };
             if f.arena == Arena::File {
                 // §362: at a file's end, its level ends and the input below resumes.
                 let i = f.pos as usize;
-                match self.files[i].next(cats, names, end_line_char) {
+                match self.files[i].next(eqtb.cats(), names, end_line_char()) {
                     Some(t) => return Some(t),
                     // e-TeX §362: `\everyeof` is read once before the file's level ends.
                     None if i > 0 && !self.files[i].eof_seen => {
@@ -206,6 +264,7 @@ impl<'a> Input<'a> {
                     None => {
                         self.frames.pop();
                         self.files.truncate(i);
+                        self.origins.truncate(i);
                         continue;
                     }
                 }
@@ -226,6 +285,118 @@ impl<'a> Input<'a> {
             }
             return Some(t);
         }
+    }
+
+    /// The tokens a scanner would read one by one from the top token list and push unchanged
+    /// (§399 a braced argument, §392 a delimited one, §473 a general text or a macro body,
+    /// unexpanded or expanded), moved to `out` in one copy: from the frame's place up to, not
+    /// including, the first token it treats otherwise, which `next` then reads. That is a
+    /// token `keep` refuses (it sees no brace and no `#n`), a macro body's `#n` (§357 reads
+    /// its argument), a token marked by `\noexpand`, the list's end, and with `depth` the
+    /// right brace that ends the group (`depth` is its brace depth, kept up to date), without
+    /// it any brace. Braces move `align_state` as `next` moves them; nothing is read when it
+    /// could reach zero (§342: then each token is checked for an alignment entry's end).
+    /// Returns the number of tokens moved.
+    #[inline(always)]
+    pub fn take_while(&mut self, defs: &Tokens, out: &mut Vec<Token>, depth: Option<&mut u32>, mut keep: impl FnMut(Token) -> bool) -> usize {
+        use super::engine_token::{CHAR_BITS, CS_FLAG, DONT_EXPAND};
+        const BEGIN: u32 = Cat::BeginGroup as u32;
+        const END: u32 = Cat::EndGroup as u32;
+        const OUT_PARAM: u32 = Cat::EndLine as u32;
+        let Some(f) = self.frames.last_mut() else { return 0 };
+        // Inside the group `align_state` stays above its value now minus `depth`.
+        let floor = depth.as_ref().map_or(1, |d| i64::from(**d));
+        if f.arena == Arena::File || f.pos >= f.end || i64::from(self.align_state) < floor {
+            return 0;
+        }
+        let list = match f.arena {
+            Arena::Defs => defs.get(Span { start: f.pos, end: f.end }),
+            _ => &self.scratch[f.pos as usize..f.end as usize],
+        };
+        let body = f.params != NONE;
+        let start = depth.as_ref().map_or(0, |d| **d);
+        let mut d = start;
+        let mut n = 0;
+        for &Token(t) in list {
+            if t & (CS_FLAG | DONT_EXPAND) != 0 {
+                if t & DONT_EXPAND != 0 || !keep(Token(t)) {
+                    break;
+                }
+            } else {
+                match t >> CHAR_BITS {
+                    BEGIN if d > 0 => d += 1,
+                    END if d > 1 => d -= 1,
+                    BEGIN | END => break,
+                    OUT_PARAM if body => break,
+                    _ if !keep(Token(t)) => break,
+                    _ => {}
+                }
+            }
+            n += 1;
+        }
+        if n == 0 {
+            return 0;
+        }
+        // A short run is pushed in place: the copy call costs more than the copy.
+        if n <= 8 {
+            out.reserve(8);
+            for &t in &list[..n] {
+                out.push(t);
+            }
+        } else {
+            out.extend_from_slice(&list[..n]);
+        }
+        f.pos += n as u32;
+        if let Some(depth) = depth {
+            self.align_state += d as i32 - start as i32;
+            *depth = d;
+        }
+        n
+    }
+
+    /// The tokens a skipping scanner would read one by one from the top token list and pass
+    /// over (§494 `pass_text`), passed over in one step: from the frame's place up to, not
+    /// including, the first token for which `skip` is false, a macro body's `#n` (§357 reads
+    /// its argument) or the list's end. Braces move `align_state` as `next` moves them; a
+    /// token after which it would be zero is left to `next` (§342 checks it for an
+    /// alignment entry's end).
+    #[inline]
+    pub fn skip_while(&mut self, defs: &Tokens, mut skip: impl FnMut(Token) -> bool) {
+        use super::engine_token::{CHAR_BITS, CS_FLAG, DONT_EXPAND};
+        const BEGIN: u32 = Cat::BeginGroup as u32;
+        const END: u32 = Cat::EndGroup as u32;
+        const OUT_PARAM: u32 = Cat::EndLine as u32;
+        let Some(f) = self.frames.last_mut() else { return };
+        if f.arena == Arena::File || f.pos >= f.end {
+            return;
+        }
+        let list = match f.arena {
+            Arena::Defs => defs.get(Span { start: f.pos, end: f.end }),
+            _ => &self.scratch[f.pos as usize..f.end as usize],
+        };
+        let body = f.params != NONE;
+        let mut a = self.align_state;
+        let mut n = 0;
+        for &Token(t) in list {
+            let t = Token(t & !DONT_EXPAND);
+            let b = if t.0 & CS_FLAG != 0 {
+                a
+            } else {
+                match t.0 >> CHAR_BITS {
+                    BEGIN => a + 1,
+                    END => a - 1,
+                    OUT_PARAM if body => break,
+                    _ => a,
+                }
+            };
+            if b == 0 || !skip(t) {
+                break;
+            }
+            a = b;
+            n += 1;
+        }
+        f.pos += n as u32;
+        self.align_state = a;
     }
 
     /// The file read next, when no token list is pending, not even an exhausted one.

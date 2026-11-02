@@ -48,7 +48,7 @@ impl Letter {
 }
 
 /// The tokens of `list` after its first `\\` at brace depth zero, and whether there is one.
-fn after_cr(list: &[Token], cr: Token) -> Option<&[Token]> {
+pub(super) fn after_cr(list: &[Token], cr: Token) -> Option<&[Token]> {
     let mut depth = 0i32;
     for (k, t) in list.iter().enumerate() {
         match t.cat() {
@@ -62,7 +62,7 @@ fn after_cr(list: &[Token], cr: Token) -> Option<&[Token]> {
 }
 
 /// A delimited argument's value (§392): one group alone loses its braces.
-fn strip_group(list: &[Token]) -> &[Token] {
+pub(super) fn strip_group(list: &[Token]) -> &[Token] {
     let (Some(first), Some(last)) = (list.first(), list.last()) else { return list };
     if list.len() < 2 || first.cat() != Some(Cat::BeginGroup) || last.cat() != Some(Cat::EndGroup) {
         return list;
@@ -250,3 +250,41 @@ impl Machine<'_, '_> {
         }
     }
 }
+
+/// letter.cls's natives, in `Meaning::Doc` order after the kernel's (`engine_doc::DOC_PARTS`).
+pub(super) const NATIVES: &[(&str, super::Native)] = &[
+    ("name", |m| m.letter_field(NAME)),
+    ("signature", |m| m.letter_field(SIGNATURE)),
+    ("address", |m| (m.hooks().address)(m)),
+    ("location", |m| m.letter_field(LOCATION)),
+    ("telephone", |m| m.letter_field(TELEPHONE)),
+    // scrlttr2's (`engine_scrlttr2`) under it.
+    ("opening", |m| if m.doc.as_ref().is_some_and(|d| d.pkg.lttr.is_some()) { m.lttr_opening() } else { m.opening() }),
+    ("closing", |m| if m.doc.as_ref().is_some_and(|d| d.pkg.lttr.is_some()) { m.lttr_closing() } else { m.closing() }),
+    ("rt@letter", |m| m.letter_start()),
+    ("rt@stopbreaks", |m| m.stop_breaks()),
+    ("rt@closingend", |m| m.closing_end()),
+];
+
+/// letter.cls's commands in place of the kernel's (`engine_doc::class_hooks`).
+pub(super) const HOOKS: super::ClassHooks = super::ClassHooks {
+    setup: |m, _| {
+        let parskip = m.glue_param(super::super::engine_pack::PAR_SKIP).width;
+        if let Some(doc) = m.doc.as_mut() {
+            doc.letter = Some(Box::new(Letter::new(doc.class.dimen("textwidth"), parskip)));
+        }
+    },
+    ..super::KERNEL_HOOKS
+};
+
+/// letter.cls's commands the native job takes (`engine_letter`), only under it.
+pub(super) const LETTER_ONLY: &[&str] = &["opening", "closing", "signature", "address", "name", "location", "telephone"];
+/// What article.cls defines and letter.cls does not, or defines otherwise (`\medskipamount`
+/// is `\parskip`; `\@makefntext` and `\footnoterule` differ; the names below are not
+/// defined), or what it has and the native job does not take yet (`\cc`, `\encl`, `\ps`,
+/// `\makelabels`, `\stopbreaks`, `\startbreaks`): under letter these stop.
+pub(super) const LETTER_LACKS: &[&str] = &["section", "subsection", "subsubsection", "paragraph", "subparagraph", "part", "maketitle", "tableofcontents", "listoffigures", "listoftables", "appendix", "caption", "footnote", "footnotemark", "footnotetext", "thanks", "bibitem", "newtheorem", "numberwithin", "printindex", "medskip", "abstractname", "appendixname", "contentsname", "figurename", "tablename", "indexname", "listfigurename", "listtablename", "partname", "refname", "newblock"];
+/// The environments of [`LETTER_LACKS`]: letter's `quote`, `quotation` and `verse` end
+/// their list head with `\item[]` (article's `\item\relax`), and its `quotation` has no
+/// `\parsep`.
+pub(super) const LETTER_LACKS_ENVS: &[&str] = &["figure", "table", "figure*", "table*", "abstract", "thebibliography", "titlepage", "quote", "quotation", "verse"];

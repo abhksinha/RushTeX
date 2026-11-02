@@ -13,7 +13,7 @@ use super::engine_token::Span;
 /// The deepest grouping allowed (TeX stops at 255 save levels; e-TeX at 65535).
 const MAX_LEVEL: u16 = u16::MAX - 1;
 /// §221 `level_one`: the level of a global or never-grouped value.
-const LEVEL_ONE: u16 = 1;
+pub(super) const LEVEL_ONE: u16 = 1;
 
 use super::engine_catcode::{Cat, CatTable};
 use super::engine_prim::Meaning;
@@ -31,6 +31,8 @@ pub enum Region {
     /// the glue parameters, as in TeX, and [`Reg::is_mu`] tells them apart.
     Mu = 4,
 }
+
+codec_enum!(Region { Int, Dimen, Glue, Toks, Mu });
 
 /// A quantity: a parameter (slots below the region's parameter count) or a register.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -79,6 +81,19 @@ struct Table<T> {
 }
 
 #[cfg(feature = "oracle")]
+impl<T: super::engine_snapshot::Codec + Clone> super::engine_snapshot::Codec for Table<T> {
+    fn put(&self, w: &mut super::engine_snapshot::Writer) {
+        let Table { vals, levels } = self;
+        vals.put(w);
+        levels.put(w);
+    }
+    fn take(r: &mut super::engine_snapshot::Reader) -> Option<Self> {
+        use super::engine_snapshot::Codec;
+        Some(Table { vals: Codec::take(r)?, levels: Codec::take(r)? })
+    }
+}
+
+#[cfg(feature = "oracle")]
 impl<T: Copy + Default + super::engine_snapshot::Codec> Table<T> {
     #[cfg(feature = "oracle")]
     fn dump(&self, w: &mut super::engine_snapshot::Writer) {
@@ -101,6 +116,11 @@ impl<T: Clone> Table<T> {
 
     fn thaw(&self) -> Self {
         Table { vals: self.vals.thaw(), levels: self.levels.thaw() }
+    }
+
+    fn thaw_into(&self, live: &mut Self) {
+        self.vals.thaw_into(&mut live.vals);
+        self.levels.thaw_into(&mut live.levels);
     }
 }
 
@@ -137,6 +157,8 @@ pub enum Code {
     Math = 3,
     Del = 4,
 }
+
+codec_enum!(Code { Lc, Uc, Sf, Math, Del });
 
 impl Code {
     /// §232's IniTeX value of the code of `c`: letters map to their lowercase and uppercase,
@@ -186,6 +208,8 @@ enum Saved {
     Shape { level: u16, v: u32 },
 }
 
+codec_data_enum!(Saved { 0 Boundary, 1 Word { region, level, slot, val }, 2 Glue { mu, level, slot, glue }, 3 Cat { level, ch, cat }, 4 Meaning { level, id, m }, 5 Toks { level, slot, span }, 6 Code { kind, level, ch, val }, 7 Box { level, n, b }, 8 Shape { level, v } });
+
 /// The equivalents and the save stack.
 #[derive(PartialEq, Debug, Clone)]
 pub struct Eqtb {
@@ -213,12 +237,82 @@ pub struct Eqtb {
     meanings: Table<Meaning>,
     save: Vec<Saved>,
     level: u16,
+    /// Whether the job's date was used after `\everyjob` (`engine_resume::Redate`); not part
+    /// of the state (equal to any other, never written).
+    pub watch: DateWatch,
+}
+
+codec_struct!(Eqtb { ints, dimens, glues, mus, toks, codes, cats, cat_levels, boxes, dead_boxes, par_shape, par_shape_level, shapes, meanings, save, level; watch });
+
+/// A run copied after its preamble may be given another date when it resumes
+/// (`engine_resume::Redate`) only if nothing after `\everyjob` used the date: neither
+/// `\time`, `\day`, `\month`, `\year` (`Machine::register_of`) nor the five l3sys constants
+/// `\everyjob` makes of them (`ids`), whose meanings are read and set only here
+/// ([`Eqtb::meaning`], [`Eqtb::set_meaning`]). Armed when the document's first token is read
+/// (`Input::next_token_slow`: no token list left, so `\everyjob` is over); `on` is the one
+/// test the readers make.
+#[derive(Clone, Debug, Default)]
+pub struct DateWatch {
+    pub on: std::cell::Cell<bool>,
+    pub pending: std::cell::Cell<bool>,
+    pub touched: std::cell::Cell<bool>,
+    pub ids: std::cell::Cell<[u32; 5]>,
+}
+
+impl PartialEq for DateWatch {
+    fn eq(&self, _: &DateWatch) -> bool {
+        true
+    }
+}
+
+impl DateWatch {
+    /// Watches `ids` from the document's first token on.
+    pub fn start(&self, ids: [u32; 5]) {
+        self.ids.set(ids);
+        self.touched.set(false);
+        self.pending.set(true);
+        self.on.set(false);
+    }
+
+    /// Watches `ids` from now on (a run resumed after `\everyjob`).
+    pub fn start_now(&self, ids: [u32; 5]) {
+        self.start(ids);
+        self.arm();
+    }
+
+    pub fn stop(&self) {
+        self.on.set(false);
+        self.pending.set(false);
+    }
+
+    #[inline]
+    pub fn arm(&self) {
+        if self.pending.get() {
+            self.pending.set(false);
+            self.on.set(true);
+        }
+    }
+
+    /// The date was used, if watched.
+    #[inline]
+    pub fn touch(&self) {
+        if self.on.get() {
+            self.touched.set(true);
+        }
+    }
+
+    #[inline(always)]
+    fn check(&self, id: u32) {
+        if self.on.get() && self.ids.get().contains(&id) {
+            self.touched.set(true);
+        }
+    }
 }
 
 impl Default for Eqtb {
     fn default() -> Self {
         use super::engine_names as n;
-        let mut e = Eqtb { ints: Table::default(), dimens: Table::default(), glues: Table::default(), mus: Table::default(), toks: Table::default(), codes: Default::default(), cats: CatTable::latex(), cat_levels: [0; 256], boxes: Table::default(), dead_boxes: Vec::new(), par_shape: 0, par_shape_level: LEVEL_ONE, shapes: Vec::new(), meanings: Table::default(), save: Vec::new(), level: LEVEL_ONE };
+        let mut e = Eqtb { ints: Table::default(), dimens: Table::default(), glues: Table::default(), mus: Table::default(), toks: Table::default(), codes: Default::default(), cats: CatTable::latex(), cat_levels: [0; 256], boxes: Table::default(), dead_boxes: Vec::new(), par_shape: 0, par_shape_level: LEVEL_ONE, shapes: Vec::new(), meanings: Table::default(), save: Vec::new(), level: LEVEL_ONE, watch: DateWatch::default() };
         // §240: the integer parameters IniTeX does not start at zero.
         for (slot, v) in [(n::MAG, 1000), (n::TOLERANCE, 10000), (n::MAX_DEAD_CYCLES, 25), (n::HANG_AFTER, 1), (n::ESCAPE_CHAR, b'\\' as i32), (n::END_LINE_CHAR, 13)] {
             e.ints.put(slot, v, LEVEL_ONE);
@@ -235,14 +329,33 @@ impl Eqtb {
     /// A checkpoint's copy (`engine_checkpoint`): the tables frozen, sharing what did not
     /// change since the last checkpoint.
     pub fn freeze(&mut self) -> Eqtb {
-        let Eqtb { ints, dimens, glues, mus, toks, codes, cats, cat_levels, boxes, dead_boxes, par_shape, par_shape_level, shapes, meanings, save, level } = self;
-        Eqtb { ints: ints.freeze(), dimens: dimens.freeze(), glues: glues.freeze(), mus: mus.freeze(), toks: toks.freeze(), codes: [0, 1, 2, 3, 4].map(|k| codes[k].freeze()), cats: *cats, cat_levels: *cat_levels, boxes: boxes.freeze(), dead_boxes: dead_boxes.clone(), par_shape: *par_shape, par_shape_level: *par_shape_level, shapes: shapes.clone(), meanings: meanings.freeze(), save: save.clone(), level: *level }
+        let Eqtb { ints, dimens, glues, mus, toks, codes, cats, cat_levels, boxes, dead_boxes, par_shape, par_shape_level, shapes, meanings, save, level, watch: _ } = self;
+        Eqtb { ints: ints.freeze(), dimens: dimens.freeze(), glues: glues.freeze(), mus: mus.freeze(), toks: toks.freeze(), codes: [0, 1, 2, 3, 4].map(|k| codes[k].freeze()), cats: *cats, cat_levels: *cat_levels, boxes: boxes.freeze(), dead_boxes: dead_boxes.clone(), par_shape: *par_shape, par_shape_level: *par_shape_level, shapes: shapes.clone(), meanings: meanings.freeze(), save: save.clone(), level: *level, watch: DateWatch::default() }
     }
 
     /// A live copy of a frozen one.
     pub fn thaw(&self) -> Eqtb {
-        let Eqtb { ints, dimens, glues, mus, toks, codes, cats, cat_levels, boxes, dead_boxes, par_shape, par_shape_level, shapes, meanings, save, level } = self;
-        Eqtb { ints: ints.thaw(), dimens: dimens.thaw(), glues: glues.thaw(), mus: mus.thaw(), toks: toks.thaw(), codes: [0, 1, 2, 3, 4].map(|k| codes[k].thaw()), cats: *cats, cat_levels: *cat_levels, boxes: boxes.thaw(), dead_boxes: dead_boxes.clone(), par_shape: *par_shape, par_shape_level: *par_shape_level, shapes: shapes.clone(), meanings: meanings.thaw(), save: save.clone(), level: *level }
+        let Eqtb { ints, dimens, glues, mus, toks, codes, cats, cat_levels, boxes, dead_boxes, par_shape, par_shape_level, shapes, meanings, save, level, watch: _ } = self;
+        Eqtb { ints: ints.thaw(), dimens: dimens.thaw(), glues: glues.thaw(), mus: mus.thaw(), toks: toks.thaw(), codes: [0, 1, 2, 3, 4].map(|k| codes[k].thaw()), cats: *cats, cat_levels: *cat_levels, boxes: boxes.thaw(), dead_boxes: dead_boxes.clone(), par_shape: *par_shape, par_shape_level: *par_shape_level, shapes: shapes.clone(), meanings: meanings.thaw(), save: save.clone(), level: *level, watch: DateWatch::default() }
+    }
+
+    /// [`Eqtb::thaw`] into a live one, its buffers kept (`Chunked::thaw_into`).
+    pub fn thaw_into(&self, live: &mut Eqtb) {
+        let Eqtb { ints, dimens, glues, mus, toks, codes, cats, cat_levels, boxes, dead_boxes, par_shape, par_shape_level, shapes, meanings, save, level, watch: _ } = self;
+        ints.thaw_into(&mut live.ints);
+        dimens.thaw_into(&mut live.dimens);
+        glues.thaw_into(&mut live.glues);
+        mus.thaw_into(&mut live.mus);
+        toks.thaw_into(&mut live.toks);
+        for (c, l) in codes.iter().zip(live.codes.iter_mut()) {
+            c.thaw_into(l);
+        }
+        boxes.thaw_into(&mut live.boxes);
+        meanings.thaw_into(&mut live.meanings);
+        (live.cats, live.cat_levels, live.par_shape, live.par_shape_level, live.level) = (*cats, *cat_levels, *par_shape, *par_shape_level, *level);
+        live.dead_boxes.clone_from(dead_boxes);
+        live.shapes.clone_from(shapes);
+        live.save.clone_from(save);
     }
 
     /// The integer (`Int`) or scaled-point (`Dimen`) value of `reg`; a glue's width.
@@ -541,17 +654,29 @@ impl Eqtb {
         let meanings = Table::<Meaning>::undump(r)?;
         let inside = |s: &Span| s.end <= toks;
         let spans_ok = toks_t.vals.iter().all(inside) && meanings.vals.iter().all(|m| !matches!(m, Meaning::Macro(mac) if !inside(&mac.text)));
-        spans_ok.then_some(Eqtb { ints, dimens, glues, mus, toks: toks_t, codes, cats, cat_levels, boxes, dead_boxes: Vec::new(), par_shape, par_shape_level: LEVEL_ONE, shapes, meanings, save: Vec::new(), level: LEVEL_ONE })
+        spans_ok.then_some(Eqtb { ints, dimens, glues, mus, toks: toks_t, codes, cats, cat_levels, boxes, dead_boxes: Vec::new(), par_shape, par_shape_level: LEVEL_ONE, shapes, meanings, save: Vec::new(), level: LEVEL_ONE, watch: DateWatch::default() })
     }
 
     /// What control sequence `id` means; `Unset` when never assigned.
     #[inline]
     pub fn meaning(&self, id: u32) -> Meaning {
+        self.watch.check(id);
         self.meanings.get(id)
+    }
+
+    /// [`Eqtb::meaning`] unwatched (`DateWatch`), for the watch's own checks.
+    pub fn meaning_quiet(&self, id: u32) -> Meaning {
+        self.meanings.get(id)
+    }
+
+    /// The group level of control sequence `id`'s meaning (`level_one` when never assigned).
+    pub fn meaning_level(&self, id: u32) -> u16 {
+        self.meanings.level(id).max(LEVEL_ONE)
     }
 
     /// §277 `eq_define` / §279 `geq_define` of a control sequence.
     pub fn set_meaning(&mut self, id: u32, m: Meaning, global: bool) {
+        self.watch.check(id);
         if global {
             self.meanings.put(id, m, LEVEL_ONE);
             return;

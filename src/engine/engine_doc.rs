@@ -63,14 +63,66 @@ mod xcolor;
 mod fancy;
 #[path = "engine_book.rs"]
 mod book;
+#[path = "engine_scrlttr2.rs"]
+mod lttr;
+#[path = "engine_koma.rs"]
+mod koma;
 #[path = "engine_titlesec.rs"]
 mod titlesec;
 #[path = "engine_url.rs"]
 mod url;
 #[path = "engine_tikz.rs"]
 mod tikz;
+#[path = "engine_case.rs"]
+mod case;
+#[path = "engine_authblk.rs"]
+mod authblk;
+#[path = "engine_qrcode.rs"]
+mod qrcode;
+#[path = "engine_cleveref.rs"]
+mod cleveref;
+#[path = "engine_lastpage.rs"]
+mod lastpage;
+#[path = "engine_csquotes.rs"]
+mod csquotes;
+#[path = "engine_counter.rs"]
+mod counter;
+#[path = "engine_mathextra.rs"]
+mod mathextra;
+#[path = "engine_mathpkgs.rs"]
+mod mathpkgs;
+#[path = "engine_picture.rs"]
+mod picture;
+#[path = "engine_cancel.rs"]
+mod cancel;
+#[path = "engine_apacite.rs"]
+mod apacite;
+#[path = "engine_length.rs"]
+mod length;
+#[path = "engine_userdef.rs"]
+mod userdef;
+#[path = "engine_a0poster.rs"]
+mod a0poster;
+#[path = "engine_screenplay.rs"]
+mod screenplay;
+#[path = "engine_threeparttable.rs"]
+mod threeparttable;
+#[path = "engine_caption.rs"]
+mod caption;
+#[path = "engine_algorithm.rs"]
+mod algorithm;
+#[path = "engine_graphicx.rs"]
+mod graphicx;
+#[path = "engine_layoutpkgs.rs"]
+mod layoutpkgs;
+#[path = "engine_makecell.rs"]
+mod makecell;
+#[path = "engine_pagelayout.rs"]
+mod pagelayout;
 #[path = "engine_hyperref.rs"]
 mod hyperref;
+#[path = "engine_hyperref_class.rs"]
+mod hyperref_class;
 #[path = "engine_natbib.rs"]
 mod natbib;
 #[path = "engine_biblatex.rs"]
@@ -83,10 +135,28 @@ mod siunitx;
 mod letter;
 #[path = "engine_amsart.rs"]
 mod amsart;
+#[path = "engine_ieeetran.rs"]
+mod ieee;
 #[path = "engine_memoir.rs"]
 mod memoir;
+use letter::{LETTER_ONLY, LETTER_LACKS, LETTER_LACKS_ENVS};
+use memoir::{MEMOIR_NATIVE, MEMOIR_OWN, MEMOIR_PACKAGES, MEMOIR_ENVS};
+use ieee::{IEEE_NATIVE, IEEE_ENVS, IEEE_PACKAGES};
+use amsart::{AMS_ONLY, AMS_PACKAGES, AMS_LACKS, AMS_LACKS_ENVS};
+use koma::{KOMA_LATER, KOMA_LATER_ENVS, KOMA_LATER_PACKAGES};
+use lttr::{LTTR_ENVS, LTTR_NATIVE, LTTR_ONLY, LTTR_PACKAGES};
 #[path = "engine_prescan.rs"]
 mod prescan;
+#[path = "engine_predict_macros.rs"]
+mod predict_macros;
+#[path = "engine_colortbl.rs"]
+mod colortbl;
+#[path = "engine_enumitem.rs"]
+mod enumitem;
+#[path = "engine_tcolorbox.rs"]
+mod tcolorbox;
+#[path = "engine_listings.rs"]
+mod listings;
 
 type Native = fn(&mut Machine);
 
@@ -114,7 +184,7 @@ pub type Read<'a> = dyn Fn(&str) -> Option<Vec<u8>> + 'a;
 const DEFAULT_FAMILIES: [&str; 3] = ["cmr", "cmss", "cmtt"];
 
 /// The font defaults the native job keeps as the kernel has them.
-const FONT_FIXED: [&str; 10] = ["familydefault", "encodingdefault", "seriesdefault", "shapedefault", "mddefault", "bfdefault", "itdefault", "sldefault", "scdefault", "updefault"];
+const FONT_FIXED: &[&str] = &["familydefault", "encodingdefault", "seriesdefault", "shapedefault", "mddefault", "bfdefault", "itdefault", "sldefault", "scdefault", "updefault"];
 
 /// A family name as a `&'static str`: the families the pin's `.fd` files declare are few,
 /// so each new name is leaked once per process and reused after.
@@ -142,18 +212,77 @@ enum Change {
 
 /// Commands a native package table redefines that the native job runs as Rust natives
 /// (package, name, `DOC` name): the package's definition is not data, but a mechanism.
-pub const PACKAGE_NATIVES: [(&str, &str, &str); 154] = [("array", "arraybackslash", "rt@arraybackslash"), ("enumitem", "setlist", "rt@setlist"), ("amsmath", "allowdisplaybreaks", "rt@allowdisplaybreaks"), ("bm", "bm", "rt@bm"), ("amsthm", "theoremstyle", "rt@thmstyle"), ("amsthm", "qed", "rt@qed"), ("amsthm", "qedsymbol", "rt@qedsymbol"), ("amsthm", "openbox", "rt@openbox"), ("amsthm", "proofname", "rt@proofname"), ("amsmath", "bigl", "rt@big1l"), ("amsmath", "bigr", "rt@big1r"), ("amsmath", "bigm", "rt@big1m"), ("amsmath", "Bigl", "rt@big15l"), ("amsmath", "Bigr", "rt@big15r"), ("amsmath", "Bigm", "rt@big15m"), ("amsmath", "biggl", "rt@big2l"), ("amsmath", "biggr", "rt@big2r"), ("amsmath", "biggm", "rt@big2m"), ("amsmath", "Biggl", "rt@big25l"), ("amsmath", "Biggr", "rt@big25r"), ("amsmath", "Biggm", "rt@big25m"), ("amsmath", "cdots", "rt@cdots"), ("amsmath", "dotsb", "rt@cdots"), ("amsmath", "dotsm", "rt@cdots"), ("amsmath", "dotsc", "rt@dotsc"), ("amsmath", "dotsi", "rt@dotsi"), ("amsmath", "dotso", "rt@dotso"), ("amsmath", "colon", "rt@colon"), ("amsmath", "big", "rt@big1"), ("amsmath", "Big", "rt@big15"), ("amsmath", "bigg", "rt@big2"), ("amsmath", "Bigg", "rt@big25"), ("amstext", "text", "rt@text"), ("amsopn", "operatorname", "rt@operatorname"), ("amsopn", "DeclareMathOperator", "rt@declmathop"), ("amsfonts", "widehat", "rt@widehat"), ("amsfonts", "widetilde", "rt@widetilde"), ("graphicx", "includegraphics", "rt@includegraphics"), ("amsmath", "eqref", "rt@eqref"), ("amsmath", "nonumber", "rt@nonumber"), ("amsmath", "notag", "rt@nonumber"), ("amsmath", "genfrac", "rt@genfrac"), ("amsmath", "dfrac", "rt@dfrac"), ("amsmath", "tfrac", "rt@tfrac"), ("amsmath", "binom", "rt@binom"), ("amsmath", "dbinom", "rt@dbinom"), ("amsmath", "tbinom", "rt@tbinom"), ("amsmath", "numberwithin", "rt@numberwithin"), ("amsmath", "pod", "rt@pod"), ("amsmath", "mod", "rt@mod"), ("amsmath", "overset", "rt@overset"), ("amsmath", "underset", "rt@underset"), ("amsmath", "overunderset", "rt@overunderset"), ("amsmath", "tag", "rt@tag"), ("amsbsy", "boldsymbol", "rt@boldsymbol"), ("amsmath", "substack", "rt@substack"), ("amsmath", "xrightarrow", "rt@xrightarrow"), ("amsmath", "xleftarrow", "rt@xleftarrow"), ("amsmath", "overrightarrow", "overrightarrow"), ("amsmath", "overleftarrow", "overleftarrow"), ("amsmath", "overleftrightarrow", "rt@overleftrightarrow"), ("amsmath", "hdotsfor", "rt@hdotsfor"), ("amsmath", "root", "root"), ("amsmath", "over", "rt@over"), ("amsmath", "atop", "rt@atop"), ("amsmath", "above", "rt@above"), ("amsmath", "overwithdelims", "rt@overwithdelims"), ("amsmath", "atopwithdelims", "rt@atopwithdelims"), ("amsmath", "abovewithdelims", "rt@abovewithdelims"), ("amsmath", "eqno", "rt@eqno"), ("amsmath", "leqno", "rt@leqno"), ("amsmath", "doteq", "doteq"), ("booktabs", "toprule", "rt@toprule"), ("booktabs", "midrule", "rt@midrule"), ("booktabs", "bottomrule", "rt@bottomrule"), ("booktabs", "specialrule", "rt@specialrule"), ("booktabs", "addlinespace", "rt@addlinespace"), ("booktabs", "cmidrule", "rt@cmidrule"), ("booktabs", "morecmidrules", "rt@morecmidrules"), ("multirow", "multirow", "rt@multirow"), ("multirow", "multirowsetup", "raggedright"), ("geometry", "geometry", "rt@geometry"), ("color", "color", "rt@color"), ("color", "textcolor", "rt@textcolor"), ("color", "definecolor", "rt@definecolor"), ("xcolor", "color", "rt@color"), ("xcolor", "textcolor", "rt@textcolor"), ("xcolor", "definecolor", "rt@definecolor"), ("url", "url", "rt@url"), ("url", "path", "rt@path"), ("url", "urlstyle", "rt@urlstyle"), ("hyperref", "href", "rt@href"), ("hyperref", "nolinkurl", "rt@nolinkurl"), ("hyperref", "hypersetup", "rt@hypersetup"), ("fancyhdr", "fancyhf", "rt@fancyhf"), ("fancyhdr", "fancyhead", "rt@fancyhead"), ("fancyhdr", "fancyfoot", "rt@fancyfoot"), ("fancyhdr", "lhead", "rt@lhead"), ("fancyhdr", "chead", "rt@chead"), ("fancyhdr", "rhead", "rt@rhead"), ("fancyhdr", "lfoot", "rt@lfoot"), ("fancyhdr", "cfoot", "rt@cfoot"), ("fancyhdr", "rfoot", "rt@rfoot"), ("titlesec", "titleformat", "rt@titleformat"), ("titlesec", "titlespacing", "rt@titlespacing"), ("natbib", "citet", "rt@citet"), ("natbib", "citep", "rt@citep"), ("natbib", "cite", "rt@natcite"), ("natbib", "citealt", "rt@citealt"), ("natbib", "citealp", "rt@citealp"), ("natbib", "citeauthor", "rt@citeauthor"), ("natbib", "citefullauthor", "rt@citefullauthor"), ("natbib", "Citet", "rt@citet"), ("natbib", "Citep", "rt@citep"), ("natbib", "Citealt", "rt@citealt"), ("natbib", "Citealp", "rt@citealp"), ("natbib", "Citeauthor", "rt@citeauthor"), ("natbib", "citeyear", "rt@citeyear"), ("natbib", "citeyearpar", "rt@citeyearpar"), ("natbib", "citetalias", "rt@citetalias"), ("natbib", "citepalias", "rt@citepalias"), ("natbib", "citenum", "rt@citenum"), ("natbib", "citetext", "rt@citetext"), ("natbib", "bibpunct", "rt@bibpunct"), ("natbib", "setcitestyle", "rt@setcitestyle"), ("natbib", "citestyle", "rt@citestyle"), ("natbib", "defcitealias", "rt@defcitealias"), ("longtable", "endhead", "rt@endhead"), ("array", "newcolumntype", "rt@newcolumntype"), ("setspace", "setstretch", "rt@setstretch"), ("setspace", "onehalfspacing", "rt@onehalfspacing"), ("setspace", "doublespacing", "rt@doublespacing"), ("setspace", "singlespacing", "rt@singlespacing"), ("siunitx", "si", "rt@si"), ("siunitx", "unit", "rt@si"), ("siunitx", "num", "rt@num"), ("siunitx", "SI", "rt@SI"), ("siunitx", "qty", "rt@SI"), ("biblatex", "cite", "rt@blxcite"), ("biblatex", "Cite", "rt@blxcite"), ("biblatex", "parencite", "rt@parencite"), ("biblatex", "Parencite", "rt@parencite"), ("biblatex", "autocite", "rt@autocite"), ("biblatex", "Autocite", "rt@autocite"), ("biblatex", "textcite", "rt@textcite"), ("biblatex", "Textcite", "rt@textcite"), ("biblatex", "citeauthor", "rt@textcite"), ("biblatex", "Citeauthor", "rt@textcite"), ("biblatex", "citetitle", "rt@textcite"), ("biblatex", "citeyear", "rt@textcite"), ("biblatex", "nocite", "rt@blxnocite"), ("biblatex", "addbibresource", "rt@addbibresource"), ("biblatex", "printbibliography", "rt@printbibliography"), ("colortbl", "rowcolors", "rt@rowcolors")];
+pub const PACKAGE_NATIVES: &[(&str, &str, &str)] = &[
+    ("nth", "nth", "rt@nth"),
+    ("array", "arraybackslash", "rt@arraybackslash"),
+    ("enumitem", "setlist", "rt@setlist"),
+    ("amsmath", "allowdisplaybreaks", "rt@allowdisplaybreaks"),
+    ("amsmath", "boxed", "rt@boxed"), ("amsmath", "sideset", "rt@sideset"), ("amsmath", "cfrac", "rt@cfrac"), ("amsmath", "intertext", "rt@intertext"), ("mathtools", "shortintertext", "rt@intertext"), ("amsmath", "iint", "rt@iint"), ("amsmath", "iiint", "rt@iiint"), ("amsmath", "iiiint", "rt@iiiint"), ("mathtools", "mathllap", "rt@mathllap"), ("mathtools", "DeclarePairedDelimiter", "rt@declpaired"), ("mathtools", "DeclarePairedDelimiterX", "rt@declpairedx"), ("mathtools", "mathrlap", "rt@mathrlap"), ("mathtools", "mathclap", "rt@mathclap"), ("mathtools", "xleftrightarrow", "rt@xleftrightarrow"), ("mathtools", "xmapsto", "rt@xmapsto"),
+    ("bm", "bm", "rt@bm"),
+    ("amsthm", "theoremstyle", "rt@thmstyle"), ("amsthm", "qed", "rt@qed"), ("amsthm", "qedhere", "rt@qedhere"), ("amsthm", "qedsymbol", "rt@qedsymbol"), ("amsthm", "openbox", "rt@openbox"), ("amsthm", "proofname", "rt@proofname"),
+    ("amsmath", "bigl", "rt@big1l"), ("amsmath", "bigr", "rt@big1r"), ("amsmath", "bigm", "rt@big1m"), ("amsmath", "Bigl", "rt@big15l"), ("amsmath", "Bigr", "rt@big15r"), ("amsmath", "Bigm", "rt@big15m"), ("amsmath", "biggl", "rt@big2l"), ("amsmath", "biggr", "rt@big2r"), ("amsmath", "biggm", "rt@big2m"), ("amsmath", "Biggl", "rt@big25l"), ("amsmath", "Biggr", "rt@big25r"), ("amsmath", "Biggm", "rt@big25m"), ("amsmath", "cdots", "rt@cdots"), ("amsmath", "dotsb", "rt@cdots"), ("amsmath", "dotsm", "rt@cdots"), ("amsmath", "dotsc", "rt@dotsc"), ("amsmath", "dotsi", "rt@dotsi"), ("amsmath", "dotso", "rt@dotso"), ("amsmath", "colon", "rt@colon"), ("amsmath", "big", "rt@big1"), ("amsmath", "Big", "rt@big15"), ("amsmath", "bigg", "rt@big2"), ("amsmath", "Bigg", "rt@big25"),
+    ("amstext", "text", "rt@text"),
+    ("amsopn", "operatorname", "rt@operatorname"), ("amsopn", "DeclareMathOperator", "rt@declmathop"),
+    ("amsfonts", "widehat", "rt@widehat"), ("amsfonts", "widetilde", "rt@widetilde"),
+    ("graphicx", "includegraphics", "rt@includegraphics"),
+    ("graphicx", "graphicspath", "rt@graphicspath"), ("graphicx", "scalebox", "rt@scalebox"), ("graphicx", "resizebox", "rt@resizebox"), ("graphicx", "rotatebox", "rt@rotatebox"),
+    ("amsmath", "eqref", "rt@eqref"), ("amsmath", "nonumber", "rt@nonumber"), ("amsmath", "notag", "rt@nonumber"), ("amsmath", "genfrac", "rt@genfrac"), ("amsmath", "dfrac", "rt@dfrac"), ("amsmath", "tfrac", "rt@tfrac"), ("amsmath", "binom", "rt@binom"), ("amsmath", "dbinom", "rt@dbinom"), ("amsmath", "tbinom", "rt@tbinom"), ("amsmath", "numberwithin", "rt@numberwithin"), ("amsmath", "pod", "rt@pod"), ("amsmath", "mod", "rt@mod"), ("amsmath", "overset", "rt@overset"), ("amsmath", "underset", "rt@underset"), ("amsmath", "overunderset", "rt@overunderset"), ("amsmath", "tag", "rt@tag"),
+    ("amsbsy", "boldsymbol", "rt@boldsymbol"),
+    ("amsmath", "substack", "rt@substack"), ("amsmath", "xrightarrow", "rt@xrightarrow"), ("amsmath", "xleftarrow", "rt@xleftarrow"), ("amsmath", "overrightarrow", "overrightarrow"), ("amsmath", "overleftarrow", "overleftarrow"), ("amsmath", "overleftrightarrow", "rt@overleftrightarrow"), ("amsmath", "hdotsfor", "rt@hdotsfor"), ("amsmath", "root", "root"), ("amsmath", "over", "rt@over"), ("amsmath", "atop", "rt@atop"), ("amsmath", "above", "rt@above"), ("amsmath", "overwithdelims", "rt@overwithdelims"), ("amsmath", "atopwithdelims", "rt@atopwithdelims"), ("amsmath", "abovewithdelims", "rt@abovewithdelims"), ("amsmath", "eqno", "rt@eqno"), ("amsmath", "leqno", "rt@leqno"), ("amsmath", "doteq", "doteq"),
+    ("booktabs", "toprule", "rt@toprule"), ("booktabs", "midrule", "rt@midrule"), ("booktabs", "bottomrule", "rt@bottomrule"), ("booktabs", "specialrule", "rt@specialrule"), ("booktabs", "addlinespace", "rt@addlinespace"), ("booktabs", "cmidrule", "rt@cmidrule"), ("booktabs", "morecmidrules", "rt@morecmidrules"),
+    ("multirow", "multirow", "rt@multirow"), ("multirow", "multirowsetup", "raggedright"),
+    ("geometry", "geometry", "rt@geometry"),
+    ("color", "color", "rt@color"), ("color", "textcolor", "rt@textcolor"), ("color", "definecolor", "rt@definecolor"),
+    ("xcolor", "color", "rt@color"), ("xcolor", "textcolor", "rt@textcolor"), ("xcolor", "definecolor", "rt@definecolor"),
+    ("tikz", "tikz", "rt@tikz"),
+    ("url", "url", "rt@url"), ("url", "path", "rt@path"), ("url", "urlstyle", "rt@urlstyle"),
+    ("hyperref", "href", "rt@href"), ("hyperref", "nolinkurl", "rt@nolinkurl"), ("hyperref", "hypersetup", "rt@hypersetup"), ("caption", "captionsetup", "rt@captionsetup"), ("caption", "captionof", "rt@captionof"), ("capt-of", "captionof", "rt@captionof"), ("subcaption", "subref", "rt@subref"), ("subfig", "subfloat", "rt@subfloat"), ("subfig", "subref", "rt@subref"),
+    ("cleveref", "cref", "rt@cref"), ("cleveref", "Cref", "rt@Cref"), ("cleveref", "crefrange", "rt@crefrange"), ("cleveref", "Crefrange", "rt@Crefrange"), ("cleveref", "crefname", "rt@crefname"), ("cleveref", "Crefname", "rt@Crefname"), ("cleveref", "labelcref", "rt@labelcref"), ("csquotes", "enquote", "rt@enquote"), ("fancyhdr", "nouppercase", "rt@nouppercase"), ("fancyhdr", "fancypagestyle", "rt@fancypagestyle"), ("fancyhdr", "fancyhf", "rt@fancyhf"), ("fancyhdr", "fancyhead", "rt@fancyhead"), ("fancyhdr", "fancyfoot", "rt@fancyfoot"), ("fancyhdr", "lhead", "rt@lhead"), ("fancyhdr", "chead", "rt@chead"), ("fancyhdr", "rhead", "rt@rhead"), ("fancyhdr", "lfoot", "rt@lfoot"), ("fancyhdr", "cfoot", "rt@cfoot"), ("fancyhdr", "rfoot", "rt@rfoot"),
+    ("titlesec", "titleformat", "rt@titleformat"), ("titlesec", "titlespacing", "rt@titlespacing"), ("titlesec", "titlelabel", "rt@titlelabel"),
+    ("natbib", "citet", "rt@citet"), ("natbib", "citep", "rt@citep"), ("natbib", "cite", "rt@natcite"), ("natbib", "citealt", "rt@citealt"), ("natbib", "citealp", "rt@citealp"), ("natbib", "citeauthor", "rt@citeauthor"), ("natbib", "citefullauthor", "rt@citefullauthor"), ("natbib", "Citet", "rt@citet"), ("natbib", "Citep", "rt@citep"), ("natbib", "Citealt", "rt@citealt"), ("natbib", "Citealp", "rt@citealp"), ("natbib", "Citeauthor", "rt@citeauthor"), ("natbib", "citeyear", "rt@citeyear"), ("natbib", "citeyearpar", "rt@citeyearpar"), ("natbib", "citetalias", "rt@citetalias"), ("natbib", "citepalias", "rt@citepalias"), ("natbib", "citenum", "rt@citenum"), ("natbib", "citetext", "rt@citetext"), ("natbib", "bibpunct", "rt@bibpunct"), ("natbib", "setcitestyle", "rt@setcitestyle"), ("natbib", "citestyle", "rt@citestyle"), ("natbib", "defcitealias", "rt@defcitealias"),
+    ("longtable", "endhead", "rt@endhead"),
+    ("array", "newcolumntype", "rt@newcolumntype"),
+    ("setspace", "setstretch", "rt@setstretch"), ("setspace", "onehalfspacing", "rt@onehalfspacing"), ("setspace", "doublespacing", "rt@doublespacing"), ("setspace", "singlespacing", "rt@singlespacing"),
+    ("braket", "set", "rt@set"), ("braket", "Set", "rt@Set"), ("braket", "Braket", "rt@Braket"),
+    ("nicefrac", "nicefrac", "rt@nicefrac"), ("units", "unit", "rt@unit"), ("units", "unitfrac", "rt@unitfracv"),
+    ("gensymb", "degree", "rt@gnsdegree"), ("gensymb", "celsius", "rt@gnscelsius"), ("gensymb", "ohm", "rt@gnsohm"), ("gensymb", "micro", "rt@gnsmicro"), ("gensymb", "perthousand", "rt@gnsperthousand"),
+    ("siunitx", "si", "rt@si"), ("siunitx", "unit", "rt@si"), ("siunitx", "num", "rt@num"), ("siunitx", "SI", "rt@SI"), ("siunitx", "qty", "rt@SI"), ("siunitx", "ang", "rt@ang"), ("apacite", "cite", "rt@apacite"), ("apacite", "fullcite", "rt@apacite"), ("apacite", "shortcite", "rt@apacite"), ("apacite", "citeNP", "rt@apaciteNP"), ("apacite", "fullciteNP", "rt@apaciteNP"), ("apacite", "shortciteNP", "rt@apaciteNP"), ("apacite", "citeA", "rt@apaciteA"), ("apacite", "fullciteA", "rt@apaciteA"), ("apacite", "shortciteA", "rt@apaciteA"), ("apacite", "citeauthor", "rt@apaciteauthor"), ("apacite", "fullciteauthor", "rt@apaciteauthor"), ("apacite", "shortciteauthor", "rt@apaciteauthor"), ("apacite", "citeauthorNP", "rt@apaciteauthor"), ("apacite", "fullciteauthorA", "rt@apaciteauthor"), ("apacite", "shortciteauthorA", "rt@apaciteauthor"), ("apacite", "citeyear", "rt@apaciteyear"), ("apacite", "citeyearNP", "rt@apaciteyearNP"), ("cancel", "cancel", "rt@cancel"), ("cancel", "bcancel", "rt@bcancel"), ("cancel", "xcancel", "rt@xcancel"), ("cancel", "cancelto", "rt@cancelto"), ("siunitx", "numrange", "rt@numrange"), ("siunitx", "SIrange", "rt@SIrange"), ("siunitx", "qtyrange", "rt@SIrange"),
+    ("biblatex", "cite", "rt@blxcite"), ("biblatex", "Cite", "rt@blxcite"), ("biblatex", "parencite", "rt@parencite"), ("biblatex", "Parencite", "rt@parencite"), ("biblatex", "autocite", "rt@autocite"), ("biblatex", "Autocite", "rt@autocite"), ("biblatex", "textcite", "rt@textcite"), ("biblatex", "Textcite", "rt@textcite"), ("biblatex", "citeauthor", "rt@textcite"), ("biblatex", "Citeauthor", "rt@textcite"), ("biblatex", "citetitle", "rt@textcite"), ("biblatex", "citeyear", "rt@textcite"), ("biblatex", "nocite", "rt@blxnocite"), ("biblatex", "addbibresource", "rt@addbibresource"), ("biblatex", "printbibliography", "rt@printbibliography"),
+    ("colortbl", "rowcolors", "rt@rowcolors"), ("colortbl", "rowcolor", "rt@rowcolor"), ("colortbl", "cellcolor", "rt@cellcolor"), ("colortbl", "columncolor", "rt@columncolor"), ("colortbl", "arrayrulecolor", "rt@arrayrulecolor"),
+    ("qrcode", "qrcode", "rt@qrcode"),
+    ("geometry", "newgeometry", "rt@newgeometry"), ("geometry", "restoregeometry", "rt@restoregeometry"),
+    ("color", "pagecolor", "rt@pagecolor"), ("color", "nopagecolor", "rt@nopagecolor"), ("xcolor", "pagecolor", "rt@pagecolor"), ("xcolor", "nopagecolor", "rt@nopagecolor"),
+    ("tcolorbox", "newtcolorbox", "rt@newtcolorbox"), ("tcolorbox", "tcbset", "rt@tcbset"),
+    ("xspace", "xspace", "rt@xspace"),
+    ("ifthen", "ifthenelse", "rt@ifthenelse"), ("ifthen", "newboolean", "rt@newboolean"), ("ifthen", "provideboolean", "rt@provideboolean"), ("ifthen", "setboolean", "rt@setboolean"), ("ifthen", "boolean", "rt@ifthenword"), ("ifthen", "equal", "rt@ifthenword"), ("ifthen", "isodd", "rt@ifthenword"), ("ifthen", "NOT", "rt@ifthenword"), ("ifthen", "AND", "rt@ifthenword"), ("ifthen", "OR", "rt@ifthenword"), ("etoolbox", "preto", "rt@etbunseen"), ("etoolbox", "appto", "rt@etbunseen"), ("etoolbox", "gpreto", "rt@etbunseen"), ("etoolbox", "gappto", "rt@etbunseen"),
+    ("placeins", "FloatBarrier", "rt@floatbarrier"),
+    ("makecell", "makecell", "rt@makecell"), ("makecell", "thead", "rt@thead"),
+    ("listings", "lstset", "rt@lstset"), ("listings", "lstinline", "rt@lstinline"), ("listings", "lstdefinestyle", "rt@lstdefinestyle"), ("listings", "lstinputlisting", "rt@lstinputlisting"),
+    ("float", "newfloat", "rt@newfloat"), ("float", "floatstyle", "rt@floatstyle"), ("float", "restylefloat", "rt@restylefloat"), ("float", "floatname", "rt@floatname"), ("float", "floatplacement", "rt@floatplacement"), ("float", "listof", "rt@listof"),
+    // algorithm.sty: `\listalgorithmname` (its float is float.sty's, `engine_algorithm`).
+    ("algorithm", "listalgorithmname", "rt@algmacro"), ("algorithm", "listofalgorithms", "rt@listofalgorithms"),
+    // algorithmicx and algpseudocode: the entities and the keyword macros the load defines
+    // (`rt@algmacro` until then), `\algtext*` and `\algnotext`.
+    ("algorithmicx", "State", "rt@algmacro"), ("algorithmicx", "Statex", "rt@algmacro"), ("algorithmicx", "Comment", "rt@algmacro"), ("algorithmicx", "algorithmiccomment", "rt@algmacro"), ("algorithmicx", "algorithmicindent", "rt@algmacro"), ("algorithmicx", "alglinenumber", "rt@algmacro"), ("algorithmicx", "algrenewcommand", "rt@algmacro"), ("algorithmicx", "algnewcommand", "rt@algmacro"), ("algorithmicx", "algrenewcomment", "rt@algmacro"), ("algorithmicx", "algtext", "rt@algtext"), ("algorithmicx", "algnotext", "rt@algnotext"),
+    ("algpseudocode", "While", "rt@algmacro"), ("algpseudocode", "EndWhile", "rt@algmacro"), ("algpseudocode", "For", "rt@algmacro"), ("algpseudocode", "ForAll", "rt@algmacro"), ("algpseudocode", "EndFor", "rt@algmacro"), ("algpseudocode", "Loop", "rt@algmacro"), ("algpseudocode", "EndLoop", "rt@algmacro"), ("algpseudocode", "Repeat", "rt@algmacro"), ("algpseudocode", "Until", "rt@algmacro"), ("algpseudocode", "If", "rt@algmacro"), ("algpseudocode", "ElsIf", "rt@algmacro"), ("algpseudocode", "Else", "rt@algmacro"), ("algpseudocode", "EndIf", "rt@algmacro"), ("algpseudocode", "Procedure", "rt@algmacro"), ("algpseudocode", "EndProcedure", "rt@algmacro"), ("algpseudocode", "Function", "rt@algmacro"), ("algpseudocode", "EndFunction", "rt@algmacro"), ("algpseudocode", "Require", "rt@algmacro"), ("algpseudocode", "Ensure", "rt@algmacro"), ("algpseudocode", "Return", "rt@algmacro"), ("algpseudocode", "textproc", "rt@algmacro"), ("algpseudocode", "algorithmicend", "rt@algmacro"), ("algpseudocode", "algorithmicdo", "rt@algmacro"), ("algpseudocode", "algorithmicwhile", "rt@algmacro"), ("algpseudocode", "algorithmicfor", "rt@algmacro"), ("algpseudocode", "algorithmicforall", "rt@algmacro"), ("algpseudocode", "algorithmicloop", "rt@algmacro"), ("algpseudocode", "algorithmicrepeat", "rt@algmacro"), ("algpseudocode", "algorithmicuntil", "rt@algmacro"), ("algpseudocode", "algorithmicprocedure", "rt@algmacro"), ("algpseudocode", "algorithmicfunction", "rt@algmacro"), ("algpseudocode", "algorithmicif", "rt@algmacro"), ("algpseudocode", "algorithmicthen", "rt@algmacro"), ("algpseudocode", "algorithmicelse", "rt@algmacro"), ("algpseudocode", "algorithmicrequire", "rt@algmacro"), ("algpseudocode", "algorithmicensure", "rt@algmacro"), ("algpseudocode", "algorithmicreturn", "rt@algmacro"), ("algpseudocode", "Call", "rt@algcall"),
+];
 
 /// After `\tag` in a source text: `*{text}` or `{text}` as the label value amsmath gives it
-/// (spaces collapsed as the tokens have them) and the bytes used, or `None` for a text the
-/// pre-scan does not read (commands, groups, math).
+/// (spaces collapsed as the tokens have them) and the bytes used. A text with commands,
+/// groups or math (kept as tokens at run time) gets a value no `\label` can have, U+FFFF
+/// then the source: a forward `\ref` to it then sends the document to the engine
+/// (`defined_once`), a backward one reads the run's tokens.
 fn tag_text(after: &str) -> Option<(String, usize)> {
     let rest = after.strip_prefix('*').unwrap_or(after);
     let body = rest.strip_prefix('{')?;
     let k = balanced(body)?;
     let raw = &body[..k];
-    if raw.contains(['\\', '{', '$', '%', '~', '#']) {
+    let used = after.len() - rest.len() + 2 + k;
+    if raw.contains(['%', '#']) {
         return None;
+    }
+    if raw.contains(['\\', '{', '$', '~']) {
+        return Some((format!("\u{ffff}{raw}"), used));
     }
     let mut text = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     if raw.starts_with(char::is_whitespace) {
@@ -162,7 +291,7 @@ fn tag_text(after: &str) -> Option<(String, usize)> {
     if raw.len() > 1 && raw.ends_with(char::is_whitespace) {
         text.push(' ');
     }
-    Some((text, after.len() - rest.len() + 2 + k))
+    Some((text, used))
 }
 
 /// `\thesection`, `\thesubsection`, ... to `level`: the heading counters joined by `.`,
@@ -182,33 +311,127 @@ fn heading_number<T: Copy + Into<i64>>(levels: &[T], level: usize, appendix: boo
     text
 }
 
-/// The counters whose `\the` a preamble may give a plain prefix: `figure`, `table`,
-/// `equation`.
-const PREFIXED: [&str; 3] = ["figure", "table", "equation"];
+/// The counters whose `\the` a document may give a text of its own: `figure`, `table`,
+/// `equation` (`own_float_the`).
+const PREFIXED: &[&str] = &["figure", "table", "equation"];
 
-/// `\renewcommand{\the<counter>}{<prefix>\arabic{<counter>}}` after the name: the prefix
-/// (letters, digits, `.`, `-`), or `None` for any other text.
-fn the_prefix<'a>(counter: &str, after: &'a str) -> Option<&'a str> {
-    let r = after.strip_prefix('}').unwrap_or(after).trim_start().strip_prefix('{')?;
-    let (prefix, r) = r.split_once("\\arabic")?;
-    r.trim_start().strip_prefix('{')?.strip_prefix(counter)?.strip_prefix("}}")?;
-    prefix.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-').then_some(prefix)
+/// The document's own counters as [`predict`] keeps them: names (and the counter each is
+/// reset within), values, `\the` texts.
+type OwnCounters<'a> = (&'a [(&'a str, Option<usize>)], &'a [i32], &'a [Option<String>]);
+
+/// `\thefigure`, `\thetable`, `\theequation` (`k` in `PREFIXED` order) at `n` as [`predict`]
+/// reads it: the document's text (`text`, read as `own_float_the` reads the macro, among the
+/// document's counters `own`: names, values, `\the` texts) or the prefix and `n`. `None`
+/// when the text cannot be read.
+/// `class`: report, then the appendix started.
+fn predicted_the(text: Option<&str>, prefix: &str, k: usize, n: i32, own: OwnCounters, sec: &[u32], class: (bool, bool)) -> Option<String> {
+    let (report, appendix) = class;
+    let Some(t) = text else { return Some(format!("{prefix}{n}")) };
+    let mut list: Vec<(&str, i32, Option<String>)> = (0..own.0.len()).map(|j| (own.0[j].0, own.1[j], own.2[j].clone())).collect();
+    list.push((PREFIXED[k], n, None));
+    let sec: Vec<i64> = sec.iter().map(|&c| i64::from(c)).collect();
+    counter::CounterEnv { own: &list, sec: &sec, report, appendix }.label(t, 0)
 }
 
-/// The preamble's prefixes of `\thefigure`, `\thetable`, `\theequation` (`S` for
-/// `S\arabic{figure}`), in `PREFIXED` order; the pre-scan refuses any other form.
-fn the_prefixes(src: &str) -> [String; 3] {
-    let pre = &src[..src.find("\\begin{document}").unwrap_or(src.len())];
-    let mut out: [String; 3] = Default::default();
-    for (k, c) in PREFIXED.iter().enumerate() {
-        let name = format!("\\the{c}");
-        for (at, _) in pre.match_indices(&name) {
-            if let Some(p) = the_prefix(c, &pre[at + name.len()..]) {
-                out[k] = p.to_string();
+/// `{text}` after `\renewcommand{\the<counter>}` (`counter` in `PREFIXED`): the bytes to the
+/// text's closing brace when `counter::CounterEnv::label` may read the text: letters,
+/// digits, ` .-:/()`, `\the<heading>`, and `\arabic`, `\roman`, `\Roman`, `\alph`, `\Alph`
+/// of a heading or of the counter (`own_float_the`). `None` for any other text.
+fn the_text_len(counter: &str, after: &str) -> Option<usize> {
+    let a = after.strip_prefix('}').unwrap_or(after).trim_start();
+    let body = a.strip_prefix('{')?;
+    let mut r = body;
+    let headings = ["chapter", "section", "subsection", "subsubsection"];
+    loop {
+        let c = r.chars().next()?;
+        if c == '}' {
+            return Some(after.len() - r.len() + 1);
+        }
+        if c == '\\' {
+            let word = r[1..].bytes().take_while(u8::is_ascii_alphabetic).count();
+            let name = &r[1..1 + word];
+            r = r[1 + word..].trim_start_matches(' ');
+            if matches!(name, "arabic" | "roman" | "Roman" | "alph" | "Alph") {
+                let (arg, rest) = r.strip_prefix('{')?.split_once('}')?;
+                if arg != counter && !headings.contains(&arg) {
+                    return None;
+                }
+                r = rest;
+            } else if !name.strip_prefix("the").is_some_and(|h| headings.contains(&h)) {
+                return None;
             }
+        } else if c.is_ascii_alphanumeric() || " .-:/()".contains(c) {
+            r = &r[1..];
+        } else {
+            return None;
         }
     }
-    out
+}
+
+/// Whether pdfLaTeX's kernel, the standard classes or a package the native job loads has
+/// the `@` name `name` (`assets/tables/kernel-at.txt`, `scripts/gen_kernel_at.py`: LuaTeX's
+/// hash after each, and every `@` name of their sources), or a family of names it builds
+/// with `\csname` (`fst@` for `\fst@algorithm`, `l@` for `\l@subsubsubsection`).
+fn kernel_at(name: &str) -> bool {
+    static LIST: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    let list = LIST.get_or_init(|| include_str!("../../assets/tables/kernel-at.txt").lines().collect());
+    let has = |n: &str| list.binary_search(&n).is_ok();
+    has(name) || name.match_indices('@').any(|(k, _)| k + 1 < name.len() && name[..k].bytes().any(|c| c.is_ascii_alphabetic()) && has(&name[..=k]))
+}
+
+/// A document's own `@` macro: a name with `@` that no table, list or [`kernel_at`] source
+/// has, so that defining it changes nothing the classes and packages read.
+fn fresh_at(name: &str) -> bool {
+    name.contains('@') && !name.starts_with("rt@") && scan_list(name) == 0 && table_names(name) == 0 && !kernel_at(name)
+}
+
+/// The length of the command name at the start of `r` (after its backslash): its letters,
+/// or letters and `@` when that whole name is the document's own (`fresh_at`).
+fn own_at_len(r: &str) -> usize {
+    let n = r.bytes().take_while(u8::is_ascii_alphabetic).count();
+    let m = r.bytes().take_while(|c| c.is_ascii_alphabetic() || *c == b'@').count();
+    if m > n && fresh_at(&r[..m]) { m } else { n }
+}
+
+/// The middle of a caption's predicted anchor, `figure<within>.N` (`float_href`): with
+/// `\counterwithin` the heading's number, else report's `\theHchapter`.
+fn float_h_within(within: Option<usize>, sec: &[u32], report: bool, appendix: bool) -> String {
+    match within {
+        Some(l) if !appendix => format!(".{}", heading_number(sec, l, false)),
+        _ if report => format!(".{}", hyperref::the_h_top(sec[0], appendix)),
+        _ => String::new(),
+    }
+}
+
+/// The last `\setcounter{secnumdepth}{n}` before byte `at` of `src`, the preamble's or the
+/// body's (`set_counter`: global, read by the next heading's `\@sect`; `Doc::secnum`), not
+/// one after a `%` on its line. A value the class lacks stops the native job.
+fn secnum_at(src: &str, at: usize) -> Option<usize> {
+    let pre = &src[..at];
+    let (k, n) = pre.rmatch_indices("\\setcounter{secnumdepth}{").find(|&(k, _)| !pre[pre[..k].rfind('\n').map_or(0, |l| l + 1)..k].contains('%'))?;
+    pre[k + n.len()..].split_once('}')?.0.trim().parse::<usize>().ok()
+}
+
+/// The enumerate counters whose `\the` [`predict`] follows (`counter::enum_current_label`).
+const ENUM_THE: [&str; 4] = ["enumi", "enumii", "enumiii", "enumiv"];
+
+/// `{\the<name>}{text}` after `\renewcommand` or `\renewcommand*` (the braces around the
+/// name optional): the counter's name and, when its braces balance, the text.
+fn renewed_the(after: &str) -> Option<(&str, Option<&str>)> {
+    let a = after.strip_prefix('*').unwrap_or(after).trim_start();
+    let a = a.strip_prefix('{').unwrap_or(a);
+    let c = a.strip_prefix("\\the")?;
+    let len = c.bytes().take_while(u8::is_ascii_alphabetic).count();
+    let rest = c[len..].trim_start();
+    let rest = rest.strip_prefix('}').unwrap_or(rest).trim_start();
+    let body = rest.strip_prefix('{').and_then(|body| {
+        let mut d = 1;
+        body.bytes().position(|x| {
+            d += i32::from(x == b'{') - i32::from(x == b'}');
+            d == 0
+        }).map(|end| &body[..end])
+    });
+    Some((&c[..len], body))
 }
 
 /// A counter's `\the` when it is numbered within a heading level: the level's number,
@@ -267,25 +490,166 @@ const ZERO_PT: [Token; 3] = [Token::char(Cat::Other, '0'), Token::char(Cat::Lett
 
 /// Names a package changes that the native job follows in its own natives once the package
 /// is loaded (`Machine::ams`): `rushtex-gen natpkg` neither blocks nor holds them.
-pub const PACKAGE_FOLLOWS: [(&str, &str); 63] = [("enumerate", "enumerate"), ("mathtools", "gathered"), ("mathtools", "endgathered"), ("mathtools", "overbrace"), ("mathtools", "underbrace"), ("calc", "addtocounter"), ("calc", "addtolength"), ("calc", "addvspace"), ("calc", "appendix"), ("calc", "caption"), ("calc", "endtitlepage"), ("calc", "enumerate"), ("calc", "eqnarray"), ("calc", "equation"), ("calc", "footnote"), ("calc", "footnotemark"), ("calc", "maketitle"), ("calc", "part"), ("calc", "refstepcounter"), ("calc", "setcounter"), ("calc", "setlength"), ("calc", "stepcounter"), ("calc", "thanks"), ("calc", "thebibliography"), ("calc", "titlepage"), ("calc", "usecounter"), ("mathtools", "endalign"), ("mathtools", "endalignat"), ("mathtools", "endflalign"), ("mathtools", "endxalignat"), ("mathtools", "endxxalignat"), ("mathtools", "nonumber"), ("mathtools", "notag"), ("enumitem", "center"), ("enumitem", "endenumerate"), ("enumitem", "enditemize"), ("enumitem", "enumerate"), ("enumitem", "flushleft"), ("enumitem", "flushright"), ("enumitem", "itemize"), ("enumitem", "description"), ("enumitem", "enddescription"), ("enumitem", "trivlist"), ("float", "caption"), ("amsmath", "smash"), ("amsmath", "bmod"), ("amsmath", "pmod"), ("amsmath", ";"), ("amsmath", "!"), ("amsmath", "negthinspace"), ("amsmath", ":"), ("amsmath", "medspace"), ("amsmath", "negmedspace"), ("amsmath", "negthickspace"), ("amsmath", "thickspace"), ("amsmath", "dots"), ("amsmath", "ldots"), ("amsmath", "equation"), ("amsmath", "endequation"), ("amsmath", "["), ("amsmath", "]"), ("amsmath", ","), ("amsmath", "thinspace")];
+pub const PACKAGE_FOLLOWS: &[(&str, &str)] = &[
+    ("enumerate", "enumerate"),
+    ("mathtools", "gathered"),
+    ("mathtools", "endgathered"),
+    ("mathtools", "overbrace"),
+    ("mathtools", "underbrace"),
+    ("calc", "addtocounter"),
+    ("calc", "addtolength"),
+    ("calc", "addvspace"),
+    ("calc", "appendix"),
+    ("calc", "caption"),
+    ("calc", "endtitlepage"),
+    ("calc", "enumerate"),
+    ("calc", "eqnarray"),
+    ("calc", "equation"),
+    ("calc", "footnote"),
+    ("calc", "footnotemark"),
+    ("calc", "maketitle"),
+    ("calc", "part"),
+    ("calc", "refstepcounter"),
+    ("calc", "setcounter"),
+    ("calc", "setlength"),
+    ("calc", "stepcounter"),
+    ("calc", "thanks"),
+    ("calc", "thebibliography"),
+    ("calc", "titlepage"),
+    ("calc", "usecounter"),
+    ("mathtools", "endalign"),
+    ("mathtools", "endalignat"),
+    ("mathtools", "endflalign"),
+    ("mathtools", "endxalignat"),
+    ("mathtools", "endxxalignat"),
+    ("mathtools", "nonumber"),
+    ("mathtools", "notag"),
+    ("enumitem", "center"),
+    ("enumitem", "endenumerate"),
+    ("enumitem", "enditemize"),
+    ("enumitem", "enumerate"),
+    ("enumitem", "flushleft"),
+    ("enumitem", "flushright"),
+    ("enumitem", "itemize"),
+    ("enumitem", "description"),
+    ("enumitem", "enddescription"),
+    ("enumitem", "trivlist"),
+    ("float", "caption"),
+    ("amsmath", "smash"),
+    ("amsmath", "bmod"),
+    ("amsmath", "pmod"),
+    ("amsmath", ";"),
+    ("amsmath", "!"),
+    ("amsmath", "negthinspace"),
+    ("amsmath", ":"),
+    ("amsmath", "medspace"),
+    ("amsmath", "negmedspace"),
+    ("amsmath", "negthickspace"),
+    ("amsmath", "thickspace"),
+    ("amsmath", "dots"),
+    ("amsmath", "ldots"),
+    ("amsmath", "equation"),
+    ("amsmath", "endequation"),
+    ("amsmath", "["),
+    ("amsmath", "]"),
+    ("amsmath", ","),
+    ("amsmath", "thinspace"),
+];
 
 /// `\paperwidth` and `\paperheight` of each of `data_class::PAPERS`, as article's
 /// options set them (`8.5in`, `210mm`, …), in sp.
 pub(super) const PAPER_SIZES: [[i32; 2]; 6] = [[40258437, 52099153], [40258437, 66308014], [34338078, 49731010], [39158276, 55380990], [27597261, 39158276], [32818364, 46616995]];
+/// The same under the KOMA-Script classes: typearea's `\ISO@PaperNameToSize` computes the ISO
+/// sizes from A0 (`841mm` by `1189mm`) by halving, a few sp from article's (`a4` is 210mm+4sp by
+/// 297mm+6sp); letter, legal and executive are article's (measured on pdfLaTeX).
+pub(super) const KOMA_PAPER_SIZES: [[i32; 2]; 6] = [[40258437, 52099153], [40258437, 66308014], [34338078, 49731010], [39158280, 55380996], [27597264, 39158280], [32818368, 46617000]];
 
 /// `\pdfpagewidth` (`\pdfpageheight` follows it).
 pub const PDF_PAGE_WIDTH: u32 = 23;
 
 /// Packages after which `\begin{document}` sets the PDF page to the paper size: those that
 /// load pdftex.def (mathtools loads graphicx in its `\AtBeginDocument`).
-pub const PAGE_SIZE_PACKAGES: [&str; 5] = ["graphicx", "color", "xcolor", "hyperref", "mathtools"];
+pub const PAGE_SIZE_PACKAGES: &[&str] = &["graphicx", "color", "xcolor", "hyperref", "mathtools"];
 
 /// Packages the native job runs as Rust alone, with no evaluated table: their commands
 /// are [`PACKAGE_NATIVES`]. graphicx (with keyval, graphics, trig and pdftex.def).
 /// amsthm (`\theoremstyle`, `\newtheorem*`, `proof`, `\qed`) is lowered the same way.
 /// setspace.sty's environments the native job runs (not `singlespace*`).
-const SETSPACE_ENVS: [&str; 4] = ["spacing", "onehalfspace", "doublespace", "singlespace"];
-const DRIVER_PACKAGES: [&str; 22] = ["graphicx", "amsthm", "booktabs", "multirow", "array", "tabularx", "geometry", "color", "xcolor", "url", "hyperref", "fancyhdr", "microtype", "siunitx", "parskip", "natbib", "longtable", "setspace", "multicol", "titlesec", "biblatex", "colortbl"];
+const SETSPACE_ENVS: &[&str] = &["spacing", "onehalfspace", "doublespace", "singlespace"];
+const DRIVER_PACKAGES: &[&str] = &[
+    "graphicx",
+    "amsthm",
+    "booktabs",
+    "multirow",
+    "array",
+    "tabularx",
+    "geometry",
+    "color",
+    "xcolor",
+    "url",
+    "hyperref",
+    "fancyhdr",
+    "microtype",
+    "siunitx",
+    "parskip",
+    "natbib",
+    "longtable",
+    "setspace",
+    "multicol",
+    "titlesec",
+    "biblatex",
+    "colortbl",
+    "footmisc",
+    "authblk",
+    "qrcode",
+    "helvet",
+    "courier",
+    "caption",
+    "subcaption",
+    "capt-of",
+    "subfig",
+    "times",
+    "palatino",
+    "lastpage",
+    "pagecolor",
+    "tcolorbox",
+    "threeparttable",
+    "listings",
+    "xspace",
+    "indentfirst",
+    "chngcntr",
+    "lipsum",
+    "comment",
+    "verbatim",
+    "cite",
+    "placeins",
+    "fullpage",
+    "xurl",
+    "makecell",
+    "cleveref",
+    // etoolbox.sty defines macros and changes nothing a page shows; its commands are
+    // unknown names to the pre-scan until ported.
+    "etoolbox",
+    "csquotes",
+    // nth.sty (2002/02/27): `\nth` (`nth`), `super` its `\nthscript` `\textsuperscript`.
+    "nth",
+    "algorithm",
+    "algorithmicx",
+    "algpseudocode",
+];
+
+/// footmisc.sty (2026) options the native job takes, in a document with no footnote and no
+/// float (the pre-scan stops at both): `bottom` keeps `\@outputbox@removebskip` and
+/// `\@outputbox@reinsertbskip` (`\FN@fixskiptrue`) and plugs `floats-space-footnotes` into
+/// `build/column/outputbox`, which with `\footins` void and `\@botlist` empty appends what
+/// the kernel's `footnotes-floats-legacy` does: `\@outputbox@reinsertbskip` alone. The
+/// others change only footnotes (`\thefootnote`, `\@makefntext`, `\footnoterule`,
+/// `\skip\footins`). Without a placement option `\FN@fixskipfalse` lets both macros to
+/// `\relax`, which changes pages ending in stretchable glue: not native.
+fn footmisc_options_ok(opts: &str) -> bool {
+    let mut o = opts.split(',').map(str::trim).filter(|o| !o.is_empty()).peekable();
+    o.peek().is_some() && opts.split(',').any(|o| o.trim() == "bottom") && o.all(|o| matches!(o, "bottom" | "hang" | "symbol" | "symbol*" | "flushmargin" | "marginal" | "norule" | "multiple" | "stable"))
+}
 /// booktabs' registers in the order `booktabs.sty` allocates them (`\newdimen`, `\newcount`).
 const BT_REGS: [(&str, Region); 17] = [("heavyrulewidth", Region::Dimen), ("lightrulewidth", Region::Dimen), ("cmidrulewidth", Region::Dimen), ("belowrulesep", Region::Dimen), ("belowbottomsep", Region::Dimen), ("aboverulesep", Region::Dimen), ("abovetopsep", Region::Dimen), ("cmidrulesep", Region::Dimen), ("cmidrulekern", Region::Dimen), ("defaultaddspace", Region::Dimen), ("@cmidla", Region::Int), ("@cmidlb", Region::Int), ("@aboverulesep", Region::Dimen), ("@belowrulesep", Region::Dimen), ("@thisruleclass", Region::Int), ("@lastruleclass", Region::Int), ("@thisrulewidth", Region::Dimen)];
 /// The first hidden register of [`BT_REGS`] (the `k`th at `BT_BASE + k` in its region).
@@ -321,13 +685,29 @@ const T1_ACCENT_CMD: &[u8; 11] = b"`'^~\"Hrvu=.";
 /// defines only `\inputencoding`, `\DeclareInputText` and `\DeclareInputMath`, and
 /// with `utf8` (LaTeX's default input encoding) leaves the state as it was
 /// (`rushtex-gen natpkg inputenc` and `inputenc[utf8]`).
-const NO_EFFECT_PACKAGES: [&str; 1] = ["inputenc"];
+const NO_EFFECT_PACKAGES: &[&str] = &["inputenc"];
+
+/// Packages `use_package` and `load_package` take by name with code of their own, outside
+/// [`DRIVER_PACKAGES`] and the native tables: babel (`babel_load`), fontenc (`font_encoding`),
+/// makeidx (no register), memoir's emulated epigraph, scrlttr2's ragged2e.
+const NAMED_PACKAGES: &[&str] = &["babel", "fontenc", "makeidx", "epigraph", "ragged2e"];
+
+/// Every package name the native job can take (some only with given options or classes):
+/// [`DRIVER_PACKAGES`], the native tables (`data_kernel::packages`), [`NO_EFFECT_PACKAGES`]
+/// and [`NAMED_PACKAGES`], sorted. `rushtex-gen natlist` prints them with the classes;
+/// `docs/native-packages.md` must name each (a unit test checks).
+pub fn native_package_names() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = DRIVER_PACKAGES.iter().copied().chain(crate::data::data_kernel::packages().map(|p| p.0)).chain(NO_EFFECT_PACKAGES.iter().copied()).chain(NAMED_PACKAGES.iter().copied()).collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
 
 /// Package options with the same effect as none, as `rushtex-gen natpkg name[option]`
 /// finds (the state after it is the package's own): amsmath's defaults, `psamsfonts`
 /// (the same fonts in TeX Live), inputenc's `utf8`; graphicx's `pdftex` and `final` are
 /// what `graphics.cfg` and `\ExecuteOptions` choose under pdfTeX.
-const SAME_OPTIONS: [(&str, &str); 16] = [
+const SAME_OPTIONS: &[(&str, &str)] = &[
     ("xcolor", "usenames"),
     ("xcolor", "dvipsnames"),
     ("xcolor", "svgnames"),
@@ -344,6 +724,16 @@ const SAME_OPTIONS: [(&str, &str); 16] = [
     ("graphicx", "final"),
     ("graphicx", "pdftex"),
     ("inputenc", "utf8"),
+    // csquotes: `autostyle=try` is csquotes.cfg's, `true` the same for one language (with
+    // babel `\csq@reset` 1 either way, without it 0); `babel` is `autostyle`; `strict` turns
+    // warnings into errors.
+    ("csquotes", "autostyle"),
+    ("csquotes", "autostyle=true"),
+    ("csquotes", "autostyle=try"),
+    ("csquotes", "babel"),
+    ("csquotes", "babel=true"),
+    ("csquotes", "strict"),
+    ("csquotes", "strict=true"),
 ];
 
 /// `\DeclareFontSubstitution` of the encodings the native path sets (`fontdef.dtx`,
@@ -390,8 +780,16 @@ fn pass_options_args(s: &str) -> Option<(&str, &str, usize)> {
 
 /// Whether the native job writes `name` itself, so a table's macro of that name is not
 /// installed (`install`): a `DOC` native or an OT1 text symbol.
+/// Asked for every macro of the kernel table each job, so the names are sorted once a
+/// process and searched by halving (a scan of [`DOC`] compared each name with every native's).
 pub fn native_name(name: &str) -> bool {
-    DOC.iter().any(|d| d.0 == name) || TEXT_SYMBOLS.iter().any(|s| s.0 == name)
+    static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    let names = NAMES.get_or_init(|| {
+        let mut v: Vec<&'static str> = DOC.iter().map(|d| d.0).chain(TEXT_SYMBOLS.iter().map(|s| s.0)).collect();
+        v.sort_unstable();
+        v
+    });
+    names.binary_search(&name).is_ok()
 }
 
 /// amsmath's dots: `\cdots` (`\extrap@\@cdots`), `\dotsb@`, `\dotsc`, `\dotsi`, `\dotso@`, or `\dots`
@@ -413,7 +811,9 @@ enum Alphabet {
     Shape(&'static str, Option<u8>),
 }
 
-// Each native's name is its own: `doc!` finds the first.
+// Each native's name is its own: `doc!` finds the first. The pairwise check of 600-odd
+// names passes the lint's step budget; it ends.
+#[allow(long_running_const_eval)]
 const _: () = {
     let mut i = 0;
     while i < DOC_TABLE.len() {
@@ -453,7 +853,7 @@ const fn same(a: &str, b: &str) -> bool {
 /// The control sequences natives reach by name, so that a document's redefinition of one
 /// is honoured (`guarded-direct-lowering.md` §8): each is interned once, when the job
 /// starts, and named by its index here (`named!`).
-const NAMED: [&str; 167] = ["leaders", "begin", "end", "\\", "name", "lbrace", "rbrace", "openbox", "par", "cr", "crcr", "arraystretch", "omit", "span", "@empty", "relax", "char", "hbox", "long", "def", "mbox", "stepcounter", "refstepcounter", "addtocounter", "label", "footnote", "displaystyle", "textstyle", "boldsymbol", "not", "DOTSB", "mathbin", "mathrel", "DOTSI", "cdotp", "ldotp", "rbrack", "}", "rangle", "rceil", "rfloor", "rgroup", "rmoustache", "right", "bigr", "biggr", "Bigr", "Biggr", "DOTSX", "{", "left", ",", ";", "quad", "qquad", "text", "]", ")", "nonumber", "notag", "rt@operatorname", "rt@reserveda", "newcommand", "hfill", "sqrtsign", "abstractname", "refname", "@preamblecmds", "qed", "eqno", "endgroup", "nobreakspace", "kern", "penalty", "interlinepenalty", "i", "j", "proofname", "qedsymbol", "setbox", "hss", "hfil", "hskip", "lvert", "rvert", "lVert", "rVert", "today", "begingroup", "vskip", "LARGE", "large", "lineskip", "ignorespaces", "prime", "mathsurround", "insert", "noindent", "vrule", "topfraction", "bottomfraction", "textfraction", "floatpagefraction", "figurename", "tablename", "over", "above", "overwithdelims", "abovewithdelims", "scriptstyle", "scriptscriptstyle", "ht", "dp", "wd", "box", "mathchoice", "ifvmode", "indent", "fi", "nonscript", "mskip", "medmuskip", "mkern", "fam", "thinmuskip", "thickmuskip", "ifdim", "aftergroup", "else", "mathop", "limits", "vbox", "baselineskip", "lineskiplimit", "raise", "mathinner", "vcenter", "halign", "everycr", "tabskip", "noalign", "cleaders", "unhbox", "copy", "relbar", "rightarrow", "leftarrow", "smash", "mathord", "prevdepth", "thickspace", "xleaders", "rootbox", "dimen", "advance", "uproot", "leftroot", "of", "vtop", "vfill", "vss", "multirowsetup", "baselinestretch", "selectfont", "unvbox", "lower", "hrule"];
+const NAMED: &[&str] = &["leaders", "begin", "end", "\\", "name", "lbrace", "rbrace", "openbox", "par", "cr", "crcr", "arraystretch", "omit", "span", "@empty", "relax", "char", "hbox", "long", "def", "mbox", "stepcounter", "refstepcounter", "addtocounter", "label", "footnote", "displaystyle", "textstyle", "boldsymbol", "not", "DOTSB", "mathbin", "mathrel", "DOTSI", "cdotp", "ldotp", "rbrack", "}", "rangle", "rceil", "rfloor", "rgroup", "rmoustache", "right", "bigr", "biggr", "Bigr", "Biggr", "DOTSX", "{", "left", ",", ";", "quad", "qquad", "text", "]", ")", "nonumber", "notag", "rt@operatorname", "rt@reserveda", "newcommand", "hfill", "sqrtsign", "abstractname", "refname", "@preamblecmds", "qed", "eqno", "endgroup", "nobreakspace", "kern", "penalty", "interlinepenalty", "i", "j", "proofname", "qedsymbol", "setbox", "hss", "hfil", "hskip", "lvert", "rvert", "lVert", "rVert", "today", "begingroup", "vskip", "LARGE", "large", "lineskip", "ignorespaces", "prime", "mathsurround", "insert", "noindent", "vrule", "topfraction", "bottomfraction", "textfraction", "floatpagefraction", "figurename", "tablename", "over", "above", "overwithdelims", "abovewithdelims", "scriptstyle", "scriptscriptstyle", "ht", "dp", "wd", "box", "mathchoice", "ifvmode", "indent", "fi", "nonscript", "mskip", "medmuskip", "mkern", "fam", "thinmuskip", "thickmuskip", "ifdim", "aftergroup", "else", "mathop", "limits", "vbox", "baselineskip", "lineskiplimit", "raise", "mathinner", "vcenter", "halign", "everycr", "tabskip", "noalign", "cleaders", "unhbox", "copy", "relbar", "rightarrow", "leftarrow", "smash", "mathord", "prevdepth", "thickspace", "xleaders", "rootbox", "dimen", "advance", "uproot", "leftroot", "of", "vtop", "vfill", "vss", "multirowsetup", "baselinestretch", "selectfont", "unvbox", "lower", "hrule"];
 
 /// The index in [`NAMED`] of `name`.
 const fn named_index(name: &str) -> usize {
@@ -469,8 +869,39 @@ const fn named_index(name: &str) -> usize {
 
 /// The native commands, by `Meaning::Doc` index. Names starting `rt@` are the steps of a
 /// command that typesets material in between (read back from the input).
-static DOC: [(&str, Native); 573] = DOC_TABLE;
-const DOC_TABLE: [(&str, Native); 573] = [
+static DOC: [(&str, Native); DOC_LEN] = DOC_TABLE;
+/// The tables [`DOC`] is made of, in `Meaning::Doc` order: the kernel's, then each package's
+/// and class's own (`NATIVES` in its file). A new package or class adds its table here, at the
+/// end; a new native goes in its topic's table, and no count changes.
+const DOC_PARTS: &[&[(&str, Native)]] = &[KERNEL_NATIVES, natbib::NATIVES, biblatex::NATIVES, babel::NATIVES, letter::NATIVES, float::NATIVES, amsart::NATIVES, ieee::NATIVES, koma::NATIVES, memoir::NATIVES, tikz::NATIVES, qrcode::NATIVES, lastpage::NATIVES, pagelayout::NATIVES, lttr::NATIVES, a0poster::NATIVES, tcolorbox::NATIVES, screenplay::NATIVES, threeparttable::NATIVES, caption::NATIVES, listings::NATIVES, counter::NATIVES, length::NATIVES, mathextra::NATIVES, mathpkgs::NATIVES, picture::NATIVES, cancel::NATIVES, graphicx::NATIVES, layoutpkgs::NATIVES, makecell::NATIVES, cleveref::NATIVES, userdef::NATIVES, csquotes::NATIVES, algorithm::NATIVES, apacite::NATIVES];
+const DOC_LEN: usize = {
+    let (mut n, mut i) = (0, 0);
+    while i < DOC_PARTS.len() {
+        n += DOC_PARTS[i].len();
+        i += 1;
+    }
+    n
+};
+/// [`DOC_PARTS`] in one array, built when the code is compiled (`doc!` reads it then). A
+/// `const` because `doc!` reads it in constant evaluation; [`DOC`] is its one runtime copy.
+#[allow(clippy::large_const_arrays)]
+const DOC_TABLE: [(&str, Native); DOC_LEN] = {
+    let mut t: [(&str, Native); DOC_LEN] = [("", |_| {}); DOC_LEN];
+    let (mut k, mut i) = (0, 0);
+    while i < DOC_PARTS.len() {
+        let mut j = 0;
+        while j < DOC_PARTS[i].len() {
+            t[k] = DOC_PARTS[i][j];
+            k += 1;
+            j += 1;
+        }
+        i += 1;
+    }
+    t
+};
+/// The kernel's natives (latex.ltx, the standard classes, and the packages without a file
+/// of their own).
+const KERNEL_NATIVES: &[(&str, Native)] = &[
     ("rt@output", |m| m.output()),
     ("rt@outputfoot", |m| m.output_page()),
     ("section", |m| m.section(0)),
@@ -526,6 +957,9 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("textsection", |m| m.text_symbol_command("TS1", 167)),
     ("textcent", |m| m.text_symbol_command("TS1", 162)),
     ("textcopyright", |m| m.text_symbol_command("TS1", 169)),
+    // latex.ltx's `\copyright`: `\ifmmode{\nfss@text{\textcopyright}}\else\textcopyright\fi`
+    // (in a formula not native, as `\textcopyright`).
+    ("copyright", |m| m.text_symbol_command("TS1", 169)),
     ("textdegree", |m| m.text_symbol_command("TS1", 176)),
     ("textdiv", |m| m.text_symbol_command("TS1", 246)),
     ("textonehalf", |m| m.text_symbol_command("TS1", 189)),
@@ -544,7 +978,44 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("textlnot", |m| m.text_symbol_command("TS1", 172)),
     ("textminus", |m| m.ts1_checked(61, 7)),
     ("textnumero", |m| m.ts1_checked(155, 5)),
+    ("linespread", |m| m.line_spread()),
+    // latex.ltx:14530-14541 `\tc@check@symbol2`, :14611-14620 `\tc@check@symbol4`; ts1enc.def slots.
+    ("textasciiacute", |m| m.ts1_checked(180, 2)),
+    ("textasciibreve", |m| m.ts1_checked(128, 2)),
+    ("textasciicaron", |m| m.ts1_checked(129, 2)),
+    ("textasciidieresis", |m| m.ts1_checked(168, 2)),
+    ("textasciigrave", |m| m.ts1_checked(96, 2)),
+    ("textasciimacron", |m| m.ts1_checked(175, 2)),
+    ("textuparrow", |m| m.ts1_checked(94, 4)),
+    ("textdownarrow", |m| m.ts1_checked(95, 4)),
+    ("textleftarrow", |m| m.ts1_checked(24, 4)),
+    ("textrightarrow", |m| m.ts1_checked(25, 4)),
     ("textflorin", |m| m.ts1_checked(140, 6)),
+    // The LICR names of the kernel's UTF-8 table (`data_utf8`): ot1enc.def's `!`` and `?``
+    // (in T1 the `\chardef`s of `T1_ONLY_SYMBOLS` replace them), latex.ltx's TS1 defaults
+    // (`\textsterling` is T1's 191 in T1, `t1_symbol`) and `\tc@check@symbol`s.
+    ("textexclamdown", |m| m.inverted_mark('!')),
+    ("textquestiondown", |m| m.inverted_mark('?')),
+    ("textsterling", |m| m.text_symbol_command("TS1", 163)),
+    // `\DeclareRobustCommand{\pounds}{\ifmmode\mathsterling\else\textsterling\fi}` (in a
+    // formula not native, as `\textsterling`).
+    ("pounds", |m| m.text_symbol_command("TS1", 163)),
+    ("textperthousand", |m| m.text_symbol_command("TS1", 135)),
+    ("textbrokenbar", |m| m.text_symbol_command("TS1", 166)),
+    ("textordfeminine", |m| m.text_symbol_command("TS1", 170)),
+    ("textordmasculine", |m| m.text_symbol_command("TS1", 186)),
+    ("textcurrency", |m| m.ts1_checked(164, 6)),
+    ("textonesuperior", |m| m.ts1_checked(185, 9)),
+    ("texttwosuperior", |m| m.ts1_checked(178, 9)),
+    ("textthreesuperior", |m| m.ts1_checked(179, 9)),
+    // babel.sty's German quotes in T1 (`\textormath`, text only): `\glqq` `\quotedblbase`,
+    // `\grqq` `\textquotedblleft`, `\glq` `\quotesinglbase`, `\grq` `\kern\z@
+    // \textquoteleft`. Their OT1 forms (`\save@sf@q`, `\set@low@box`) are not ported
+    // (`t1_only`).
+    ("glqq", |m| m.babel_quote(18)),
+    ("grqq", |m| m.babel_quote(16)),
+    ("glq", |m| m.babel_quote(13)),
+    ("grq", |m| m.babel_quote(96)),
     ("textless", |m| m.text_symbol_command("OML", 60)),
     ("textgreater", |m| m.text_symbol_command("OML", 62)),
     ("bmod", |m| m.mod_op(BMOD)),
@@ -561,11 +1032,14 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("mathversion", |m| m.math_version(2)),
     ("rt@boldversion", |m| m.set_math_version(true)),
     ("rt@glbsettings", |m| m.glb_settings()),
+    ("rt@restglb", |m| m.restore_glb_settings()),
     ("rt@boldsymbol", |m| m.boldsymbol()),
     ("rt@bm", |m| m.bm()),
     ("rt@substack", |m| m.substack()),
-    ("rt@xrightarrow", |m| m.ext_arrow(false)),
-    ("rt@xleftarrow", |m| m.ext_arrow(true)),
+    ("rt@xrightarrow", |m| m.ext_arrow(0)),
+    ("rt@xleftarrow", |m| m.ext_arrow(1)),
+    ("rt@xleftrightarrow", |m| m.ext_arrow(2)),
+    ("rt@xmapsto", |m| m.ext_arrow(3)),
     ("overrightarrow", |m| m.over_arrow(0)),
     ("notin", |m| m.palette_relation(false)),
     ("cong", |m| m.palette_relation(true)),
@@ -601,6 +1075,7 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("rt@urlstyle", |m| m.url_style()),
     ("rt@color", |m| m.color_command()),
     ("rt@textcolor", |m| m.text_color()),
+    ("rt@tikz", |m| m.tikz_short()),
     ("rt@definecolor", |m| m.define_color()),
     ("rt@setcolor", |m| {
         let c = m.current_color();
@@ -634,28 +1109,21 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("negthickspace", |m| m.tm_space(5)),
     ("@", |m| m.space_factor_1000()),
     ("nobreakspace", |m| m.nobreak_space()),
-    ("\0~", |m| if m.ams_on() { m.ams_tie() } else { m.nobreak_space() }),
+    ("\0~", |m| (m.hooks().tie)(m)),
     ("mbox", |m| m.mbox()),
-    ("newcommand", |m| m.new_command()),
-    ("renewcommand", |m| m.new_command()),
-    ("title", |m| if m.ams_on() { m.ams_title() } else { m.store(0) }),
+    ("newcommand", |m| m.new_command(false)),
+    ("renewcommand", |m| m.new_command(true)),
+    ("title", |m| {
+        (m.hooks().title)(m);
+        m.title_macro(0);
+    }),
     ("author", |m| {
-        if m.ams_on() {
-            return m.ams_author();
-        }
-        m.store(1);
-        if let Some(doc) = m.doc.as_mut() {
-            doc.authored = true;
-        }
+        (m.hooks().author)(m);
+        m.title_macro(1);
     }),
     ("date", |m| {
-        if m.ams_on() {
-            return m.ams_keywords(true);
-        }
-        m.store(2);
-        if let Some(doc) = m.doc.as_mut() {
-            doc.dated = true;
-        }
+        (m.hooks().date)(m);
+        m.title_macro(2);
     }),
     ("begin", |m| m.begin_env()),
     ("end", |m| m.end_env()),
@@ -697,8 +1165,11 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("LARGE", |m| m.size_command(7)),
     ("huge", |m| m.size_command(8)),
     ("Huge", |m| m.size_command(9)),
-    ("maketitle", |m| if m.ams_on() { m.ams_make_title() } else { m.make_title() }),
-    ("appendix", |m| m.appendix()),
+    ("maketitle", |m| {
+        (m.hooks().make_title)(m);
+        m.title_macros_spent();
+    }),
+    ("appendix", |m| (m.hooks().appendix)(m)),
     ("rt@newpage", |m| m.new_page()),
     ("rt@tabular", |m| m.tabular_open()),
     ("today", |m| m.today()),
@@ -713,32 +1184,31 @@ const DOC_TABLE: [(&str, Native); 573] = [
         let mut arg = Vec::new();
         m.read_arg(&mut arg);
         let name: String = arg.iter().map(|t| t.chr()).collect();
-        let parskip = m.glue_param(super::engine_pack::PAR_SKIP).width;
         let em_ex = m.em_ex();
         if let Some(doc) = m.doc.as_mut() {
             doc.class_em_ex = em_ex;
             doc.book = name == "book";
             // memoir.cls: chapters and `\thesection` as report's (`2026-10-31-memoir-moderncv.md`).
             doc.memoir = name == "memoir";
-            doc.report = name == "report" || doc.book || doc.memoir;
+            // scrbook.cls: scrreprt's chapters with book's matters, `openright` and
+            // `\pagestyle{headings}` (KOMA's, `koma_headings_tokens`).
+            doc.pkg.koma.book = name == "scrbook";
+            doc.report = name == "report" || doc.book || doc.memoir || name == "scrreprt" || doc.pkg.koma.book;
+            // article.cls's `titlepage` option (`\@titlepagetrue`): the title page `\maketitle`.
+            doc.titlepage = doc.report || name == "article" && opts.split(',').any(|o| o.trim() == "titlepage");
             // book.cls: `openright` unless `openany`; `\pagestyle{headings}`.
-            doc.openright = doc.book && !opts.split(',').any(|o| o.trim() == "openany");
-            doc.headings = doc.book;
-            if name == "letter" {
-                doc.letter = Some(Box::new(letter::Letter::new(doc.class.dimen("textwidth"), parskip)));
-            }
-            doc.koma = name == "scrartcl";
+            doc.openright = (doc.book || doc.memoir || doc.pkg.koma.book) && !opts.split(',').any(|o| o.trim() == "openany");
+            doc.headings = doc.book || doc.pkg.koma.book;
+            doc.std_heads = matches!(name.as_str(), "article" | "report" | "book" | "extarticle");
+            doc.koma = name == "scrartcl" || name == "scrreprt" || doc.pkg.koma.book;
+            doc.pkg.ext = name == "extarticle";
         }
-        // amsart.cls: `\RequirePackage{amsmath}` (with `leqno`), `{amsfonts}`, and its own
-        // copy of amsthm.
-        if arg.iter().map(|t| t.chr()).eq("amsart".chars()) {
-            if let Some(doc) = m.doc.as_mut() {
-                doc.ams = Some(Box::new(amsart::Ams::new()));
-            }
-            for p in ["amsmath", "amsfonts", "amsthm"] {
-                m.load_package(p);
-            }
+        let hooks = class_hooks(&name);
+        if let Some(doc) = m.doc.as_mut() {
+            doc.hooks = hooks;
         }
+        (hooks.setup)(m, &opts);
+        m.title_macros_init();
     }),
     ("makeatletter", |m| m.e.eqtb.set_catcode(b'@', Cat::Letter, false)),
     ("makeatother", |m| m.e.eqtb.set_catcode(b'@', Cat::Other, false)),
@@ -749,6 +1219,15 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("rt@stop", |m| m.halted = true),
     ("providecommand", |m| m.provide_command()),
     ("label", |m| m.label()),
+    ("makeindex", |m| {
+        if let Some(d) = m.doc.as_mut() {
+            d.pkg.index_file = true;
+        }
+    }),
+    ("index", |m| m.index()),
+    // makeidx's `\printindex`: `\@input@{\jobname.ind}`, which reads no file (no index is
+    // made in one pass) and types only "No file".
+    ("printindex", |_| {}),
     ("ref", |m| m.reference()),
     ("rt@runinend", |m| m.run_in_end()),
     ("chapter", |m| m.chapter()),
@@ -771,17 +1250,24 @@ const DOC_TABLE: [(&str, Native); 573] = [
         let key = m.rm_key("bx/n");
         m.select_nfss(&key, size);
     }),    ("paragraph", |m| m.section(3)),
+    ("subparagraph", |m| m.section(4)),
     ("rt@verbatim", |m| m.verbatim_setup()),
     ("verb", |m| m.verb()),
     ("rt@verbopen", |m| m.verb_open(false)),
     ("rt@sverbopen", |m| m.verb_open(true)),
+    // `\verb@egroup`'s `\egroup`.
+    ("rt@verbend", |m| m.end_group(SIMPLE_GROUP)),
     ("rt@leavevmode", |m| {
         m.leave_vmode();
     }),
     ("rt@@par", |m| m.run_ops(vec![Op::Par])),
     ("pageref", |m| m.page_reference()),
-    ("tableofcontents", |m| m.table_of_contents()),
+    ("tableofcontents", |m| (m.hooks().table_of_contents)(m)),
+    ("epigraph", |m| (m.hooks().epigraph)(m)),
     ("rt@tocsec", |m| m.toc_section_skip()),
+    ("listoffigures", |m| m.list_of(LOF)),
+    ("listoftables", |m| m.list_of(LOT)),
+    ("rt@lotmarks", |m| m.list_of_marks()),
     ("rt@bfseries", |m| m.font_change(Change::Series("bx"))),
     ("rt@tocpage", |m| m.toc_page_box()),
     ("rt@afterindent", |m| {
@@ -813,6 +1299,7 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("v", |m| m.text_accent(20)),
     ("r", |m| m.text_accent(23)),
     ("c", |m| m.cedilla()),
+    ("k", |m| m.ogonek()),
     ("rt@cedilla", |m| m.cedilla_end()),
     ("AA", |m| m.ring_letter('A')),
     ("aa", |m| m.ring_letter('a')),
@@ -822,10 +1309,15 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("addtolength", |m| m.set_length(true)),
     ("setcounter", |m| m.set_counter()),
     ("pagestyle", |m| m.page_style()),
+    ("markright", |m| m.mark_command(false)),
+    ("markboth", |m| m.mark_command(true)),
     ("thispagestyle", |m| m.this_page_style()),
     ("smallskip", |m| m.skip_amount("{3pt plus1pt minus1pt}")),
     ("medskip", |m| m.skip_amount("{6pt plus2pt minus2pt}")),
     ("bigskip", |m| m.skip_amount("{12pt plus4pt minus4pt}")),
+    ("smallbreak", |m| m.skip_break("3pt", "50", "smallskip")),
+    ("medbreak", |m| m.skip_break("6pt", "100", "medskip")),
+    ("bigbreak", |m| m.skip_break("12pt", "200", "bigskip")),
     ("em", |m| m.font_declaration(Change::Em, false)),
     ("ensuremath", |m| m.ensure_math()),
     ("rule", |m| m.rule()),
@@ -854,6 +1346,11 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("rt@colorbox", |m| m.colorbox_rest()),
     ("rt@fboxsepzero", |m| m.e.eqtb.set_word(FBOXSEP, 0, false)),
     ("rt@fancyhf", |m| m.fancy_hf("")),
+    ("rt@fancypagestyle", |m| m.fancy_pagestyle()),
+    ("rt@fancypsend", |m| m.fancy_pagestyle_end()),
+    // fancyhdr defines `\nouppercase` only in `\f@nch@reset`, for the head and foot
+    // (`fancy_tokens` reads it there).
+    ("rt@nouppercase", |m| m.not_native("fancyhdr's \\nouppercase outside a head or foot")),
     ("rt@setstretch", |m| m.set_stretch()),
     ("rt@onehalfspacing", |m| m.spacing_command(false)),
     ("rt@doublespacing", |m| m.spacing_command(true)),
@@ -868,21 +1365,51 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("rt@rfoot", |m| m.fancy_slot(5)),
     ("rt@fancyclip", |m| m.fancy_clip()),
     ("cleardoublepage", |m| m.clear_double_page()),
-    ("rt@cleardouble", |m| m.clear_double_tail()),
-    ("frontmatter", |m| m.book_matter(0)),
-    ("mainmatter", |m| m.book_matter(1)),
-    ("backmatter", |m| m.book_matter(2)),
+    ("rt@cleardouble", |m| (m.hooks().clear_double_tail)(m)),
+    ("frontmatter", |m| (m.hooks().matter)(m, 0)),
+    ("mainmatter", |m| (m.hooks().matter)(m, 1)),
+    ("backmatter", |m| (m.hooks().matter)(m, 2)),
+    ("rt@normalcolor", |m| m.normal_color()),
     ("pagenumbering", |m| m.page_numbering()),
+    ("fnsymbol", |m| m.fn_symbol()),
     ("addcontentsline", |m| m.add_contents_line()),
-    ("rt@mkboth", |m| m.mkboth_upper("Contents")),
+    ("rt@mkboth", |m| {
+        let name = m.doc.as_ref().map_or("Contents", |d| d.toc_name);
+        // titlesec's `\ttl@select` holds a `\@mkboth` of the title (`\ttl@gmk`) for `\ttl@finmarks`.
+        // Under `\pagestyle{fancy}` `fancy_mkboth` already holds it (`fancy_finmarks`).
+        if let Some(d) = m.doc.as_mut().filter(|d| d.titlesec.as_ref().is_some_and(|t| t.chapter)) {
+            if !d.fancy.as_ref().is_some_and(|f| f.mkboth.is_some()) {
+                if let Some(t) = d.titlesec.as_mut() {
+                    t.held = Some(name);
+                }
+            }
+            return;
+        }
+        m.mkboth_upper(name)
+    }),
     ("rt@bibmk", |m| m.bib_marks()),
     ("rt@fancytocmk", |m| m.fancy_toc_marks()),
     ("rt@rowcolors", |m| m.row_colors()),
+    ("rt@usetikzlibrary", |m| m.use_tikz_library()),
+    ("rt@tikzset", |m| m.tikz_set()),
+    ("rt@tikzstyle", |m| m.tikz_style()),
+    ("MakeUppercase", |m| m.make_uppercase()),
+    ("uppercase", |m| m.uppercase()),
+    ("rt@affil", |m| m.authblk_entry(true)),
+    ("rt@columnbreak", |m| m.column_break()),
+    ("rt@nth", |m| m.nth()),
     ("rt@ctcr", |m| m.ct_cr()),
+    // `\rowcolor` and `\arrayrulecolor` at a row's start are read by `align_peek_native`.
+    ("rt@rowcolor", |m| m.not_native("\\rowcolor inside an entry")),
+    ("rt@cellcolor", |m| m.cell_color()),
+    ("rt@columncolor", |m| m.column_color()),
+    ("rt@arrayrulecolor", |m| m.arrayrule_color()),
     ("rt@titleformat", |m| m.title_format()),
     ("rt@titlespacing", |m| m.title_spacing()),
+    ("rt@titlelabel", |m| m.title_label()),
     ("rt@ttlsetup", |m| m.ttl_setup()),
     ("rt@ttlend", |m| m.ttl_end()),
+    ("rt@ttlchapend", |m| m.ttl_chapter_end()),
     ("rt@titlerule", |m| m.title_rule()),
     ("rt@filright", |m| m.ttl_fil(0)),
     ("rt@filleft", |m| m.ttl_fil(1)),
@@ -901,33 +1428,6 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("rt@endequation", |m| m.end_equation()),
     ("rt@normalfont", |m| m.normal_font()),
     ("rt@quotation", |m| m.list_env("quotation")),
-    // natbib (`engine_natbib.rs`).
-    ("rt@citet", |m| m.nat_cite(natbib::CITET, false)),
-    ("rt@citep", |m| m.nat_cite(natbib::CITEP, false)),
-    ("rt@natcite", |m| m.nat_cite(natbib::CITEP, true)),
-    ("rt@citealt", |m| m.nat_cite(natbib::CITEALT, false)),
-    ("rt@citealp", |m| m.nat_cite(natbib::CITEALP, false)),
-    ("rt@citeauthor", |m| m.nat_cite(natbib::CITEAUTHOR, false)),
-    // `\citefullauthor` is `\citeauthor*`.
-    ("rt@citefullauthor", |m| m.nat_cite(natbib::Cite { star: false, ..natbib::CITEAUTHOR }, false)),
-    ("rt@citeyear", |m| m.nat_cite(natbib::CITEYEAR, false)),
-    ("rt@citeyearpar", |m| m.nat_cite(natbib::CITEYEARPAR, false)),
-    ("rt@citetalias", |m| m.nat_cite(natbib::CITETALIAS, false)),
-    ("rt@citepalias", |m| m.nat_cite(natbib::CITEPALIAS, false)),
-    ("rt@citenum", |m| m.nat_citenum()),
-    ("rt@citetext", |m| m.nat_citetext()),
-    ("rt@bibpunct", |m| m.nat_bibpunct()),
-    ("rt@setcitestyle", |m| m.nat_setcitestyle()),
-    ("rt@citestyle", |m| m.nat_citestyle()),
-    ("rt@defcitealias", |m| m.nat_defcitealias()),
-    // biblatex (`engine_biblatex.rs`).
-    ("rt@blxcite", |m| m.blx_cite(biblatex::Kind::Cite)),
-    ("rt@parencite", |m| m.blx_cite(biblatex::Kind::Paren)),
-    ("rt@autocite", |m| m.blx_cite(biblatex::Kind::Auto)),
-    ("rt@textcite", |m| m.blx_cite(biblatex::Kind::Bare)),
-    ("rt@blxnocite", |m| m.blx_nocite()),
-    ("rt@addbibresource", |m| m.blx_addbibresource()),
-    ("rt@printbibliography", |m| m.blx_printbibliography()),
     // `\bibliographystyle{style}` writes `\bibstyle{style}` to the aux file only; natbib
     // reads the names off the source (`natbib::styles`).
     ("bibliographystyle", |m| {
@@ -935,6 +1435,9 @@ const DOC_TABLE: [(&str, Native); 573] = [
         m.read_arg(&mut a);
     }),
     ("cite", |m| m.cite()),
+    // latex.ltx:17786 `\nocite`: `\@bsphack`, `\immediate\write`s to the aux file, `\@esphack`;
+    // natbib.sty:750 and biblatex leave the same nodes, so one native serves all three.
+    ("nocite", |m| m.blx_nocite()),
     ("bibitem", |m| m.bibitem()),
     ("rt@bibopen", |m| m.bib_open()),
     ("rt@enumtmpl", |m| m.enum_template_open()),
@@ -954,6 +1457,9 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("rt@si", |m| m.siunitx_command(0)),
     ("rt@num", |m| m.siunitx_command(1)),
     ("rt@SI", |m| m.siunitx_command(2)),
+    ("rt@ang", |m| m.siunitx_command(3)),
+    ("rt@numrange", |m| m.siunitx_command(4)),
+    ("rt@SIrange", |m| m.siunitx_command(5)),
     ("rt@endhead", |m| m.lt_chunk_mark(false)),
     ("rt@ltend", |m| m.lt_chunk_mark(true)),
     ("rt@ltchunk", |m| m.not_native("a longtable chunk's end in an entry")),
@@ -996,8 +1502,25 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("rm", |m| m.font_declaration(Change::Default(0), true)),
     ("sf", |m| m.font_declaration(Change::Default(1), true)),
     ("tt", |m| m.font_declaration(Change::Default(2), true)),
+    ("cal", |m| m.old_math_alphabet("mathcal")),
+    ("center", |m| m.bare_center(0)),
+    ("flushleft", |m| m.bare_center(1)),
+    ("flushright", |m| m.bare_center(2)),
     ("newpage", |m| m.new_page()),
     ("clearpage", |m| m.clear_page()),
+    ("linebreak", |m| m.latex_line_break(true)),
+    ("nolinebreak", |m| m.latex_line_break(false)),
+    ("pagebreak", |m| m.page_break(true)),
+    ("nopagebreak", |m| m.page_break(false)),
+    ("newline", |m| m.new_line()),
+    ("-", |m| m.soft_hyphen()),
+    ("raggedbottom", |m| m.ragged_bottom(true)),
+    ("flushbottom", |m| m.ragged_bottom(false)),
+    ("hyphenation", |m| m.hyphenation()),
+    ("MakeLowercase", |m| m.make_lowercase()),
+    ("enlargethispage", |m| m.enlarge_this_page()),
+    // `\stretch{n}` is read by `\vspace` and `\hspace` (`glue_arg`) only.
+    ("stretch", |m| m.not_native("\\stretch outside \\vspace and \\hspace")),
     // Kernel macros of primitives alone (latex.ltx:570-607, 9432, 16407-16408, 18332-18343).
     ("rlap", |m| m.kernel_macro(true, "\\hbox to0pt{#1\\hss}")),
     ("llap", |m| m.kernel_macro(true, "\\hbox to0pt{\\hss#1}")),
@@ -1028,6 +1551,12 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("rt@floatflush", |m| m.float_flush()),
     ("rt@clearpage", |m| m.clear_page_tail()),
     ("rt@includegraphics", |m| m.include_graphics()),
+    // multirow's `\setlength\hsize{w}\@parboxrestore` in a `\multirow` of width `w`.
+    ("rt@mrwidth", |m| {
+        let (w, _) = m.scan_dimen(false);
+        m.set_dimen_named(param!("hsize"), w);
+        m.par_box_restore();
+    }),
     ("rt@eqref", |m| m.eqref()),
     ("rt@genfrac", |m| {
         let [l, r, thick, style] = std::array::from_fn(|_| {
@@ -1095,6 +1624,7 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("newtheorem", |m| m.new_theorem()),
     ("rt@thmstyle", |m| m.theorem_style()),
     ("rt@qed", |m| m.qed()),
+    ("rt@qedhere", |m| m.qed_here()),
     // amsart's `\qedsymbol` is `\textsquare`: `\begingroup \usefont{U}{msa}{m}{n}\thr@@
     // \endgroup`.
     ("rt@qedsymbol", |m| {
@@ -1172,6 +1702,8 @@ const DOC_TABLE: [(&str, Native); 573] = [
     ("rt@mathopen", |m| m.build_math_group(OPEN, 0)),
     ("rt@casesopen", |m| m.cases_open()),
     ("rt@matrixopen", |m| m.matrix_open()),
+    ("rt@matrixl", |m| m.mt_matrix_open(b'l')),
+    ("rt@matrixr", |m| m.mt_matrix_open(b'r')),
     ("rt@arstrut", |m| m.array_strut()),
     ("rt@eqtag", |m| {
         let n = m.equation_text();
@@ -1179,7 +1711,7 @@ const DOC_TABLE: [(&str, Native); 573] = [
             m.begin_group(SIMPLE_GROUP);
             m.normal_font();
             if m.colored() {
-                m.color_stack(Some(DEFAULT_COLOR));
+                m.push_default_color();
             }
             m.eqnnum_text(&n);
             m.end_group(SIMPLE_GROUP);
@@ -1218,44 +1750,6 @@ const DOC_TABLE: [(&str, Native); 573] = [
     // `\lefteqn{#1}`: `\rlap{$\displaystyle #1$}`.
     ("lefteqn", |m| m.left_eqn()),
     ("rt@mskip", |m| m.matrix_skip()),
-    // babel (`engine_babel`), installed when it loads.
-    ("rt@selectlanguage", |m| m.select_language()),
-    ("rt@foreignlanguage", |m| m.foreign_language()),
-    ("rt@foreignend", |m| m.foreign_end()),
-    ("rt@espercent", |m| m.es_percent()),
-    ("rt@esperiod", |m| m.es_period()),
-    // letter.cls (`engine_letter`).
-    ("name", |m| m.letter_field(letter::NAME)),
-    ("signature", |m| m.letter_field(letter::SIGNATURE)),
-    ("address", |m| if m.ams_on() { m.ams_address(amsart::ADDRESS) } else { m.letter_field(letter::ADDRESS) }),
-    ("location", |m| m.letter_field(letter::LOCATION)),
-    ("telephone", |m| m.letter_field(letter::TELEPHONE)),
-    ("opening", |m| m.opening()),
-    ("closing", |m| m.closing()),
-    ("rt@letter", |m| m.letter_start()),
-    ("rt@stopbreaks", |m| m.stop_breaks()),
-    ("rt@closingend", |m| m.closing_end()),
-    // Two columns (`engine_float`): article's `\twocolumn[\@maketitle]`.
-    ("rt@topnewpage", |m| m.top_new_page_open()),
-    ("rt@topnewpageend", |m| m.top_new_page_close()),
-    ("rt@notopfloats", |m| m.fl().topnum = 0),
-    // amsart.cls (`engine_amsart`).
-    ("curraddr", |m| m.ams_address(amsart::CURRADDR)),
-    ("email", |m| m.ams_address(amsart::EMAIL)),
-    ("urladdr", |m| m.ams_address(amsart::URLADDR)),
-    ("keywords", |m| m.ams_keywords(false)),
-    ("subjclass", |m| m.ams_subjclass()),
-    ("rt@amsabsitem", |m| m.ams_abstract_item()),
-    ("rt@amsabsend2", |m| m.ams_abstract_end2()),
-    ("rt@amsfn", |m| m.ams_fn_setup()),
-    ("rt@amsfnend", |m| m.ams_fn_end()),
-    ("rt@amsmark", |m| m.ams_mark(0)),
-    ("rt@amsupprep", |m| m.ams_upprep()),
-    ("rt@amsauthors", |m| m.ams_authors()),
-    ("rt@amsendauthors", |m| m.end_trivlist()),
-    ("rt@amssetabstract", |m| m.ams_set_abstract()),
-    ("rt@amstitleend", |m| m.ams_title_end()),
-    ("rt@amsbigskip", |m| m.ams_big_skip()),
 ];
 const OUTPUT: usize = doc!("rt@output");
 const OUTPUT_FOOT: usize = doc!("rt@outputfoot");
@@ -1343,6 +1837,13 @@ const P_CELL: i32 = 8;
 const MT_PROT: i32 = 9;
 /// titlesec's `\ttl@select`: `\everypar{\setbox\z@\lastbox\ttl@strut}`.
 const TTL_STRUT: i32 = 10;
+/// enumitem's `\enit@postlabel@i` `\everypar` for the unboxed `description` styles.
+const ENIT_DESC: i32 = 11;
+/// titlesec's run-in `\everypar` (`ttl_run_in`).
+const TTL_RUN_IN: i32 = 13;
+/// listings' text lines (`engine_listings`): `\lst@parshape`, `\lst@framelr`, labels'
+/// `\refstepcounter{lstnumber}`.
+const LST_LINE: i32 = 12;
 /// `\l@nohyphenation` (language.dat's third language).
 const NOHYPHENATION: i32 = 2;
 /// `\@labels`, `\@tempboxa` and `\@arstrutbox`, hidden box registers.
@@ -1386,6 +1887,10 @@ const FILL: Reg = Reg::register(Region::Glue, 32701);
 /// their names (multicol and two columns read them).
 pub(super) const COLUMNSEP: Reg = Reg::register(Region::Dimen, 32706);
 pub(super) const COLUMNSEPRULE: Reg = Reg::register(Region::Dimen, 32707);
+/// The kernel's `\paperwidth` and `\paperheight` as the class's paper option or geometry
+/// leave them, hidden registers under their names from `\begin{document}` on.
+pub(super) const PAPER_WIDTH: Reg = Reg::register(Region::Dimen, 32708);
+pub(super) const PAPER_HEIGHT: Reg = Reg::register(Region::Dimen, 32709);
 
 /// [`data_class::CLASS_REGS`] indexes.
 /// The first of the registers holding [`data_class::CLASS_DIMENS`] (dimensions, in order).
@@ -1483,6 +1988,32 @@ const REMARK: u8 = 3;
 
 type NewTheorem<'a> = (&'a str, Option<&'a str>, &'a str, Option<usize>, usize, Option<&'a str>);
 
+/// float.sty's `\newfloat{type}{placement}{ext}[within]` in source text `s` (after the
+/// name): the type, the counter it numbers within, and the length read; `None` unless the
+/// type and the extension are letters (and digits) and the placement letters of `htbpH!`.
+fn newfloat_args(s: &str) -> Option<(&str, Option<&str>, usize)> {
+    let mut r = s;
+    let mut args = [""; 3];
+    for a in &mut args {
+        let (x, rest) = r.trim_start().strip_prefix('{')?.split_once('}')?;
+        (*a, r) = (x, rest);
+    }
+    let [t, p, x] = args;
+    let ok = !t.is_empty() && t.bytes().all(|c| c.is_ascii_alphabetic()) && !p.is_empty() && p.bytes().all(|c| b"htbpH!".contains(&c)) && !x.is_empty() && x.bytes().all(|c| c.is_ascii_alphanumeric());
+    if !ok {
+        return None;
+    }
+    // `\@ifnextchar[` looks past spaces (a blank line is `\par`, no `[`).
+    let after = r.trim_start_matches([' ', '\t']).strip_prefix('\n').unwrap_or(r.trim_start_matches([' ', '\t'])).trim_start_matches([' ', '\t']);
+    match after.strip_prefix('[') {
+        Some(w) => {
+            let (w, rest) = w.split_once(']')?;
+            Some((t, Some(w), s.len() - rest.len()))
+        }
+        None => Some((t, None, s.len() - r.len())),
+    }
+}
+
 /// `\newtheorem`'s arguments in source text `s` (after the name): the environment, the
 /// shared counter's environment, the title (any balanced text), the reset level, the length
 /// read, and the counter resetting it when `[within]` is not a heading level (a theorem's,
@@ -1548,9 +2079,18 @@ impl Doc {
 enum Make {
     Mklab,
     Llap,
+    /// enumitem's `align=left` (`\enit@align@left`): `\nobreak#1\hfil`.
+    EnitLeft,
     Plain,
     /// `\descriptionlabel`: `\hspace\labelsep \normalfont\bfseries #1`.
     Description,
+    /// enumitem's unboxed `description` styles (`sameline`, `unboxed`, `nextline`, the
+    /// flag `\ifenit@nextline`): `\nobreak\descriptionlabel{#1}`, then `\enit@postlabel`
+    /// remakes `\@labels` and `\everypar` (`engine_enumitem.rs`).
+    DescUnboxed(bool),
+    /// threeparttable's `\TPTnoteLabel`: `\tnote{#1}\hfil`, `\TPToverlap` being `\relax`
+    /// after the table: `{\textsuperscript{#1}}\hfil`.
+    Tnote,
 }
 
 /// `\@itemlabel`: empty, `\labelitem<depth>`, or `\labelenum<depth>`.
@@ -1568,6 +2108,8 @@ enum Label {
     Enit(u8, u16),
     /// enumitem's `label` key in `itemize`: `Doc::enum_templates[i]`, with no counter.
     Given(u16),
+    /// algorithmicx's `\ALG@step` (`engine_algorithm`).
+    Alg,
 }
 /// color.sty's `\default@color` with pdftex.def: `\current@color` at `\begin{document}`.
 pub(super) const DEFAULT_COLOR: &str = "0 g 0 G";
@@ -1589,15 +2131,390 @@ const FOOTINS: u32 = 253;
 /// The control words a native document may use (with the macros it defines), and its
 /// environments.
 #[cfg(any(test, feature = "gen"))]
-const WORDS: [&str; 245] = ["fill", "curraddr", "email", "urladdr", "keywords", "subjclass", "chapter", "addcontentsline", "cleardoublepage", "frontmatter", "mainmatter", "backmatter", "pagenumbering", "opening", "closing", "signature", "address", "name", "location", "telephone", "newenvironment", "renewenvironment", "textmu", "textohm", "textcelsius", "texteuro", "textyen", "textonequarter", "textthreequarters", "textlnot", "textminus", "textnumero", "textflorin", "verb", "hrulefill", "dotfill", "bibliographystyle", "dimexpr", "fboxsep", "fboxrule", "rlap", "llap", "null", "nobreak", "allowbreak", "break", "sloppy", "fussy", "enspace", "hbox", "vbox", "vtop", "raise", "lower", "vskip", "vfill", "penalty", "hrule", "vrule", "unskip", "indent", "ignorespaces", "kern", "thanks", "and", "textasteriskcentered", "clearpage", "notin", "cong", "underbrace", "overbrace", "rule", "medskip", "bigskip", "smallskip", "columnwidth", "ensuremath", "em", "thispagestyle", "c", "l", "L", "AA", "aa", "textendash", "textemdash", "textquotedblleft", "textquotedblright", "textquoteleft", "textquoteright", "textcent", "textcopyright", "textdegree", "textdiv", "textonehalf", "textpm", "textregistered", "texttimes", "texttrademark", "strut", "eqno", "leqno", "buildrel", "doteq", "root", "of", "uproot", "leftroot", "overrightarrow", "overleftarrow", "boldmath", "unboldmath", "mathversion", "nonumber", "lefteqn", "vdots", "ddots", "appendix", "textbackslash", "textbar", "textbardbl", "textbraceleft", "textbraceright", "textbullet", "textdagger", "textdaggerdbl", "textparagraph", "textsection", "textperiodcentered", "textless", "textgreater", "bmod", "pmod", "negthinspace", "medspace", "negmedspace", "thickspace", "negthickspace", "smash", "phantom", "vphantom", "hphantom", 
-    "section", "subsection", "subsubsection", "emph", "textbf", "textmd", "textit", "textsl", "textsc", "textup", "textrm", "textsf", "texttt", "LaTeX", "TeX", "ldots", "dots", "textellipsis", "thinspace", "nobreakspace", "mbox", "newcommand", "renewcommand", "title", "author", "date", "begin", "end", "documentclass", "textunderscore", "footnote", "item",
-    "tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge", "maketitle", "today", "providecommand", "label", "ref", "paragraph", "pageref", "tableofcontents", "H", "u", "v", "r", "i", "j", "ss", "ae", "oe", "o", "AE", "OE", "O", "setlength", "addtolength", "setcounter", "pagestyle", "vspace", "cite", "bibitem", "sqrt", "hline", "tabularnewline", "multicolumn", "cline", "bfseries", "mdseries", "itshape", "slshape", "scshape", "upshape", "rmfamily", "sffamily", "ttfamily", "normalfont", "bf", "it", "sl", "sc", "rm", "sf", "tt", "newpage", "centering", "raggedright", "raggedleft", "hspace", "noindent", "textwidth", "textheight", "linewidth", "par", "caption",
+const WORDS: &[&str] = &[
+    "fill",
+    // article.cls's old `\cal` (`old_math_alphabet`).
+    "cal",
+    // `\flushleft` and its kin as commands at a minipage's top (`bare_center`).
+    "center",
+    "flushleft",
+    "flushright",
+    // The picture commands (`engine_picture`).
+    "unitlength",
+    "put",
+    "multiput",
+    "line",
+    "vector",
+    "thinlines",
+    "thicklines",
+    "linethickness",
+    "shortstack",
+    "dashbox",
+    "circle",
+    "oval",
+    "qbezier",
+    // mathtools' `\delimsize` in a `\DeclarePairedDelimiterX` body (`paired_delimiter_x`).
+    "delimsize",
+    "paperwidth",
+    "paperheight",
+    "listoftables",
+    "listoffigures",
+    "curraddr",
+    "email",
+    "urladdr",
+    "keywords",
+    "subjclass",
+    "chapter",
+    "addchap",
+    "subtitle",
+    "subject",
+    "publishers",
+    "addcontentsline",
+    "cleardoublepage",
+    "frontmatter",
+    "mainmatter",
+    "backmatter",
+    "pagenumbering",
+    "fnsymbol",
+    "opening",
+    "closing",
+    "setkomavar",
+    "setkomafont",
+    "addtokomafont",
+    "usekomavar",
+    "usekomafont",
+    "ps",
+    "encl",
+    "cc",
+    "signature",
+    "address",
+    "name",
+    "location",
+    "telephone",
+    "newenvironment",
+    "renewenvironment",
+    "textmu",
+    "textohm",
+    "textcelsius",
+    "texteuro",
+    "textyen",
+    "textonequarter",
+    "textthreequarters",
+    "textlnot",
+    "textminus",
+    "textnumero",
+    "linespread",
+    "counterwithin",
+    "counterwithout",
+    "textasciiacute",
+    "textasciibreve",
+    "textasciicaron",
+    "textasciidieresis",
+    "textasciigrave",
+    "textasciimacron",
+    "textuparrow",
+    "textdownarrow",
+    "textleftarrow",
+    "textrightarrow",
+    "textflorin",
+    "textexclamdown",
+    "textquestiondown",
+    "textsterling",
+    "pounds",
+    "textperthousand",
+    "textbrokenbar",
+    "textordfeminine",
+    "textordmasculine",
+    "textcurrency",
+    "textonesuperior",
+    "texttwosuperior",
+    "textthreesuperior",
+    "glqq",
+    "grqq",
+    "glq",
+    "grq",
+    "k",
+    "DH",
+    "DJ",
+    "NG",
+    "TH",
+    "dh",
+    "dj",
+    "ng",
+    "th",
+    "ij",
+    "IJ",
+    "guillemetleft",
+    "guillemetright",
+    "guillemotleft",
+    "guillemotright",
+    "guilsinglleft",
+    "guilsinglright",
+    "quotedblbase",
+    "quotesinglbase",
+    "verb",
+    "hrulefill",
+    "dotfill",
+    "bibliographystyle",
+    "dimexpr",
+    "fboxsep",
+    "fboxrule",
+    "rlap",
+    "llap",
+    "null",
+    "nobreak",
+    "allowbreak",
+    "break",
+    "settowidth",
+    "enlargethispage",
+    "parindent",
+    "parskip",
+    "baselineskip",
+    "thechapter",
+    "thesection",
+    "thesubsection",
+    "thesubsubsection",
+    "theenumi",
+    "theenumii",
+    "theenumiii",
+    "theenumiv",
+    "stretch",
+    "settoheight",
+    "settodepth",
+    "linebreak",
+    "nolinebreak",
+    "pagebreak",
+    "nopagebreak",
+    "newline",
+    "-",
+    "raggedbottom",
+    "flushbottom",
+    "hyphenation",
+    "sloppy",
+    "fussy",
+    "enspace",
+    "hbox",
+    "vbox",
+    "vtop",
+    "raise",
+    "lower",
+    "vskip",
+    "vfill",
+    "penalty",
+    "hrule",
+    "vrule",
+    "unskip",
+    "indent",
+    "ignorespaces",
+    "kern",
+    "thanks",
+    "and",
+    "textasteriskcentered",
+    "clearpage",
+    "notin",
+    "cong",
+    "underbrace",
+    "overbrace",
+    "rule",
+    "medskip",
+    "bigskip",
+    "smallskip",
+    "smallbreak",
+    "medbreak",
+    "bigbreak",
+    "columnwidth",
+    "ensuremath",
+    "em",
+    "thispagestyle",
+    "markright",
+    "markboth",
+    "c",
+    "l",
+    "L",
+    "AA",
+    "aa",
+    "textendash",
+    "textemdash",
+    "textquotedblleft",
+    "textquotedblright",
+    "textquoteleft",
+    "textquoteright",
+    "textcent",
+    "textcopyright",
+    "copyright",
+    "textdegree",
+    "textdiv",
+    "textonehalf",
+    "textpm",
+    "textregistered",
+    "texttimes",
+    "texttrademark",
+    "strut",
+    "eqno",
+    "leqno",
+    "buildrel",
+    "doteq",
+    "root",
+    "of",
+    "uproot",
+    "leftroot",
+    "overrightarrow",
+    "overleftarrow",
+    "boldmath",
+    "unboldmath",
+    "mathversion",
+    "nonumber",
+    "lefteqn",
+    "vdots",
+    "ddots",
+    "appendix",
+    "textbackslash",
+    "textbar",
+    "textbardbl",
+    "textbraceleft",
+    "textbraceright",
+    "textbullet",
+    "textdagger",
+    "textdaggerdbl",
+    "textparagraph",
+    "textsection",
+    "textperiodcentered",
+    "textless",
+    "textgreater",
+    "bmod",
+    "pmod",
+    "negthinspace",
+    "medspace",
+    "negmedspace",
+    "thickspace",
+    "negthickspace",
+    "smash",
+    "phantom",
+    "vphantom",
+    "hphantom",
+    "section",
+    "subsection",
+    "subsubsection",
+    "emph",
+    "textbf",
+    "textmd",
+    "textit",
+    "textsl",
+    "textsc",
+    "textup",
+    "textrm",
+    "textsf",
+    "texttt",
+    "LaTeX",
+    "TeX",
+    "ldots",
+    "dots",
+    "textellipsis",
+    "thinspace",
+    "nobreakspace",
+    "mbox",
+    "newcommand",
+    "renewcommand",
+    "title",
+    "author",
+    "date",
+    "begin",
+    "end",
+    "documentclass",
+    "textunderscore",
+    "footnote",
+    "item",
+    "tiny",
+    "scriptsize",
+    "footnotesize",
+    "small",
+    "normalsize",
+    "large",
+    "Large",
+    "LARGE",
+    "huge",
+    "Huge",
+    "maketitle",
+    "today",
+    "providecommand",
+    "label",
+    "ref",
+    "paragraph",
+    "subparagraph",
+    "pageref",
+    "tableofcontents",
+    "H",
+    "u",
+    "v",
+    "r",
+    "i",
+    "j",
+    "ss",
+    "ae",
+    "oe",
+    "o",
+    "AE",
+    "OE",
+    "O",
+    "setlength",
+    "addtolength",
+    "setcounter",
+    "pagestyle",
+    "vspace",
+    "cite",
+    "nocite",
+    "bibitem",
+    "sqrt",
+    "hline",
+    "tabularnewline",
+    "multicolumn",
+    "cline",
+    "bfseries",
+    "mdseries",
+    "itshape",
+    "slshape",
+    "scshape",
+    "upshape",
+    "rmfamily",
+    "sffamily",
+    "ttfamily",
+    "normalfont",
+    "bf",
+    "it",
+    "sl",
+    "sc",
+    "rm",
+    "sf",
+    "tt",
+    "newpage",
+    "centering",
+    "raggedright",
+    "raggedleft",
+    "hspace",
+    "noindent",
+    "textwidth",
+    "textheight",
+    "linewidth",
+    "par",
+    "caption",
 ];
 /// ot1enc.def's `\DeclareTextSymbol`s: in OT1 each is its `\OT1\name`, a `\chardef`, so
 /// the main loop's ligatures and kerns see it as a character.
 const TEXT_SYMBOLS: [(&str, u32); 15] = [("i", 16), ("j", 17), ("ss", 25), ("ae", 26), ("oe", 27), ("o", 28), ("AE", 29), ("OE", 30), ("O", 31), ("textendash", 123), ("textemdash", 124), ("textquotedblleft", 92), ("textquotedblright", 34), ("textquoteleft", 96), ("textquoteright", 39)];
 /// [`TEXT_SYMBOLS`] in T1 (`t1enc.def`'s `\DeclareTextSymbol`s), set by `\usepackage[T1]{fontenc}`.
 const T1_TEXT_SYMBOLS: [(&str, u32); 15] = [("i", 25), ("j", 26), ("ss", 255), ("ae", 230), ("oe", 247), ("o", 248), ("AE", 198), ("OE", 215), ("O", 216), ("textendash", 21), ("textemdash", 22), ("textquotedblleft", 16), ("textquotedblright", 17), ("textquoteleft", 96), ("textquoteright", 39)];
+/// t1enc.def's `\DeclareTextSymbol`s of characters OT1 has not (`\DH`, the guillemets, the
+/// base-line quotes, ...: in OT1 LaTeX's "unavailable in encoding" error, so the pre-scan
+/// takes them only in T1, `t1_only`) and of the three ot1enc.def makes otherwise
+/// (`\textexclamdown`, `\textquestiondown`, `\textsterling`), set as `\chardef`s by
+/// `\usepackage[T1]{fontenc}` as [`T1_TEXT_SYMBOLS`] are.
+const T1_ONLY_SYMBOLS: [(&str, u32); 21] = [("DH", 208), ("DJ", 208), ("NG", 141), ("TH", 222), ("dh", 240), ("dj", 158), ("ng", 173), ("th", 254), ("ij", 188), ("IJ", 156), ("guillemetleft", 19), ("guillemetright", 20), ("guillemotleft", 19), ("guillemotright", 20), ("guilsinglleft", 14), ("guilsinglright", 15), ("quotedblbase", 18), ("quotesinglbase", 13), ("textexclamdown", 189), ("textquestiondown", 190), ("textsterling", 191)];
+
+/// Whether `name` is a text command only T1 has among the encodings the native job sets:
+/// [`T1_ONLY_SYMBOLS`] before the three OT1 makes too, and `\k` (t1enc.def).
+fn t1_only(name: &str) -> bool {
+    matches!(name, "k" | "glqq" | "grqq" | "glq" | "grq") || T1_ONLY_SYMBOLS[..18].iter().any(|s| s.0 == name)
+}
 /// t1enc.def's `\DeclareTextComposite`s: `(accent << 8) | base`, sorted (the accent's own
 /// character, `\i` as 25), and the slot of each, side by side.
 const T1_COMPOSITE_KEYS: [u16; 111] = [
@@ -1624,17 +2541,21 @@ const T1_COMPOSITE_SLOTS: [u8; 111] = [
 /// name with an `@` (no table lists all the kernel's), goes to the engine: the native would
 /// not see the new text (GDL §8). `\baselinestretch` and the float fractions are read as
 /// macros.
-const READ_INTERNALLY: [&str; 55] = ["relbar", "chaptername", "thepart", "thesection", "thesubsection", "thesubsubsection", "theparagraph", "thesubparagraph", "theequation", "thefigure", "thetable", "thefootnote", "thempfootnote", "thepage", "theenumi", "theenumii", "theenumiii", "theenumiv", "labelitemi", "labelitemii", "labelitemiii", "labelitemiv", "labelenumi", "labelenumii", "labelenumiii", "labelenumiv", "labelitemfont", "contentsname", "listfigurename", "listtablename", "partname", "appendixname", "dbltopfraction", "dblfloatpagefraction", "tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge", "normalfont", "section", "item", "ref", "vspace", "textup", "bfseries", "textbullet", "textendash", "textasteriskcentered", "textperiodcentered"];
+const READ_INTERNALLY: &[&str] = &["relbar", "thepart", "thesection", "thesubsection", "thesubsubsection", "theparagraph", "thesubparagraph", "theequation", "thefigure", "thetable", "thempfootnote", "thepage", "labelitemfont", "partname", "dbltopfraction", "dblfloatpagefraction", "tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge", "normalfont", "section", "item", "ref", "vspace", "textup", "bfseries", "textbullet", "textendash", "textasteriskcentered", "textperiodcentered"];
 /// Commands of preamble code (`\makeatletter`, `\ifx`, `\let`, …); `\let`, `\def` and
 /// `\providecommand` define their first name, as `\newcommand` does. `\pdfgentounicode` is
 /// the primitive's assignment: the job carries the format's `\pdfglyphtounicode` pairs
 /// (`GlyphUnicode::carry`) and the writer reads the parameter (`engine_ship`).
 #[cfg(any(test, feature = "gen"))]
-const PREAMBLE: [&str; 15] = ["def", "makeatletter", "makeatother", "ifx", "else", "fi", "bgroup", "egroup", "relax", "document", "enddocument", "@preamblecmds", "@notprerr", "endinput", "pdfgentounicode"];
+const PREAMBLE: &[&str] = &["def", "makeatletter", "makeatother", "ifx", "else", "fi", "bgroup", "egroup", "relax", "document", "enddocument", "@preamblecmds", "@notprerr", "endinput", "pdfgentounicode"];
 /// amsmath's environments built on `array`, native once amsmath is loaded (its definitions
 /// replace the kernel's `cases` and `matrix`, which the native path does not take).
-const AMS_ARRAYS: [&str; 8] = ["cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "smallmatrix"];
-const ENVS: [&str; 36] = ["letter", "titlepage", "minipage", "eqnarray", "eqnarray*", "array", "align", "align*", "gather", "gather*", "multline", "multline*", "aligned", "gathered", "split", "equation*", "figure", "table", "figure*", "table*", "tabular", "document", "em", "quote", "quotation", "verse", "itemize", "enumerate", "center", "description", "verbatim", "flushleft", "flushright", "abstract", "equation", "thebibliography"];
+const AMS_ARRAYS: &[&str] = &["cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "smallmatrix", "dcases", "dcases*", "rcases", "rcases*", "drcases", "drcases*", "cases*", "matrix*", "pmatrix*", "bmatrix*", "Bmatrix*", "vmatrix*", "Vmatrix*"];
+/// mathtools' `\newcases` environments (in `AMS_ARRAYS`, native with mathtools loaded).
+const MT_CASES: &[&str] = &["dcases", "dcases*", "rcases", "rcases*", "drcases", "drcases*", "cases*"];
+/// mathtools' starred matrices (in `AMS_ARRAYS`, native with mathtools loaded).
+const MT_MATRICES: &[&str] = &["matrix*", "pmatrix*", "bmatrix*", "Bmatrix*", "vmatrix*", "Vmatrix*"];
+const ENVS: &[&str] = &["letter", "titlepage", "minipage", "eqnarray", "eqnarray*", "array", "align", "align*", "alignat", "alignat*", "flalign", "flalign*", "subequations", "gather", "gather*", "multline", "multline*", "aligned", "gathered", "split", "equation*", "figure", "table", "figure*", "table*", "tabular", "tabular*", "document", "em", "quote", "quotation", "verse", "itemize", "enumerate", "center", "description", "verbatim", "flushleft", "flushright", "abstract", "equation", "thebibliography", "picture", "centering", "raggedright", "raggedleft", "tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge", "bfseries", "mdseries", "itshape", "slshape", "scshape", "upshape", "rmfamily", "sffamily", "ttfamily"];
 
 /// `\normalsize` among `data_class::SIZE_COMMANDS`.
 const NORMALSIZE: usize = 4;
@@ -1646,10 +2567,12 @@ struct Sec {
     after: &'static str,
     size: usize,
 }
-const SECS: [Sec; 4] = [
+const SECS: [Sec; 5] = [
     Sec { before: "-3.5ex plus -1ex minus -.2ex", after: "2.3ex plus .2ex", size: 6 },
     Sec { before: "-3.25ex plus -1ex minus -.2ex", after: "1.5ex plus .2ex", size: 5 },
     Sec { before: "-3.25ex plus -1ex minus -.2ex", after: "1.5ex plus .2ex", size: NORMALSIZE },
+    Sec { before: "3.25ex plus 1ex minus .2ex", after: "-1em", size: NORMALSIZE },
+    // `\subparagraph`: as `\paragraph`, with the indent `\parindent` (`run_in`).
     Sec { before: "3.25ex plus 1ex minus .2ex", after: "-1em", size: NORMALSIZE },
 ];
 /// `secnumdepth`: levels below it are numbered (`\paragraph` is not).
@@ -1677,6 +2600,160 @@ impl Class {
     }
 }
 
+/// What a class puts in place of the kernel's commands, chosen once by `\documentclass`
+/// (`class_hooks`): a class with commands of its own gives its `HOOKS` in its file, with
+/// `..KERNEL_HOOKS` for the rest. A new class is one arm in `class_hooks` and its file.
+#[allow(unpredictable_function_pointer_comparisons)]
+#[derive(PartialEq)]
+pub(super) struct ClassHooks {
+    /// `\documentclass[options]{name}`'s own work after the kernel's: its state, its
+    /// `\RequirePackage`s.
+    pub(super) setup: fn(&mut Machine, &str),
+    pub(super) tie: Native,
+    pub(super) title: Native,
+    pub(super) author: Native,
+    pub(super) date: Native,
+    pub(super) make_title: Native,
+    pub(super) appendix: Native,
+    pub(super) table_of_contents: Native,
+    pub(super) epigraph: Native,
+    /// `\cleardoublepage`'s tail.
+    pub(super) clear_double_tail: Native,
+    /// `\frontmatter` (0), `\mainmatter` (1), `\backmatter` (2).
+    pub(super) matter: fn(&mut Machine, u8),
+    pub(super) address: Native,
+}
+
+/// The kernel's (article, report, book) commands, and every class's but its own.
+pub(super) const KERNEL_HOOKS: ClassHooks = ClassHooks {
+    setup: |_, _| {},
+    tie: |m| m.nobreak_space(),
+    title: |m| m.store(0),
+    author: |m| {
+        if m.doc.as_ref().is_some_and(|d| d.authblk.is_some()) {
+            return m.authblk_entry(false);
+        }
+        m.store(1);
+        if let Some(doc) = m.doc.as_mut() {
+            doc.authored = true;
+        }
+    },
+    date: |m| {
+        m.store(2);
+        if let Some(doc) = m.doc.as_mut() {
+            doc.dated = true;
+        }
+    },
+    make_title: |m| m.make_title(),
+    appendix: |m| m.appendix(),
+    table_of_contents: |m| m.table_of_contents(),
+    epigraph: |m| m.not_native("\\epigraph outside memoir"),
+    clear_double_tail: |m| m.clear_double_tail(),
+    matter: |m, k| m.book_matter(k),
+    address: |m| m.letter_field(letter::ADDRESS),
+};
+
+/// The hooks of class `name` (`ClassHooks`).
+fn class_hooks(name: &str) -> &'static ClassHooks {
+    match name {
+        "amsart" => &amsart::HOOKS,
+        "memoir" => &memoir::HOOKS,
+        "IEEEtran" => &ieee::HOOKS,
+        "letter" => &letter::HOOKS,
+        "scrlttr2" => &lttr::HOOKS,
+        "scrbook" => &koma::BOOK_HOOKS,
+        "a0poster" => &a0poster::HOOKS,
+        "screenplay" => &screenplay::HOOKS,
+        _ => &KERNEL_HOOKS,
+    }
+}
+
+impl Machine<'_, '_> {
+    /// The document class's hooks (`ClassHooks`).
+    fn hooks(&self) -> &'static ClassHooks {
+        self.doc.as_ref().map_or(&KERNEL_HOOKS, |d| d.hooks)
+    }
+}
+
+/// The packages' and classes' own state, each a struct with `Default` in its own file: a new
+/// package adds one field here, a package's new state goes in its struct, and neither
+/// touches `Doc`'s initializer.
+#[derive(Default, Clone, PartialEq)]
+struct Packages {
+    /// caption.sty's caption in the making and its first `\label` (`engine_caption`).
+    cap: caption::Caption,
+    /// algorithmicx's open `algorithmic` and its blocks (`engine_algorithm`).
+    alg: algorithm::Alg,
+    /// threeparttable's place (`engine_threeparttable`: 0 outside, then before, in and after
+    /// the table) and its table's width (`\TPT@hsize`).
+    tpt: u8,
+    tpt_hsize: i32,
+    /// A caption held before the table (`\TPT@docapt`) and the `\label`s gathered after it.
+    tpt_caption: Option<Vec<Token>>,
+    tpt_labels: Vec<Token>,
+    tpt_box: u32,
+    /// `\if@twocolumn` around each open `@twocolumnfalse` environment.
+    twocol_saved: Vec<bool>,
+    /// latex.ltx's `\makeindex` ran: `\index` writes to `\@indexfile` (`\@wrindex`).
+    index_file: bool,
+    koma: koma::KomaState,
+    enit: enumitem::Enit,
+    ct: colortbl::Colortbl,
+    /// qrcode.sty's codes written and the matrix being printed (`engine_qrcode`).
+    qr: Option<Box<qrcode::QrState>>,
+    /// natbib's punctuation and mode, once the package is loaded; the document's
+    /// `\bibliographystyle` names (`natbib::styles`), its aux file's `\bibstyle` lines.
+    natbib: Option<Box<natbib::Natbib>>,
+    /// hyperref's options.
+    hy: hyperref::HyperOpts,
+    /// cleveref's options and names (`engine_cleveref`), once the package is loaded.
+    cref: Option<Box<cleveref::Cleveref>>,
+    /// A tikzpicture's text while its nodes' text boxes are typeset (`engine_tikz_node`):
+    /// read again by `\rt@tikzdraw`.
+    tikz: Option<String>,
+    /// `\usetikzlibrary{positioning}` read: `of` in a placement key is its.
+    tikz_positioning: bool,
+    /// `\usetikzlibrary{arrows.meta}` read: `to` is its tip then (other code and spaces).
+    tikz_arrows_meta: bool,
+    /// The arrows library loaded (its `stealth'`).
+    tikz_arrows_lib: bool,
+    /// The preamble's `\tikzset`/`\tikzstyle` styles, in order (`tikz::tikzset_styles`).
+    tikz_styles: Vec<(String, String)>,
+    /// lastpage's markers in the lists so far (`engine_lastpage`): pages are kept while any is;
+    /// with hyperref, the links of `\pageref{LastPage}` to retarget.
+    lastpage: u32,
+    lastpage_links: Vec<usize>,
+    /// The lists' names (`userdef::OWN_NAMES`, by bit) the document defined.
+    own_names: u8,
+    /// The document's `\AtBeginDocument` code, in order (`userdef::at_begin_document`).
+    begin_hook: Vec<Token>,
+    /// `\newgeometry` and `\restoregeometry` (`engine_pagelayout`).
+    gm: pagelayout::GmState,
+    /// pdftex.def's `\current@page@color` while `\ifGPT@pagecolor` (`\pagecolor`).
+    page_color: Option<String>,
+    /// scrlttr2's variables, fonts and options (`engine_scrlttr2`).
+    lttr: Option<Box<lttr::Lttr>>,
+    /// a0poster.cls is the class (`engine_a0poster`).
+    a0poster: bool,
+    /// screenplay.cls is the class: its `\@realauthor`, `\@address`, `\@agent`.
+    screenplay: Option<Box<screenplay::Screenplay>>,
+    /// extsizes' extarticle.cls is the class (`EXT_LATER`).
+    ext: bool,
+    /// tcolorbox's `\tcbset` options, `\newtcolorbox` environments and the box being built
+    /// (`engine_tcolorbox`).
+    tcb: tcolorbox::TcbState,
+    /// listings' `\lstset` items and the listing being typeset (`engine_listings`).
+    lst: listings::LstState,
+    /// graphicx's `\graphicspath` lists and the boxes being scaled (`engine_graphicx`).
+    gx: graphicx::GxState,
+    /// xurl.sty is loaded: letters and digits are `\UrlBreaks`, `\Urlmuskip` 0mu plus 1mu.
+    xurl: bool,
+    /// setspace.sty loaded after hyperref: its `\@footnotetext` has no anchor.
+    setspace_late: bool,
+    /// nth.sty's `super`: `\nthscript` is `\textsuperscript`.
+    nth_super: bool,
+}
+
 /// A native document's own state: what LaTeX keeps in registers and macros, typed.
 // Its equality, native functions compared by address, serves only the watch session's early cutoff
 // (`engine_checkpoint::converged`): one process, so a step is never unequal to itself but
@@ -1685,6 +2762,32 @@ impl Class {
 #[derive(PartialEq, Clone)]
 pub struct Doc {
     class: Class,
+    /// `\raggedbottom` (`Some(true)`) or `\flushbottom` (`Some(false)`) since the class's.
+    bottom: Option<bool>,
+    /// The document's own counters, in the order `\newcounter` made them (`engine_counter`).
+    own_counters: Vec<counter::Counter>,
+    /// How many lengths `\newlength` made (`engine_length`), and the `\settowidth`s whose box
+    /// is being made: the length and which dimension.
+    own_lengths: u16,
+    set_to: Vec<(Reg, u8)>,
+    /// amsthm's `\QED@stack`, one entry per open `proof` (`\pushQED{\qed}`): whether its
+    /// `\qed` is still to come (`\qedhere` sets `\qed@elt{}`).
+    qed: Vec<bool>,
+    /// amsmath's `\numberwithin{equation}{chapter}` in report or book: `\theequation` is
+    /// `\thechapter.\arabic{equation}` even before the first chapter.
+    eq_chapter: bool,
+    /// amsmath's `subequations`: `\theparentequation` and `\c@parentequation`, while
+    /// `\theequation` is `\theparentequation\alph{equation}`.
+    sub_eq: Option<(String, i32)>,
+    /// hyperref's `\theHparentequation` in `subequations`: `\theHequation` is it then
+    /// `\alph{equation}`.
+    sub_eq_h: Option<String>,
+    /// The amsmath display begun (`ams_display`'s kind, kept when `\nonumber` changes that):
+    /// 1 `equation`, 2 `equation*` and `\[`, as `\@currenvir` names it.
+    display_env: u8,
+    /// amsthm's `\equation@qed` ran in this `equation` (`\qedhere`): its `\alt@tag` sets the
+    /// number and the QED symbol in a `\vtop` (`end_ams_display`).
+    eq_qed: bool,
     /// `\c@page`.
     page: i32,
     /// `\normalfont\normalsize`, for the head and foot (`\reset@font\normalsize`).
@@ -1709,6 +2812,8 @@ pub struct Doc {
     newlist: bool,
     noitemarg: bool,
     endpe: bool,
+    /// `\if@titlepage`: report and book, or article with its `titlepage` option.
+    titlepage: bool,
     /// The open lists, innermost last: what the list group holds as macros.
     lists: Vec<List>,
     /// The open `tabular`s, innermost last; the box the next one's `\@array` opens; `\cr`
@@ -1719,6 +2824,9 @@ pub struct Doc {
     /// tabular's `\halign to` (`tabular*`'s `\@halignto`).
     tx: Option<Box<tabular::Tx>>,
     tab_to: Option<i32>,
+    /// The `@{\extracolsep{x}}` texts of the tabular being opened and their glue, which
+    /// the preamble's scan sets as tabskip ([`Machine::tabular_tabskips`]).
+    tab_ecs: Vec<(crate::engine::Span, Glue)>,
     /// tabularx's `\TX@delta`: `\hfuzz` when the package was loaded.
     tx_delta: i32,
     /// array.sty's `\newcolumntype`s in `\NC@list` order: letter, arguments, replacement.
@@ -1760,6 +2868,11 @@ pub struct Doc {
     noskipsec: bool,
     /// `\@title`, `\@author`, `\@date`.
     stored: [Vec<Token>; 3],
+    /// authblk's authors and affiliations (`engine_authblk`), once it is loaded.
+    authblk: Option<Box<authblk::Authblk>>,
+    /// Which family `\familydefault` names: 0 `\rmdefault` (the kernel's), 1 `\sfdefault`,
+    /// 2 `\ttdefault` (`font_defaults`).
+    normal_fam: u8,
     /// The size the math families were last set for (`\glb@currsize`).
     math_size: &'static str,
     /// The math versions `normal` and `bold` (`\mv@normal`, `\mv@bold`): each family's NFSS
@@ -1777,8 +2890,9 @@ pub struct Doc {
     /// and `\[`, 0 outside; and `\df@label`, the key a `\label` there leaves for the end.
     ams_display: u8,
     /// amsmath's `\df@tag` from `\tag{text}` or `\tag*{text}` in the display: the text and
-    /// whether it is starred (no parentheses).
-    df_tag: Option<(String, bool)>,
+    /// whether it is starred (no parentheses); a text with commands, groups or math is
+    /// its tokens instead (the text empty), typeset through the input.
+    df_tag: Option<(String, bool, Vec<Token>)>,
     df_label: Option<Vec<Token>>,
     /// amsmath's `\big@size`, set with the math fonts.
     big_size: i32,
@@ -1796,9 +2910,13 @@ pub struct Doc {
     /// amsmath's `\numberwithin{equation}{level}`: the heading level resetting the counter
     /// and printing before it (`\theequation` is `\thesection.\arabic{equation}`).
     eq_within: Option<usize>,
+    /// `\counterwithin{figure}{level}` and `{table}` (amsmath's `\numberwithin`): the heading level
+    /// (index in `counters`) whose step resets the counter (`Machine::float_within`).
+    fig_within: [Option<u8>; 2],
     /// After `\appendix`: `\thesection` is `\@Alph\c@section`.
     appendix: bool,
-    /// The preamble's prefixes of `\thefigure`, `\thetable`, `\theequation` (`the_prefixes`).
+    /// report's `\thechapter.` before `\thefigure`, `\thetable`, `\theequation` (the class's;
+    /// a document's own text is `own_float_the`'s).
     the_prefix: [String; 3],
     sphack: Vec<(Glue, i32)>,
     /// `\c@footnote`; the footnote text between the mark and the insertion; the space
@@ -1865,6 +2983,10 @@ pub struct Doc {
     /// The indices in `contents` of the entries shown (level below 3), made at
     /// `\tableofcontents`: the `toc_next`-th shown entry is found without a scan.
     toc_shown: Vec<u32>,
+    /// The list being set: the contents (0), `\listoffigures` ([`LOF`]) or
+    /// `\listoftables` ([`LOT`]); and its name, for `\@mkboth`.
+    toc_list: usize,
+    toc_name: &'static str,
     toc_seen: usize,
     toc_pages: Vec<Option<i32>>,
     /// `\tableofcontents`'s page-number boxes, each with its entry: typeset with a digit
@@ -1896,9 +3018,6 @@ pub struct Doc {
     fancy: Option<Box<fancy::Fancy>>,
     /// titlesec's formats and spacing, once the package is loaded.
     titlesec: Option<Box<titlesec::Titlesec>>,
-    /// natbib's punctuation and mode, once the package is loaded; the document's
-    /// `\bibliographystyle` names (`natbib::styles`), its aux file's `\bibstyle` lines.
-    natbib: Option<Box<natbib::Natbib>>,
     /// biblatex's style and `autocite`, once the package is loaded.
     biblatex: Option<Box<biblatex::Biblatex>>,
     bibstyles: Vec<String>,
@@ -1913,6 +3032,12 @@ pub struct Doc {
     openright: bool,
     mainmatter: bool,
     headings: bool,
+    /// `\pagestyle{myheadings}` (article.cls, report.cls, book.cls `\ps@myheadings`): the
+    /// head of `headings` from the marks `\markright` and `\markboth` put, which the
+    /// sectioning commands do not (`\sectionmark` is `\@gobble` there).
+    my_headings: bool,
+    /// The class is article, report, book or extarticle (their `\ps@myheadings`).
+    std_heads: bool,
     marks: u32,
     /// `\pagenumbering`'s style (`book::PAGE_STYLES`); whether the page being output has
     /// the `headings` head (`HEAD_BOX`); a twoside book's section title for its mark.
@@ -1932,6 +3057,10 @@ pub struct Doc {
     geometry: Option<super::engine_geometry::Geometry>,
     /// The colour literals `\color` has set, each once ([`CURRENT_COLOR`] indexes them).
     colors: Vec<String>,
+    /// `\default@color` when the preamble set one with `\color` (`None`: [`DEFAULT_COLOR`]),
+    /// and the preamble's pushes of it, made on the main list at `\document`.
+    default_color: Option<String>,
+    preamble_colors: Vec<String>,
     /// `\definecolor`'s colours: name and literal.
     color_names: Vec<(String, String)>,
     /// url.sty's `\UrlBigBreakPenalty` and `\UrlBreakPenalty`: `\relpenalty` and
@@ -1944,8 +3073,6 @@ pub struct Doc {
     predicted_hrefs: std::sync::Arc<std::collections::HashMap<String, String>>,
     /// The link `ref_link` set up for `rt@startlink`: attributes and anchor.
     link: Option<(usize, String)>,
-    /// hyperref's options.
-    hy: hyperref::HyperOpts,
     /// The URI the next `rt@startlink` links to (`\url`, `\href`).
     uri: Option<String>,
     /// The anchor `raised_link` left for `rt@anchor`.
@@ -1957,9 +3084,6 @@ pub struct Doc {
     /// enumerate.sty's label templates (`enum_template`): the parts, `None` for
     /// `\theenum<d>`, and the style of `\theenum<d>` (`1`, `a`, `A`, `i`, `I`).
     enum_templates: Vec<(Vec<Option<Token>>, u8)>,
-    /// enumitem's `\setlist` keys: the list (0 `list`, 1 `enumerate`, 2 `itemize`, 3
-    /// `description`), the level (0 for all), the keys.
-    enit_set: Vec<(u8, u8, Vec<Token>)>,
     /// The open `\parbox`es and minipages, innermost last (`parbox`).
     pbox: Vec<parbox::Saved>,
     /// The open `\colorbox`es' frame and background colours as `rt@color` tokens.
@@ -1986,18 +3110,28 @@ pub struct Doc {
     letter: Option<Box<letter::Letter>>,
     /// The class is amsart: its front matter and page styles (`engine_amsart`).
     ams: Option<Box<amsart::Ams>>,
+    /// The class is IEEEtran: its title, headings and page heads (`engine_ieeetran`).
+    ieee: Option<Box<ieee::Ieee>>,
     /// `\documentclass{memoir}`: its page styles, `\@mkidx` and `\M@sect` (`engine_memoir`).
     memoir: bool,
+    /// memoir: `\chapterstyle` (0 `default`, 1 `section`), `\c@secnumdepth` in the main matter
+    /// (`\setsecnumdepth`, `maxsecnumdepth`; 1 by default) and the `tocdepth` the contents
+    /// are read with (`\settocdepth`'s `\changetocdepth` first in the `.toc`; 1 by default).
+    memoir_style: u8,
+    memoir_secnum: u8,
+    memoir_tocdepth: u8,
+    /// article, report, book: the preamble's `\setcounter{secnumdepth}{n}` (`None`: the
+    /// class's 3 or 2). Levels at or past it print no number (`\@sect`'s `\ifnum #2>\c@secnumdepth`).
+    secnum: Option<i8>,
     /// memoir: the em and ex of the class's font, in which memoir.cls set its heading skips
     /// (`\setbeforesecskip{-3.5ex ..}` assigns `\beforesecskip` at class load).
     class_em_ex: (i64, i64),
-    /// colortbl: each `\rowcolors{first}{odd}{even}` (`ROWCOLORS` names one), `\rownum`,
-    /// and `\CT@row@color` (the row's colour, global).
-    ct_specs: Vec<(i32, Option<String>, Option<String>)>,
-    ct_num: i32,
-    ct_row: Option<String>,
     /// The sizes `\fontsize` asked for and the shape lacked ([`SIZE_SUBST`]).
     size_asked: Vec<&'static str>,
+    /// The class's commands in place of the kernel's (`class_hooks`).
+    hooks: &'static ClassHooks,
+    /// The packages' and classes' own state (`Packages`).
+    pkg: Packages,
 }
 
 /// The text the native job runs for `src`, from after `\documentclass{article}` to
@@ -2013,7 +3147,7 @@ pub fn accepts(src: &str) -> Option<&str> {
 
 /// [`accepts`]'s scan: the body, or the first name it does not accept.
 fn scan(src: &str) -> Result<&str, &str> {
-    scan_with(src, &mut |_| false)
+    scan_with(src, &mut |_, _| false)
 }
 
 /// The mistakes LaTeX reports that the native job would typeset past: braces that do not
@@ -2035,6 +3169,7 @@ struct WellState {
     envs: Vec<Box<str>>,
     in_document: bool,
     after_cs: bool,
+    long_arg: bool,
 }
 
 /// [`well_formed`] from a watch session's mark, taking marks (`engine_prescan`), with
@@ -2052,6 +3187,9 @@ fn well_formed_from(body: &str, from: Option<(&WellState, usize)>, mut marks: Op
     const GROUP: u8 = 0;
     const ARG: u8 = 1;
     const DEF: u8 = 2;
+    // A `\long` command's argument (`\parbox`'s `\@iiiparbox`, `\@footnotetext`,
+    // `\@xmpar`): a blank line there is its `\par`.
+    const LONG: u8 = 3;
     let mut braces: Vec<u8> = Vec::new();
     // Inside a definition's name and arguments, before its braces are done.
     let mut defining = false;
@@ -2059,17 +3197,19 @@ fn well_formed_from(body: &str, from: Option<(&WellState, usize)>, mut marks: Op
     let mut in_document = false;
     // Whether the last token was a control word (or its `*` / `[...]`), so a `{` is its argument.
     let mut after_cs = false;
+    // Whether a `{` after the control word is a `\long` command's argument.
+    let mut long_arg = false;
     let mut i = 0;
     if let Some((st, at)) = from {
         i = at;
         braces.clone_from(&st.braces);
         envs = st.envs.iter().map(|s| &**s).collect();
-        (defining, in_document, after_cs) = (st.defining, st.in_document, st.after_cs);
+        (defining, in_document, after_cs, long_arg) = (st.defining, st.in_document, st.after_cs, st.long_arg);
     }
     let mut next_mark = marks.as_deref().map_or(usize::MAX, |m| m.first(i));
     while i < b.len() {
         if i >= next_mark {
-            let st = WellState { braces: braces.clone(), defining, envs: envs.iter().map(|&s| s.into()).collect(), in_document, after_cs };
+            let st = WellState { braces: braces.clone(), defining, envs: envs.iter().map(|&s| s.into()).collect(), in_document, after_cs, long_arg };
             match marks.as_deref_mut().expect("a session's marks").mark(i, reach.max(i + SCAN_REACH), st) {
                 Ok(next) => next_mark = next,
                 // The rest is the last run's, which found nothing.
@@ -2155,7 +3295,10 @@ fn well_formed_from(body: &str, from: Option<(&WellState, usize)>, mut marks: Op
                     }
                     continue;
                 }
-                after_cs = true;
+                // A delimiter's `[` (`\left[`, `\bigl[`) is the delimiter, not an optional
+                // argument: read on, `\begin{matrix}` after it too.
+                long_arg = matches!(name, "parbox" | "footnote" | "footnotetext" | "marginpar");
+                after_cs = !matches!(name, "left" | "right" | "middle" | "big" | "Big" | "bigg" | "Bigg" | "bigl" | "Bigl" | "biggl" | "Biggl" | "bigr" | "Bigr" | "biggr" | "Biggr" | "bigm" | "Bigm" | "biggm" | "Biggm");
                 if matches!(name, "newcommand" | "renewcommand" | "providecommand" | "newenvironment" | "renewenvironment" | "def" | "gdef" | "edef" | "xdef" | "long" | "DeclareRobustCommand" | "NewDocumentCommand" | "RenewDocumentCommand" | "NewDocumentEnvironment") {
                     defining = true;
                 }
@@ -2166,32 +3309,53 @@ fn well_formed_from(body: &str, from: Option<(&WellState, usize)>, mut marks: Op
                 continue;
             }
             b'*' if after_cs => i += 1,
+            // tikz's `\tikzstyle{name}=[keys]` in the preamble: the `[keys]` after `=` is read as
+            // an optional argument.
+            b'=' if after_cs && !in_document && body[i + 1..].trim_start_matches([' ', '\t']).starts_with('[') => {
+                i += 1;
+                while matches!(b.get(i), Some(b' ' | b'\t')) {
+                    i += 1;
+                }
+            }
             b'[' if after_cs => {
-                // An optional argument, read whole (braces inside it are counted).
+                // An optional argument, read whole (braces inside it are counted). A `[` with
+                // no `]` after it is text: `$d\colon X\to[0,\infty)$` is a half-open interval
+                // after a command that takes no argument, and pdfLaTeX reads it so. So is one
+                // whose `]` comes only after a `\begin` or `\end` (`$t\in [0,\theta)$` in a
+                // `cases`, a later `\xrightarrow[..]`): read as text, an optional argument
+                // holding a whole environment is checked the same.
+                let open = i;
                 let mut depth = 0i32;
                 while i < b.len() {
                     match b[i] {
                         b'{' => depth += 1,
                         b'}' => depth -= 1,
                         b']' if depth == 0 => break,
+                        b'\\' if body[i..].starts_with("\\begin{") || body[i..].starts_with("\\end{") => {
+                            i = b.len();
+                            break;
+                        }
                         b'\\' => i += 1,
                         _ => {}
                     }
                     i += 1;
                 }
                 if i >= b.len() || depth != 0 {
-                    return Err("an optional argument never closed");
+                    i = open + 1;
+                    after_cs = false;
+                    continue;
                 }
                 i += 1;
             }
             b'{' => {
-                braces.push(if defining || braces.contains(&DEF) { DEF } else if after_cs { ARG } else { GROUP });
+                braces.push(if defining || braces.contains(&DEF) { DEF } else if after_cs && long_arg { LONG } else if after_cs { ARG } else { GROUP });
                 i += 1;
                 after_cs = false;
             }
             b'}' => {
                 let Some(kind) = braces.pop() else { return Err("a } with no {") };
                 i += 1;
+                long_arg = kind == LONG;
                 // `\frac{a}{b}`: the next `{` is an argument too.
                 after_cs = true;
                 // A definition is done after its last brace (`\newenvironment{x}{a}{b}`).
@@ -2241,22 +3405,285 @@ fn well_formed_from(body: &str, from: Option<(&WellState, usize)>, mut marks: Op
     Ok(())
 }
 
+/// `RT_NATIVE_ALL` is set ([`Machine::not_native`]), read once.
+fn native_all() -> bool {
+    static ALL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ALL.get_or_init(|| std::env::var_os("RT_NATIVE_ALL").is_some())
+}
+
 /// Every name, environment, option or character [`scan`] stops at, once each, in order
-/// of first appearance: the native job's whole gap list for `src` (`--native-gaps`).
-pub fn native_blockers(src: &str) -> Vec<&str> {
-    let mut all: Vec<&str> = Vec::new();
-    let end = scan_with(src, &mut |what| {
-        if !all.contains(&what) {
-            all.push(what);
+/// of first appearance: the native job's whole gap list for `src` (`--native-gaps`). A
+/// label with a detail names it: `package options: geometry`, `a babel option: french`,
+/// `a non-ASCII character: é` (`src` holds one `char` per byte, so the detail's bytes are
+/// read back as UTF-8).
+pub fn native_blockers(src: &str) -> Vec<String> {
+    let mut all: Vec<String> = Vec::new();
+    let mut add = |what: &str, detail: &str| {
+        let label = if detail.is_empty() {
+            what.to_string()
+        } else {
+            let bytes: Vec<u8> = detail.chars().map(|c| c as u32 as u8).collect();
+            let text = String::from_utf8_lossy(&bytes);
+            // A whole script is one label: Chinese, Japanese and Korean text (a ctex or
+            // luatexja document), Cyrillic (T2A), Greek letters in text (LGR), Arabic and
+            // Hebrew, Vietnamese (T5); bytes that are not UTF-8 (a Latin-1 file) too.
+            let script = |c: char| match c as u32 {
+                0x2E80..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFFEF => Some("CJK"),
+                0x400..=0x52F => Some("Cyrillic"),
+                0x370..=0x3FF | 0x1F00..=0x1FFF => Some("Greek"),
+                0x590..=0x6FF | 0x200C..=0x200F => Some("Arabic or Hebrew"),
+                0x1EA0..=0x1EFF => Some("Vietnamese"),
+                0xFFFD => Some("bytes that are not UTF-8"),
+                _ => None,
+            };
+            let text = match text.chars().find_map(script) {
+                Some(name) => name.into(),
+                None => text,
+            };
+            let text: Vec<&str> = text.lines().map(|l| l.split('%').next().unwrap_or("")).flat_map(str::split_whitespace).collect();
+            format!("{what}: {}", text.join(" "))
+        };
+        if !label.is_empty() && !all.contains(&label) {
+            all.push(label);
         }
+    };
+    let end = scan_with(src, &mut |what, detail| {
+        add(what, detail);
         true
     });
     if let Err(what) = end {
-        if !what.is_empty() && !all.contains(&what) {
-            all.push(what);
-        }
+        add(what, "");
     }
     all
+}
+
+/// The document with each style file of its own spliced in where the preamble loads it, as
+/// LaTeX reads a package (`latex.ltx` `\@onefilewithoptions`): `\usepackage{mine}` with a
+/// `mine.sty` beside it (`read` gives its text, `None` when there is none; it is asked for
+/// every name, so a watch session looks at each) becomes `\makeatletter`, the file, and `@`'s
+/// catcode as it was before (`\@pushfilename` saves `\the\catcode`\@`, `\@popfilename`
+/// restores it). In the file `\RequirePackage` is `\usepackage` and a trailing `[date]` is
+/// dropped (it only warns of an older version); `\ProvidesPackage`, `\ProvidesFile` and
+/// `\NeedsTeXFormat` write only to the log; `\endinput` ends it after the rest of its line
+/// (tex.web §362). The pre-scan then takes or refuses the text as the document's own. `Err`
+/// says why the document runs on the engine: a class of its own, a local file named like a
+/// package the native job or the registry knows (pdfLaTeX loads the local file, which the
+/// native tables are not), options to a local file (no `\ProcessOptions` takes them), a
+/// local file loaded inside a group or before `\documentclass`.
+pub fn splice_local_styles<'a>(src: &'a str, read: &dyn Fn(&str) -> Option<String>) -> Result<std::borrow::Cow<'a, str>, String> {
+    let end = doc_start(src).unwrap_or(src.len());
+    let mut seen = Vec::new();
+    let pre = splice_styles(&src[..end], false, read, &mut seen)?;
+    if seen.is_empty() {
+        return Ok(std::borrow::Cow::Borrowed(src));
+    }
+    Ok(std::borrow::Cow::Owned(pre + &src[end..]))
+}
+
+/// [`splice_local_styles`] over `text`, the preamble (`sty` false) or a style file's text;
+/// `seen` holds the local files already spliced (LaTeX loads a package once).
+fn splice_styles(text: &str, sty: bool, read: &dyn Fn(&str) -> Option<String>, seen: &mut Vec<String>) -> Result<String, String> {
+    let b = text.as_bytes();
+    let mut out = String::new();
+    // `from`: the start of the text not yet copied to `out`.
+    let (mut i, mut from, mut depth) = (0, 0, 0usize);
+    // `@` is a letter in a package file (`\@onefilewithoptions`'s `\makeatletter`).
+    let (mut letter, mut class) = (sty, sty);
+    while i < b.len() {
+        match b[i] {
+            b'%' => i += text[i..].find('\n').unwrap_or(text.len() - i),
+            b'{' => (depth, i) = (depth + 1, i + 1),
+            b'}' => (depth, i) = (depth.saturating_sub(1), i + 1),
+            b'\\' => {
+                let n = b[i + 1..].iter().take_while(|&&c| c.is_ascii_alphabetic() || letter && c == b'@').count();
+                if n == 0 {
+                    i += 1 + text[i + 1..].chars().next().map_or(0, char::len_utf8);
+                    continue;
+                }
+                let (name, after) = (&text[i + 1..i + 1 + n], i + 1 + n);
+                match name {
+                    "makeatletter" => letter = true,
+                    "makeatother" => letter = false,
+                    "endinput" if sty => {
+                        // Not the `\endinput` itself, which would end the document's own file.
+                        let stop = text[after..].find('\n').map_or(text.len(), |k| after + k + 1);
+                        out.push_str(&text[from..i]);
+                        out.push_str(&text[after..stop]);
+                        return Ok(out);
+                    }
+                    "ProvidesPackage" | "ProvidesFile" | "NeedsTeXFormat" if sty => {
+                        let k = load_args(text, after).map_or(after, |a| a.3);
+                        out.push_str(&text[from..i]);
+                        (i, from) = (k, k);
+                        continue;
+                    }
+                    "documentclass" if !sty => {
+                        class = true;
+                        if let Some(n) = load_args(text, after).and_then(|a| a.1.split(',').map(str::trim).find(|n| local_name(n) && read(&format!("{n}.cls")).is_some())) {
+                            return Err(format!("the document's own {n}.cls"));
+                        }
+                    }
+                    "usepackage" | "RequirePackage" => {
+                        let Some((opts, names, end, date_end)) = load_args(text, after) else {
+                            i = after;
+                            continue;
+                        };
+                        let files: Vec<(&str, Option<String>)> = names.split(',').map(str::trim).filter(|n| !n.is_empty()).map(|n| (n, local_name(n).then(|| read(&format!("{n}.sty"))).flatten())).collect();
+                        if let Some(&(n, _)) = files.iter().find(|f| f.1.is_some()) {
+                            if !opts.trim().is_empty() {
+                                return Err(format!("options to the document's own {n}.sty"));
+                            }
+                            if !class || depth > 0 {
+                                return Err(format!("the document's own {n}.sty loaded inside a group or before \\documentclass"));
+                            }
+                            out.push_str(&text[from..i]);
+                            let cmd = if sty { "usepackage" } else { name };
+                            let mut k = 0;
+                            while k < files.len() {
+                                let Some(file) = &files[k].1 else {
+                                    // The packages before the next local file, loaded as they were.
+                                    let run = files[k..].iter().take_while(|f| f.1.is_none()).count();
+                                    let list: Vec<&str> = files[k..k + run].iter().map(|f| f.0).collect();
+                                    out.push_str(&format!("\\{cmd}{{{}}}", list.join(",")));
+                                    k += run;
+                                    continue;
+                                };
+                                let n = files[k].0;
+                                k += 1;
+                                if require(n, &mut Vec::new()) || crate::data::data_pkgs::pkgs().is_some_and(|t| t.file(&format!("{n}.sty")).is_some()) {
+                                    return Err(format!("the document's own {n}.sty, named like a package RushTeX knows"));
+                                }
+                                if seen.iter().any(|s| s == n) {
+                                    continue;
+                                }
+                                if seen.len() >= 32 {
+                                    return Err("too many style files of the document's own".to_string());
+                                }
+                                seen.push(n.to_string());
+                                let body = splice_styles(file, true, read, seen)?;
+                                out.push_str("\\makeatletter ");
+                                out.push_str(&body);
+                                if !body.ends_with('\n') {
+                                    out.push('\n');
+                                }
+                                out.push_str(if letter { "\\makeatletter " } else { "\\makeatother " });
+                            }
+                            (i, from) = (date_end, date_end);
+                            continue;
+                        }
+                        if sty && (name == "RequirePackage" || date_end > end) {
+                            out.push_str(&text[from..i]);
+                            out.push_str("\\usepackage");
+                            out.push_str(&text[after..end]);
+                            (i, from) = (date_end, date_end);
+                            continue;
+                        }
+                        i = end;
+                        continue;
+                    }
+                    _ => {}
+                }
+                i = after;
+            }
+            _ => i += b[i..].iter().position(|&c| matches!(c, b'%' | b'\\' | b'{' | b'}')).unwrap_or(b.len() - i),
+        }
+    }
+    out.push_str(&text[from..]);
+    Ok(out)
+}
+
+/// A file name [`splice_local_styles`] looks for beside the document: plain text, not a path
+/// from the root.
+fn local_name(n: &str) -> bool {
+    !n.is_empty() && !n.starts_with('/') && !n.contains(['%', '\\', '#', '{', '}'])
+}
+
+/// After a loading command at `at`: its `[options]`, its `{names}`, where the names end and
+/// where a trailing `[date]` ends (the names' end without one); spaces and one line end
+/// are skipped before each, as `\@ifnextchar` does.
+fn load_args(text: &str, at: usize) -> Option<(&str, &str, usize, usize)> {
+    let skip = |k: usize| {
+        let r = &text[k..];
+        let t = r.trim_start_matches([' ', '\t']);
+        let t = t.strip_prefix('\n').map_or(t, |t| t.trim_start_matches([' ', '\t']));
+        k + r.len() - t.len()
+    };
+    let mut k = skip(at);
+    let mut opts = "";
+    if text[k..].starts_with('[') {
+        let e = text[k..].find(']')?;
+        opts = &text[k + 1..k + e];
+        k = skip(k + e + 1);
+    }
+    let r = text[k..].strip_prefix('{')?;
+    let e = r.find('}')?;
+    let names = &r[..e];
+    let end = k + 1 + e + 1;
+    let d = skip(end);
+    let date_end = if text[d..].starts_with('[') { text[d..].find(']').map_or(end, |e| d + e + 1) } else { end };
+    Some((opts, names, end, date_end))
+}
+
+/// The lines natbib's BibTeX styles write after `\begin{thebibliography}{n}`.
+const NATBIB_BBL_PREAMBLE: &str = "\\providecommand{\\natexlab}[1]{#1}\n\\providecommand{\\url}[1]{\\texttt{#1}}\n\\expandafter\\ifx\\csname urlstyle\\endcsname\\relax\n  \\providecommand{\\doi}[1]{doi: #1}\\else\n  \\providecommand{\\doi}{doi: \\begingroup \\urlstyle{rm}\\Url}\\fi\n";
+
+/// `src` without the body's `comment` environments when comment.sty is loaded: each
+/// `\begin{comment}` line through its `\end{comment}` line, both alone on their lines (as
+/// comment.sty wants them), goes whole with its line ends. comment.sty reads those lines
+/// one by one and drops them (`\CommentCutFile` is not read back for an excluded
+/// environment), leaving no token: the text around reads as if the lines were not there
+/// (measured: the same page as the source without them). Anything else stays for the
+/// pre-scan to refuse. verbatim.sty's `comment` (`\@bsphack`, the lines read as
+/// `verbatim`'s with nothing kept, `\@esphack`) leaves the same text, but ends at the first
+/// line holding `\end{comment}` anywhere: that line must be it alone.
+pub fn splice_comments(src: &str) -> std::borrow::Cow<'_, str> {
+    let Some(start) = doc_start(src).filter(|&d| src[d..].contains("\\begin{comment}")) else {
+        return std::borrow::Cow::Borrowed(src);
+    };
+    // comment.sty (or verbatim.sty) loaded in the preamble (`\usepackage{..., comment, ...}`).
+    let loaded = |pkg: &str| {
+        src[..start].match_indices("\\usepackage").any(|(k, _)| {
+            !commented(src, k) && {
+                let mut r = src[k + "\\usepackage".len()..].trim_start();
+                if let Some(o) = r.strip_prefix('[') {
+                    r = o.split_once(']').map_or("", |x| x.1).trim_start();
+                }
+                r.strip_prefix('{').and_then(|r| r.split_once('}')).is_some_and(|(list, _)| list.split(',').any(|p| p.trim() == pkg))
+            }
+        })
+    };
+    let comment_sty = loaded("comment");
+    if !comment_sty && !loaded("verbatim") {
+        return std::borrow::Cow::Borrowed(src);
+    }
+    let mut out = String::with_capacity(src.len());
+    out.push_str(&src[..start]);
+    let mut lines = src[start..].split_inclusive('\n');
+    while let Some(line) = lines.next() {
+        if line.trim() != "\\begin{comment}" {
+            out.push_str(line);
+            continue;
+        }
+        let mut held = vec![line];
+        let mut closed = false;
+        for l in lines.by_ref() {
+            held.push(l);
+            // `\ProcessCommentLine` compares the line with `\end{comment}` under `\dospecials`
+            // made other: a leading space stays (only a tab is skipped), so it does not match.
+            if comment_sty && l.trim_start_matches('\t').trim_end() == "\\end{comment}" {
+                closed = true;
+                break;
+            }
+            if !comment_sty && l.contains("\\end{comment}") {
+                closed = l.trim() == "\\end{comment}";
+                break;
+            }
+        }
+        if !closed {
+            out.extend(held);
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// `src` with each body `\bibliography{..}` replaced by the text of `bbl` (`\jobname.bbl`,
@@ -2268,13 +3695,26 @@ pub fn splice_bibliography<'a>(src: &'a str, bbl: Option<&str>) -> std::borrow::
     if !src.contains("\\bibliography") {
         return std::borrow::Cow::Borrowed(src);
     }
-    let begin = src.find("\\begin{document}").unwrap_or(usize::MAX);
+    let begin = doc_start(src).unwrap_or(usize::MAX);
     let mut out = String::with_capacity(src.len() + bbl.map_or(0, str::len));
     let (mut i, mut from) = (0, 0);
     let b = src.as_bytes();
     while i < b.len() {
         match b[i] {
             b'%' => i += src[i..].find('\n').unwrap_or(src.len() - i),
+            // Verbatim text is not read as commands: a `\bibliography{x}` shown in
+            // `verbatim`, `lstlisting` or `\verb|..|` stays as typed.
+            b'\\' if src[i + 1..].starts_with("begin{verbatim}") || src[i + 1..].starts_with("begin{lstlisting}") => {
+                let end = if src[i + 7..].starts_with("verbatim") { "\\end{verbatim}" } else { "\\end{lstlisting}" };
+                i += src[i..].find(end).unwrap_or(src.len() - i);
+            }
+            b'\\' if src[i + 1..].starts_with("verb") && !b.get(i + 5).is_some_and(|c| c.is_ascii_alphabetic()) => {
+                let d = i + 5 + usize::from(b.get(i + 5) == Some(&b'*'));
+                i = match b.get(d) {
+                    Some(&c) => d + 1 + b[d + 1..].iter().position(|&x| x == c || x == b'\n').map_or(b.len() - d - 1, |k| k + 1),
+                    None => b.len(),
+                };
+            }
             b'\\' if src[i + 1..].starts_with("bibliography") => {
                 let n = 1 + "bibliography".len();
                 let style = src[i + n..].starts_with("style");
@@ -2295,15 +3735,226 @@ pub fn splice_bibliography<'a>(src: &'a str, bbl: Option<&str>) -> std::borrow::
                 // The file's last end of line and the line `\bibliography` ends give TeX two
                 // spaces where the splice gives one; both fall in vertical mode, after
                 // `\end{thebibliography}`.
-                out.push_str(bbl.map_or("", |t| t.strip_suffix('\n').unwrap_or(t)));
+                // With no `.bbl` (`\typeout{No file ...}`) or an empty one, the line still
+                // ends after `}` with its end-of-line space: an empty group keeps it a line of
+                // its own, where nothing would join it to the next as an empty line (a `\par`).
+                let text = bbl.map_or("", |t| t.strip_suffix('\n').unwrap_or(t));
+                // natbib's styles (`plainnat`, `abbrvnat`, `unsrtnat`) open the list with
+                // `\providecommand`s of `\natexlab`, `\url` and `\doi` (vertical mode, no
+                // node): left out, so a `\url` or `\doi` no package defines stays undefined
+                // and refuses, and `\natexlab` is natbib's own.
+                let text = match text.split_once(NATBIB_BBL_PREAMBLE) {
+                    Some((a, b)) if a.ends_with('\n') => std::borrow::Cow::Owned(format!("{a}{b}")),
+                    _ => std::borrow::Cow::Borrowed(text),
+                };
+                out.push_str(if text.is_empty() { "{}" } else { &text });
                 (i, from) = (end, end);
             }
             b'\\' => i += 2,
-            _ => i += 1,
+            // To the next `%` or `\` (a watch session splices at every save).
+            _ => i += b[i..].iter().position(|&c| c == b'%' || c == b'\\').unwrap_or(b.len() - i),
         }
     }
     out.push_str(&src[from..]);
     std::borrow::Cow::Owned(out)
+}
+
+/// `src` with each `\input{name}`, `\input name` and `\include{name}` replaced by the text
+/// of the file `read` finds (one `char` per byte; `read` is asked for `name.tex` first
+/// when `name` has no extension, as `\IfFileExists` asks `\file_full_name:n`), so that the
+/// pre-scan, `predict` and the job see one source, as TeX reads one token stream: no `.aux`
+/// file, one pass. The splice keeps TeX's token stream at both ends of the file:
+/// - its first line starts a line of its own (`%` and an end of line when text comes
+///   before `\input` on its line), read in state `new_line` as TeX reads a file's first line
+///   (§331: leading spaces skipped, an empty line a `\par`);
+/// - its last line ends with its own end of line (§362: a space, or nothing after a control
+///   word), and the rest of the line after `\input{name}` continues in state `mid_line` (an
+///   empty group keeps a space or the end of line after `}` a space token, where a new line
+///   would skip it or make an empty line a `\par`; `\input name` ends at a space or an end
+///   of line it consumes, §526, and the rest is read in state `skip_blanks`);
+/// - `\include{name}` (`latex.ltx`'s `\@include`) is `\clearpage`, the file, then
+///   `\clearpage\clearpage`; one left out by the preamble's `\includeonly{list}` is the first
+///   `\clearpage` alone (`\@nameuse{cp@name}` is `\relax` with no `.aux`), and
+///   `\includeonly` is taken out (it types nothing). Its `\immediate\write`s to the `.aux`
+///   files and the empty file hooks leave no node.
+/// - `\input{glyphtounicode}` in the preamble is dropped: the file is in the format already
+///   (`engine_tounicode`), and reading it again sets the same pairs.
+///
+/// What it cannot splice exactly stays in the text for the pre-scan to refuse: a file not
+/// beside the document, one with `\endinput` (TeX stops reading it at the end of that
+/// line), an `\input` inside braces (an argument or a definition, which TeX tokenizes at
+/// another time), a name with a macro or a space, an `\include` in the preamble or within an
+/// included file (`\include cannot be nested`), and verbatim text. Names `read` was asked
+/// for are those a watch session looks at.
+pub fn splice_inputs<'a>(src: &'a str, read: &mut dyn FnMut(&str) -> Option<String>) -> std::borrow::Cow<'a, str> {
+    if !src.contains("\\input") && !src.contains("\\include") {
+        return std::borrow::Cow::Borrowed(src);
+    }
+    // `\includeonly{a,b}` (preamble only): `\@for` keeps a trailing space in an item, which
+    // `\include{a}` never matches; such a list stays for the pre-scan.
+    let mut only: Option<Vec<String>> = None;
+    let mut cut = None;
+    if let Some(k) = src.find("\\includeonly{").filter(|&k| doc_start(src).is_some_and(|d| k < d) && !src[..k].rsplit('\n').next().is_some_and(|l| l.contains('%'))) {
+        let rest = &src[k + "\\includeonly{".len()..];
+        if let Some(close) = rest.find('}') {
+            let list: Vec<&str> = rest[..close].split(',').map(|n| n.trim_start_matches([' ', '\t', '\n'])).collect();
+            if list.iter().all(|n| !n.ends_with([' ', '\t', '\n']) && !n.contains(['\\', '{', '%'])) {
+                only = Some(list.iter().filter(|n| !n.is_empty()).map(|n| n.strip_suffix(".tex").unwrap_or(n).to_string()).collect());
+                cut = Some(format!("{}{}", &src[..k], &src[k + "\\includeonly{".len() + close + 1..]));
+            }
+        }
+    }
+    let src = cut.as_deref().unwrap_or(src);
+    let mut out = String::with_capacity(src.len());
+    splice_files(src, src.as_bytes(), 0, 0, &mut out, read, only.as_deref(), 0, false, false);
+    std::borrow::Cow::Owned(out)
+}
+
+/// [`splice_inputs`] over `src` from `i` (the text before `from` already in `out`): `depth`
+/// is 0 for the document, one more for each file it reads; `body` whether `src` from `i` is
+/// after `\begin{document}`, `in_include` whether it is an `\include`d file's.
+#[allow(clippy::too_many_arguments)]
+fn splice_files(src: &str, b: &[u8], mut i: usize, mut from: usize, out: &mut String, read: &mut dyn FnMut(&str) -> Option<String>, only: Option<&[String]>, depth: u8, mut body: bool, in_include: bool) {
+    let mut braces = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'%' => i += src[i..].find('\n').unwrap_or(src.len() - i),
+            b'{' => {
+                braces += 1;
+                i += 1;
+            }
+            b'}' => {
+                braces = braces.saturating_sub(1);
+                i += 1;
+            }
+            b'\\' => {
+                let rest = &src[i + 1..];
+                let n = rest.bytes().take_while(u8::is_ascii_alphabetic).count().max(1);
+                let name = rest.get(..n).unwrap_or("");
+                let next = i + 1 + n;
+                // Verbatim text is not read for commands: `\verb<c>..<c>`, and the
+                // environments whose bodies are read as characters.
+                if name == "verb" || name == "lstinline" {
+                    let d = next + usize::from(b.get(next) == Some(&b'*'));
+                    i = match b.get(d) {
+                        Some(&c) if c != b'\n' => src[d + 1..].find(char::from(c)).map_or(b.len(), |k| d + 2 + k),
+                        _ => d,
+                    };
+                    continue;
+                }
+                // url's addresses are read with `%` and the like ordinary (`\url{50%off}`).
+                if matches!(name, "url" | "path" | "nolinkurl" | "href") && b.get(next) == Some(&b'{') {
+                    i = src[next..].find('}').map_or(b.len(), |k| next + k + 1);
+                    continue;
+                }
+                if name == "begin" {
+                    let env = src[next..].strip_prefix('{').and_then(|r| r.find('}').map(|k| &r[..k]));
+                    if env == Some("document") {
+                        body = true;
+                    }
+                    if let Some(env) = env.filter(|e| matches!(*e, "verbatim" | "verbatim*" | "Verbatim" | "lstlisting" | "comment" | "minted" | "filecontents" | "filecontents*")) {
+                        let end = format!("\\end{{{env}}}");
+                        i = src[next..].find(&end).map_or(b.len(), |k| next + k + end.len());
+                        continue;
+                    }
+                }
+                let include = name == "include";
+                if !(name == "input" || include) || braces > 0 || include && (!body || in_include) {
+                    i = next;
+                    continue;
+                }
+                let line_start = src[..i].rfind('\n').map_or(0, |k| k + 1);
+                let after = src[next..].trim_start_matches([' ', '\t']);
+                let open = next + (src.len() - next - after.len());
+                // The file's name and where the text after `\input` resumes, and whether that
+                // resumes in state `mid_line` (after `}`).
+                let (name, resume, mid) = if let Some(r) = after.strip_prefix('{') {
+                    let Some(close) = r.find('}') else {
+                        i = next;
+                        continue;
+                    };
+                    (&r[..close], open + 2 + close, true)
+                } else if !include && open > next {
+                    // `\input name`: to a space or an end of line, consumed (§526); then
+                    // the rest of the line in state `skip_blanks`, or the next line.
+                    let len = after.bytes().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'/' | b'-' | b'_')).count();
+                    let end = open + len;
+                    let stop = b.get(end).copied();
+                    if len == 0 || !matches!(stop, None | Some(b' ' | b'\t' | b'\n' | b'\r' | b'\\')) {
+                        i = next;
+                        continue;
+                    }
+                    let mut resume = end;
+                    if matches!(stop, Some(b' ' | b'\t')) {
+                        resume += src[end..].bytes().take_while(|c| matches!(c, b' ' | b'\t')).count();
+                    }
+                    if matches!(b.get(resume), Some(b'\n')) {
+                        resume += 1;
+                    } else if matches!(b.get(resume), Some(b'\r')) {
+                        resume += src[resume..].find('\n').map_or(src.len() - resume, |k| k + 1);
+                    }
+                    (&src[open..end], resume, false)
+                } else {
+                    i = next;
+                    continue;
+                };
+                if name.is_empty() || name.contains(['\\', ' ', '"', '#', '%', '{', '~']) {
+                    i = next;
+                    continue;
+                }
+                let stem = name.strip_suffix(".tex").filter(|_| include).unwrap_or(name);
+                let leaf = stem.rsplit('/').next().unwrap_or(stem);
+                if !body && stem == "glyphtounicode" && !include && read("glyphtounicode.tex").is_none() {
+                    out.push_str(&src[from..i]);
+                    (i, from) = (resume, resume);
+                    continue;
+                }
+                let excluded = include && only.is_some_and(|l| !l.iter().any(|n| n == stem));
+                // A missing `\include` file is `\typeout{No file name.tex.}` (`\@input@`).
+                let text = if excluded {
+                    Some(String::new())
+                } else if include {
+                    Some(read(&format!("{stem}.tex")).unwrap_or_default())
+                } else if !leaf.contains('.') {
+                    read(&format!("{stem}.tex")).or_else(|| read(stem))
+                } else {
+                    read(stem).or_else(|| read(&format!("{stem}.tex")))
+                };
+                // A file TeX would stop reading early (`\endinput`, which ends it after its line)
+                // stays for the pre-scan, as does one too deeply nested.
+                let Some(text) = text.filter(|t| depth < 16 && !t.contains("\\endinput")) else {
+                    i = next;
+                    continue;
+                };
+                out.push_str(&src[from..i]);
+                let own_line = src[line_start..i].bytes().all(|c| matches!(c, b' ' | b'\t'));
+                let body_text = text.strip_suffix('\n').unwrap_or(&text);
+                // An empty file has no line at all (§362): the text goes on as it was.
+                let lines = !(body_text.is_empty() && !text.ends_with('\n'));
+                if include {
+                    out.push_str("\\clearpage");
+                }
+                if lines {
+                    if include || !own_line {
+                        out.push_str("%\n");
+                    }
+                    let mut inner = String::with_capacity(body_text.len());
+                    splice_files(body_text, body_text.as_bytes(), 0, 0, &mut inner, read, only, depth + 1, body, in_include || include);
+                    out.push_str(&inner);
+                    out.push('\n');
+                }
+                if include {
+                    out.push_str(if excluded { " " } else { "\\clearpage\\clearpage " });
+                } else if !lines || mid && (resume == src.len() || src[resume..].starts_with([' ', '\t', '\n', '\r'])) {
+                    out.push_str("{}");
+                }
+                (i, from) = (resume, resume);
+            }
+            // To the next `%`, `\` or brace.
+            _ => i += b[i..].iter().position(|&c| matches!(c, b'%' | b'\\' | b'{' | b'}')).unwrap_or(b.len() - i),
+        }
+    }
+    out.push_str(&src[from..]);
 }
 
 /// The kernel's text of the UTF-8 character at the start of `s` (one `char` per byte) and
@@ -2421,6 +4072,28 @@ fn byte_end(b: &[u8], mut i: usize, c: u8) -> usize {
     i + b.get(i..).map_or(0, |r| r.iter().take_while(|&&x| x != c).count())
 }
 
+/// Where `\begin{document}` starts: the first one not in a `%` comment (templates name it
+/// in a preamble comment, "everything between \documentclass and \begin{document}").
+pub(super) fn doc_start(src: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(k) = src[from..].find("\\begin{document}") {
+        let at = from + k;
+        if !commented(src, at) {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
+}
+
+/// Whether byte `at` of `src` is in a comment: its line has a `%` before it that no `\`
+/// escapes (an even run of backslashes before the `%`).
+pub(super) fn commented(src: &str, at: usize) -> bool {
+    let b = src.as_bytes();
+    let line = src[..at].rfind('\n').map_or(0, |k| k + 1);
+    (line..at).any(|i| b[i] == b'%' && b[line..i].iter().rev().take_while(|&&c| c == b'\\').count() % 2 == 0)
+}
+
 /// Where each `\` of `text` is, in order: [`predict`]'s searches of the whole text for
 /// control words go through these (a watch session updates them around the edit,
 /// `engine_prescan::Cache::predict`).
@@ -2446,9 +4119,10 @@ fn after_part<'a>(text: &'a str, part: &str) -> &'a str {
     &text[offset(text, part) + part.len()..]
 }
 
-/// [`scan`], telling `block` each thing it does not take; `block` returning `true` goes on
-/// past it (the census), `false` stops there.
-fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result<&'a str, &'a str> {
+/// [`scan`], telling `block` each thing it does not take (with a detail for the census, the
+/// package of `package options`, or empty); `block` returning `true` goes on past it (the
+/// census), `false` stops there.
+fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool) -> Result<&'a str, &'a str> {
     scan_from(src, block, None, None)
 }
 
@@ -2458,18 +4132,23 @@ fn scan_with<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool) -> Result
 pub(super) struct ScanState {
     blocked: bool,
     defined: Vec<Box<str>>,
+    tcb_opt: Vec<Box<str>>,
     define_next: bool,
     provide: bool,
-    /// `class`, `report`, `book`, `letter`, `ams`, `koma`, `memoir`.
-    class: [bool; 7],
+    /// `class`, `report`, `book`, `letter`, `ams`, `koma`, `memoir`, `lttr`.
+    class: [bool; 8],
     loaded: Vec<&'static str>,
     tabs: usize,
     floats: usize,
     mcols: usize,
     thms: Vec<Box<str>>,
+    counters: Vec<Box<str>>,
+    newfloats: Vec<Box<str>>,
     coltypes: Vec<(u8, usize, Box<str>)>,
     enit_end: usize,
     box_len_end: usize,
+    spec_end: usize,
+    def_end: usize,
     lang: Option<babel::ScanBabel>,
     t1: bool,
     /// Whether `\begin{document}` is before the mark: the steps that look behind them
@@ -2488,7 +4167,197 @@ const SCAN_REACH: usize = 64;
 /// read that may run to the end), so a mark is reused only while every byte read before it
 /// is unchanged. A local that lives from one step to the next is a field of [`ScanState`],
 /// restored below and kept at a mark.
-fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Option<(&ScanState, usize)>, mut marks: Option<&mut prescan::Marks<ScanState>>) -> Result<&'a str, &'a str> {
+/// Where the pre-scan stands at a command a [`PRESCAN_CHECKS`] row reads: the source, the
+/// command's backslash, the text after its name, and the open `multicols`.
+struct ScanAt<'a> {
+    src: &'a str,
+    i: usize,
+    after: &'a str,
+    mcols: usize,
+    loaded: &'a [&'static str],
+}
+
+impl ScanAt<'_> {
+    /// Whether the command is past `\begin{document}`.
+    fn in_body(&self) -> bool {
+        doc_start(self.src).is_some_and(|d| d < self.i)
+    }
+}
+
+/// A [`PRESCAN_CHECKS`] row's answer: the command is taken and the scan reads on; it stops
+/// (for the reason given, else its name); or it is taken and the scan goes on at a byte.
+enum Verdict {
+    Pass,
+    Stop(Option<&'static str>),
+    Skip(usize),
+}
+
+/// Whether the document's lists (`\tableofcontents`, `\listoffigures`, `\listoftables`, each an
+/// `\@starttoc` and a new `\write`) leave room in pdfTeX's sixteen streams (`\e@alloc` stops
+/// at `\sixt@@n`): the kernel's three (`\@unused`, `\@mainaux`, `\@partaux`), `\makeindex`'s
+/// `\@indexfile`, the lists, and three kept for packages (pgf's `\w@pgf@writea`, hyperref's
+/// `\@outlinefile`, …). A document with more goes to the engine, as pdfLaTeX's "No room for a
+/// new \write" would break its lists.
+fn starttoc_room(s: &ScanAt) -> Verdict {
+    // One pass over the source's backslashes (a byte search), not a scan per name.
+    let lists = s.src.match_indices('\\').filter(|&(k, _)| ["tableofcontents", "listof"].iter().any(|c| s.src.as_bytes()[k + 1..].starts_with(c.as_bytes()))).count();
+    let index = usize::from(s.src.contains("\\makeindex"));
+    // comment.sty's `\newwrite\CommentStream`.
+    let index = index + usize::from(s.loaded.contains(&"comment"));
+    if 3 + index + lists <= 13 { Verdict::Pass } else { Verdict::Stop(Some("more lists than pdfTeX's \\write streams hold")) }
+}
+
+/// The pre-scan's checks of one command each, by name and the package that must be loaded
+/// for the row to apply ("" for none): a package's command that takes only some arguments.
+/// A new package's check is one row here.
+#[allow(clippy::type_complexity)]
+const PRESCAN_CHECKS: &[(&str, &str, fn(&ScanAt) -> Verdict)] = &[
+    // graphics.sty's `\includegraphics[llx,lly][urx,ury]{file}` and `\rotatebox[..]`: not
+    // graphicx's keys ([`require`]).
+    ("includegraphics", "graphics", |s| if s.after.trim_start().starts_with(['[', '*']) { Verdict::Stop(None) } else { Verdict::Pass }),
+    ("rotatebox", "graphics", |s| if s.after.trim_start().starts_with('[') { Verdict::Stop(None) } else { Verdict::Pass }),
+    // authblk's `\author[mark]{name}`, `\affil[mark]{text}` (`authblk_entry`); the text is
+    // scanned on as text.
+    ("author", "authblk", |s| if !authblk::call_ok(s.after) || s.in_body() { Verdict::Stop(Some("authblk without marks")) } else { Verdict::Pass }),
+    ("affil", "authblk", |s| if !authblk::call_ok(s.after) || s.in_body() { Verdict::Stop(Some("authblk without marks")) } else { Verdict::Pass }),
+    // multicol's `\columnbreak` without its optional argument, in `multicols`.
+    ("columnbreak", "multicol", |s| if s.mcols == 0 || s.after.trim_start().starts_with('[') { Verdict::Stop(None) } else { Verdict::Pass }),
+    // `\MakeUppercase{text}` of plain text (`case::upper_ok`, `make_uppercase`); the text is
+    // scanned on as text.
+    ("MakeUppercase", "", |s| {
+        let arg = s.after.trim_start().strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
+        if arg.is_some_and(case::upper_ok) { Verdict::Pass } else { Verdict::Stop(None) }
+    }),
+    ("MakeLowercase", "", |s| {
+        let arg = s.after.trim_start().strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
+        if arg.is_some_and(case::lower_ok) { Verdict::Pass } else { Verdict::Stop(None) }
+    }),
+    // `\uppercase{text}` (`Machine::uppercase`) with an explicit `{`, the text scanned on as
+    // text; the job checks its characters. A document setting `\uccode` goes to the engine.
+    ("uppercase", "", |s| if s.after.trim_start().starts_with('{') && !s.src.contains("\\uccode") { Verdict::Pass } else { Verdict::Stop(None) }),
+    // `\makeindex` in the preamble (`\@onlypreamble`); `\index{entry}` with its entry read
+    // whole (not typeset), unless `\@sanitize` would read it otherwise (`%`, `\{`, `\}`);
+    // makeidx's `\printindex`.
+    ("makeindex", "", |s| if s.in_body() { Verdict::Stop(None) } else { Verdict::Pass }),
+    ("index", "", |s| {
+        let after = s.after.trim_start();
+        match after.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k])) {
+            Some(e) if !e.contains('%') && !e.contains("\\{") && !e.contains("\\}") => Verdict::Skip(s.src.len() - after.len() + e.len() + 2),
+            _ => Verdict::Stop(None),
+        }
+    }),
+    ("printindex", "makeidx", |_| Verdict::Pass),
+    // Each `\@starttoc` allocates a `\newwrite` (latex.ltx `\@starttoc`, `\e@alloc` up to
+    // `\sixt@@n`): past the kernel's and the packages' streams, pdfLaTeX stops with "No room
+    // for a new \write" and a broken list (`starttoc_room`).
+    ("tableofcontents", "", starttoc_room),
+    ("listoffigures", "", starttoc_room),
+    ("listoftables", "", starttoc_room),
+    ("listof", "float", starttoc_room),
+    ("listofalgorithms", "algorithm", starttoc_room),
+    ("tnote", "threeparttable", |_| Verdict::Pass),
+    // makecell's `\cellset` (`\def\arraystretch{1}\extrarowheight\z@`) is the default only
+    // while the document leaves `\arraystretch` alone (`engine_makecell`).
+    ("makecell", "makecell", |s| if s.src.contains("arraystretch") { Verdict::Stop(Some("\\makecell with \\arraystretch changed")) } else { Verdict::Pass }),
+    ("thead", "makecell", |s| if s.src.contains("arraystretch") { Verdict::Stop(Some("\\makecell with \\arraystretch changed")) } else { Verdict::Pass }),
+    // `\twocolumn[text]` in the body; the text is scanned on (in one column it declines).
+    ("twocolumn", "", |s| if s.in_body() && s.after.starts_with('[') { Verdict::Pass } else { Verdict::Stop(None) }),
+    // `\the\year`, `\the\month`, `\the\day`: the primitive `\the` of the date parameters
+    // (§465, the run's date, `run_date`), digits as typed; a document assigning one goes to
+    // the engine.
+    ("the", "", |s| {
+        let date = ["year", "month", "day"].into_iter().find(|p| s.after.strip_prefix('\\').and_then(|r| r.strip_prefix(p)).is_some_and(|r| !r.starts_with(|c: char| c.is_ascii_alphabetic() || c == '@')));
+        match date {
+            Some(p) if !s.src.contains(&format!("\\{p}=")) && !s.src.contains(&format!("\\{p} =")) && !s.src.contains(&format!("\\advance\\{p}")) => Verdict::Skip(s.src.len() - s.after.len() + 1 + p.len()),
+            _ => Verdict::Stop(None),
+        }
+    }),
+    // qrcode's `\qrcode*[options]{text}` (`qrcode::call_len`, `Machine::qrcode`); its text is
+    // read as other characters, so it is not scanned on. With hyperref the code is a link
+    // (`\qrcode@hyperwrapper@hyperref`): not native.
+    ("qrcode", "qrcode", |s| {
+        let after = s.after.trim_start();
+        match qrcode::call_len(after) {
+            Some(len) if !s.loaded.contains(&"hyperref") => Verdict::Skip(s.src.len() - after.len() + len),
+            _ => Verdict::Stop(None),
+        }
+    }),
+    // tcolorbox's `\tcbset{options}` in the preamble (`tcolorbox::keys_ok`, `tcb_set`); the
+    // options are scanned on as text.
+    ("tcbset", "tcolorbox", |s| {
+        let arg = s.after.trim_start().strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
+        if arg.is_some_and(|a| tcolorbox::keys_ok(a, false)) && !s.in_body() { Verdict::Pass } else { Verdict::Stop(None) }
+    }),
+    // listings' `\lstset{keys}` in the preamble (`listings::keys_ok`, `lst_set`), not scanned
+    // (as `\lstdefinestyle`'s): `keys_ok` reads every value, `aboveskip=\medskipamount` too.
+    ("lstset", "listings", |s| {
+        let t = s.after.trim_start();
+        let arg = t.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
+        match arg {
+            Some(a) if listings::keys_ok(a) && !s.in_body() => Verdict::Skip(s.src.len() - t.len() + 1 + a.len() + 1),
+            _ => Verdict::Stop(None),
+        }
+    }),
+    // listings' `\lstinputlisting[keys]{file}` in the body (`listings::input_len`), not scanned.
+    ("lstinputlisting", "listings", |s| match listings::input_len(s.after) {
+        Some(k) if s.in_body() => Verdict::Skip(s.src.len() - s.after.len() + k),
+        _ => Verdict::Stop(None),
+    }),
+    // listings' `\lstdefinestyle{name}{keys}` (`listings::define_style_len`), not scanned.
+    ("lstdefinestyle", "listings", |s| match listings::define_style_len(s.after) {
+        Some(k) => Verdict::Skip(s.src.len() - s.after.len() + k),
+        None => Verdict::Stop(None),
+    }),
+    // listings' `\lstinline[opts]|text|` in the body (`listings::inline_args`, `lst_inline`):
+    // its text is not scanned.
+    ("lstinline", "listings", |s| {
+        match listings::inline_args(s.after) {
+            Some((_, _, used)) if s.in_body() => Verdict::Skip(s.src.len() - s.after.len() + used),
+            _ => Verdict::Stop(None),
+        }
+    }),
+    // `\usetikzlibrary{list}` in the preamble, of libraries that define macros only
+    // (`tikz::library_call_len`, `use_tikz_library`).
+    ("usetikzlibrary", "tikz", |s| {
+        let after = s.after.trim_start();
+        match tikz::library_call_len(after) {
+            Some(len) if !s.in_body() => Verdict::Skip(s.src.len() - after.len() + len),
+            _ => Verdict::Stop(None),
+        }
+    }),
+    // `\tikzset{styles}` and `\tikzstyle{name}=[keys]` in the preamble (`tikz::tikzset_call_len`,
+    // `tikz::tikzstyle_call`, `tikz_set`): every picture reads them (`tikz::preamble_styles`).
+    ("tikzset", "tikz", |s| {
+        let after = s.after.trim_start();
+        match tikz::tikzset_call_len(after) {
+            Some(len) if !s.in_body() => Verdict::Skip(s.src.len() - after.len() + len),
+            _ => Verdict::Stop(None),
+        }
+    }),
+    ("tikzstyle", "tikz", |s| {
+        let after = s.after.trim_start();
+        match tikz::tikzstyle_call(after) {
+            Some((len, _)) if !s.in_body() => Verdict::Skip(s.src.len() - after.len() + len),
+            _ => Verdict::Stop(None),
+        }
+    }),
+];
+
+/// The first [`PRESCAN_CHECKS`] row for command `name` whose package is loaded. Asked at most
+/// commands of the source, so the rows are indexed by name once a process (sorted, table
+/// order kept among rows of one name) rather than compared with `name` one by one.
+fn prescan_check(name: &str, loaded: &[&str]) -> Option<fn(&ScanAt) -> Verdict> {
+    static BY_NAME: std::sync::OnceLock<Vec<(&'static str, u16)>> = std::sync::OnceLock::new();
+    let rows = BY_NAME.get_or_init(|| {
+        let mut v: Vec<(&'static str, u16)> = PRESCAN_CHECKS.iter().enumerate().map(|(i, c)| (c.0, i as u16)).collect();
+        v.sort_unstable();
+        v
+    });
+    let start = rows.partition_point(|r| r.0 < name);
+    rows[start..].iter().take_while(|r| r.0 == name).map(|r| &PRESCAN_CHECKS[r.1 as usize]).find(|c| c.1.is_empty() || loaded.contains(&c.1)).map(|c| c.2)
+}
+
+fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, from: Option<(&ScanState, usize)>, mut marks: Option<&mut prescan::Marks<ScanState>>) -> Result<&'a str, &'a str> {
     let mut reach = 0usize;
     // Bytes up to and with the first of `$rest` (the text after the read) were read; with
     // `$more`, that many bytes past it too.
@@ -2501,12 +4370,25 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
         };
     }
     let mut blocked = false;
+    // Where `\makeatletter` and `\makeatother` stand, found once: whether `@` is a letter at a
+    // byte is the later of the two that end before it (a search back from every command made
+    // the pre-scan quadratic in the source).
+    let at_marks = |pat: &str| src.match_indices(pat).map(|(k, _)| k + pat.len()).collect::<Vec<_>>();
+    let (at_letter, at_other) = (at_marks("\\makeatletter"), at_marks("\\makeatother"));
+    let last_before = |ends: &[usize], i: usize| ends[..ends.partition_point(|&e| e <= i)].last().copied();
+    // The preamble's tikz styles, read once for the pictures (`tikz::preamble_styles`).
+    let tikz_styles = std::cell::OnceCell::new();
+    // What the next `stop` names for the census (`native_blockers`): the package whose options
+    // stop, the babel options, the non-ASCII character.
+    let detail = std::cell::Cell::new("");
     let mut stop = |what: &'a str, blocked: &mut bool| {
         *blocked = true;
-        if block(what) { Ok(()) } else { Err(what) }
+        if block(what, detail.take()) { Ok(()) } else { Err(what) }
     };
     let b = src.as_bytes();
     let mut defined: Vec<&str> = Vec::new();
+    // `\newtcolorbox` environments with an optional argument (`[options]` after `\begin`).
+    let mut tcb_opt: Vec<&str> = Vec::new();
     let mut define_next = false;
     // `\providecommand` of a defined name does nothing: it never redefines an internal.
     let mut provide = false;
@@ -2514,6 +4396,8 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
     // `\documentclass{report}`: what report.cls defines otherwise than article.cls and the
     // native job does not take yet stops (`2026-10-28-report-class-design.md`).
     let mut report = false;
+    // article's `titlepage` option: its title page `abstract` is not native.
+    let mut titlepage = false;
     let mut book = false;
     // `\documentclass{letter}` (`2026-10-31-native-letter-class.md`): what letter.cls lacks or
     // defines otherwise than article.cls stops, and its own commands are taken only there.
@@ -2527,6 +4411,15 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
     // `\documentclass{memoir}` (`2026-10-31-memoir-moderncv.md`): memoir.cls redefines most of
     // the kernel's document commands, so under it only [`MEMOIR_NATIVE`] is taken.
     let mut memoir = false;
+    // `\documentclass{IEEEtran}` (`2026-10-31-w8-journal-classes.md`): only [`IEEE_NATIVE`]
+    // is taken, the class redefining most of the kernel's document commands.
+    let mut ieee = false;
+    // `\documentclass{scrlttr2}` (`2026-11-01-w9-scrlttr2.md`): only [`LTTR_NATIVE`] is
+    // taken, and scrlttr2's own commands only there.
+    let mut lttr = false;
+    let mut a0 = false;
+    let mut sp = false;
+    let mut ext = false;
     // The packages `\usepackage` loads from native tables, with the packages they load.
     let mut loaded: Vec<&'static str> = Vec::new();
     let (mut have, mut have_for) = (KERNEL_BIT, 0);
@@ -2538,6 +4431,10 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
     let mut mcols = 0usize;
     // The `\newtheorem` environments.
     let mut thms: Vec<&str> = Vec::new();
+    // The document's own counters (`\newcounter`).
+    let mut counters: Vec<&str> = Vec::new();
+    // float.sty's `\newfloat` types (their counters are in `counters` too).
+    let mut newfloats: Vec<&str> = Vec::new();
     // array.sty's `\newcolumntype`s: letter, number of arguments, replacement text.
     let mut coltypes: Vec<(u8, usize, &str)> = Vec::new();
     // The end of enumitem keys being read: `\arabic*` and its kin are its label's counter.
@@ -2545,10 +4442,21 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
     // The end of a `\raisebox`'s or `\framebox`'s lengths, where `\width`, `\height` and
     // `\depth` name its box.
     let mut box_len_end = 0;
+    // The end of a tabular's preamble, where babel's `<` `>` are column specifiers: array.sty's
+    // `\@testpach` reads each as `\string` (array.sty:63), so spanish's shorthands are inert.
+    let mut spec_end = 0;
+    // The end of a definition's text, where `&` is only stored (`\newcommand{\x}{a & b}`):
+    // it is an alignment tab where the macro is used, which the job's alignments read as TeX does.
+    let mut def_end = 0;
+    // The document's macros whose text opens an alignment (`\newcommand{\mat}[2]{\left(
+    // \begin{array}{#1}#2\end{array}\right)}`): the `&`s of a use's arguments are its tabs.
+    let tab_own = macros_holding(src, |t| ["{array}", "{tabular}", "matrix}", "{cases}", "{aligned}", "{split}"].iter().any(|e| t.contains(&format!("\\begin{e}"))));
     // babel's languages (`engine_babel`), and whether `[T1]{fontenc}` is loaded (babel's
     // OT1 `\"` is its own, with `\bbl@allowhyphens`).
     let mut lang: Option<babel::ScanBabel> = None;
     let mut t1 = false;
+    // enumitem's `shortlabels` (`enit_short_ok`).
+    let mut enit_short = false;
     // Whether `\begin{document}` ends at or before the last mark, read from `begun_from` on.
     let (mut begun, mut begun_from) = (false, 0);
     let mut i = 0;
@@ -2556,13 +4464,16 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
         i = at;
         blocked = st.blocked;
         defined = st.defined.iter().map(|s| &**s).collect();
+        tcb_opt = st.tcb_opt.iter().map(|s| &**s).collect();
         (define_next, provide) = (st.define_next, st.provide);
-        [class, report, book, letter, ams, koma, memoir] = st.class;
+        [class, report, book, letter, ams, koma, memoir, lttr] = st.class;
         loaded.clone_from(&st.loaded);
         (tabs, floats, mcols) = (st.tabs, st.floats, st.mcols);
         thms = st.thms.iter().map(|s| &**s).collect();
+        counters = st.counters.iter().map(|s| &**s).collect();
+        newfloats = st.newfloats.iter().map(|s| &**s).collect();
         coltypes = st.coltypes.iter().map(|(c, k, t)| (*c, *k, &**t)).collect();
-        (enit_end, box_len_end) = (at + st.enit_end, at + st.box_len_end);
+        (enit_end, box_len_end, spec_end, def_end) = (at + st.enit_end, at + st.box_len_end, at + st.spec_end, at + st.def_end);
         (lang, t1) = (st.lang, st.t1);
         (begun, begun_from) = (st.begun, at);
     }
@@ -2577,17 +4488,22 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
             let st = ScanState {
                 blocked,
                 defined: defined.iter().map(|&s| s.into()).collect(),
+                tcb_opt: tcb_opt.iter().map(|&s| s.into()).collect(),
                 define_next,
                 provide,
-                class: [class, report, book, letter, ams, koma, memoir],
+                class: [class, report, book, letter, ams, koma, memoir, lttr],
                 loaded: loaded.clone(),
                 tabs,
                 floats,
                 mcols,
                 thms: thms.iter().map(|&s| s.into()).collect(),
+                counters: counters.iter().map(|&s| s.into()).collect(),
+                newfloats: newfloats.iter().map(|&s| s.into()).collect(),
                 coltypes: coltypes.iter().map(|&(c, k, t)| (c, k, t.into())).collect(),
                 enit_end: enit_end.saturating_sub(i),
                 box_len_end: box_len_end.saturating_sub(i),
+                spec_end: spec_end.saturating_sub(i),
+                def_end: def_end.saturating_sub(i),
                 lang,
                 t1,
                 begun,
@@ -2615,7 +4531,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
             }
         }
         match b[i] {
-            b'&' if tabs > 0 => i += 1,
+            b'&' if tabs > 0 || i < def_end => i += 1,
             b'%' => i = src[i..].find('\n').map_or(b.len(), |n| i + n + 1),
             // babel's shorthand characters: `"` (portuguese, spanish), spanish's `<` `>`; its
             // `~` reads the next token as an argument (`\language@active@arg~`), so a space, a
@@ -2624,7 +4540,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                 stop("a babel shorthand", &mut blocked)?;
                 i += 1;
             }
-            b'<' | b'>' if lang.is_some_and(|l| l.quoting()) => {
+            b'<' | b'>' if lang.is_some_and(|l| l.quoting()) && i >= spec_end => {
                 stop("a babel shorthand", &mut blocked)?;
                 i += 1;
             }
@@ -2653,14 +4569,38 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                 if memoir && (rest.starts_with("begin{verbatim}") || rest.starts_with("verb")) {
                     stop("verbatim under memoir", &mut blocked)?;
                 }
+                // tcolorbox loads verbatim.sty, whose `verbatim` the native job does not have:
+                // its `\@verbatim` lacks the kernel's `\@tempswafalse` and `\verbatim@start`
+                // swallows the first end of line, so the first line's `\leavevmode\null` follows
+                // whatever `\if@tempswa` was left by the text before (a `\cite`, a file hook).
+                if loaded.contains(&"tcolorbox") && rest.starts_with("begin{verbatim}") {
+                    stop("verbatim under tcolorbox", &mut blocked)?;
+                }
+                // A listing's options and text (`listings::env_len`), not scanned.
+                if let Some(r) = rest.strip_prefix("begin{lstlisting}").filter(|_| loaded.contains(&"listings")) {
+                    match listings::env_len(r) {
+                        Some(k) => {
+                            i += 1 + "begin{lstlisting}".len() + k;
+                            continue;
+                        }
+                        None => stop("lstlisting", &mut blocked)?,
+                    }
+                }
                 // `\verbatim`'s text is not scanned.
                 if rest.starts_with("begin{verbatim}") {
-                    i += rest.find("\\end{verbatim}").ok_or("verbatim")? + 1 + "\\end{verbatim}".len();
+                    let k = rest.find("\\end{verbatim}").ok_or("verbatim")?;
+                    i += k + 1 + "\\end{verbatim}".len();
+                    // verbatim.sty's `\verbatim@rescan` drops the rest of the `\end` line, which
+                    // the kernel sets; its `\endverbatim` has no `\if@newlist \leavevmode`.
+                    if loaded.contains(&"verbatim") && (!src[i..].split('\n').next().unwrap_or("").trim().is_empty() || matches!(rest[..k].strip_prefix("begin{verbatim}").map(|r| r.trim_matches([' ', '\t'])), Some("" | "\n"))) {
+                        stop("verbatim.sty: text after \\end{verbatim}, or no text", &mut blocked)?;
+                    }
                     continue;
                 }
                 // A tikzpicture of `engine_tikz`'s grammar is read whole; any other stops.
                 if let Some(r) = rest.strip_prefix("begin{tikzpicture}").filter(|_| loaded.contains(&"tikz") && !defined.contains(&"tikzpicture")) {
-                    match r.find("\\end{tikzpicture}").filter(|&k| tikz::parse(&r[..k]).is_some()) {
+                    // A node's `\includegraphics` is graphicx's, natively only when it is loaded.
+                    match r.find("\\end{tikzpicture}").filter(|&k| (loaded.contains(&"graphicx") || !r[..k].contains("\\includegraphics")) && tikz::accepts(&r[..k], tikz_styles.get_or_init(|| tikz::preamble_styles(src)))) {
                         Some(k) => {
                             i += 1 + "begin{tikzpicture}".len() + k + "\\end{tikzpicture}".len();
                             continue;
@@ -2668,6 +4608,58 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                         None => {
                             seen!("");
                             stop("tikzpicture", &mut blocked)?
+                        }
+                    }
+                }
+                // `\tikz[opts] <command>;` (tikz.code.tex `\tikz@collect@command`): the picture
+                // of that one command, read whole like the environment's.
+                if let Some(r) = rest.strip_prefix("tikz").filter(|r| loaded.contains(&"tikz") && !defined.contains(&"tikz") && r.trim_start_matches([' ', '\t']).starts_with(['\\', '['])) {
+                    let lead = r.len() - r.trim_start_matches([' ', '\t']).len();
+                    let r = &r[lead..];
+                    let opts = if r.starts_with('[') { r.find(']').map_or(0, |k| k + 1) } else { 0 };
+                    let cmd = &r[opts..];
+                    // `\tikz[opts]{<commands>}` (`\tikz@`): the environment's text, options and
+                    // the group's commands (`Machine::tikz_short`).
+                    let braced = cmd.trim_start_matches([' ', '\t', '\n']);
+                    if opts > 0 && braced.starts_with('{') {
+                        let mut depth = 0i32;
+                        let close = braced.char_indices().find(|&(_, ch)| {
+                            match ch {
+                                '{' => depth += 1,
+                                '}' => depth -= 1,
+                                _ => {}
+                            }
+                            depth == 0
+                        }).map(|(k, _)| k);
+                        match close.filter(|&k| (loaded.contains(&"graphicx") || !braced[..k].contains("\\includegraphics")) && tikz::accepts(&format!("{}{}", &r[..opts], &braced[1..k]), tikz_styles.get_or_init(|| tikz::preamble_styles(src)))) {
+                            Some(k) => {
+                                i += 1 + "tikz".len() + lead + opts + (cmd.len() - braced.len()) + k + 1;
+                                continue;
+                            }
+                            None => {
+                                seen!("");
+                                stop("tikz", &mut blocked)?
+                            }
+                        }
+                    }
+                    // The `;` outside braces that ends the command.
+                    let mut depth = 0i32;
+                    let semi = cmd.char_indices().find(|&(_, ch)| {
+                        match ch {
+                            '{' => depth += 1,
+                            '}' => depth -= 1,
+                            _ => {}
+                        }
+                        ch == ';' && depth == 0
+                    }).map(|(k, _)| k);
+                    match semi.filter(|&k| cmd.trim_start().starts_with('\\') && !cmd[..k].contains("\n\n") && (loaded.contains(&"graphicx") || !cmd[..k].contains("\\includegraphics")) && tikz::accepts(&r[..opts + k + 1], tikz_styles.get_or_init(|| tikz::preamble_styles(src)))) {
+                        Some(k) => {
+                            i += 1 + "tikz".len() + lead + opts + k + 1;
+                            continue;
+                        }
+                        None => {
+                            seen!("");
+                            stop("tikz", &mut blocked)?
                         }
                     }
                 }
@@ -2693,9 +4685,17 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                 }
                 let known = |name: &str| {
                     let (table, blocked, list) = names_row(name);
-                    blocked & have == 0 && (table & have != 0 || list & DRIVER_NATIVE != 0 && PACKAGE_NATIVES.iter().any(|p| p.1 == name && DRIVER_PACKAGES.contains(&p.0) && loaded.contains(&p.0)) || list & (IN_WORDS | IN_PREAMBLE) != 0) || defined.contains(&name)
+                    (t1 || !t1_only(name)) && blocked & have == 0 && (table & have != 0 || list & DRIVER_NATIVE != 0 && PACKAGE_NATIVES.iter().any(|p| p.1 == name && DRIVER_PACKAGES.contains(&p.0) && loaded.contains(&p.0)) || list & (IN_WORDS | IN_PREAMBLE) != 0) || defined.contains(&name)
                 };
-                if rest[..n].contains('@') && !known(&rest[..n]) {
+                // `\@biblabel` defined after `\makeatletter` (`own_bib_label`).
+                // A document's own `@` macro (`fresh_at`) defined there by `\newcommand`,
+                // `\providecommand`, `\def` or `\let` (not `\renewcommand`, whose name exists).
+                let at_open = last_before(&at_letter, i) > last_before(&at_other, i);
+                let fresh_def = define_next && at_open && !src[..i].trim_end_matches('{').trim_end().trim_end_matches('*').ends_with("\\renewcommand") && fresh_at(&rest[..n]);
+                let own_at = define_next && at_open && &rest[..n] == "@biblabel" || fresh_def;
+                // After `\makeatletter` the whole name is one: a definition of one the kernel
+                // or a package has stops below as internal, a use as unknown.
+                if rest[..n].contains('@') && !known(&rest[..n]) && !own_at && !(at_open && define_next) {
                     n = rest[..n].find('@').unwrap_or(n);
                 }
                 if n == 0 {
@@ -2704,10 +4704,10 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                     }
                     define_next = false;
                     let symbol = rest.get(..rest.chars().next().map_or(0, char::len_utf8)).unwrap_or("");
-                    // What babel's languages redefine: portuguese's `\-`, spanish's `\.`, and
-                    // babel's OT1 `\"` (`\bbl@umlauta`).
+                    // What babel's languages redefine: portuguese's `\-` and spanish's `\.`
+                    // (babel's OT1 `\"` is `babel_umlaut`).
                     if let Some(l) = lang {
-                        if symbol == "-" && l.langs & 0b1100 != 0 || symbol == "." && l.spanish() || symbol == "\"" && !t1 {
+                        if symbol == "-" && l.langs & 0b1100 != 0 || symbol == "." && l.spanish() {
                             stop("a command babel redefines", &mut blocked)?;
                         }
                     }
@@ -2720,6 +4720,16 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                     continue;
                 }
                 let name = &rest[..n];
+                if n > 0 && tab_own.contains(&name) {
+                    // The use's brace arguments, read up to the first that is not one.
+                    let mut k = n;
+                    loop {
+                        let t = rest[k..].trim_start_matches([' ', '\n']);
+                        let Some(len) = t.strip_prefix('{').and_then(balanced) else { break };
+                        k = rest.len() - t.len() + 1 + len + 1;
+                    }
+                    def_end = def_end.max(i + 1 + k);
+                }
                 if i < enit_end && matches!(name, "arabic" | "alph" | "Alph" | "roman" | "Roman") && rest[n..].starts_with('*') {
                     i += 2 + n;
                     continue;
@@ -2739,9 +4749,9 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                     }
                     seen!(if t.starts_with('{') { "" } else { t });
                 }
-                // siunitx's `\si`/`\unit`, `\num`, `\SI`/`\qty`: the arguments `siunitx::units`
+                // siunitx's `\si`/`\unit`, `\num`, `\SI`/`\qty`, `\ang` and the ranges: the arguments `siunitx::units`
                 // and `siunitx::number` take, not scanned (their unit macros exist only there).
-                if loaded.contains(&"siunitx") && matches!(name, "si" | "unit" | "num" | "SI" | "qty") {
+                if loaded.contains(&"siunitx") && matches!(name, "si" | "unit" | "num" | "SI" | "qty" | "ang" | "numrange" | "SIrange" | "qtyrange") {
                     match siunitx::scan_args(name, &rest[n..]) {
                         Some(k) => {
                             i += 1 + n + k;
@@ -2762,18 +4772,34 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                         stop("multicolumn preamble", &mut blocked)?;
                     }
                 }
-                if !report && name == "chapter" || !book && matches!(name, "frontmatter" | "mainmatter" | "backmatter") {
+                // KOMA-Script's title fields, outside it the document's or undefined.
+                if !koma && matches!(name, "subtitle" | "subject" | "publishers") && !define_next && !defined.contains(&name) {
+                    stop(name, &mut blocked)?;
+                }
+                // scrreprt's `\addchap` (`koma_addchap`); scrartcl's is not native.
+                if !report && name == "chapter" || !book && !memoir && matches!(name, "frontmatter" | "mainmatter" | "backmatter") || name == "addchap" && !(koma && report) {
                     stop(name, &mut blocked)?;
                 }
                 // letter.cls's own commands, outside it the document's or undefined.
-                if !letter && LETTER_ONLY.contains(&name) && !(ams && name == "address") && !define_next && !defined.contains(&name) || !letter && name == "begin" && rest[n..].starts_with("{letter}") && !defined.contains(&"letter") {
+                if !letter && LETTER_ONLY.contains(&name) && !((ams || sp) && name == "address") && !(lttr && matches!(name, "opening" | "closing")) && !define_next && !defined.contains(&name) || !letter && !lttr && name == "begin" && rest[n..].starts_with("{letter}") && !defined.contains(&"letter") {
                     stop(name, &mut blocked)?;
+                }
+                // scrlttr2's own commands, outside it the document's or undefined; under it
+                // only [`LTTR_NATIVE`] and [`LTTR_ENVS`].
+                if !lttr && LTTR_ONLY.contains(&name) && !define_next && !defined.contains(&name) {
+                    stop(name, &mut blocked)?;
+                }
+                if lttr && (!LTTR_NATIVE.contains(&name) && !define_next && !defined.contains(&name) || matches!(name, "begin" | "end") && !LTTR_ENVS.iter().any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
+                    stop(if matches!(name, "begin" | "end") { "an environment under scrlttr2" } else { name }, &mut blocked)?;
                 }
                 if letter && (LETTER_LACKS.contains(&name) || matches!(name, "begin" | "end") && LETTER_LACKS_ENVS.iter().any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
                     stop(name, &mut blocked)?;
                 }
-                if memoir && (!MEMOIR_NATIVE.contains(&name) || matches!(name, "begin" | "end") && !rest[n..].starts_with("{document}")) {
+                if memoir && (!MEMOIR_NATIVE.contains(&name) && !define_next && !defined.contains(&name) || matches!(name, "begin" | "end") && !MEMOIR_ENVS.iter().any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
                     stop(if matches!(name, "begin" | "end") { "an environment under memoir" } else { name }, &mut blocked)?;
+                }
+                if ieee && (!IEEE_NATIVE.contains(&name) && !defined.contains(&name) || matches!(name, "begin" | "end") && !IEEE_ENVS.iter().any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
+                    stop(if matches!(name, "begin" | "end") { "an environment under IEEEtran" } else { name }, &mut blocked)?;
                 }
                 if ams && (AMS_LACKS.contains(&name) && !defined.contains(&name) || matches!(name, "begin" | "end") && AMS_LACKS_ENVS.iter().any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
                     stop(name, &mut blocked)?;
@@ -2781,16 +4807,21 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                 if !ams && AMS_ONLY.contains(&name) && !define_next && !defined.contains(&name) {
                     stop(name, &mut blocked)?;
                 }
-                if report && (REPORT_LATER.contains(&name) || name == "begin" && rest[n..].starts_with("{abstract}")) {
+                // `\numberwithin{equation}{chapter}` is report's own numbering but for an equation
+                // before the first chapter (`equation_step`).
+                let chapter_eqs = name == "numberwithin" && rest[n..].trim_start().starts_with("{equation}{chapter}");
+                if (report || titlepage) && (REPORT_LATER.contains(&name) && report && !chapter_eqs || name == "begin" && rest[n..].starts_with("{abstract}") && (koma || memoir || book)) {
                     stop(name, &mut blocked)?;
                 }
-                if koma && (KOMA_LATER.contains(&name) || name == "begin" && KOMA_LATER_ENVS.iter().any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
-                    stop(if name == "begin" { "an environment scrartcl defines otherwise" } else { name }, &mut blocked)?;
+                // screenplay's `\baselinestretch` (0.8) is in its table's size rows only.
+                if sp && matches!(name, "fontsize" | "linespread" | "baselinestretch") {
+                    stop(name, &mut blocked)?;
                 }
-                // natbib's `thebibliography` and `\bibitem` (`\NAT@parse`, `\bibsection`)
-                // are not native yet.
-                if loaded.contains(&"natbib") && (name == "bibitem" || name == "begin" && rest[n..].starts_with("{thebibliography}")) {
-                    stop("natbib's thebibliography", &mut blocked)?;
+                if ext && (EXT_LATER.contains(&name) || name == "begin" && EXT_LATER_ENVS.iter().any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
+                    stop(if name == "begin" { "an environment extarticle defines otherwise" } else { name }, &mut blocked)?;
+                }
+                if koma && (KOMA_LATER.contains(&name) && !(report && matches!(name, "maketitle" | "tableofcontents" | "caption") || book && name == "cleardoublepage") || name == "begin" && KOMA_LATER_ENVS.iter().filter(|e| !(report && matches!(**e, "figure" | "table") || book && **e == "thebibliography" && loaded.contains(&"natbib"))).any(|e| rest[n..].strip_prefix('{').and_then(|r| r.strip_prefix(e)).is_some_and(|r| r.starts_with('}')))) {
+                    stop(if name == "begin" { "an environment scrartcl defines otherwise" } else { name }, &mut blocked)?;
                 }
                 // Under biblatex every key is missing (no `.bbl` is read); its
                 // `\bibliography` and `\bibliographystyle`, a kernel bibliography and natbib
@@ -2798,33 +4829,60 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                 if loaded.contains(&"biblatex") && (matches!(name, "bibitem" | "bibliography" | "bibliographystyle") || name == "begin" && rest[n..].starts_with("{thebibliography}")) {
                     stop("biblatex with a kernel bibliography", &mut blocked)?;
                 }
+                if loaded.contains(&"authblk") && authblk::NAMES.contains(&name) {
+                    stop("authblk's settings", &mut blocked)?;
+                }
                 if define_next {
-                    let prefixed = !report && name.strip_prefix("the").filter(|c| PREFIXED.contains(c)).is_some_and(|c| {
-                        // Only in the preamble, and not with amsmath's `\numberwithin`, which redefines `\theequation` in its turn.
-                        !(c == "equation" && src.contains("\\numberwithin")) && !src[..i].contains("\\begin{document}") && {
-                            // A prefix is read to its `}}`, where the scan goes on; anything
-                            // else may have been read to the end.
-                            let p = the_prefix(c, &rest[n..]);
-                            if p.is_none() {
-                                seen!("");
-                            }
-                            p.is_some()
+                    // `\thefigure`, `\thetable`, `\theequation` of a text the counter reader
+                    // reads (`own_float_the`), in the preamble or the body; amsmath's later
+                    // `\numberwithin` redefining `\theequation` in its turn declines
+                    // (`number_within`).
+                    let text_len = name.strip_prefix("the").filter(|c| PREFIXED.contains(c)).and_then(|c| {
+                        // A text is read to its `}`, where the scan goes on; anything else
+                        // may have been read to the end.
+                        let p = the_text_len(c, &rest[n..]);
+                        if p.is_none() {
+                            seen!("");
                         }
+                        p
                     });
-                    if !provide && !prefixed && (name.contains('@') || READ_INTERNALLY.contains(&name)) {
+                    let prefixed = text_len.is_some();
+                    if !provide && !prefixed && (name.contains('@') && name != "@biblabel" && !fresh_def || READ_INTERNALLY.contains(&name)) {
+                        stop("a definition of an internal macro", &mut blocked)?;
+                    }
+                    // The lists' names are the document's only through `\renewcommand` and kin,
+                    // which mark them (`own_head_name`).
+                    if userdef::OWN_NAMES.contains(&name) && !matches!(src[..i].trim_end_matches('{').trim_end().trim_end_matches('*').rsplit('\\').next(), Some("newcommand" | "renewcommand" | "providecommand")) {
                         stop("a definition of an internal macro", &mut blocked)?;
                     }
                     define_next = false;
-                    // The definition's text is read by `the_prefixes`, not scanned.
-                    if prefixed {
-                        let a = rest[n..].find("\\arabic").unwrap_or(0);
-                        i += 1 + n + a + rest[n + a..].find("}}").unwrap_or(0) + 2;
+                    // A `\newcommand` (or `\providecommand`) of a name the document never uses
+                    // again changes nothing but the name's meaning: its text is not scanned
+                    // (a calendar's `\daybox` of tikz commands, defined and left unused). Only
+                    // a name nothing defines yet (`\newcommand` of a defined one is an error)
+                    // and a text LaTeX takes without one (braces balanced, each `#` a
+                    // parameter it has or `##`); anything else is scanned as before.
+                    let before = src[..i].trim_end_matches('{').trim_end().trim_end_matches('*');
+                    let fresh = scan_list(name) == 0 && table_names(name) == 0 && !defined.contains(&name);
+                    if !prefixed && fresh && (before.ends_with("\\newcommand") || before.ends_with("\\providecommand")) && uses_of(src, name) == 1 {
+                        if let Some(len) = definition_len(&rest[n..]) {
+                            defined.push(name);
+                            i += 1 + n + len;
+                            continue;
+                        }
+                    }
+                    // The definition's text is read by `own_float_the`, not scanned.
+                    if let Some(len) = text_len {
+                        i += 1 + n + len;
                         continue;
                     }
                     defined.push(name);
-                } else if matches!(name, "newcommand" | "renewcommand" | "providecommand" | "let" | "def" | "DeclareMathOperator") {
+                } else if matches!(name, "newcommand" | "renewcommand" | "providecommand" | "let" | "def" | "DeclareMathOperator" | "DeclarePairedDelimiter" | "DeclarePairedDelimiterX") {
                     define_next = true;
                     provide = name == "providecommand";
+                    if name != "let" {
+                        def_end = def_end.max(def_text_end(&rest[n..], name == "def").map_or(0, |k| i + 1 + n + k));
+                    }
                 } else if name == "PassOptionsToPackage" {
                     // `{options}{packages}`, each option one with the same effect as none for
                     // each package (`pass_options`): then it changes nothing, loaded or not.
@@ -2854,23 +4912,76 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                         if memoir && !MEMOIR_PACKAGES.contains(&p) {
                             stop("a package under memoir", &mut blocked)?;
                         }
-                        if koma && KOMA_LATER_PACKAGES.contains(&p) {
+                        // memoir.cls's `\EmulatedPackage{epigraph}`: the load is a no-op.
+                        if memoir && p == "epigraph" && opts.is_empty() {
+                            continue;
+                        }
+                        // ragged2e with no option under scrlttr2: new lengths and commands
+                        // only (its `selectfont` hook is `\relax` until `\RaggedRight` and the
+                        // like, which [`LTTR_NATIVE`] does not take).
+                        if lttr && p == "ragged2e" && opts.is_empty() {
+                            continue;
+                        }
+                        if ieee && !IEEE_PACKAGES.contains(&p) {
+                            stop("a package under IEEEtran", &mut blocked)?;
+                        }
+                        if lttr && !LTTR_PACKAGES.contains(&p) {
+                            stop("a package under scrlttr2", &mut blocked)?;
+                        }
+                        // natbib under scrbook: `\bibsection` is KOMA's `\bib@heading` (`koma_mkdouble`).
+                        if koma && KOMA_LATER_PACKAGES.contains(&p) && !(book && p == "natbib") {
                             stop("a package scrartcl interacts with", &mut blocked)?;
                             continue;
                         }
-                        if book && p == "fancyhdr" {
-                            // Its two-sided heads and marks under book are not native yet.
-                            stop(p, &mut blocked)?;
-                        } else if p == "geometry" {
+                        if p == "geometry" {
                             let opts: String = opts.lines().map(|l| l.split('%').next().unwrap_or("")).collect();
                             let mut g = super::engine_geometry::Geometry::default();
                             if opts.contains('\\') || g.keys(&opts, &mut |_| Some(0)).is_err() {
                                 stop("a geometry option", &mut blocked)?;
                             }
+                        } else if p == "fullpage" {
+                            // `fullpage_load`: lengths from the class's paper.
+                            if !layoutpkgs::fullpage_options_ok(opts) {
+                                stop("a fullpage option", &mut blocked)?;
+                            }
+                            if loaded.contains(&"geometry") || koma || memoir {
+                                stop("fullpage after geometry, or under KOMA or memoir", &mut blocked)?;
+                            }
+                            if !require(p, &mut loaded) {
+                                stop(p, &mut blocked)?;
+                            }
+                            continue;
+                        } else if p == "xurl" && loaded.contains(&"biblatex") {
+                            // xurl.sty's `\@ifpackageloaded{biblatex}` counters.
+                            stop("xurl after biblatex", &mut blocked)?;
+                            continue;
+                        } else if p == "caption" {
+                            // `caption_keys` reads them at the load (`caption::Opts::keys`).
+                            if opts.contains('%') || caption::Opts::default().keys(opts).is_err() {
+                                stop("a caption option", &mut blocked)?;
+                            }
+                        } else if p == "algorithm" {
+                            // `algorithm_load`: float.sty's `\newfloat{algorithm}{htbp}{loa}[within]`.
+                            match algorithm::algorithm_options(opts) {
+                                Ok((_, within, _)) if !opts.contains('%') && within.is_none_or(|w| w != "chapter" || report) && !counters.contains(&"algorithm") && !defined.contains(&"algorithm") => {
+                                    counters.push("algorithm");
+                                    newfloats.push("algorithm");
+                                }
+                                _ => stop("an algorithm option", &mut blocked)?,
+                            }
+                        } else if p == "algpseudocode" {
+                            if opts.contains('%') || algorithm::pseudocode_options(opts).is_err() {
+                                stop("an algpseudocode option", &mut blocked)?;
+                            }
                         } else if p == "hyperref" {
                             // `hyper_keys` reads them at the load; commands there are not native.
                             if opts.contains('\\') || opts.contains('%') {
                                 stop("a hyperref option", &mut blocked)?;
+                            }
+                        } else if p == "cleveref" {
+                            // `cleveref_load`: the names' options.
+                            if !cleveref::options_ok(opts) {
+                                stop("a cleveref option", &mut blocked)?;
                             }
                         } else if p == "natbib" {
                             // `natbib_load` reads them; the ones it refuses stop here.
@@ -2884,15 +4995,27 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                                 stop("a biblatex option", &mut blocked)?;
                             }
                         } else if p == "titlesec" {
-                            // Formats and spacing only (`titlesec_load`); article without parskip.
-                            if report || loaded.contains(&"parskip") || !titlesec::options_ok(opts) {
+                            // Formats and spacing only (`titlesec_load`); article, report or book.
+                            if !titlesec::options_ok(opts) {
                                 stop("a titlesec option", &mut blocked)?;
+                            } else if report && (koma || memoir) {
+                                stop("titlesec under KOMA-Script or memoir", &mut blocked)?;
                             }
                         } else if p == "xcolor" && opts.split(',').map(str::trim).filter(|o| !o.is_empty()).eq(["table"]) {
                             // `table` loads colortbl after xcolor (`use_package`).
                             require(p, &mut loaded);
                             require("colortbl", &mut loaded);
                             continue;
+                        } else if p == "mathpazo" && opts.trim() == "sc" || p == "nth" && opts.trim() == "super" {
+                            // `sc` (`use_package`).
+                        } else if p == "cancel" && cancel::cancel_options(opts).is_some() {
+                            // Its options (`cancel_options`).
+                        } else if p == "footmisc" {
+                            if !footmisc_options_ok(opts) {
+                                stop("a footmisc option", &mut blocked)?;
+                            }
+                        } else if p == "enumitem" && opts.split(',').map(str::trim).all(|o| o.is_empty() || o == "shortlabels") {
+                            enit_short = true;
                         } else if p == "fontenc" {
                             // Only `[T1]` (`font_encoding`); it loads nothing.
                             if opts.split(',').map(str::trim).filter(|o| !o.is_empty()).ne(["T1"]) {
@@ -2902,16 +5025,30 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                             continue;
                         } else if p == "babel" {
                             // Its languages and spanish's options (`babel_options`).
+                            let opts_raw = opts;
                             let opts: String = opts.lines().map(|l| l.split('%').next().unwrap_or("")).collect();
                             match babel::ScanBabel::new(&opts) {
-                                Some(l) if lang.is_none() && !report => lang = Some(l),
-                                _ => stop("a babel option", &mut blocked)?,
+                                Some(l) if lang.is_none() && (!report || l.english_main() || l.report_ok() && !koma && !memoir) => lang = Some(l),
+                                _ => {
+                                    detail.set(opts_raw);
+                                    stop("a babel option", &mut blocked)?
+                                }
+                            }
+                            continue;
+                        } else if p == "tcolorbox" && tcolorbox::most(opts) {
+                            // `most`'s libraries: theorems' `\RequirePackage{amsmath}`, listingsutf8's
+                            // listings (the rest define keys and macros only, `tcolorbox::most`).
+                            if !require(p, &mut loaded) || !require("amsmath", &mut loaded) || !require("listings", &mut loaded) {
+                                stop(p, &mut blocked)?;
                             }
                             continue;
                         } else if !same_options(p, opts) {
                             // A package without a table is its own blocker; its options are
                             // named only for a package the native job loads.
                             let native = require(p, &mut loaded);
+                            if native {
+                                detail.set(p);
+                            }
                             stop(if native { "package options" } else { p }, &mut blocked)?;
                             continue;
                         }
@@ -2947,7 +5084,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                     // array.sty's own (`\@tfor\next:=<>clrmbp@!|`, tabularx's `X`, `*`) or an
                     // optional argument declines. The text is scanned on.
                     match newcolumntype_args(&rest[n..]) {
-                        Some((c, k, body)) if !b"<>clrmbp@!|X*".contains(&c) && !src[..i].contains("\\begin{document}") => {
+                        Some((c, k, body)) if !b"<>clrmbp@!|X*".contains(&c) && !doc_start(src).is_some_and(|d| d < i) => {
                             seen!(after_part(src, body));
                             // A letter defined again keeps its place in `\NC@list`.
                             match coltypes.iter_mut().find(|t| t.0 == c) {
@@ -2975,8 +5112,14 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                     seen!(after.trim_start(), SCAN_REACH);
                     match class_options(&rest[n..]) {
                         Err(what) => stop(what, &mut blocked)?,
-                        Ok(c) => (report, book, letter, koma, ams, memoir) = (c.2 == 1 || c.2 == 3 || c.2 == data_class::MEMOIR, c.2 == 3, c.2 == 2, c.2 == data_class::SCRARTCL, c.2 == data_class::AMSART, c.2 == data_class::MEMOIR),
+                        Ok(c) => (report, book, letter, koma, ams, memoir, ieee, lttr) = (c.2 == 1 || c.2 == 3 || c.2 == data_class::MEMOIR || c.2 == data_class::SCRREPRT || c.2 == data_class::SCRBOOK, c.2 == 3 || c.2 == data_class::SCRBOOK, c.2 == 2, c.2 == data_class::SCRARTCL || c.2 == data_class::SCRREPRT || c.2 == data_class::SCRBOOK, c.2 == data_class::AMSART, c.2 == data_class::MEMOIR, c.2 == data_class::IEEETRAN, c.2 == data_class::SCRLTTR2),
                     }
+                    if let Ok(c) = class_options(&rest[n..]) {
+                        a0 = c.2 == data_class::A0POSTER;
+                        sp = c.2 == data_class::SCREENPLAY;
+                        ext = c.2 == data_class::EXTARTICLE;
+                    }
+                    titlepage = rest[n..].strip_prefix('[').and_then(|r| r.split_once(']')).is_some_and(|(o, _)| o.split(',').any(|o| o.trim() == "titlepage"));
                     // amsart.cls's `\RequirePackage{amsmath}` and `{amsfonts}`; its own amsthm
                     // code (`\ver@amsthm.sty` is set, so `\usepackage{amsthm}` loads nothing).
                     if ams {
@@ -2984,14 +5127,17 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                             require(p, &mut loaded);
                         }
                     }
+                    // memoir.cls's `\RequirePackage{array}` and `{booktabs}`.
+                    if memoir {
+                        for p in ["array", "booktabs"] {
+                            require(p, &mut loaded);
+                        }
+                    }
                     class = true;
                 } else if name == "framebox" {
-                    // `\framebox[width][pos]{text}` or `\framebox{text}`, not the picture form;
-                    // `\width` and kin in the width (`framebox_rest`).
+                    // `\framebox[width][pos]{text}`, `\framebox{text}` or the picture form
+                    // (`picture_makebox`); `\width` and kin in the width (`framebox_rest`).
                     let r = rest[n..].trim_start();
-                    if r.starts_with('(') {
-                        stop(name, &mut blocked)?;
-                    }
                     let width = r.strip_prefix('[').map(|b| bracketed(b).map(|h| &b[h.len() + 1..]));
                     seen!(match width {
                         Some(Some(after)) => after,
@@ -3024,12 +5170,9 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                     }
                 } else if matches!(name, "fbox" | "textsuperscript" | "textsubscript") {
                 } else if name == "makebox" {
-                    // `\makebox[width][pos]{text}` or `\makebox{text}`, not the picture form.
+                    // `\makebox[width][pos]{text}`, `\makebox{text}` or the picture form.
                     seen!(rest[n..].trim_start());
-                    if rest[n..].trim_start().starts_with('(') {
-                        stop(name, &mut blocked)?;
-                    }
-                } else if name == "thepage" && loaded.contains(&"fancyhdr") && !src[..i].contains("\\begin{document}") {
+                } else if matches!(name, "thepage" | "leftmark" | "rightmark") && loaded.contains(&"fancyhdr") && !doc_start(src).is_some_and(|d| d < i) {
                     // In a fancyhdr slot, typeset at output time (`fancy_tokens`).
                 } else if matches!(name, "colorbox" | "fcolorbox") {
                     // xcolor's `\color@b@x` (`colorbox`); color.sty's differs.
@@ -3055,9 +5198,46 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                         }
                         _ => stop(name, &mut blocked)?,
                     }
-                } else if matches!(name, "titleformat" | "titlespacing") && loaded.contains(&"titlesec") {
+                } else if matches!(name, "counterwithin" | "counterwithout") {
+                    // A heading counter's numbering changed where no number shows it
+                    // (`counter::counter_change_unseen`, `counter_within`).
+                    match counter::counter_change_unseen(src, &rest[n..]) {
+                        Some(len) => {
+                            i = src.len() - rest[n + len..].len();
+                            continue;
+                        }
+                        None => stop(name, &mut blocked)?,
+                    }
+                } else if matches!(name, "preto" | "appto" | "gpreto" | "gappto") && loaded.contains(&"etoolbox") {
+                    // etoolbox's patch of a kernel macro the document never runs
+                    // (`userdef::etb_unseen_patch`, `etb_unseen`): its code is not read.
+                    match userdef::etb_unseen_patch(src, &rest[n..]) {
+                        Some(len) => {
+                            i = src.len() - rest[n + len..].len();
+                            continue;
+                        }
+                        None => stop(name, &mut blocked)?,
+                    }
+                } else if name == "linespread" {
+                    // `\linespread{factor}` (`line_spread`): in the preamble, or in the body with
+                    // its `\selectfont` right after.
+                    let after = rest[n..].trim_start();
+                    let next = after.strip_prefix('{').and_then(|r| r.split_once('}')).map(|(x, r)| (x, r.trim_start()));
+                    let body = doc_start(src).is_some_and(|d| d < i);
+                    match next {
+                        Some((x, r)) if x.trim().parse::<f64>().is_ok() && !body => {
+                            i = src.len() - r.len();
+                            continue;
+                        }
+                        Some((x, r)) if x.trim().parse::<f64>().is_ok() && r.starts_with("\\selectfont") && !r[11..].starts_with(|c: char| c.is_ascii_alphabetic() || c == '@') => {
+                            i = src.len() - r.len() + 11;
+                            continue;
+                        }
+                        _ => stop(name, &mut blocked)?,
+                    }
+                } else if matches!(name, "titleformat" | "titlespacing" | "titlelabel") && loaded.contains(&"titlesec") {
                     // Read whole by `titlesec::call_len`; the natives store the arguments.
-                    match titlesec::call_len(name, &rest[n..], loaded.contains(&"xcolor") || loaded.contains(&"color")) {
+                    match titlesec::call_len(name, &rest[n..], loaded.contains(&"xcolor") || loaded.contains(&"color"), report && !koma && !memoir) {
                         Some(len) => {
                             // A last `[...]` was looked for.
                             let t = rest[n + len..].trim_start();
@@ -3079,18 +5259,35 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                     };
                     let keys = after.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
                     let names_ok = names.split(',').map(str::trim).all(|p| p.is_empty() || matches!(p, "enumerate" | "itemize" | "description") || p.parse::<u8>().is_ok());
-                    if !names_ok || !keys.is_some_and(enit_keys_ok) || src[..i].contains("\\begin{document}") {
+                    // A short label in `\setlist` is read in the list it applies to; only
+                    // `enumerate`'s or `itemize`'s own are taken (`enit_short_ok`).
+                    let short = enit_short && matches!(names.trim(), "enumerate" | "itemize") && keys.is_some_and(|k| enit_short_ok(k, names.trim() == "enumerate"));
+                    if !names_ok || !(short || keys.is_some_and(enit_keys_ok)) || doc_start(src).is_some_and(|d| d < i) {
                         stop("enumitem list options", &mut blocked)?;
                     }
                     enit_end = src.len() - after.len() + 1 + keys.map_or(0, str::len);
                     seen!(&src[enit_end..]);
+                } else if name == "newtcolorbox" && loaded.contains(&"tcolorbox") {
+                    // `\newtcolorbox{name}[n][default]{options}` in the preamble
+                    // (`new_tcolorbox`): the environment is the document's, its options of
+                    // `tcolorbox::keys_ok` (`#n` items allowed), scanned on as text.
+                    match tcolorbox::newtcolorbox_args(&rest[n..]) {
+                        Some((e, opt, body, used)) if !ENVS.contains(&e) && !thms.contains(&e) && !known(e) && !defined.contains(&e) && tcolorbox::keys_ok(body, true) && !doc_start(src).is_some_and(|d| d < i) => {
+                            seen!(&rest[n + used..]);
+                            defined.push(e);
+                            if opt {
+                                tcb_opt.push(e);
+                            }
+                        }
+                        _ => stop("newtcolorbox", &mut blocked)?,
+                    }
                 } else if matches!(name, "newenvironment" | "renewenvironment") {
                     // `\newenvironment{name}[n]{begin}{end}` in the preamble (`new_environment`):
                     // `\name` and `\endname` are the document's macros, their texts scanned as
                     // text. A name the native job has or reads goes to the engine.
                     let env = rest[n..].trim_start_matches('*').trim_start().strip_prefix('{').and_then(|r| r.split_once('}')).map(|r| r.0);
                     match env {
-                        Some(e) if !e.is_empty() && e.bytes().all(|c| c.is_ascii_alphabetic()) && !ENVS.contains(&e) && !AMS_ARRAYS.contains(&e) && !thms.contains(&e) && !READ_INTERNALLY.contains(&e) && !known(e) && !(SETSPACE_ENVS.contains(&e) && loaded.contains(&"setspace")) && !src[..i].contains("\\begin{document}") => {
+                        Some(e) if !e.is_empty() && e.bytes().all(|c| c.is_ascii_alphabetic()) && !ENVS.contains(&e) && !AMS_ARRAYS.contains(&e) && !thms.contains(&e) && !READ_INTERNALLY.contains(&e) && !known(e) && !(SETSPACE_ENVS.contains(&e) && loaded.contains(&"setspace")) && !doc_start(src).is_some_and(|d| d < i) => {
                             seen!(after_part(src, e));
                             defined.push(e)
                         }
@@ -3105,11 +5302,142 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                     }
                     i += 1 + n + rest[n..].find('}').map_or(0, |k| k + 1);
                     continue;
-                } else if lang.is_some_and(|l| l.spanish() && matches!(name, "lim" | "limsup" | "liminf" | "max" | "min" | "inf" | "bmod" | "pmod" | "mod" | "dotlessi") || l.layout() && (matches!(name, "thanks" | "roman" | "alph" | "Alph" | "pagenumbering" | "appendix" | "fnsymbol" | "tableofcontents") || name == "begin" && ["{enumerate}", "{itemize}"].iter().any(|e| rest[n..].starts_with(e)))) {
+                } else if lang.is_some_and(|l| l.spanish() && matches!(name, "lim" | "limsup" | "liminf" | "max" | "min" | "inf" | "bmod" | "pmod" | "mod" | "dotlessi") || l.layout() && matches!(name, "thanks" | "roman" | "alph" | "Alph" | "pagenumbering" | "appendix" | "fnsymbol" | "tableofcontents")) {
                     // spanish's `\mathspanish` operators, and `\layoutspanish` (main language):
-                    // its `\@fnsymbol`, `\@roman`, `\@alph`, `\@Alph` and list labels.
+                    // its `\@fnsymbol`, `\@roman`, `\@alph`, `\@Alph` (its list labels are
+                    // checked as the lists open, `es_list_ok`).
                     stop("a command babel's spanish redefines", &mut blocked)?;
-                } else if !known(name) {
+                } else if lang.is_some_and(|l| l.french() && matches!(name, "footnote" | "footnotemark" | "footnotetext" | "url" | "href" | "nolinkurl" | "path" | "verb" | "part")) {
+                    // french3.ldf's footnotes (`\@footnotemarkFB`, `\@makefntextFB`), the
+                    // active `: ; ! ?` in a URL or verbatim argument, and `\FB@partname`.
+                    stop("a command babel's french changes", &mut blocked)?;
+                } else if lang.is_some_and(|l| l.french()) && matches!(name, "og" | "fg") {
+                    // french3.ldf's guillemets (`engine_babel`'s `fr_og`, `fr_fg`).
+                } else if name == "AtBeginDocument" {
+                    // `\AtBeginDocument{code}` (`engine_userdef`): the code is scanned on where
+                    // it stands.
+                } else if name == "newif" {
+                    // `\newif\ifname` (`engine_userdef`) of letters nothing defines: `\ifname`,
+                    // `\nametrue` and `\namefalse` are the document's. Each is pushed as a slice
+                    // of one of its uses (the names are compared by their text).
+                    let x = rest[n..].trim_start().strip_prefix("\\if").unwrap_or("");
+                    let base = &x[..x.bytes().take_while(u8::is_ascii_alphabetic).count()];
+                    let full = &rest[n..].trim_start()[1..3 + base.len()];
+                    let fresh = |w: &str| scan_list(w) == 0 && table_names(w) == 0 && !READ_INTERNALLY.contains(&w);
+                    if base.is_empty() || x[base.len()..].starts_with('@') || !fresh(full) || defined.contains(&full) {
+                        stop(name, &mut blocked)?;
+                    } else {
+                        defined.push(full);
+                        for suffix in ["true", "false"] {
+                            let word = format!("\\{base}{suffix}");
+                            if !fresh(&word[1..]) {
+                                stop(name, &mut blocked)?;
+                            }
+                            let at = src.match_indices(&word).map(|(k, _)| k).find(|&k| !src[k + word.len()..].starts_with(|c: char| c.is_ascii_alphabetic()));
+                            if let Some(k) = at {
+                                defined.push(&src[k + 1..k + word.len()]);
+                            }
+                        }
+                        i = src.len() - x[base.len()..].len();
+                        continue;
+                    }
+                } else if name == "newlength" {
+                    // `\newlength{\name}` or `\newlength\name` (`engine_length`) of a name nothing
+                    // defines: the document's own, read as a length where it is used.
+                    let after = rest[n..].trim_start();
+                    let (braced, r) = match after.strip_prefix('{') {
+                        Some(r) => (true, r.trim_start()),
+                        None => (false, after),
+                    };
+                    let x = r.strip_prefix('\\').unwrap_or("");
+                    let new = &x[..x.bytes().take_while(u8::is_ascii_alphabetic).count()];
+                    let close = if braced { x[new.len()..].trim_start().strip_prefix('}') } else { Some(&x[new.len()..]) };
+                    match close {
+                        Some(c) if !new.is_empty() &&scan_list(new) == 0 && table_names(new) == 0 && !defined.contains(&new) && !READ_INTERNALLY.contains(&new) => {
+                            defined.push(new);
+                            i = src.len() - c.len();
+                            continue;
+                        }
+                        _ => stop(name, &mut blocked)?,
+                    }
+                } else if name == "newfloat" && loaded.contains(&"float") {
+                    // float.sty's `\newfloat{type}{placement}{ext}[within]` in the preamble
+                    // (`engine_float::new_float`): a new name of letters, its counter one of
+                    // the document's, `\begin{type}` a float.
+                    match newfloat_args(&rest[n..]) {
+                        Some((t, within, len)) if !doc_start(src).is_some_and(|d| d < i) && !counters.contains(&t) && !counter::KERNEL_COUNTERS.contains(&t) && !thms.contains(&t) && !ENVS.contains(&t) && !defined.contains(&t) && within.is_none_or(|w| counters.contains(&w) || matches!(w, "chapter" | "section" | "subsection" | "subsubsection")) => {
+                            counters.push(t);
+                            newfloats.push(t);
+                            i += 1 + n + len;
+                            continue;
+                        }
+                        _ => stop(name, &mut blocked)?,
+                    }
+                } else if name == "newcounter" {
+                    // `\newcounter{name}` or `\newcounter{name}[within]` (`engine_counter`): a
+                    // new name of letters, within one of the document's own counters.
+                    let after = rest[n..].trim_start();
+                    let arg = after.strip_prefix('{').and_then(|r| r.split_once('}'));
+                    let Some((c, r)) = arg.filter(|(c, _)| !c.is_empty() && c.bytes().all(|b| b.is_ascii_alphabetic()) && !counters.contains(c) && !counter::KERNEL_COUNTERS.contains(c) && !thms.contains(c)) else {
+                        stop(name, &mut blocked)?;
+                        i += 1 + n;
+                        continue;
+                    };
+                    // `\@ifnextchar[` looks past spaces for `[within]`.
+                    let r = r.trim_start();
+                    seen!(r);
+                    let mut end = src.len() - r.len();
+                    if let Some(w) = r.strip_prefix('[') {
+                        match w.split_once(']') {
+                            Some((p, _)) if counters.contains(&p) || matches!(p, "chapter" | "section" | "subsection" | "subsubsection") => end = src.len() - w.len() + p.len() + 1,
+                            _ => {
+                                stop(name, &mut blocked)?;
+                                i += 1 + n;
+                                continue;
+                            }
+                        }
+                    }
+                    counters.push(c);
+                    i = end;
+                    continue;
+                } else if matches!(name, "stepcounter" | "refstepcounter" | "addtocounter" | "arabic" | "roman" | "Roman" | "alph" | "Alph" | "value") {
+                    // A command on one of the document's own counters (`engine_counter`), under
+                    // hyperref with its anchor.
+                    let after = rest[n..].trim_start();
+                    let arg = after.strip_prefix('{').and_then(|r| r.split_once('}')).map(|r| r.0);
+                    match arg {
+                        // `\addtocounter`'s value is read on, for calc's expressions below.
+                        Some(c) if counters.contains(&c) && name == "addtocounter" => {}
+                        Some(c) if counters.contains(&c) => {
+                            i = src.len() - after.len() + c.len() + 2;
+                            continue;
+                        }
+                        // A form of a heading's counter (`\arabic{section}`, `counter_form`).
+                        Some(c) if matches!(name, "arabic" | "roman" | "Roman" | "alph" | "Alph") && matches!(c, "chapter" | "section" | "subsection" | "subsubsection" | "enumi" | "enumii" | "enumiii" | "enumiv" | "footnote") => {
+                            i = src.len() - after.len() + c.len() + 2;
+                            continue;
+                        }
+                        // In an `\ifthenelse` test, a counter `counter_value` reads (the
+                        // native `\value` declines anywhere else).
+                        Some(c) if name == "value" && loaded.contains(&"ifthen") && matches!(c, "chapter" | "section" | "subsection" | "subsubsection" | "enumi" | "enumii" | "enumiii" | "enumiv" | "footnote" | "figure" | "table" | "equation") => {
+                            i = src.len() - after.len() + c.len() + 2;
+                            continue;
+                        }
+                        _ => stop(name, &mut blocked)?,
+                    }
+                } else if name.strip_prefix("the").is_some_and(|c| counters.contains(&c)) {
+                    // `\the<name>` of one of the document's counters (its macro, or the
+                    // document's redefinition).
+                } else if let Some(check) = prescan_check(name, &loaded) {
+                    match check(&ScanAt { src, i, after: &rest[n..], mcols, loaded: &loaded }) {
+                        Verdict::Pass => {}
+                        Verdict::Stop(why) => stop(why.unwrap_or(name), &mut blocked)?,
+                        Verdict::Skip(to) => {
+                            i = to;
+                            continue;
+                        }
+                    }
+                } else if !known(name) && !(memoir && MEMOIR_OWN.contains(&name)) && !(a0 && a0poster::A0POSTER_OWN.contains(&name)) && !(sp && screenplay::SCREENPLAY_OWN.contains(&name)) {
                     stop(name, &mut blocked)?;
                 } else if matches!(name, "setlength" | "addtolength") {
                     // The length (a name the native job checks when it runs) and its value,
@@ -3138,6 +5466,11 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                         stop("a calc expression", &mut blocked)?;
                     }
                 }
+                // footmisc (`footmisc_options_ok`): its footnotes and its float placement are
+                // not native.
+                if loaded.contains(&"footmisc") && (matches!(name, "footnote" | "footnotemark" | "footnotetext" | "thanks") || name == "begin" && ["{figure}", "{table}", "{figure*}", "{table*}"].iter().any(|e| rest[n..].starts_with(e))) {
+                    stop("a footnote or float under footmisc", &mut blocked)?;
+                }
                 if mcols > 0 && matches!(name, "footnote" | "footnotetext" | "thanks" | "marginpar" | "clearpage" | "cleardoublepage") {
                     stop("a footnote, float or \\clearpage in multicols", &mut blocked)?;
                 }
@@ -3151,22 +5484,44 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                         seen!(after);
                         if let Some(r) = after.strip_prefix('[') {
                             let keys = bracketed(r);
-                            if env == "description" || loaded.contains(&"enumerate") || !keys.is_some_and(enit_keys_ok) {
+                            let ok = if env == "description" { enit_desc_keys_ok } else { enit_keys_ok };
+                            let short = enit_short && env != "description" && keys.is_some_and(|k| enit_short_ok(k, env == "enumerate"));
+                            if loaded.contains(&"enumerate") || !(short || keys.is_some_and(ok)) {
                                 stop("enumitem list options", &mut blocked)?;
                             }
                             enit_end = src.len() - r.len() + keys.map_or(0, str::len);
                             seen!(&src[enit_end..]);
                         }
                     }
-                    if name == "begin" && env == "minipage" {
+                    // tcolorbox's `[options]` (`tcolorbox::keys_ok`), also after a
+                    // `\newtcolorbox` environment with an optional argument.
+                    if name == "begin" && loaded.contains(&"tcolorbox") && (env == "tcolorbox" && !defined.contains(&env) || tcb_opt.contains(&env)) {
+                        let after = rest[n + env.len() + 2..].trim_start();
+                        seen!(after);
+                        if let Some(r) = after.strip_prefix('[') {
+                            seen!(bracketed(r).map_or("", |k| &r[k.len()..]));
+                            if !bracketed(r).is_some_and(|k| tcolorbox::keys_ok(k, false)) {
+                                stop("tcolorbox options", &mut blocked)?;
+                            }
+                        }
+                    }
+                    if name == "begin" && (env == "minipage" || matches!(env, "subfigure" | "subtable") && loaded.contains(&"subcaption")) {
                         let (ok, read) = box_position_ok(&rest[n + env.len() + 2..]);
                         seen!(read);
                         if !ok {
                             stop("a minipage with a height or another position", &mut blocked)?;
                         }
                     }
-                    let ams_array = AMS_ARRAYS.contains(&env) && loaded.contains(&"amsmath");
-                    let proof = env == "proof" && loaded.contains(&"amsthm") || env == "tabularx" && loaded.contains(&"tabularx") || env == "longtable" && loaded.contains(&"longtable") || SETSPACE_ENVS.contains(&env) && loaded.contains(&"setspace") || matches!(env, "multicols" | "multicols*") && loaded.contains(&"multicol");
+                    let ams_array = AMS_ARRAYS.contains(&env) && loaded.contains(&"amsmath") && (!MT_CASES.contains(&env) && !MT_MATRICES.contains(&env) || loaded.contains(&"mathtools"));
+                    let proof = env == "proof" && loaded.contains(&"amsthm") || env == "IEEEkeywords" && ieee || env == "titlingpage" && memoir || env == "dialogue" && sp || env == "tabularx" && loaded.contains(&"tabularx") || env == "longtable" && loaded.contains(&"longtable") || SETSPACE_ENVS.contains(&env) && loaded.contains(&"setspace") || matches!(env, "multicols" | "multicols*") && loaded.contains(&"multicol") || env == "tcolorbox" && loaded.contains(&"tcolorbox") || matches!(env, "threeparttable" | "tablenotes") && loaded.contains(&"threeparttable") || matches!(env, "subfigure" | "subtable") && loaded.contains(&"subcaption") || env == "algorithmic" && loaded.contains(&"algorithmicx") || env == "@twocolumnfalse";
+                    // threeparttable's `[t]` only; tablenotes' options (`para`, `flushleft`)
+                    // decline.
+                    if name == "begin" && matches!(env, "threeparttable" | "tablenotes") && loaded.contains(&"threeparttable") {
+                        let after = rest[n + env.len() + 2..].trim_start();
+                        if after.starts_with('[') && !(env == "threeparttable" && after.starts_with("[t]")) {
+                            stop("a threeparttable or tablenotes option", &mut blocked)?;
+                        }
+                    }
                     if matches!(env, "multicols" | "multicols*") && loaded.contains(&"multicol") && !defined.contains(&env) {
                         // `{n}` with n from 2 to 20, no heading argument, at the outer level.
                         if name == "end" {
@@ -3186,10 +5541,11 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                     if mcols > 0 && env == "longtable" {
                         stop("a footnote, float or \\clearpage in multicols", &mut blocked)?;
                     }
-                    if !(ams_array || proof || thms.contains(&env) || ENVS.contains(&env) && blocked_names(env) & have == 0 && (!matches!(env, "equation*" | "align" | "align*" | "gather" | "gather*" | "multline" | "multline*" | "aligned" | "gathered" | "split") || loaded.contains(&"amsmath"))) && !defined.contains(&env) {
+                    let newfloat = newfloats.contains(&env.strip_suffix('*').unwrap_or(env));
+                    if !(ams_array || proof || newfloat || thms.contains(&env) || ENVS.contains(&env) && blocked_names(env) & have == 0 && (!matches!(env, "equation*" | "subequations" | "align" | "align*" | "alignat" | "alignat*" | "flalign" | "flalign*" | "gather" | "gather*" | "multline" | "multline*" | "aligned" | "gathered" | "split") || loaded.contains(&"amsmath"))) && !defined.contains(&env) {
                         stop(env, &mut blocked)?;
                     }
-                    if matches!(env, "figure" | "table" | "figure*" | "table*") {
+                    if matches!(env, "figure" | "table" | "figure*" | "table*") || newfloat {
                         // A float in a float or a tabular is `\@parmoderr`.
                         if name == "end" {
                             floats = floats.saturating_sub(1);
@@ -3202,9 +5558,9 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                         }
                     }
                     // `align`'s `&` is taken as a tabular's is.
-                    if (matches!(env, "tabular" | "tabularx" | "longtable" | "align" | "align*" | "gather" | "gather*" | "multline" | "multline*" | "aligned" | "gathered" | "split" | "array" | "eqnarray" | "eqnarray*") || ams_array) && name == "end" {
+                    if (matches!(env, "tabular" | "tabular*" | "tabularx" | "longtable" | "align" | "align*" | "alignat" | "alignat*" | "flalign" | "flalign*" | "gather" | "gather*" | "multline" | "multline*" | "aligned" | "gathered" | "split" | "array" | "eqnarray" | "eqnarray*") || ams_array) && name == "end" {
                         tabs = tabs.saturating_sub(1);
-                    } else if matches!(env, "align" | "align*" | "gather" | "gather*" | "multline" | "multline*" | "aligned" | "gathered" | "split" | "eqnarray" | "eqnarray*") || ams_array {
+                    } else if matches!(env, "align" | "align*" | "alignat" | "alignat*" | "flalign" | "flalign*" | "gather" | "gather*" | "multline" | "multline*" | "aligned" | "gathered" | "split" | "eqnarray" | "eqnarray*") || ams_array {
                         tabs += 1;
                     } else if env == "array" && !defined.contains(&env) {
                         // `[pos]{spec}`: a preamble `tabular::mkpream_array` takes.
@@ -3216,19 +5572,27 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                         };
                         let spec = after.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
                         seen!(spec.map_or("", |s| after_part(src, s)));
-                        if spec.and_then(tabular::array_spec).and_then(|s| tabular::mkpream_array(&s)).is_none() {
+                        // A macro's parameter (`\newcommand{\mat}[2]{\left(\begin{array}{#1}…`)
+                        // is the use's preamble, which the run reads (`tabular`'s check).
+                        let param = spec.is_some_and(|s| s.len() == 2 && s.starts_with('#') && s.as_bytes()[1].is_ascii_digit());
+                        if !param && spec.and_then(tabular::array_spec).and_then(|s| tabular::mkpream_array(&s)).is_none() {
                             stop("array preamble", &mut blocked)?;
                         }
-                    } else if env == "tabular" && !defined.contains(&env) {
-                        // `[pos]{spec}`: a preamble `tabular::mkpream` takes.
+                    } else if matches!(env, "tabular" | "tabular*") && !defined.contains(&env) {
+                        // `[pos]{spec}` (after `tabular*`'s `{width}`): a preamble
+                        // `tabular::mkpream` takes.
                         tabs += 1;
                         let after = rest[n + env.len() + 2..].trim_start();
+                        let after = if env == "tabular*" { after.strip_prefix('{').and_then(|r| balanced(r).map(|k| r[k + 1..].trim_start())).unwrap_or("") } else { after };
                         let after = match after.strip_prefix('[') {
                             Some(r) => r.split_once(']').map_or("", |(_, a)| a.trim_start()),
                             None => after,
                         };
                         let spec = after.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
                         seen!(spec.map_or("", |s| after_part(src, s)));
+                        if loaded.contains(&"array") {
+                            spec_end = spec.map_or(spec_end, |s| src.len() - after_part(src, s).len());
+                        }
                         if !spec.is_some_and(|s| tabular::spec_ok(s, loaded.contains(&"array"), loaded.contains(&"tabularx"), loaded.contains(&"siunitx"), &coltypes)) {
                             stop("tabular preamble", &mut blocked)?;
                         }
@@ -3245,6 +5609,9 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                         };
                         let spec = after.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
                         seen!(spec.map_or("", |s| after_part(src, s)));
+                        if loaded.contains(&"array") {
+                            spec_end = spec.map_or(spec_end, |s| src.len() - after_part(src, s).len());
+                        }
                         if !spec.is_some_and(|s| tabular::spec_ok(s, loaded.contains(&"array"), loaded.contains(&"tabularx"), loaded.contains(&"siunitx"), &coltypes)) {
                             stop("tabular preamble", &mut blocked)?;
                         }
@@ -3259,6 +5626,7 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                         };
                         let spec = after.strip_prefix('{').and_then(|r| balanced(r).map(|k| &r[..k]));
                         seen!(spec.map_or("", |s| after_part(src, s)));
+                        spec_end = spec.map_or(spec_end, |s| src.len() - after_part(src, s).len());
                         if !spec.is_some_and(|s| tabular::spec_ok(s, true, true, loaded.contains(&"siunitx"), &coltypes)) {
                             stop("tabular preamble", &mut blocked)?;
                         }
@@ -3277,13 +5645,30 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str) -> bool, from: Opt
                 }
                 let known = |name: &str| {
                     let (table, blocked, list) = names_row(name);
-                    blocked & have == 0 && (table & have != 0 || list & DRIVER_NATIVE != 0 && PACKAGE_NATIVES.iter().any(|p| p.1 == name && DRIVER_PACKAGES.contains(&p.0) && loaded.contains(&p.0)) || list & (IN_WORDS | IN_PREAMBLE) != 0) || defined.contains(&name)
+                    (t1 || !t1_only(name)) && blocked & have == 0 && (table & have != 0 || list & DRIVER_NATIVE != 0 && PACKAGE_NATIVES.iter().any(|p| p.1 == name && DRIVER_PACKAGES.contains(&p.0) && loaded.contains(&p.0)) || list & (IN_WORDS | IN_PREAMBLE) != 0) || defined.contains(&name)
                 };
                 match utf8_text(&src[i..]) {
-                    // babel's OT1 `\"` is its own (`\bbl@umlauta`).
-                    Some((len, text)) if text_names(text).all(|name| known(name) || name.len() == 1 && "'`^\"~=. -".contains(name)) && !(lang.is_some() && !t1 && text.contains("\\\"")) => i += len,
+                    Some((len, text)) if text_names(text).all(|name| known(name) || name.len() == 1 && "'`^\"~=. -".contains(name)) => i += len,
                     _ => {
-                        stop(src.get(i..i + n).filter(|c| c.is_ascii()).unwrap_or("a non-ASCII character"), &mut blocked)?;
+                        // The census names the character (its UTF-8 bytes: as many continuation
+                        // bytes as the lead byte says, if there) and goes on after all of them.
+                        let mut n = n;
+                        if !src[i..].starts_with(|c: char| c.is_ascii()) {
+                            let len = match src[i..].chars().next().map_or(0, |c| c as u32) {
+                                0xF0.. => 4,
+                                0xE0.. => 3,
+                                0xC0.. => 2,
+                                _ => 1,
+                            };
+                            let r = &src[i..];
+                            let more = r.chars().skip(1).take(len - 1).take_while(|c| matches!(*c as u32, 0x80..=0xBF)).count();
+                            let whole = &r[..r.char_indices().nth(1 + more).map_or(r.len(), |(k, _)| k)];
+                            detail.set(whole);
+                            stop("a non-ASCII character", &mut blocked)?;
+                            n = whole.len();
+                        } else {
+                            stop(&src[i..i + n], &mut blocked)?;
+                        }
                         i += n;
                     }
                 }
@@ -3355,6 +5740,58 @@ fn bracketed(s: &str) -> Option<&str> {
     None
 }
 
+/// After `\newcommand` (or its kin, `def` false) or `\def`: the offset just past the
+/// definition's text, `*{\name}[n][default]{text}` or `\name#1#2{text}`; `None` for any other
+/// form (`\def`'s delimited parameters among them). A `\` takes the next byte with it; a
+/// `%` the rest of its line.
+fn def_text_end(s: &str, def: bool) -> Option<usize> {
+    let b = s.as_bytes();
+    let ws = |mut k: usize| {
+        while b.get(k).is_some_and(|c| c.is_ascii_whitespace()) {
+            k += 1;
+        }
+        k
+    };
+    let cs = |k: usize| (b.get(k) == Some(&b'\\')).then(|| k + 1 + b[k + 1..].iter().take_while(|c| c.is_ascii_alphabetic()).count().max(1).min(b.len() - k - 1));
+    let mut k = ws(0);
+    if def {
+        k = ws(cs(k)?);
+        while b.get(k) == Some(&b'#') && b.get(k + 1).is_some_and(|c| (b'1'..=b'9').contains(c)) {
+            k = ws(k + 2);
+        }
+    } else {
+        if b.get(k) == Some(&b'*') {
+            k = ws(k + 1);
+        }
+        k = match b.get(k) {
+            Some(b'{') => ws(k + 1 + balanced(&s[k + 1..])? + 1),
+            _ => ws(cs(k)?),
+        };
+        for _ in 0..2 {
+            if b.get(k) == Some(&b'[') {
+                k = ws(k + 1 + s[k + 1..].find(']')? + 1);
+            }
+        }
+    }
+    if b.get(k) != Some(&b'{') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut j = k + 1;
+    while j < b.len() {
+        match b[j] {
+            b'\\' => j += 1,
+            b'%' => j += s[j..].find('\n')?,
+            b'{' => depth += 1,
+            b'}' if depth == 0 => return Some(j + 1),
+            b'}' => depth -= 1,
+            _ => {}
+        }
+        j += 1;
+    }
+    None
+}
+
 /// The length of a braced group's contents after its `{`, to its matching `}`.
 fn balanced(s: &str) -> Option<usize> {
     let mut depth = 0;
@@ -3390,69 +5827,18 @@ fn newcolumntype_args(rest: &str) -> Option<(u8, usize, &str)> {
     Some((c, k, &r[..balanced(r)?]))
 }
 
-/// letter.cls's commands the native job takes (`engine_letter`), only under it.
-const LETTER_ONLY: [&str; 7] = ["opening", "closing", "signature", "address", "name", "location", "telephone"];
-/// What article.cls defines and letter.cls does not, or defines otherwise (`\medskipamount`
-/// is `\parskip`; `\@makefntext` and `\footnoterule` differ; the names below are not
-/// defined), or what it has and the native job does not take yet (`\cc`, `\encl`, `\ps`,
-/// `\makelabels`, `\stopbreaks`, `\startbreaks`): under letter these stop.
-const LETTER_LACKS: [&str; 32] = ["section", "subsection", "subsubsection", "paragraph", "subparagraph", "part", "maketitle", "tableofcontents", "listoffigures", "listoftables", "appendix", "caption", "footnote", "footnotemark", "footnotetext", "thanks", "bibitem", "newtheorem", "numberwithin", "printindex", "medskip", "abstractname", "appendixname", "contentsname", "figurename", "tablename", "indexname", "listfigurename", "listtablename", "partname", "refname", "newblock"];
-/// The environments of [`LETTER_LACKS`]: letter's `quote`, `quotation` and `verse` end
-/// their list head with `\item[]` (article's `\item\relax`), and its `quotation` has no
-/// `\parsep`.
-const LETTER_LACKS_ENVS: [&str; 10] = ["figure", "table", "figure*", "table*", "abstract", "thebibliography", "titlepage", "quote", "quotation", "verse"];
-
-/// amsart.cls's own front-matter commands (`engine_amsart`), only under it (its `\address` is letter.cls's name too, `LETTER_ONLY`).
-/// What the native job takes under memoir: the preamble's class, packages and title fields,
-/// `\section` to `\subsubsection` (memoir's `\@startsection` and `\M@sect`), text fonts and
-/// sizes (the class table's `\@setfontsize` rows). The rest of memoir.cls's document commands
-/// (`\chapter`, `\maketitle`, `\tableofcontents`, lists, `\footnote`, floats, `verbatim`,
-/// `\today`, page styles, the layout commands) stop until ported
-/// (`2026-10-31-memoir-moderncv.md`).
-const MEMOIR_NATIVE: [&str; 36] = ["documentclass", "usepackage", "title", "author", "date", "begin", "end", "section", "subsection", "subsubsection", "par", "textbf", "textit", "textsl", "textsc", "textup", "textmd", "textrm", "textsf", "texttt", "emph", "bfseries", "itshape", "em", "noindent", "tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge", "\\"];
-/// The packages taken under memoir: they change no command memoir.cls defines.
-const MEMOIR_PACKAGES: [&str; 3] = ["inputenc", "fontenc", "lmodern"];
-const AMS_ONLY: [&str; 5] = ["curraddr", "email", "urladdr", "keywords", "subjclass"];
-/// The packages a native amsart document may load: math and graphics, which leave the
-/// class's page, title, heading, footnote and citation code alone.
-const AMS_PACKAGES: [&str; 8] = ["amsmath", "amssymb", "amsfonts", "amsthm", "graphicx", "mathtools", "bm", "url"];
-/// What amsart.cls defines otherwise than article.cls and the native job does not take yet,
-/// or what it does not define: under amsart these stop. Its lists (`\makelabel` with
-/// `\upshape`, labels `(1)`), footnotes (`\@makefnmark` raised .9ex, `\footnoterule`
-/// 5pc), floats (`\@makecaption`), run-in numbered `\subsection`s, `thebibliography`,
-/// `\sloppy` (`\emergencystretch3em`), `\frenchspacing`, the skip amounts
-/// (`\@adjustvertspacing`), `\tableofcontents` (`\@tocline`), `\appendix`, `\part`,
-/// `\markboth`, its `\thanks` and `\dedicatory`, `\swapnumbers`, `\newtheoremstyle`,
-/// and amsmath's numbered displays and `\tag` (tags on the left under `leqno`).
-const AMS_LACKS: [&str; 33] = ["subsection", "subsubsection", "paragraph", "subparagraph", "part", "appendix", "tableofcontents", "listoffigures", "listoftables", "footnote", "footnotemark", "footnotetext", "thanks", "caption", "markboth", "markright", "sloppy", "fussy", "frenchspacing", "nonfrenchspacing", "smallskip", "medskip", "bigskip", "bibitem", "newblock", "pagestyle", "thispagestyle", "dedicatory", "swapnumbers", "newtheoremstyle", "tag", "printindex", "contrib"];
-/// The environments of [`AMS_LACKS`]: lists, floats, numbered displays (amsmath under
-/// `leqno`), `thebibliography`, `titlepage`.
-const AMS_LACKS_ENVS: [&str; 22] = ["itemize", "enumerate", "description", "verse", "quote", "quotation", "figure", "table", "figure*", "table*", "thebibliography", "titlepage", "equation", "align", "gather", "multline", "eqnarray", "eqnarray*", "flalign", "alignat", "split", "theindex"];
-
 /// What report.cls defines otherwise than article.cls and the native job does not take yet:
 /// the title page versions of `\maketitle` (and `abstract`), `\part`, `\appendix`, the
 /// lists of figures and tables, `\numberwithin` (beside `\thechapter.`).
-const REPORT_LATER: [&str; 5] = ["part", "listoffigures", "listoftables", "numberwithin", "printindex"];
+const REPORT_LATER: &[&str] = &["part", "numberwithin"];
 
-/// What scrartcl.cls (KOMA-Script) defines otherwise than article.cls and the native job
-/// does not take yet: the list is the difference of every control sequence's meaning after
-/// `\begin{document}` under the two classes (`2026-10-31-native-koma.md`). Its headings
-/// (`\scr@startsection`, `\sectfont`), `\maketitle`, footnotes (`\@makefntext` with
-/// `\deffootnote`), captions and floats (`\@makecaption`, `\tb@atbegin@after`), the KOMA
-/// table of contents (tocbasic), `\appendix`, `\cleardoublepage`, the `headings` page styles.
-const KOMA_LATER: [&str; 15] = ["subparagraph", "part", "maketitle", "footnotetext", "footnotemark", "caption", "tableofcontents", "listoffigures", "listoftables", "appendix", "cleardoublepage", "printindex", "markboth", "markright", "numberwithin"];
-/// scrartcl's environments the native job does not take yet: `abstract`, `titlepage`, the
-/// floats, the bibliography and the index. (Its lists are native: the labels go through
-/// `\usekomafont` to the same fonts but `\labelenumii`, `\theenumii)`, and the description
-/// label's `\descfont`; `quotation` has `\listparindent 1em`; `\@list@extra` changes
-/// nothing while `\parskip` is not positive.)
-const KOMA_LATER_ENVS: [&str; 8] = ["abstract", "titlepage", "figure", "table", "figure*", "table*", "thebibliography", "theindex"];
-/// Packages that act on what scrartcl changes: its page styles (fancyhdr), headings
-/// (titlesec, hyperref's anchors), captions and floats (float, longtable), lists
-/// (enumitem, enumerate), the paper (geometry reads it from the class options, KOMA's is a4
-/// without one), `\parskip` (parskip), `\baselinestretch` (setspace, KOMA's is `1`), the
-/// captions names (babel), the bibliography (natbib).
-const KOMA_LATER_PACKAGES: [&str; 12] = ["hyperref", "fancyhdr", "titlesec", "natbib", "babel", "parskip", "geometry", "enumitem", "float", "longtable", "setspace", "enumerate"];
+/// What extsizes' extarticle.cls (1996) defines otherwise than article.cls and the native
+/// job does not take yet: the contents lines (`\l@part`, `\l@section` without `\kern-\p@
+/// \kern\p@`), the lists of figures and tables and `thebibliography` (their `\@mkboth`
+/// inside `\section*`'s argument, no `\@clubpenalty`), `titlepage` (the `\if@compatibility`
+/// one), `\part` (`~`). Its `\labelitem`s without `\labelitemfont` are `label_mark`'s.
+const EXT_LATER: &[&str] = &["part", "tableofcontents", "listoffigures", "listoftables", "listof", "listofalgorithms"];
+const EXT_LATER_ENVS: &[&str] = &["thebibliography", "titlepage"];
 
 /// `\documentclass[options]{article}` after its name: the size option's index in
 /// `data_class::CLASS_SIZES`, the combination of the parameter-only options
@@ -3481,17 +5867,52 @@ fn class_options(rest: &str) -> Result<(usize, u32, usize), &str> {
     let cls = data_class::CLASSES.iter().position(|c| after.trim_start().strip_prefix('{').and_then(|r| r.strip_prefix(c)).is_some_and(|r| r.starts_with('}'))).ok_or("documentclass")?;
     let (report, letter, book) = (cls == 1, cls == 2, cls == 3);
     let (mut size, mut paper, mut orient, mut side, mut draft, mut open, mut cols) = (None, None, None, None, None, None, None);
-    let koma = cls == data_class::SCRARTCL;
+    let koma = cls == data_class::SCRARTCL || cls == data_class::SCRREPRT || cls == data_class::SCRBOOK;
+    let scrbook = cls == data_class::SCRBOOK;
     let ams = cls == data_class::AMSART;
+    // scrlttr2 (`engine_scrlttr2::options`): its default is 12pt (DIN.lco), a4; bit 32 of
+    // its table is `parskip=half`.
+    // screenplay.cls: `\DeclareOption*{\PackageError..}`, no option.
+    if cls == data_class::SCREENPLAY {
+        return match opts.split(',').map(str::trim).find(|o| !o.is_empty()) {
+            Some(o) => Err(o),
+            None => Ok((0, 0, cls)),
+        };
+    }
+    if cls == data_class::SCRLTTR2 {
+        let o = lttr::options(opts)?;
+        return Ok((o.size.unwrap_or(2), if o.parskip_half { data_class::option_key(0, false, false, true) } else { 0 }, cls));
+    }
     if koma {
-        if let Some(o) = opts.split(',').map(str::trim).find(|o| matches!(*o, "letterpaper" | "twoside" | "draft" | "twocolumn") || o.contains('=') || o.ends_with("pt") && !data_class::CLASS_SIZES.contains(o)) {
+        // scrbook is two-sided by default: `twoside`, `oneside`, `openright` and `openany`
+        // are its own (`2026-11-01-w9-scrbook.md`).
+        if let Some(o) = opts.split(',').map(str::trim).find(|o| matches!(*o, "letterpaper" | "draft" | "twocolumn") || *o == "twoside" && !scrbook || o.contains('=') || o.ends_with("pt") && !data_class::CLASS_SIZES.contains(o)) {
             return Err(o);
         }
     }
     for o in opts.split(',').map(str::trim).filter(|o| !o.is_empty()) {
-        let slot = if let Some(i) = data_class::CLASS_SIZES.iter().position(|s| *s == o) {
+        // extarticle's `titlepage` (`Doc::titlepage` is article's).
+        if cls == data_class::EXTARTICLE && o == "titlepage" {
+            return Err(o);
+        }
+        let slot = if cls == data_class::A0POSTER {
+            // a0poster.cls (`engine_a0poster.rs`): `\ExecuteOptions{landscape,a0b,final}`; the
+            // paper options are the table's paper index (`data_class::A0_PAPERS`), `portrait`
+            // its landscape bit. `posterdraft` (`draft`) and every other option decline.
+            match o {
+                "a0b" => (&mut paper, 0),
+                "a0" => (&mut paper, 1),
+                "a1" => (&mut paper, 2),
+                "a2" => (&mut paper, 3),
+                "a3" => (&mut paper, 4),
+                "portrait" => (&mut orient, 1),
+                "landscape" => (&mut orient, 0),
+                "final" => (&mut draft, 0),
+                _ => return Err(o),
+            }
+        } else if let Some(i) = data_class::class_sizes(cls).iter().position(|s| *s == o) {
             (&mut size, i)
-        } else if let Some(i) = data_class::PAPERS.iter().position(|p| *p == o).filter(|_| !ams || matches!(o, "letterpaper" | "a4paper")) {
+        } else if let Some(i) = data_class::PAPERS.iter().position(|p| *p == o).filter(|_| !ams && cls != data_class::IEEETRAN || matches!(o, "letterpaper" | "a4paper")) {
             (&mut paper, i)
         } else if cls == data_class::MEMOIR {
             // memoir.cls (`2026-10-31-memoir-moderncv.md`): `\ExecuteOptions{final,letterpaper,
@@ -3508,6 +5929,18 @@ fn class_options(rest: &str) -> Result<(usize, u32, usize), &str> {
                 "final" => (&mut draft, 0),
                 "onecolumn" => (&mut cols, 0),
                 "openright" | "openany" => (&mut open, 0),
+                _ => return Err(o),
+            }
+        } else if cls == data_class::IEEETRAN {
+            // IEEEtran.cls (`2026-10-31-w8-journal-classes.md`): `\ExecuteOptions{letterpaper,
+            // 10pt,twocolumn,oneside,final,journal}`; `conference` is the table's landscape
+            // bit. `9pt`, `onecolumn`, `twoside`, `draft*`, `technote`, `peerreview*`,
+            // `compsoc`, `comsoc`, `transmag`, `cspaper`, `nofonttune`, `captionsoff`,
+            // `romanappendices` and the other papers decline.
+            match o {
+                "conference" => (&mut orient, 1),
+                "journal" => (&mut orient, 0),
+                "twocolumn" | "oneside" | "final" => continue,
                 _ => return Err(o),
             }
         } else if ams {
@@ -3536,11 +5969,17 @@ fn class_options(rest: &str) -> Result<(usize, u32, usize), &str> {
                 "onecolumn" | "notitlepage" if letter => continue,
                 "onecolumn" => (&mut cols, 0),
                 "twocolumn" if !report && !letter && !book => (&mut cols, 1),
+                // scrreprt's default is `titlepage=true`: the legacy options are not followed.
+                "notitlepage" | "titlepage" if cls == data_class::SCRREPRT || scrbook => return Err(o),
+                "notitlepage" if opts.split(',').any(|o| o.trim() == "titlepage") => return Err(o),
                 "notitlepage" => continue,
+                // `\@titlepagetrue` (report's and book's default): article's `\maketitle` is the
+                // title page one (`Doc::titlepage`), its `abstract` stops in the pre-scan.
+                "titlepage" if !koma => continue,
                 "leqno" | "fleqn" if letter => return Err(o),
                 "openany" if report => continue,
                 // book.cls: `\@openrighttrue` or `\@openrightfalse` (`book_open`).
-                "openany" | "openright" if book => (&mut open, 0),
+                "openany" | "openright" if book || scrbook => (&mut open, 0),
                 // A size the class does not declare (`8pt`, `20pt`, `10.5pt`): article.cls has
                 // no `\DeclareOption*`, so `\ProcessOptions` puts it on `\@unusedoptionlist`
                 // (a warning at `\begin{document}`, nothing more), and `\@process@ptions`
@@ -3553,7 +5992,7 @@ fn class_options(rest: &str) -> Result<(usize, u32, usize), &str> {
             return Err(o);
         }
     }
-    let key = data_class::option_key(paper.unwrap_or(0), orient == Some(1), side.unwrap_or((book || cls == data_class::MEMOIR) as usize) == 1, draft == Some(1)) | if cols == Some(1) { data_class::TWOCOLUMN } else { 0 };
+    let key = data_class::option_key(paper.unwrap_or(0), orient == Some(1), side.unwrap_or((book || cls == data_class::MEMOIR || scrbook) as usize) == 1, draft == Some(1)) | if cols == Some(1) || cls == data_class::IEEETRAN { data_class::TWOCOLUMN } else { 0 };
     Ok((size.unwrap_or(koma as usize), key, cls))
 }
 
@@ -3580,7 +6019,25 @@ fn label_tokens(text: &str) -> Vec<Token> {
 /// `\label` when it runs (`label`), so a wrong one only sends the document to the engine.
 /// `slashes` are `src`'s backslashes ([`backslashes`]).
 fn predict(src: &str, slashes: &[usize]) -> Predicted {
-    predict_from(src, slashes, None).predicted()
+    let p = predict_from(src, slashes, None).predicted();
+    // `RT_NATIVE_ALL=1`: where an incomplete prediction stopped reading.
+    if native_all() && !p.complete {
+        let at = PREDICT_READ.with(std::cell::Cell::get).min(src.len());
+        let from = (at.saturating_sub(60)..=at).find(|&k| src.is_char_boundary(k)).unwrap_or(at);
+        eprintln!("decline: the prediction stops near: {}", src[from..at].replace('\n', " "));
+        // The last command it began to read, where the walk most likely gave up.
+        let at = PREDICT_CMD.with(std::cell::Cell::get).min(src.len());
+        let to = (at..=(at + 60).min(src.len())).rev().find(|&k| src.is_char_boundary(k)).unwrap_or(at);
+        eprintln!("decline: the prediction's last command: {}", src[at..to].replace('\n', " "));
+    }
+    p
+}
+
+thread_local! {
+    /// [`predict_from`]'s furthest read, kept for `RT_NATIVE_ALL` ([`predict`]).
+    static PREDICT_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// [`predict_from`]'s last command read, kept for `RT_NATIVE_ALL` ([`predict`]).
+    static PREDICT_CMD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// [`predict`]'s outputs in the order it made them (a later value for a key replaces an
@@ -3614,7 +6071,9 @@ struct PredictGlobals {
     thms: Vec<(String, usize, Option<usize>, Option<usize>)>,
     starred: Vec<String>,
     pf: [String; 3],
+    ft: [Option<String>; 3],
     eq_within: Option<usize>,
+    fig_within: [Option<usize>; 2],
 }
 
 /// One of [`predict`]'s open groups at a mark, its strings by value.
@@ -3635,7 +6094,9 @@ struct PredictGroup {
 struct PredictState {
     mainmatter: bool,
     thm_values: Vec<u32>,
+    own_values: Vec<i32>,
     pf: [String; 3],
+    ft: [Option<String>; 3],
     groups: Vec<PredictGroup>,
     sec: [u32; SECNUMDEPTH],
     enums: [u32; 4],
@@ -3651,13 +6112,15 @@ struct PredictState {
     hfootnote: u32,
     items: u32,
     links: u32,
+    /// `secnumdepth` as the walk last read it (`secnum_at` in the preamble, then the body's).
+    secnum: Option<usize>,
     logs: [usize; 3],
 }
 
 impl PartialEq for PredictState {
     fn eq(&self, o: &PredictState) -> bool {
-        (self.mainmatter, &self.thm_values, &self.pf, &self.groups, self.sec, self.enums, self.footnote, self.equation, self.appendix) == (o.mainmatter, &o.thm_values, &o.pf, &o.groups, o.sec, o.enums, o.footnote, o.equation, o.appendix)
-            && (&self.display_keys, &self.pending, &self.pending_href, &self.floats, self.figtab, self.numbered, self.hfootnote, self.items, self.links) == (&o.display_keys, &o.pending, &o.pending_href, &o.floats, o.figtab, o.numbered, o.hfootnote, o.items, o.links)
+        (self.mainmatter, &self.thm_values, &self.own_values, &self.pf, &self.ft, &self.groups, self.sec, self.enums, self.footnote, self.equation, self.appendix) == (o.mainmatter, &o.thm_values, &o.own_values, &o.pf, &o.ft, &o.groups, o.sec, o.enums, o.footnote, o.equation, o.appendix)
+            && (&self.display_keys, &self.pending, &self.pending_href, &self.floats, self.figtab, self.numbered, self.hfootnote, self.items, self.links, self.secnum) == (&o.display_keys, &o.pending, &o.pending_href, &o.floats, o.figtab, o.numbered, o.hfootnote, o.items, o.links, o.secnum)
     }
 }
 
@@ -3673,15 +6136,22 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
     let mut out = PredictLog::default();
     let reach = std::cell::Cell::new(0usize);
     // Bytes up to and with the first of `rest` (the text after a read) were read.
-    let seen = |rest: &str| reach.set(reach.get().max(src.len() - rest.len() + 1));
+    let seen = |rest: &str| {
+        reach.set(reach.get().max(src.len() - rest.len() + 1));
+        if native_all() {
+            PREDICT_READ.with(|r| r.set(reach.get()));
+        }
+    };
     // The searches of the whole text go from `\` to `\` ([`backslashes`]): each needle is a
     // control word, so its matches are the backslashes it starts at.
     let b = src.as_bytes();
-    let Some(start) = slashes.iter().copied().find(|&k| b[k..].starts_with(b"\\begin{document}")) else { return out };
+    let Some(start) = slashes.iter().copied().find(|&k| b[k..].starts_with(b"\\begin{document}") && !commented(src, k)) else { return out };
     let enumitem = src[..start].contains("enumitem");
+    // caption.sty with hyperref: `hypcap`'s anchor names (`figure.caption.N`).
+    let hypcap = src[..start].contains("hyperref") && (src[..start].contains("caption}") || src[..start].contains("caption,"));
     // report: `\chapter` is level 0, `\section` level 1.
     let cls = src.find("\\documentclass").and_then(|i| class_options(&src[i + "\\documentclass".len()..]).ok()).map_or(0, |c| c.2);
-    let report = cls == 1 || cls == 3 || cls == data_class::MEMOIR;
+    let report = cls == 1 || cls == 3 || cls == data_class::MEMOIR || cls == data_class::SCRREPRT || cls == data_class::SCRBOOK;
     // book: `\@mainmatterfalse` after `\frontmatter` and `\backmatter`.
     let mut mainmatter = true;
     // A `\setlist` whose keys name a `label`.
@@ -3698,9 +6168,27 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
         .split("\\DeclareMathOperator")
         .skip(1)
         .filter_map(|r| r.trim_start_matches('*').trim_start().strip_prefix("{\\")?.split('}').next())
+        // mathtools' paired delimiters (`\DeclarePairedDelimiter\abs{\lvert}{\rvert}`) too.
+        .chain(src[..start].split("\\DeclarePairedDelimiter").skip(1).filter_map(|r| {
+            // `\DeclarePairedDelimiterX\name[n]...` too.
+            let r = r.strip_prefix('X').unwrap_or(r).trim_start();
+            let r = r.strip_prefix('{').unwrap_or(r).strip_prefix('\\')?;
+            Some(&r[..r.bytes().take_while(u8::is_ascii_alphabetic).count()])
+        }))
         .collect();
+    // The document's `\newif` flags (`engine_userdef`): `\ifname`, `\nametrue`, `\namefalse`
+    // number nothing, as operators do. Both branches of a conditional are read: a heading in
+    // one numbers what follows differently, which the labels' check finds (`defined_once`).
+    let mut operators = operators;
+    operators.extend(newif_words(src, slashes));
     // The body's definitions too: a macro used before its definition is checked as any other.
     let (quiet, loud, star_macros) = quiet_macros(src, slashes, &operators);
+    // Own macros a heading's contents line may hold.
+    let toc_own = toc_own_macros(src, start, &quiet);
+    // The preamble's macros holding `\tag` (`tag_macros`).
+    let tagm = tag_macros(&src[..start]);
+    // The preamble's `secnumdepth`, then each `\setcounter{secnumdepth}` the body's walk meets.
+    let mut secnum = secnum_at(src, start);
     // The preamble's theorems: environment, counter owner, reset level; and each counter.
     let mut thms: Vec<(&str, usize, Option<usize>, Option<usize>)> = Vec::new();
     // amsthm's `\newtheorem*` numbers nothing.
@@ -3731,13 +6219,227 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
         thms.push((env, owner, within, parent));
     }
     let mut thm_values = vec![0u32; thms.len()];
-    let mut pf = the_prefixes(src);
+    // The document's own counters (`\newcounter{name}[within]`, `engine_counter`), the body's
+    // too (each zero until it is made, and named only after: the pre-scan), and the values
+    // the preamble's `\setcounter`s give them; a preamble that steps one is not followed.
+    let mut own: Vec<(&str, Option<usize>)> = Vec::new();
+    let mut own_values: Vec<i32> = Vec::new();
+    let mut own_level: Vec<Option<usize>> = Vec::new();
+    // The preamble's redefinitions of the document's counters' `\the`.
+    let mut own_the: Vec<Option<String>> = Vec::new();
+    // float.sty's `\newfloat` types, each also one of `own`.
+    let mut newfloats: Vec<&str> = Vec::new();
+    // algorithmicx: the entities whose text is off (`\algtext*`, algpseudocode's `noend`), by
+    // bit; in an `algorithmic`, `ALG@line`, and whether an `\item` there lost the count.
+    let mut alg_notext: u32 = 0;
+    let (mut alg_line, mut alg_lost): (Option<u32>, bool) = (None, false);
+    // Redefinitions of `\theenumi`..`\theenumiv`, the preamble's and then the body's.
+    let mut enum_the: [Option<String>; 4] = Default::default();
+    // The document's `\thefigure`, `\thetable`, `\theequation` (`predicted_the`).
+    let mut ft: [Option<String>; 3] = Default::default();
+    // `\counterwithin{figure}{section}` and kin: the heading level `figure` and `table` are
+    // reset within (`Doc::fig_within`).
+    let mut fig_within: [Option<usize>; 2] = [None, None];
+    // A heading's counter at `level` stepped: the document's counters within it or a lower
+    // level zeroed, and theirs (`Machine::reset_own_within`).
+    // `\stepcounter` of the document's counter `o`: the counters within it zeroed, and theirs.
+    fn step_own(own: &[(&str, Option<usize>)], values: &mut [i32], o: usize) {
+        values[o] = values[o].wrapping_add(1);
+        let mut reset = vec![o];
+        for j in o + 1..own.len() {
+            if own[j].1.is_some_and(|w| reset.contains(&w)) {
+                values[j] = 0;
+                reset.push(j);
+            }
+        }
+    }
+    // `\refstepcounter`'s label of counter `o` (`\the<name>` as `\newcounter` made it, or the
+    // preamble's text) and its hyperref anchor (`name.\theHname`).
+    fn own_label_href(own: &[(&str, Option<usize>)], own_level: &[Option<usize>], values: &[i32], the: &[Option<String>], sec: &[u32], (report, appendix): (bool, bool), o: usize) -> Option<(String, String)> {
+        let names: Vec<(&str, i32, Option<String>)> = (0..own.len()).map(|j| (own[j].0, values[j], the[j].clone())).collect();
+        let sec64: Vec<i64> = sec.iter().map(|&c| i64::from(c)).collect();
+        let env = counter::CounterEnv { own: &names, sec: &sec64, report, appendix };
+        let label = match &the[o] {
+            Some(t) => env.label(t, 0)?,
+            None => values[o].to_string(),
+        };
+        let list: Vec<(Option<usize>, Option<usize>, i32)> = (0..own.len()).map(|j| (own[j].1, own_level[j], values[j])).collect();
+        Some((label, format!("{}.{}", own[o].0, counter::own_the_h(&list, sec, o))))
+    }
+    fn reset_own(own: &[(&str, Option<usize>)], own_level: &[Option<usize>], values: &mut [i32], level: usize) {
+        let mut reset: Vec<usize> = Vec::new();
+        for j in 0..own.len() {
+            if own_level[j].is_some_and(|l| l >= level) || own[j].1.is_some_and(|w| reset.contains(&w)) {
+                values[j] = 0;
+                reset.push(j);
+            }
+        }
+    }
+    // Only commands outside braces: those in a definition's text are read where it is used.
+    let (mut depth, mut last, mut comment) = (0i32, 0usize, false);
+    for &k in slashes {
+        if k >= start && !b[k..].starts_with(b"\\newcounter") {
+            continue;
+        }
+        // The second backslash of `\\` is no command.
+        if k < last {
+            continue;
+        }
+        // Braces in a comment are not counted.
+        for &c in &b[last.min(k)..k.min(start)] {
+            if comment {
+                comment = c != b'\n';
+            } else if c == b'%' {
+                comment = true;
+            } else {
+                depth += i32::from(c == b'{') - i32::from(c == b'}');
+            }
+        }
+        if comment && k < start {
+            last = k + 1;
+            continue;
+        }
+        // `\{`, `\}` and `\%` are not braces or a comment.
+        last = (k + 2).min(start);
+        let r = &src[k + 1..];
+        let word = r.bytes().take_while(u8::is_ascii_alphabetic).count();
+        if depth > 0 && k < start {
+            continue;
+        }
+        fn braced(r: &str) -> Option<(&str, &str)> {
+            r.trim_start().strip_prefix('{').and_then(|r| r.split_once('}'))
+        }
+        match &r[..word] {
+            "newcounter" => {
+                let Some((c, after)) = braced(&r[word..]) else { return out };
+                let (mut within, mut level) = (None, None);
+                if let Some(w) = after.trim_start().strip_prefix('[') {
+                    let Some((p, _)) = w.split_once(']') else { return out };
+                    match own.iter().position(|o| o.0 == p) {
+                        Some(o) => within = Some(o),
+                        // Within a heading's counter (`engine_counter::sectional_level`).
+                        None => match ["chapter", "section", "subsection", "subsubsection"].iter().position(|x| *x == p).and_then(|k| k.checked_sub(usize::from(!report))) {
+                            Some(l) => level = Some(l),
+                            None => return out,
+                        },
+                    }
+                }
+                own.push((c, within));
+                own_level.push(level);
+                own_the.push(None);
+                own_values.push(0);
+            }
+            // float.sty's `\newfloat{type}{placement}{ext}[within]`: `\newcounter{type}[within]`
+            // with `\the<type>` `\the<within>.\arabic{type}`.
+            // algorithm.sty's `\newfloat{algorithm}{htbp}{loa}[within]` (`algorithm_load`).
+            "newfloat" | "usepackage" => {
+                let (t, within) = if &r[..word] == "newfloat" {
+                    let Some((t, within, _)) = newfloat_args(&r[word..]) else { return out };
+                    (t, within)
+                } else {
+                    let rest = r[word..].trim_start();
+                    let (opts, rest) = match rest.strip_prefix('[') {
+                        Some(o) => o.split_once(']').unwrap_or(("", "")),
+                        None => ("", rest),
+                    };
+                    let Some((list, _)) = braced(rest) else { continue };
+                    if list.split(',').any(|p| p.trim() == "algpseudocode") && algorithm::pseudocode_options(opts) == Ok(true) {
+                        alg_notext |= algorithm::noend_bits();
+                    }
+                    if !list.split(',').any(|p| p.trim() == "algorithm") {
+                        continue;
+                    }
+                    let Ok((_, within, _)) = algorithm::algorithm_options(opts) else { return out };
+                    ("algorithm", within)
+                };
+                let (mut w, mut level) = (None, None);
+                if let Some(p) = within {
+                    match own.iter().position(|o| o.0 == p) {
+                        Some(o) => w = Some(o),
+                        None => match ["chapter", "section", "subsection", "subsubsection"].iter().position(|x| *x == p).and_then(|k| k.checked_sub(usize::from(!report))) {
+                            Some(l) => level = Some(l),
+                            None => return out,
+                        },
+                    }
+                }
+                own.push((t, w));
+                own_level.push(level);
+                own_the.push(within.map(|p| format!("\\the{p}.\\arabic{{{t}}}")));
+                own_values.push(0);
+                newfloats.push(t);
+            }
+            // algorithmicx's `\algtext*{entity}` and `\algnotext{entity}`.
+            "algtext" | "algnotext" if k < start => match algorithm::notext_arg(&r[word..], &r[..word] == "algtext") {
+                Some(e) => alg_notext |= 1 << e,
+                None => return out,
+            },
+            "setcounter" => {
+                let Some((c, after)) = braced(&r[word..]) else { return out };
+                if let Some(o) = own.iter().position(|o| o.0 == c) {
+                    match braced(after).and_then(|(v, _)| v.trim().parse::<i32>().ok()) {
+                        Some(v) => own_values[o] = v,
+                        None => return out,
+                    }
+                }
+            }
+            "stepcounter" | "addtocounter" | "refstepcounter" => return out,
+            // The preamble's `\counterwithin[*]{figure}{section}` (amsmath's `\numberwithin`):
+            // `\@addtoreset`, and unstarred `\thefigure` `\thesection.\arabic{figure}`
+            // (`Machine::float_within`).
+            "counterwithin" | "numberwithin" => {
+                let star = r[word..].starts_with('*');
+                let Some((c, after)) = braced(&r[word + usize::from(star)..]) else { return out };
+                let Some(t) = ["figure", "table"].iter().position(|x| *x == c) else { continue };
+                let Some((p, _)) = braced(after) else { return out };
+                let Some(l) = ["chapter", "section", "subsection", "subsubsection"].iter().position(|x| *x == p).and_then(|l| l.checked_sub(usize::from(!report))).filter(|&l| l < 3) else { return out };
+                if k >= start {
+                    return out;
+                }
+                fig_within[t] = Some(l);
+                if !star {
+                    ft[t] = Some(format!("\\the{p}.\\arabic{{{c}}}"));
+                }
+            }
+            // `\renewcommand{\the<name>}{text}` of the document's counter: its labels'
+            // text (`counter::CounterEnv::label`).
+            "renewcommand" => {
+                let Some((c, body)) = renewed_the(&r[word..]) else { continue };
+                // `\theenumi`..`\theenumiv` (`counter::enum_current_label`).
+                if let Some(j) = ENUM_THE.iter().position(|e| *e == c) {
+                    let Some(body) = body else { return out };
+                    enum_the[j] = Some(body.to_string());
+                    continue;
+                }
+                if let Some(k) = PREFIXED.iter().position(|e| *e == c) {
+                    let Some(body) = body else { return out };
+                    ft[k] = Some(body.to_string());
+                    continue;
+                }
+                let Some(o) = own.iter().position(|x| x.0 == c) else { continue };
+                let Some(body) = body else { return out };
+                own_the[o] = Some(body.to_string());
+            }
+            _ => {}
+        }
+    }
+    // The document's own lengths (`\newlength`), which number nothing where they are used.
+    let lengths: Vec<&str> = slashes.iter().filter(|&&k| b[k..].starts_with(b"\\newlength")).filter_map(|&k| {
+        let r = src[k + "\\newlength".len()..].trim_start().trim_start_matches('{').trim_start().strip_prefix('\\')?;
+        Some(&r[..r.bytes().take_while(u8::is_ascii_alphabetic).count()])
+    }).collect();
+    // report's `\thechapter.` before `\thefigure`, `\thetable`, `\theequation` (none before
+    // the first chapter).
+    let mut pf: [String; 3] = Default::default();
     // amsmath's `\numberwithin{equation}{level}`.
     let mut eq_within = None;
     for (at, _) in src[..start].match_indices("\\numberwithin") {
         let args: Vec<&str> = src[at + "\\numberwithin".len()..].split('}').take(2).map(|a| a.trim_start().trim_start_matches('{').trim()).collect();
         match (args.as_slice(), ["section", "subsection", "subsubsection"].iter().position(|l| args.get(1) == Some(l))) {
             (["equation", _], Some(l)) => eq_within = Some(l),
+            // report's own numbering past the first chapter (`equation_before_chapter`).
+            (["equation", "chapter"], None) if report => {}
+            // `figure` and `table`: read with `\counterwithin` above (`fig_within`).
+            (["figure" | "table", _], _) => {}
             _ => return out,
         }
     }
@@ -3759,7 +6461,9 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
             thms: thms.iter().map(|&(e, o, w, p)| (e.to_string(), o, w, p)).collect(),
             starred: owned(&starred),
             pf: pf.clone(),
+            ft: ft.clone(),
             eq_within,
+            fig_within,
         })
     });
     // Labels and anchors are made once into `strs` and named by index there, so a group
@@ -3791,12 +6495,18 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
     };
     let mut groups = vec![Group { label: 0, href: 1, depth: 0, enumerate: false, opaque: false, template: 0 }];
     let (mut sec, mut enums, mut footnote, mut equation) = ([0u32; SECNUMDEPTH], [0u32; 4], 0u32, 0u32);
+    // amsmath's `subequations`: the parent's number and the equation counter it set aside.
+    let mut sub: Option<(String, u32)> = None;
+    // hyperref's `\theHparentequation` there (`subequations_anchor`).
+    let mut sub_h: Option<String> = None;
     let mut appendix = false;
     // The keys a `\label` gave in the display now open, which a later `\tag` renumbers
     // (amsmath writes a display's label after its tag).
     let mut display_keys: Vec<String> = Vec::new();
     let mut pending: Option<u32> = None;
-    let (mut floats, mut figtab) = (Vec::new(), [0u32; 2]);
+    let (mut floats, mut figtab) = (Vec::<usize>::new(), [0u32; 2]);
+    let mut in_sub = false;
+    let mut in_sf = false;
     // Inside an `equation` whose number stands.
     let mut numbered = false;
     let next = |i: usize| {
@@ -3805,6 +6515,7 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
         r.as_bytes().first().copied()
     };
     // A heading's title, read to its closing brace.
+    let lists_of = src[start..].contains("\\listof");
     let title_at = |i: usize| {
         let t = heading_title(&src[i..]);
         seen(t.map_or("", |t| after_part(src, t)));
@@ -3815,7 +6526,7 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
     let (mut hfootnote, mut items) = (0u32, 0u32);
     // `\Hy@linkcounter`: every starred heading, thebibliography's too.
     let mut links = 0u32;
-    let book = cls == 3;
+    let book = cls == 3 || cls == data_class::SCRBOOK;
     // The anchor of the group the pending label opens (a footnote's `Hfootnote.N`).
     let mut pending_href: Option<u32> = None;
     let push = |groups: &mut Vec<Group>, pending: &mut Option<u32>, pending_href: &mut Option<u32>| {
@@ -3832,14 +6543,38 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
         out = log;
         mainmatter = st.mainmatter;
         thm_values = st.thm_values;
+        own_values = st.own_values;
         pf = st.pf;
-        groups = st.groups.iter().map(|g| Group { label: put(&mut strs, &g.label), href: put(&mut strs, &g.href), depth: g.depth, enumerate: g.enumerate, opaque: g.opaque, template: put(&mut strs, &g.template) }).collect();
+        ft = st.ft;
+        groups =st.groups.iter().map(|g| Group { label: put(&mut strs, &g.label), href: put(&mut strs, &g.href), depth: g.depth, enumerate: g.enumerate, opaque: g.opaque, template: put(&mut strs, &g.template) }).collect();
         (sec, enums, footnote, equation, appendix) = (st.sec, st.enums, st.footnote, st.equation, st.appendix);
         display_keys = st.display_keys;
         pending = st.pending.map(|s| put(&mut strs, &s));
         pending_href = st.pending_href.map(|s| put(&mut strs, &s));
         (floats, figtab, numbered) = (st.floats, st.figtab, st.numbered);
-        (hfootnote, items, links) = (st.hfootnote, st.items, st.links);
+        (hfootnote, items, links, secnum) = (st.hfootnote, st.items, st.links, st.secnum);
+    }
+    // `\theequation` (in `subequations` its parent's and `\alph`) and `\thefigure`,
+    // `\thetable` at the counters' values now (`predicted_the`); the walk ends on a text the
+    // reader cannot read.
+    macro_rules! the_eq {
+        ($sub:expr) => {
+            match ($sub, ft[2].as_deref()) {
+                (None, Some(t)) => match predicted_the(Some(t), "", 2, equation as i32, (&own, &own_values, &own_the), &sec, (report, appendix)) {
+                    Some(v) => v,
+                    None => return out,
+                },
+                (s, _) => eq_text(s, &pf[2], &sec, appendix, eq_within, equation),
+            }
+        };
+    }
+    macro_rules! the_float {
+        ($t:expr) => {
+            match predicted_the(ft[$t].as_deref(), &pf[$t], $t, figtab[$t] as i32, (&own, &own_values, &own_the), &sec, (report, appendix)) {
+                Some(v) => v,
+                None => return out,
+            }
+        };
     }
     // The next byte at or after which a mark is due (none without a session).
     let mut next_mark = inc.as_deref().map_or(usize::MAX, |s| s.marks.first(i));
@@ -3849,7 +6584,9 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
             let st = PredictState {
                 mainmatter,
                 thm_values: thm_values.clone(),
+                own_values: own_values.clone(),
                 pf: pf.clone(),
+                ft: ft.clone(),
                 groups: groups.iter().map(|g| PredictGroup { label: text(g.label), href: text(g.href), depth: g.depth, enumerate: g.enumerate, opaque: g.opaque, template: text(g.template) }).collect(),
                 sec,
                 enums,
@@ -3865,6 +6602,7 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                 hfootnote,
                 items,
                 links,
+                secnum,
                 logs: [out.labels.len(), out.hrefs.len(), out.toc.len()],
             };
             let s = inc.as_deref_mut().expect("a session");
@@ -3895,20 +6633,59 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                 i += 1;
             }
             b'\\' => {
+                if native_all() {
+                    PREDICT_CMD.with(|r| r.set(i));
+                }
                 let rest = &src[i + 1..];
-                let n = rest.bytes().take_while(u8::is_ascii_alphabetic).count();
+                let n = own_at_len(rest);
                 if n == 0 {
                     if rest.starts_with('[') {
                         display_keys.clear();
+                    }
+                    // `\\` in an `algorithmic` is `\algbreak`, an `\item`.
+                    if rest.starts_with('\\') && alg_line.is_some() {
+                        alg_lost = true;
                     }
                     i += 2;
                     continue;
                 }
                 let name = &rest[..n];
+                // algorithmicx's entities: an `\item` each, `\ALG@step`, unless its text is off.
+                if let Some(line) = alg_line.as_mut() {
+                    if let Some(k) = algorithm::entity_index(name) {
+                        if alg_notext & 1 << k == 0 {
+                            *line += 1;
+                        }
+                        i += 1 + n;
+                        continue;
+                    }
+                }
+                if matches!(name, "algtext" | "algnotext") {
+                    match algorithm::notext_arg(&rest[n..], name == "algtext") {
+                        Some(k) => alg_notext |= 1 << k,
+                        None => return out,
+                    }
+                    i += 1 + n;
+                    continue;
+                }
                 // `\verb`'s text numbers nothing and is not read (`verb_len`).
                 if name == "verb" {
                     let Some(k) = verb_len(&rest[4..]) else { return out };
                     i += 5 + k;
+                    continue;
+                }
+                // `\tikz[opts] <command>;`: a path numbers nothing (up to the `;` outside braces).
+                if name == "tikz" {
+                    let mut depth = 0i32;
+                    let Some(k) = rest[4..].bytes().position(|c| {
+                        match c {
+                            b'{' => depth += 1,
+                            b'}' => depth -= 1,
+                            _ => {}
+                        }
+                        c == b';' && depth == 0
+                    }) else { return out };
+                    i += 5 + k + 1;
                     continue;
                 }
                 i += 1 + n;
@@ -3924,8 +6701,32 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                 // kernel also knows (`\renewcommand{\sec}{\section{S}}`).
                 // A macro of starred headings only: the link counter, as the headings step it.
                 if let Some(&(_, k)) = star_macros.iter().find(|s| s.0 == name) {
+                    // A macro of unlabelled `\item`s (`k` 0): nothing outside an `enumerate`
+                    // or `algorithmic`.
+                    if k == 0 {
+                        if alg_line.is_some() || groups.last().is_none_or(|g| g.enumerate) {
+                            return out;
+                        }
+                        continue;
+                    }
+                    // `\begin{itemize}` or `\end{itemize}` in a macro of its own.
+                    if k == LIST_MACRO_BEGIN {
+                        push(&mut groups, &mut pending, &mut pending_href);
+                        groups.last_mut().expect("a group").enumerate = false;
+                        continue;
+                    }
+                    if k == LIST_MACRO_END {
+                        if groups.len() > 1 {
+                            groups.pop();
+                        }
+                        continue;
+                    }
                     links += k as u32;
                     set_href(&mut groups, &mut strs, format!("section*.{links}"));
+                    continue;
+                }
+                // A document counter's `\the`, redefined or not, numbers nothing.
+                if name.strip_prefix("the").is_some_and(|c| own.iter().any(|o| o.0 == c)) {
                     continue;
                 }
                 if loud.contains(&name) {
@@ -3934,17 +6735,32 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                 match name {
                     "begin" | "end" => {
                         let Some(env) = arg() else { return out };
+                        // algorithmicx's `\setcounter{ALG@line}{0}`.
+                        if env == "algorithmic" {
+                            (alg_line, alg_lost) = (if name == "begin" { Some(0) } else { None }, false);
+                        }
                         if name == "end" {
                             if groups.len() > 1 {
                                 groups.pop();
                             }
                             numbered &= env != "equation";
-                            if matches!(env, "figure" | "table" | "figure*" | "table*") {
-                                floats.pop();
+                            if env == "subequations" {
+                                if let Some((_, n)) = sub.take() {
+                                    equation = n;
+                                }
+                                sub_h = None;
                             }
-                        } else if env == "verbatim" {
-                            let Some(e) = src[i..].find("\\end{verbatim}") else { return out };
-                            i += e + "\\end{verbatim}".len();
+                            if matches!(env, "figure" | "table" | "figure*" | "table*") || newfloats.contains(&env.strip_suffix('*').unwrap_or(env)) {
+                                floats.pop();
+                                in_sf = false;
+                            }
+                            if matches!(env, "subfigure" | "subtable") {
+                                in_sub = false;
+                            }
+                        } else if env == "verbatim" || env == "lstlisting" {
+                            let end = if env == "verbatim" { "\\end{verbatim}" } else { "\\end{lstlisting}" };
+                            let Some(e) = src[i..].find(end) else { return out };
+                            i += e + end.len();
                             continue;
                         } else if env == "tikzpicture" {
                             // Paths number nothing.
@@ -3976,6 +6792,9 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                                     enums[g.depth - 1] = 0;
                                 }
                                 "itemize" | "description" | "quote" | "quotation" | "verse" | "center" | "flushleft" | "flushright" | "abstract" | "titlepage" => g.enumerate = false,
+                                // threeparttable's `\list{}{...}` (no counter) and its `\vtop`.
+                                "tablenotes" => g.enumerate = false,
+                                "threeparttable" | "@twocolumnfalse" => {}
                                 // article's `\section*{\refname}`, report's and book's `\chapter*{\bibname}`.
                                 "thebibliography" => {
                                     g.enumerate = false;
@@ -3985,11 +6804,21 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                                 "equation" => {
                                     display_keys.clear();
                                     equation += 1;
-                                    g.label = intern(&mut strs, pf[2].clone() + &within_text(&sec, appendix, eq_within, equation));
-                                    set_href(&mut groups, &mut strs, theorem_href("equation", &sec, eq_href, equation));
+                                    g.label = intern(&mut strs, the_eq!(sub.as_ref().map(|s| &*s.0)));
+                                    set_href(&mut groups, &mut strs, eq_anchor(sub_h.as_deref(), &sec, eq_href, equation));
                                     numbered = true;
                                 }
                                 "equation*" => display_keys.clear(),
+                                // A `\label` right after `\begin{subequations}` is the parent's.
+                                "subequations" if sub.is_none() => {
+                                    equation += 1;
+                                    let parent = the_eq!(None::<&str>);
+                                    g.label = intern(&mut strs, parent.clone());
+                                    set_href(&mut groups, &mut strs, theorem_href("equation", &sec, eq_href, equation));
+                                    sub_h = Some(theorem_href("", &sec, eq_href, equation)[1..].to_string());
+                                    sub = Some((parent, equation));
+                                    equation = 0;
+                                }
                                 // `align`: a number per row (each `\\`, and the last) not
                                 // `\nonumber`ed; a row's `\label` takes its number. The body
                                 // is read here and passed over.
@@ -4006,12 +6835,17 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                                         return out;
                                     }
                                     equation += 1;
+                                    // hyperref's `\eqnarray`: one `equation.N` target at its start
+                                    // (`\hyper@makecurrent`), every row's label pointing there;
+                                    // `eqnarray*` empties `\@currentHref`.
+                                    let href = if env == "eqnarray" { eq_anchor(sub_h.as_deref(), &sec, eq_href, equation) } else { String::new() };
                                     for row in split_rows(body) {
                                         let mut rest = row;
                                         while let Some(p) = rest.find("\\label{") {
                                             let r = &rest[p + 7..];
                                             let Some(e) = r.find('}') else { return out };
-                                            out.labels.push((r[..e].to_string(), pf[2].clone() + &within_text(&sec, appendix, eq_within, equation)));
+                                            out.hrefs.push((r[..e].to_string(), href.clone()));
+                                            out.labels.push((r[..e].to_string(), the_eq!(sub.as_ref().map(|s| &*s.0))));
                                             rest = &r[e..];
                                         }
                                         if env == "eqnarray" && !row.contains("\\nonumber") && !row.contains("\\notag") {
@@ -4023,7 +6857,7 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                                     i += 2 + env.len() + k + close.len();
                                     continue;
                                 }
-                                "align" | "align*" | "gather" | "gather*" | "multline" | "multline*" => {
+                                "align" | "align*" | "alignat" | "alignat*" | "flalign" | "flalign*" | "gather" | "gather*" | "multline" | "multline*" => {
                                     let after = &src[i + 2 + env.len()..];
                                     let close = format!("\\end{{{env}}}");
                                     let Some(k) = after.find(&close) else { return out };
@@ -4034,17 +6868,31 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                                     }
                                     // A `multline` is one equation, whatever its rows.
                                     let rows = if env.starts_with("multline") { vec![body] } else { split_rows(body) };
+                                    // hyperref's `\Hy@make@anchor` in each tag: the measuring pass
+                                    // takes `\Hy@linkcounter` once per tag, the rows once more.
+                                    // A macro of the preamble's holding `\tag` counts the same.
+                                    let tagged = |r: &str| r.contains("\\tag") || tag_macro_uses(r, &tagm) > 0;
+                                    links += rows.iter().filter(|r| tagged(r)).count() as u32;
                                     for row in rows {
                                         // A row's `\tag{text}` replaces its number (`\tag@in@align`).
                                         let tag = match row.find("\\tag") {
-                                            Some(_) if env.starts_with("multline") => return out,
                                             Some(p) => match tag_text(&row[p + 4..]) {
                                                 Some((text, _)) => Some(text),
                                                 None => return out,
                                             },
+                                            // A tag macro's text is not read: a label there stops.
+                                            None if tagged(row) => {
+                                                if row.contains("\\label") {
+                                                    return out;
+                                                }
+                                                Some(String::new())
+                                            }
                                             None => None,
                                         };
                                         let numbered = !env.ends_with('*') && !row.contains("\\nonumber") && !row.contains("\\notag") && tag.is_none();
+                                        if tag.is_some() {
+                                            links += 1;
+                                        }
                                         if numbered {
                                             equation += 1;
                                         }
@@ -4054,11 +6902,11 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                                             let Some(e) = r.find('}') else { return out };
                                             let value = match &tag {
                                                 Some(t) => t.clone(),
-                                                None if numbered => pf[2].clone() + &within_text(&sec, appendix, eq_within, equation),
+                                                None if numbered => the_eq!(sub.as_ref().map(|s| &*s.0)),
                                                 None => return out,
                                             };
                                             out.labels.push((r[..e].to_string(), value));
-                                            out.hrefs.push((r[..e].to_string(), theorem_href("equation", &sec, eq_href, equation)));
+                                            out.hrefs.push((r[..e].to_string(), if tag.is_some() { format!("AMS.{links}") } else { eq_anchor(sub_h.as_deref(), &sec, eq_href, equation) }));
                                             rest = &r[e..];
                                         }
                                     }
@@ -4067,11 +6915,14 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                                     continue;
                                 }
                                 // An entry is a group; `\label` there takes the label around.
-                                "em" | "document" | "tabular" | "tabularx" | "array" | "proof" | "aligned" | "gathered" | "split" | "minipage" | "spacing" | "onehalfspace" | "doublespace" | "singlespace" | "multicols" | "multicols*" => {}
+                                "em" | "centering" | "raggedright" | "raggedleft" | "tiny" | "scriptsize" | "footnotesize" | "small" | "normalsize" | "large" | "Large" | "LARGE" | "huge" | "Huge" | "bfseries" | "mdseries" | "itshape" | "slshape" | "scshape" | "upshape" | "rmfamily" | "sffamily" | "ttfamily" | "document" | "tabular" | "tabular*" | "tabularx" | "array" | "proof" | "aligned" | "gathered" | "split" | "minipage" | "picture" | "spacing" | "onehalfspace" | "doublespace" | "singlespace" | "multicols" | "multicols*" | "tcolorbox" | "algorithmic" => {}
                                 e if starred.contains(&e) => {}
                                 // A preamble environment whose texts number nothing.
                                 e if quiet.contains(&e) => {}
                                 e if AMS_ARRAYS.contains(&e) => {}
+                                // IEEEtran's `IEEEkeywords` (the `Index Terms` head) numbers nothing.
+                                "IEEEkeywords" if cls == data_class::IEEETRAN => {}
+                                "titlingpage" if cls == data_class::MEMOIR => {}
                                 // `\@thm`'s `\refstepcounter`, numbered `\thesection.n` when
                                 // reset by a level.
                                 e if thms.iter().any(|t| t.0 == e) => {
@@ -4086,15 +6937,44 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                                     g.label = intern(&mut strs, parent.unwrap_or_default() + &within_text(&sec, appendix, thms[owner].2, thm_values[owner]));
                                     set_href(&mut groups, &mut strs, theorem_href(thms[owner].0, &sec, thms[owner].2, thm_values[owner]));
                                 }
+                                // A `\newfloat` type: 8 and its counter's index above the
+                                // byte (`own`).
+                                e if newfloats.contains(&e.strip_suffix('*').unwrap_or(e)) => {
+                                    g.enumerate = false;
+                                    let Some(o) = own.iter().position(|x| x.0 == e.strip_suffix('*').unwrap_or(e)) else { return out };
+                                    floats.push(8 | o << 8);
+                                }
                                 "figure" | "figure*" | "table" | "table*" => {
                                     g.enumerate = false;
                                     floats.push(env.starts_with("table") as usize);
+                                    // caption.sty's `hypcap` anchor at the float's start.
+                                    if hypcap {
+                                        links += 1;
+                                        set_href(&mut groups, &mut strs, format!("{}.caption.{links}", if env.starts_with("table") { "table" } else { "figure" }));
+                                    }
+                                }
+                                // subcaption's `subfigure`: the float's counter steps at the
+                                // first one before any `\caption` (`\caption@subtypehook`).
+                                // A float's entry: its type (bit 0), a sub-caption seen (bit
+                                // 1), its `\caption` seen (bit 2), a sub-caption before it
+                                // (bit 3), the sub counter (from bit 4).
+                                "subfigure" | "subtable" => {
+                                    let Some(f) = floats.last_mut() else { return out };
+                                    if in_sub || *f & 4 != 0 && *f & 8 != 0 {
+                                        return out;
+                                    }
+                                    if *f & 6 == 0 {
+                                        figtab[*f & 1] += 1;
+                                        *f &= 15;
+                                    }
+                                    *f |= if *f & 4 == 0 { 10 } else { 2 };
+                                    in_sub = true;
                                 }
                                 // `\LT@array`'s `\@kernel@refstepcounter{\LTcaptype}`.
                                 "longtable" => {
                                     figtab[1] += 1;
-                                    g.label = intern(&mut strs, format!("{}{}", pf[1], figtab[1]));
-                                    let within = if report { format!(".{}", hyperref::the_h_top(sec[0], appendix)) } else { String::new() };
+                                    g.label = intern(&mut strs, the_float!(1));
+                                    let within = float_h_within(fig_within[1], &sec, report, appendix);
                                     set_href(&mut groups, &mut strs, format!("table{within}.{}", figtab[1]));
                                 }
                                 _ => return out,
@@ -4112,9 +6992,14 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                         }
                     }
                     // `\section*{\contentsname}`, report's `\chapter*`: a starred heading's anchor.
-                    "tableofcontents" => {
+                    "tableofcontents" | "listoftables" | "listoffigures" | "listof" | "listofalgorithms" => {
                         links += 1;
                         set_href(&mut groups, &mut strs, if report { hyperref::star_chapter_anchor(appendix, links) } else { format!("section*.{links}") });
+                        // memoir's `\tableofcontents`: `\addcontentsline{toc}{chapter}{\contentsname}`.
+                        if cls == data_class::MEMOIR {
+                            let top = groups.last().expect("a group");
+                            out.toc.push(TocEntry { level: 0, number: format!("#{}", strs[top.href as usize]), title: "Contents".to_string(), href: String::new() });
+                        }
                     }
                     // `\addcontentsline{toc}{level}{text}`: an entry with no number, linked
                     // (hyperref) to `\@currentHref` ("#href").
@@ -4131,27 +7016,57 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                             return out;
                         }
                         let top = groups.last().expect("a group");
-                        out.toc.push(TocEntry { level, number: format!("#{}", strs[top.href as usize]), title: args[2].to_string() });
+                        out.toc.push(TocEntry { level, number: format!("#{}", strs[top.href as usize]), title: args[2].to_string(), href: String::new() });
                         i += rest[n..].len() - r.len();
                     }
                     "frontmatter" | "backmatter" => mainmatter = false,
                     "mainmatter" => mainmatter = true,
-                    "chapter" if report => {
+                    // scrreprt's `\addchap*` is `\chapter*`; `\addchap` an unnumbered chapter
+                    // whose `\cl@chapter` resets the counters below it (`koma_addchap`), the
+                    // label and `\thechapter.` prefixes unchanged. hyperref and the contents
+                    // are not native under KOMA-Script: no anchor or contents entry.
+                    "addchap" if report => {
                         if next(i) == Some(b'*') {
                             links += 1;
                             set_href(&mut groups, &mut strs, hyperref::star_chapter_anchor(appendix, links));
                             continue;
                         }
+                        sec[1..].fill(0);
+                        (equation, figtab, footnote) = (0, [0, 0], 0);
+                        for (t, v) in thms.iter().zip(thm_values.iter_mut()) {
+                            if t.2.is_some() {
+                                *v = 0;
+                            }
+                        }
+                        // scrreprt's `\hy@insteadofrefstepcounter{chapter}` (with hyperref):
+                        // `\Hy@MakeCurrentHrefAuto{chapter*}` and its anchor.
+                        links += 1;
+                        set_href(&mut groups, &mut strs, hyperref::star_chapter_anchor(appendix, links));
+                        // Its `\nonumberline` contents line ("*N": no number, the anchor).
+                        let Some(title) = title_at(i) else { return out };
+                        if !title.is_empty() && !toc_safe_own(title, &toc_own) {
+                            return out;
+                        }
+                        out.toc.push(TocEntry { level: 0, number: format!("*{links}"), title: title.to_string(), href: String::new() });
+                    }
+                    "chapter" if report => {
+                        // memoir: hpdftex's `\@schapter` anchor, then memoir's `\MakeLinkTarget[chapter]{}`.
+                        let memoir = cls == data_class::MEMOIR;
+                        if next(i) == Some(b'*') {
+                            links += 1 + memoir as u32;
+                            set_href(&mut groups, &mut strs, if memoir { format!("chapter*.{links}") } else { hyperref::star_chapter_anchor(appendix, links) });
+                            continue;
+                        }
                         // book outside the main matter: hpdftex's `\@chapter` anchor
                         // `chapter*.N`, a contents line with no number ("*N" names the anchor).
-                        if book && !mainmatter {
-                            links += 1;
-                            set_href(&mut groups, &mut strs, hyperref::star_chapter_anchor(appendix, links));
+                        if (book || memoir) && !mainmatter {
+                            links += 1 + memoir as u32;
+                            set_href(&mut groups, &mut strs, if memoir { format!("chapter*.{links}") } else { hyperref::star_chapter_anchor(appendix, links) });
                             let Some(title) = title_at(i) else { return out };
-                            if !title.is_empty() && !toc_safe(title) {
+                            if !title.is_empty() && !toc_safe_own(title, &toc_own) {
                                 return out;
                             }
-                            out.toc.push(TocEntry { level: 0, number: format!("*{links}"), title: title.to_string() });
+                            out.toc.push(TocEntry { level: 0, number: format!("*{links}"), title: title.to_string(), href: String::new() });
                             continue;
                         }
                         set_href(&mut groups, &mut strs, hyperref::heading_anchor_name(true, appendix, 0, &[sec[0] + 1]));
@@ -4160,6 +7075,7 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                         // pre-scan refuses those within a theorem counter under report.
                         sec[0] += 1;
                         sec[1..].fill(0);
+                        reset_own(&own, &own_level, &mut own_values, 0);
                         (equation, figtab, footnote) = (0, [0, 0], 0);
                         for (t, v) in thms.iter().zip(thm_values.iter_mut()) {
                             if t.2.is_some() {
@@ -4172,25 +7088,37 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                         let g = groups.last_mut().expect("a group");
                         g.label = intern(&mut strs, number.clone());
                         let Some(title) = title_at(i) else { return out };
-                        if !title.is_empty() && !toc_safe(title) {
+                        if !title.is_empty() && !toc_safe_own(title, &toc_own) {
                             return out;
                         }
-                        out.toc.push(TocEntry { level: 0, number, title: title.to_string() });
+                        out.toc.push(TocEntry { level: 0, number, title: title.to_string(), href: String::new() });
                     }
-                    "section" | "subsection" | "subsubsection" | "paragraph" => {
+                    "section" | "subsection" | "subsubsection" | "paragraph" | "subparagraph" => {
                         if next(i) == Some(b'*') {
-                            links += 1;
-                            set_href(&mut groups, &mut strs, format!("section*.{links}"));
+                            // KOMA-Script's starred sections make no anchor (`\scr@startsection`
+                            // passes hpdftex's `\@ssect`).
+                            if cls != data_class::SCRARTCL && cls != data_class::SCRREPRT && cls != data_class::SCRBOOK {
+                                links += 1;
+                                set_href(&mut groups, &mut strs, format!("section*.{links}"));
+                            }
                             continue;
                         }
-                        let level = ["section", "subsection", "subsubsection", "paragraph"].iter().position(|s| *s == name).expect("a heading") + report as usize;
+                        let level = ["section", "subsection", "subsubsection", "paragraph", "subparagraph"].iter().position(|s| *s == name).expect("a heading") + report as usize;
                         let mut number = String::new();
+                        let mut href = String::new();
                         // memoir.cls: `\setsecnumdepth{section}`.
-                        if level < if cls == data_class::MEMOIR { 2 } else { SECNUMDEPTH } {
+                        // memoir: `secnumdepth` -10 outside the main matter.
+                        if level < if cls == data_class::MEMOIR { memoir::secnum_in(&src[..start]) as usize + 1 } else { secnum.map_or(SECNUMDEPTH, |d| d + report as usize) } && (cls != data_class::MEMOIR || mainmatter) {
                             sec[level] += 1;
                             sec[level + 1..].fill(0);
+                            reset_own(&own, &own_level, &mut own_values, level);
                             if eq_within.is_some_and(|w| w >= level) {
                                 equation = 0;
+                            }
+                            for t in 0..2 {
+                                if fig_within[t].is_some_and(|w| w >= level) {
+                                    figtab[t] = 0;
+                                }
                             }
                             // `\@stpelt` steps a reset counter from -1, so the counters it resets go to 0 too.
                             for (t, v) in thms.iter().zip(thm_values.iter_mut()) {
@@ -4203,15 +7131,28 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                             let g = groups.last_mut().expect("a group");
                             g.label = intern(&mut strs, number.clone());
                             set_href(&mut groups, &mut strs, if level < 3 { hyperref::heading_anchor_name(report, appendix, level, &sec) } else { String::new() });
+                        } else {
+                            // hpdftex's `\@sect` (memhfixc's `\M@sect`) past `secnumdepth`:
+                            // `\Hy@MakeCurrentHrefAuto{section*}`, the contents line's anchor.
+                            links += 1;
+                            href = format!("section*.{links}");
+                            set_href(&mut groups, &mut strs, href.clone());
                         }
-                        // `\@dblarg`: the contents take the optional short title.
+                        // `\@dblarg`: the contents take the optional short title. One past
+                        // the classes' `tocdepth` (which a document may not change) is in
+                        // neither the contents nor the bookmarks: its title is not read.
                         let Some(title) = title_at(i) else { return out };
-                        if !title.is_empty() && !toc_safe(title) {
+                        if !title.is_empty() && !toc_safe_own(title, &toc_own) && (level < 3 || cls == data_class::MEMOIR) {
                             return out;
                         }
-                        out.toc.push(TocEntry { level, number, title: title.to_string() });
+                        out.toc.push(TocEntry { level, number, title: title.to_string(), href });
                     }
                     "item" => {
+                        // An `\item` in an `algorithmic` steps `ALG@line` (`\ALG@step`): not
+                        // followed here.
+                        if alg_line.is_some() && next(i) != Some(b'[') {
+                            alg_lost = true;
+                        }
                         let g = groups.last_mut().expect("a group");
                         // `\item[label]` steps no counter: `\@currentlabel` and the anchor stay.
                         if !g.enumerate || next(i) == Some(b'[') {
@@ -4238,6 +7179,20 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                             continue;
                         }
 
+                        // A `\theenum<j>` of the document's: `own_enum_label`'s reading.
+                        if enum_the.iter().any(Option::is_some) {
+                            let mut names: Vec<(&str, i32, Option<String>)> = (0..own.len()).map(|j| (own[j].0, own_values[j], own_the[j].clone())).collect();
+                            for (j, form) in ["arabic", "alph", "roman", "Alph"].iter().enumerate() {
+                                names.push((ENUM_THE[j], enums[j] as i32, Some(enum_the[j].clone().unwrap_or_else(|| format!("\\{form}{{{}}}", ENUM_THE[j])))));
+                            }
+                            let sec64: Vec<i64> = sec.iter().map(|&c| i64::from(c)).collect();
+                            let env = counter::CounterEnv { own: &names, sec: &sec64, report, appendix };
+                            let Some(text) = counter::enum_current_label(&env, d - 1) else { return out };
+                            let g = groups.last_mut().expect("a group");
+                            g.label = intern(&mut strs, text);
+                            set_href(&mut groups, &mut strs, format!("Item.{items}"));
+                            continue;
+                        }
                         // `\p@enumN\theenumN`, as `item_start` writes it.
                         let mut text = enums[0].to_string();
                         if d >= 2 {
@@ -4257,15 +7212,97 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                         set_href(&mut groups, &mut strs, format!("Item.{items}"));
                     }
                     // `\caption`'s `\refstepcounter\@captype`, in the float's group.
-                    "caption" => {
-                        let Some(t) = floats.last().copied() else { return out };
-                        figtab[t] += 1;
+                    // subfig's `\subfloat`: `\refstepcounter{subfigure}` with the float's
+                    // counter one up (the main caption comes below it).
+                    "subfloat" => {
+                        let Some(f) = floats.last_mut() else { return out };
+                        if *f & 14 != 0 || in_sub {
+                            return out;
+                        }
+                        *f += 16;
+                        let t = *f & 1;
+                        let value = format!("{}{}{}", pf[t], figtab[t] + 1, alph((*f >> 4) as i32, b'a').collect::<String>());
+                        groups.last_mut().expect("a group").label = intern(&mut strs, value);
+                        in_sf = true;
+                    }
+                    // `\captionof{type}` (capt-of, caption): the same outside a float, its
+                    // flags clear (`\caption@settype`).
+                    "caption" | "captionof" => {
+                        in_sf = false;
+                        let mut one;
+                        let f = if name == "captionof" {
+                            let r = src[i..].trim_start_matches([' ', '\t', '\r', '\n']);
+                            let Some(k) = ["{figure}", "{table}"].iter().position(|t| r.starts_with(t)) else { return out };
+                            if in_sub {
+                                return out;
+                            }
+                            i = src.len() - r.len() + [8, 7][k];
+                            one = k;
+                            &mut one
+                        } else {
+                            let Some(f) = floats.last_mut() else { return out };
+                            f
+                        };
+                        // float.sty's `\caption` in a `\newfloat` type: `\refstepcounter{type}`
+                        // (its `\addcontentsline` is in no list here).
+                        if *f & 8 != 0 {
+                            if in_sub {
+                                return out;
+                            }
+                            let o = *f >> 8;
+                            step_own(&own, &mut own_values, o);
+                            let Some((label, href)) = own_label_href(&own, &own_level, &own_values, &own_the, &sec, (report, appendix), o) else { return out };
+                            groups.last_mut().expect("a group").label = intern(&mut strs, label.clone());
+                            set_href(&mut groups, &mut strs, href.clone());
+                            // float.sty's `\addcontentsline{\ext@type}`, for `\listof`: the
+                            // type's list is `LOF + 2 + k`, `k` its place among the new types.
+                            if lists_of {
+                                let Some(k) = newfloats.iter().position(|t| *t == own[o].0) else { return out };
+                                let Some(title) = title_at(i) else { return out };
+                                let title = strip_labels(title);
+                                if !toc_safe(&title) {
+                                    return out;
+                                }
+                                out.toc.push(TocEntry { level: LOF + 2 + k, number: label, title: format!("{{\\ignorespaces {title}}}"), href });
+                            }
+                            continue;
+                        }
+                        let t = *f & 1;
+                        // subcaption's sub-caption: `\thesubfigure` after `\p@subfigure`.
+                        if in_sub {
+                            *f += 16;
+                            let value = format!("{}{}", the_float!(t), alph((*f >> 4) as i32, b'a').collect::<String>());
+                            groups.last_mut().expect("a group").label = intern(&mut strs, value);
+                            continue;
+                        }
+                        // After a `subfigure` the counter has stepped there.
+                        if *f & 2 != 0 && *f & 4 != 0 {
+                            return out;
+                        }
+                        if *f & 2 == 0 {
+                            figtab[t] += 1;
+                            *f &= 15;
+                        }
+                        *f |= 4;
+                        let number = the_float!(t);
                         let g = groups.last_mut().expect("a group");
-                        g.label = intern(&mut strs, format!("{}{}", pf[t], figtab[t]));
+                        g.label = intern(&mut strs, number.clone());
                         // report's `\@addtoreset{figure}{chapter}`: `\theHfigure` is
                         // `\theHchapter.\the\value{figure}` (latex.ltx).
-                        let within = if report { format!(".{}", hyperref::the_h_top(sec[0], appendix)) } else { String::new() };
-                        set_href(&mut groups, &mut strs, format!("{}{within}.{}", ["figure", "table"][t], figtab[t]));
+                        let within = float_h_within(fig_within[t], &sec, report, appendix);
+                        let href = if hypcap { strs[groups.last().expect("a group").href as usize].clone() } else { format!("{}{within}.{}", ["figure", "table"][t], figtab[t]) };
+                        set_href(&mut groups, &mut strs, href.clone());
+                        // With a list of figures or tables, `\@caption`'s `\addcontentsline`
+                        // entry: `\numberline{\thetable}{\ignorespaces short}`, its `\label`
+                        // gobbled (`\addcontentsline`'s `\let\label\@gobble`).
+                        if lists_of {
+                            let Some(title) = title_at(i) else { return out };
+                            let title = strip_labels(title);
+                            if !toc_safe(&title) {
+                                return out;
+                            }
+                            out.toc.push(TocEntry { level: LOF + t, number, title: format!("{{\\ignorespaces {title}}}"), href });
+                        }
                     }
                     "footnote" => {
                         if next(i) == Some(b'[') {
@@ -4285,6 +7322,72 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                     }
                     // A label's value does not depend on the page; other counters are not
                     // followed here.
+                    // The document's own counters (`engine_counter`): a literal value set or
+                    // added, a step zeroing the counters within it, and `\refstepcounter`'s
+                    // label, `\the<name>` as `\newcounter` made it (the pre-scan stops a
+                    // redefinition being read here: it is checked when the label is made).
+                    "setcounter" | "addtocounter" | "stepcounter" | "refstepcounter" if arg().is_some_and(|c| own.iter().any(|o| o.0 == c)) => {
+                        let Some(o) = arg().and_then(|c| own.iter().position(|x| x.0 == c)) else { return out };
+                        if matches!(name, "setcounter" | "addtocounter") {
+                            let after = rest[n..].split_once('}').map_or("", |x| x.1);
+                            let Some((v, more)) = after.trim_start().strip_prefix('{').and_then(|r| r.split_once('}')) else { return out };
+                            seen(more);
+                            let Ok(v) = v.trim().parse::<i32>() else { return out };
+                            own_values[o] = if name == "setcounter" { v } else { own_values[o].wrapping_add(v) };
+                        } else {
+                            step_own(&own, &mut own_values, o);
+                            if name == "refstepcounter" {
+                                let Some((label, href)) = own_label_href(&own, &own_level, &own_values, &own_the, &sec, (report, appendix), o) else { return out };
+                                let g = groups.last_mut().expect("a group");
+                                g.label = intern(&mut strs, label);
+                                set_href(&mut groups, &mut strs, href);
+                            }
+                        }
+                    }
+                    "arabic" | "roman" | "Roman" | "alph" | "Alph" | "value" | "newcounter" if arg().is_some_and(|c| own.iter().any(|o| o.0 == c)) => {}
+                    "arabic" | "roman" | "Roman" | "alph" | "Alph" | "fnsymbol" if arg().is_some_and(|c| matches!(c, "chapter" | "section" | "subsection" | "subsubsection" | "enumi" | "enumii" | "enumiii" | "enumiv" | "footnote")) => {}
+                    _ if name.strip_prefix("the").is_some_and(|c| own.iter().any(|o| o.0 == c)) => {}
+                    // ifthen's `\ifthenelse{test}{then}{else}` of parts that number nothing
+                    // (`\value` read only in the test): passed whole, whichever branch the
+                    // run takes; a part that might number stops the walk.
+                    "ifthenelse" => {
+                        let mut r = &rest[n..];
+                        for _ in 0..3 {
+                            let Some(body) = r.trim_start().strip_prefix('{') else { return out };
+                            let Some(k) = balanced(body) else { return out };
+                            let part = &body[..k];
+                            let numbers = part.match_indices('\\').any(|(p, _)| {
+                                let w = &part[p + 1..];
+                                let w = &w[..w.bytes().take_while(u8::is_ascii_alphabetic).count()];
+                                !w.is_empty() && !matches!(w, "value" | "and" | "or" | "not") && (loud.contains(&w) || !numbers_nothing(w, &operators, &quiet))
+                            });
+                            if numbers {
+                                return out;
+                            }
+                            r = &body[k + 1..];
+                        }
+                        i += rest[n..].len() - r.len();
+                        continue;
+                    }
+                    "newlength" | "newif" => {}
+                    _ if lengths.contains(&name) => {}
+                    // `\setcounter{figure}{0}` (`set_counter`): the floats' next numbers.
+                    "setcounter" if matches!(arg(), Some("figure" | "table")) => {
+                        let t = usize::from(arg() == Some("table"));
+                        let after = rest[n..].split_once('}').map_or("", |x| x.1);
+                        let Some((v, more)) = after.trim_start().strip_prefix('{').and_then(|r| r.split_once('}')) else { return out };
+                        seen(more);
+                        let Ok(v) = v.trim().parse::<u32>() else { return out };
+                        figtab[t] = v;
+                    }
+                    // `secnumdepth` in the body (`set_counter`): the next heading reads it.
+                    "setcounter" if arg() == Some("secnumdepth") && cls != data_class::MEMOIR => {
+                        let after = rest[n..].split_once('}').map_or("", |x| x.1);
+                        let Some((v, more)) = after.trim_start().strip_prefix('{').and_then(|r| r.split_once('}')) else { return out };
+                        seen(more);
+                        let Ok(v) = v.trim().parse::<usize>() else { return out };
+                        secnum = Some(v);
+                    }
                     "setcounter" if arg() != Some("page") => return out,
                     "setlength" | "addtolength" => {
                         let after = rest[n..].trim_start();
@@ -4301,8 +7404,28 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                         if top.opaque {
                             return out;
                         }
+                        // In an `algorithmic`: `\theALG@line`, the anchor as it was.
+                        if let Some(line) = alg_line {
+                            if alg_lost {
+                                return out;
+                            }
+                            out.labels.push((key.to_string(), line.to_string()));
+                            out.hrefs.push((key.to_string(), strs[top.href as usize].clone()));
+                            i += 2 + key.len();
+                            continue;
+                        }
                         out.labels.push((key.to_string(), strs[top.label as usize].clone()));
                         out.hrefs.push((key.to_string(), strs[top.href as usize].clone()));
+                        // `\subcaption@label`: also `sub@key`, `\thesubfigure`.
+                        if in_sub {
+                            let n = floats.last().map_or(0, |f| f >> 4);
+                            out.labels.push((format!("sub@{key}"), alph(n as i32, b'a').collect()));
+                        }
+                        // subfig's `\subfloat@label`: `sub@key` is `\caption@lstfmt`'s `(a)`.
+                        if in_sf {
+                            let n = floats.last().map_or(0, |f| f >> 4);
+                            out.labels.push((format!("sub@{key}"), format!("({})", alph(n as i32, b'a').collect::<String>())));
+                        }
                         display_keys.push(key.to_string());
                         i += 2 + key.len();
                     }
@@ -4313,11 +7436,28 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                         if std::mem::take(&mut numbered) {
                             equation -= 1;
                         }
+                        // hyperref's `\Hy@make@anchor`: `AMS.N`, the display's `\@currentHref`.
+                        links += 1;
+                        let href = format!("AMS.{links}");
                         for key in display_keys.drain(..) {
-                            out.labels.push((key, text.clone()));
+                            out.labels.push((key.clone(), text.clone()));
+                            out.hrefs.push((key, href.clone()));
                         }
                         groups.last_mut().expect("a group").label = intern(&mut strs, text);
+                        set_href(&mut groups, &mut strs, href);
                         i += used;
+                    }
+                    // A macro holding `\tag` (`tag_macros`) in a display: hyperref's count
+                    // taken, the text not read (a label in the display stops the walk).
+                    _ if tagm.contains(&name) => {
+                        if !display_keys.is_empty() {
+                            return out;
+                        }
+                        if std::mem::take(&mut numbered) {
+                            equation -= 1;
+                        }
+                        links += 1;
+                        groups.last_mut().expect("a group").opaque = true;
                     }
                     "ref" | "eqref" => {
                         let Some(key) = arg() else { return out };
@@ -4332,11 +7472,61 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
                     _ if scan_list(name) & IN_WORDS != 0 && !matches!(name, "newcommand" | "renewcommand" | "providecommand") => {}
                     // `\def\name`: the name is `quiet` or `loud` as any defined macro.
                     "def" => {}
+                    // `{\let\thefootnote\relax\footnote{..}}`: a name no count reads made a
+                    // command that numbers nothing; both names are passed.
+                    "let" => {
+                        fn word(s: &str) -> Option<&str> {
+                            s.strip_prefix('\\').map(|s| &s[..s.bytes().take_while(u8::is_ascii_alphabetic).count()]).filter(|w| !w.is_empty())
+                        }
+                        let r = rest[n..].trim_start();
+                        let Some(a) = word(r) else { return out };
+                        let r2 = r[1 + a.len()..].trim_start().trim_start_matches('=').trim_start();
+                        let Some(b2) = word(r2) else { return out };
+                        if COUNTING.contains(&a) || scan_list(a) != 0 || table_names(a) != 0 || loud.contains(&a) || !numbers_nothing(b2, &operators, &quiet) {
+                            return out;
+                        }
+                        i += rest[n..].len() - r2.len() + 1 + b2.len();
+                    }
+                    // A body's `\renewcommand{\theenumi}{\alph{enumi}}`: the item labels' text.
+                    "renewcommand" if renewed_the(&rest[n..]).is_some_and(|(c, b)| ENUM_THE.contains(&c) && b.is_some()) => {
+                        if let Some((c, Some(b))) = renewed_the(&rest[n..]) {
+                            if let Some(j) = ENUM_THE.iter().position(|e| *e == c) {
+                                enum_the[j] = Some(b.to_string());
+                            }
+                        }
+                    }
+                    // A body's `\renewcommand{\thefigure}{A.\arabic{figure}}`: the captions'
+                    // and equations' text from here (`predicted_the`), the text not walked.
+                    // Only outside groups, whose end would restore the text.
+                    "renewcommand" if renewed_the(&rest[n..]).is_some_and(|(c, b)| PREFIXED.contains(&c) && b.is_some()) => {
+                        if groups.len() > 1 {
+                            return out;
+                        }
+                        if let Some((c, Some(b))) = renewed_the(&rest[n..]) {
+                            let k = PREFIXED.iter().position(|e| *e == c).expect("a counter");
+                            ft[k] = Some(b.to_string());
+                            i += (b.as_ptr() as usize - rest[n..].as_ptr() as usize) + b.len() + 1;
+                            continue;
+                        }
+                    }
+                    // A body's `\renewcommand{\labelitemi}{--}`: a name whose every text
+                    // numbers nothing (`quiet_macros`), as `\def`'s; the name without braces too
+                    // (`\newcommand\eps \epsilon`).
+                    "newcommand" | "renewcommand" | "providecommand" if arg().and_then(|a| a.strip_prefix('\\')).is_some_and(|a| quiet.contains(&a) && !loud.contains(&a) || a == "@biblabel") || rest[n..].trim_start().starts_with("\\@biblabel") || rest[n..].trim_start_matches('*').strip_prefix('\\').map(|r| &r[..r.bytes().take_while(u8::is_ascii_alphabetic).count()]).is_some_and(|a| !a.is_empty() && quiet.contains(&a) && !loud.contains(&a)) => {}
+                    // `\makeatletter\renewcommand\@biblabel[1]{#1.}\makeatother` before the
+                    // bibliography: the label numbers nothing.
+                    "makeatletter" | "makeatother" => {}
                     // `\fontsize{size}{skip}\selectfont` (`font_size`) numbers nothing.
-                    "fontsize" | "selectfont" | "parbox" | "fbox" | "makebox" | "raisebox" | "framebox" | "colorbox" | "fcolorbox" | "textsuperscript" | "textsubscript" | "selectlanguage" | "foreignlanguage" => {}
+                    "fontsize" | "selectfont" | "parbox" | "fbox" | "makebox" | "raisebox" | "framebox" | "colorbox" | "fcolorbox" | "textsuperscript" | "textsubscript" | "selectlanguage" | "foreignlanguage" | "MakeUppercase" | "MakeLowercase" | "uppercase" | "index" | "makeindex" | "printindex" | "the" | "year" | "month" | "day" | "usetikzlibrary" | "tikzset" | "tikzstyle" | "affil" | "columnbreak" | "qrcode" | "tnote" | "twocolumn" => {}
+                    // The picture commands (`engine_picture`) number nothing.
+                    "put" | "multiput" | "line" | "vector" | "thinlines" | "thicklines" | "linethickness" | "unitlength" | "shortstack" | "dashbox" | "circle" | "oval" | "qbezier" => {}
                     // A `\raisebox`'s or `\framebox`'s `\height` and kin (the pre-scan passes
                     // them only there).
                     "width" | "height" | "depth" => {}
+                    // memoir's own commands that number nothing (`\epigraph`).
+                    _ if cls == data_class::MEMOIR && MEMOIR_OWN.contains(&name) => {}
+                    _ if cls == data_class::A0POSTER && a0poster::A0POSTER_OWN.contains(&name) => {}
+                    _ if cls == data_class::SCREENPLAY && screenplay::SCREENPLAY_OWN.contains(&name) => {}
                     // Kernel values, operators and math macros number nothing.
                     _ if table_names(name) != 0 => {}
                     // A package's native command (`\includegraphics`, `\operatorname`) numbers
@@ -4356,15 +7546,102 @@ fn predict_from(src: &str, slashes: &[usize], mut inc: Option<&mut prescan::Pred
     out
 }
 
+/// How many times `\name` stands in `src` as a whole control word, counted up to two (the
+/// pre-scan asks only whether a definition is its name's one use): the search stops at the
+/// second, mostly near the definition, instead of reading the whole source for each name.
+fn uses_of(src: &str, name: &str) -> usize {
+    let needle = format!("\\{name}");
+    src.match_indices(&needle).filter(|(k, _)| !src[k + needle.len()..].starts_with(|c: char| c.is_ascii_alphabetic())).take(2).count()
+}
+
+/// The length of a `\newcommand`'s rest after its name: the name's closing `}` if braced,
+/// `[n]` and `[default]`, then the `{text}` with balanced braces, each `#` in it `##` or
+/// a parameter of the `n` (`None` otherwise: LaTeX's "Illegal parameter number").
+fn definition_len(after: &str) -> Option<usize> {
+    let mut r = after.strip_prefix('}').unwrap_or(after);
+    let mut params = 0u8;
+    for k in 0..2 {
+        let t = r.trim_start();
+        match t.strip_prefix('[') {
+            Some(o) => {
+                let (v, a) = o.split_once(']')?;
+                if k == 0 {
+                    params = v.trim().parse().ok().filter(|n| (1..=9).contains(n))?;
+                }
+                r = a;
+            }
+            None => break,
+        }
+    }
+    let body = r.trim_start().strip_prefix('{')?;
+    let mut depth = 1usize;
+    let end = body.bytes().position(|c| {
+        match c {
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
+            _ => {}
+        }
+        depth == 0
+    })?;
+    let text = &body.as_bytes()[..end];
+    let mut k = 0;
+    while k < text.len() {
+        if text[k] == b'#' {
+            match text.get(k + 1) {
+                Some(b'#') => k += 1,
+                Some(d @ b'1'..=b'9') if d - b'0' <= params => {}
+                _ => return None,
+            }
+        }
+        k += 1;
+    }
+    // `body` starts one past the `{`: the text up to and with its `}`.
+    Some(after.len() - body.len() + end + 1)
+}
+
+/// The names `\newif\ifname` makes (`ifname`, `nametrue`, `namefalse`), each as a slice of
+/// one of its uses in `src` (or of the `\newif`).
+fn newif_words<'a>(src: &'a str, slashes: &[usize]) -> Vec<&'a str> {
+    let b = src.as_bytes();
+    let mut out = Vec::new();
+    for &k in slashes.iter().filter(|&&k| b[k..].starts_with(b"\\newif\\if")) {
+        let r = &src[k + "\\newif\\".len()..];
+        let full = &r[..2 + r[2..].bytes().take_while(u8::is_ascii_alphabetic).count()];
+        if full.len() == 2 {
+            continue;
+        }
+        out.push(full);
+        for suffix in ["true", "false"] {
+            let word = format!("\\{}{suffix}", &full[2..]);
+            if let Some(at) = src.match_indices(&word).map(|(j, _)| j).find(|&j| !src[j + word.len()..].starts_with(|c: char| c.is_ascii_alphabetic())) {
+                out.push(&src[at + 1..at + word.len()]);
+            }
+        }
+    }
+    out
+}
+
 /// Whether [`predict`] passes `name` by without a counter changing: a native command,
 /// table name, package native or declared operator that none of its own cases handles.
+/// The commands [`predict`] reads as numbering (or reading numbers): never quiet.
+const COUNTING: [&str; 17] = ["begin", "end", "section", "subsection", "subsubsection", "paragraph", "subparagraph", "item", "caption", "footnote", "maketitle", "setcounter", "setlength", "addtolength", "label", "ref", "eqref"];
+
 fn numbers_nothing(name: &str, operators: &[&str], quiet: &[&str]) -> bool {
-    const COUNTING: [&str; 16] = ["begin", "end", "section", "subsection", "subsubsection", "paragraph", "item", "caption", "footnote", "maketitle", "setcounter", "setlength", "addtolength", "label", "ref", "eqref"];
-    if COUNTING.contains(&name) || matches!(name, "nonumber" | "notag" | "newcommand" | "renewcommand" | "providecommand") {
+    // `\setlength` and `\addtolength` of a kernel length (`\itemsep`, pandoc's `\tightlist`)
+    // number nothing in a macro; one of the document's own lengths is not a table name, so
+    // its macro stays out.
+    if COUNTING.contains(&name) && !matches!(name, "setlength" | "addtolength") || matches!(name, "nonumber" | "notag" | "newcommand" | "renewcommand" | "providecommand") {
         return false;
     }
-    scan_list(name) & (IN_WORDS | PACKAGE_NATIVE) != 0 || table_names(name) != 0 || operators.contains(&name) || quiet.contains(&name) || matches!(name, "fontsize" | "selectfont" | "parbox" | "fbox" | "makebox" | "raisebox" | "framebox" | "colorbox" | "fcolorbox" | "textsuperscript" | "textsubscript" | "selectlanguage" | "foreignlanguage")
+    scan_list(name) & (IN_WORDS | PACKAGE_NATIVE) != 0 || table_names(name) != 0 || operators.contains(&name) || quiet.contains(&name) || matches!(name, "arabic" | "roman" | "Roman" | "alph" | "Alph" | "fontsize" | "selectfont" | "parbox" | "fbox" | "makebox" | "raisebox" | "framebox" | "colorbox" | "fcolorbox" | "textsuperscript" | "textsubscript" | "selectlanguage" | "foreignlanguage" | "MakeUppercase" | "MakeLowercase" | "uppercase" | "index" | "makeindex" | "printindex" | "the" | "year" | "month" | "day" | "usetikzlibrary" | "tikzset" | "tikzstyle" | "affil" | "columnbreak" | "qrcode" | "tnote" | "twocolumn")
+        // The list parameters (latex.ltx `\newskip\itemsep` and kin), set in a macro.
+        || matches!(name, "itemsep" | "parsep" | "topsep" | "partopsep" | "itemindent" | "listparindent" | "labelwidth" | "labelsep" | "leftmargin" | "rightmargin")
 }
+
+/// [`quiet_macros`]'s third list: a macro that is `\begin{itemize}` (or `description`), and
+/// one that is its `\end`.
+const LIST_MACRO_BEGIN: usize = usize::MAX - 1;
+const LIST_MACRO_END: usize = usize::MAX;
 
 /// The macros the preamble defines with `\newcommand`, `\renewcommand` or
 /// `\providecommand` whose text numbers nothing ([`numbers_nothing`], an earlier such macro
@@ -4373,14 +7650,15 @@ fn numbers_nothing(name: &str, operators: &[&str], quiet: &[&str]) -> bool {
 /// predicted value, so a macro wrongly let through can only send the document to the engine.
 /// The second list holds the other macros the preamble defines; the third, those of them
 /// whose text numbers nothing but `k` starred headings (each hpdftex's `\@ssect` steps the
-/// link counter, `section*.n`), with `k`.
+/// link counter, `section*.n`), with `k`; or nothing but unlabelled `\item`s (`k` 0), or
+/// that is a list's `\begin` or `\end` alone ([`LIST_MACRO_BEGIN`], [`LIST_MACRO_END`]).
 fn quiet_macros<'a>(preamble: &'a str, slashes: &[usize], operators: &[&str]) -> (Vec<&'a str>, Vec<&'a str>, Vec<(&'a str, usize)>) {
     let (mut quiet, mut loud): (Vec<&'a str>, Vec<&'a str>) = (Vec::new(), Vec::new());
     let mut starred = Vec::new();
     let mut rest = preamble;
     // The first of the commands in `rest`: from backslash to backslash (`slashes`, each of
     // `preamble`'s), not a search of the rest of the text for each command.
-    const DEFS: [&str; 6] = ["\\newcommand", "\\renewcommand", "\\providecommand", "\\def", "\\newenvironment", "\\renewenvironment"];
+    const DEFS: [&str; 7] = ["\\newcommand", "\\renewcommand", "\\providecommand", "\\def", "\\newenvironment", "\\renewenvironment", "\\newtcolorbox"];
     let b = preamble.as_bytes();
     let mut j = 0;
     let mut first = |rest: &str| {
@@ -4398,10 +7676,14 @@ fn quiet_macros<'a>(preamble: &'a str, slashes: &[usize], operators: &[&str]) ->
     };
     while let Some(k) = first(rest) {
         let def = k.1 == 4;
-        let env = k.1 > 14;
+        // (`\providecommand` is as long as `\newenvironment`.)
+        let env = rest[k.0..].starts_with("\\newenvironment") || rest[k.0..].starts_with("\\renewenvironment");
+        // tcolorbox's `\newtcolorbox{name}[n][default]{options}`: `name` an environment whose
+        // text is its options.
+        let tcb = rest[k.0..].starts_with("\\newtcolorbox");
         let r = rest[k.0 + k.1..].trim_start_matches('*').trim_start();
         rest = r;
-        let (name, mut r) = if env {
+        let (name, mut r) = if env || tcb {
             // `\newenvironment{name}[n]{begin}{end}`: `\name`, whose text is both.
             match r.strip_prefix('{').and_then(|r| r.split_once('}')) {
                 Some((n, r)) => (n, r),
@@ -4410,7 +7692,7 @@ fn quiet_macros<'a>(preamble: &'a str, slashes: &[usize], operators: &[&str]) ->
         } else if def {
             // `\def\name#1#2{text}`: the parameters only `#` and digits.
             let Some(r) = r.strip_prefix('\\') else { continue };
-            let n = r.bytes().take_while(u8::is_ascii_alphabetic).count();
+            let n = own_at_len(r);
             let (name, after) = (&r[..n], &r[n..]);
             let Some(open) = after.find('{') else { continue };
             if n == 0 || !after[..open].bytes().all(|c| c == b'#' || c.is_ascii_digit()) {
@@ -4425,7 +7707,7 @@ fn quiet_macros<'a>(preamble: &'a str, slashes: &[usize], operators: &[&str]) ->
                 Some((n, r)) => (n, r),
                 None => match r.strip_prefix('\\') {
                     Some(r) => {
-                        let n = r.bytes().take_while(u8::is_ascii_alphabetic).count();
+                        let n = own_at_len(r);
                         (&r[..n], &r[n..])
                     }
                     None => continue,
@@ -4440,27 +7722,34 @@ fn quiet_macros<'a>(preamble: &'a str, slashes: &[usize], operators: &[&str]) ->
                 r = a;
             }
         }
-        let Some(body) = r.trim_start().strip_prefix('{') else {
-            loud.push(name);
-            continue;
+        // `\newcommand\eps \epsilon`: the text is one control word (`\@yargdef`'s
+        // undelimited argument).
+        let lone = r.trim_start().strip_prefix('\\').filter(|_| !def && !env && !tcb).map(|t| t.bytes().take_while(u8::is_ascii_alphabetic).count()).filter(|&n| n > 0).map(|n| &r.trim_start()[..1 + n]);
+        let (mut text, after_text) = if let Some(t) = lone {
+            (t, "")
+        } else {
+            let Some(body) = r.trim_start().strip_prefix('{') else {
+                loud.push(name);
+                continue;
+            };
+            let mut depth = 1usize;
+            let Some(end) = body.bytes().position(|c| {
+                match c {
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    _ => {}
+                }
+                depth == 0
+            }) else {
+                loud.push(name);
+                continue;
+            };
+            (&body[..end], &body[end + 1..])
         };
-        let mut depth = 1usize;
-        let Some(end) = body.bytes().position(|c| {
-            match c {
-                b'{' => depth += 1,
-                b'}' => depth -= 1,
-                _ => {}
-            }
-            depth == 0
-        }) else {
-            loud.push(name);
-            continue;
-        };
-        let mut text = &body[..end];
         // An environment's end text joins its begin text.
         let joined;
         if env {
-            let after = body[end + 1..].trim_start();
+            let after = after_text.trim_start();
             let Some(k) = after.strip_prefix('{').and_then(balanced) else {
                 loud.push(name);
                 continue;
@@ -4468,16 +7757,65 @@ fn quiet_macros<'a>(preamble: &'a str, slashes: &[usize], operators: &[&str]) ->
             joined = format!("{text}{}", &after[1..1 + k]);
             text = &joined;
         }
+        // A tcolorbox, or an environment already found quiet, numbers nothing: its text does.
+        let unboxed;
+        if text.contains("\\begin{") || text.contains("\\end{") {
+            let mut t = text.to_string();
+            for e in quiet.iter().copied().chain(["tcolorbox"]) {
+                t = t.replace(&format!("\\begin{{{e}}}"), "").replace(&format!("\\end{{{e}}}"), "");
+            }
+            unboxed = t;
+            text = &unboxed;
+        }
+        // A tikzpicture numbers nothing (the body's scan skips one whole too).
+        let unpictured;
+        if text.contains("\\begin{tikzpicture}") {
+            let (mut t, mut rest) = (String::new(), text);
+            while let Some(k) = rest.find("\\begin{tikzpicture}") {
+                t.push_str(&rest[..k]);
+                rest = rest[k..].find("\\end{tikzpicture}").map_or("\\@", |e| &rest[k + e + "\\end{tikzpicture}".len()..]);
+            }
+            t.push_str(rest);
+            unpictured = t;
+            text = &unpictured;
+        }
         let names = text.split('\\').skip(1).map(|t| (t.bytes().take_while(u8::is_ascii_alphabetic).count(), t));
-        let ok = names.clone().all(|(n, t)| n == 0 || (!t[n..].starts_with('@') && numbers_nothing(&t[..n], operators, &quiet)));
-        let star = |n: usize, t: &str| matches!(&t[..n], "section" | "subsection" | "subsubsection" | "paragraph") && t[n..].starts_with('*');
+        // `\begin` and `\end` of an environment that steps no counter (latex.ltx's center,
+        // flushleft, flushright, quote, quotation, verse; array and tabular; amsmath's
+        // matrices, cases and inner displays, which `\refstepcounter` nothing).
+        let plain = |n: usize, t: &str| {
+            matches!(&t[..n], "begin" | "end") && t[n..].strip_prefix('{').and_then(|r| r.split_once('}')).is_some_and(|(e, _)| matches!(e, "center" | "flushleft" | "flushright" | "quote" | "quotation" | "verse" | "array" | "tabular" | "tabular*" | "aligned" | "gathered" | "split") || AMS_ARRAYS.contains(&e))
+        };
+        let names = names.filter(move |&(n, t)| !plain(n, t));
+        // A name with `@`: the document's own (`fresh_at`) found quiet before.
+        let own_at = |t: &str| {
+            let m = t.bytes().take_while(|c| c.is_ascii_alphabetic() || *c == b'@').count();
+            fresh_at(&t[..m]) && quiet.contains(&&t[..m])
+        };
+        let ok = names.clone().all(|(n, t)| n == 0 || own_at(t) || (!t[n..].starts_with('@') && numbers_nothing(&t[..n], operators, &quiet)));
+        let star = |n: usize, t: &str| matches!(&t[..n], "section" | "subsection" | "subsubsection" | "paragraph" | "subparagraph") && t[n..].starts_with('*');
         let stars = names.clone().filter(|&(n, t)| star(n, t)).count();
         let starred_ok = stars > 0 && names.clone().all(|(n, t)| n == 0 || star(n, t) || (!t[n..].starts_with('@') && numbers_nothing(&t[..n], operators, &quiet)));
-        if ok && !name.is_empty() && !name.contains('@') {
+        // A text whose only counting command is `\item` (not `\item[`): it steps nothing in
+        // an `itemize` or `description` (`k` 0, checked where it is used).
+        let item = |n: usize, t: &str| &t[..n] == "item" && !t[n..].trim_start().starts_with('[');
+        let item_ok = stars == 0 && names.clone().any(|(n, t)| item(n, t)) && names.clone().all(|(n, t)| n == 0 || item(n, t) || (!t[n..].starts_with('@') && numbers_nothing(&t[..n], operators, &quiet)));
+        // A command (not an environment, no `#`) whose text is an `itemize` or `description`'s
+        // `\begin` (with options) or `\end` alone: the list opens or closes where it is used.
+        let list = (!env && !text.contains('#')).then(|| text.trim()).and_then(|t| {
+            let (open, e) = if let Some(e) = t.strip_prefix("\\begin{") { (true, e) } else { (false, t.strip_prefix("\\end{")?) };
+            let (e, after) = e.split_once('}')?;
+            let after = after.trim();
+            let tail_ok = after.is_empty() || open && after.starts_with('[') && after.ends_with(']') && !after[1..after.len() - 1].contains(['[', ']', '\\']);
+            (matches!(e, "itemize" | "description") && tail_ok).then_some(if open { LIST_MACRO_BEGIN } else { LIST_MACRO_END })
+        });
+        if ok && !name.is_empty() && (!name.contains('@') || fresh_at(name)) {
             quiet.push(name);
         } else if !name.is_empty() {
             loud.push(name);
-            if starred_ok && !name.contains('@') {
+            if let Some(k) = list.filter(|_| !name.contains('@')) {
+                starred.push((name, k));
+            } else if (starred_ok || item_ok) && !name.contains('@') {
                 starred.push((name, stars));
             }
         }
@@ -4488,7 +7826,8 @@ fn quiet_macros<'a>(preamble: &'a str, slashes: &[usize], operators: &[&str]) ->
 /// Each `\bibitem`'s value, for a `\cite` ahead of it: in each `thebibliography`
 /// (`\usecounter{enumiv}` from zero) a `\bibitem{key}` is the next number, a
 /// `\bibitem[label]{key}` its label. A label with commands or braces is left out; `bibitem`
-/// checks every value it uses.
+/// checks every value it uses. Under the key `BIB BIB key`, each item's place in its list:
+/// the number natbib's `\NAT@wrout` writes (`\the\c@NAT@ctr`).
 fn predict_bib(body: &str, first: Option<usize>, labels: &mut std::collections::HashMap<String, String>) {
     // Comments are cut line by line, so text before the line of `first`, the first
     // `\begin{thebibliography}`, holds none (a line's text only shortens) and is not read.
@@ -4504,11 +7843,13 @@ fn predict_bib(body: &str, first: Option<usize>, labels: &mut std::collections::
     }).collect::<Vec<_>>().join("\n");
     for env in body.split("\\begin{thebibliography}").skip(1) {
         let env = env.split("\\end{thebibliography}").next().unwrap_or("");
-        let mut n = 0;
+        let (mut n, mut m) = (0, 0);
         for item in env.split("\\bibitem").skip(1) {
             if item.starts_with(|c: char| c.is_ascii_alphabetic()) {
                 continue;
             }
+            // natbib's `\c@NAT@ctr`: every `\bibitem` steps it, labelled or not.
+            m += 1;
             let item = item.trim_start();
             let (label, rest) = match item.strip_prefix('[') {
                 Some(r) => match r.split_once(']') {
@@ -4518,6 +7859,7 @@ fn predict_bib(body: &str, first: Option<usize>, labels: &mut std::collections::
                 None => (None, item),
             };
             let Some((key, _)) = rest.strip_prefix('{').and_then(|r| r.split_once('}')) else { continue };
+            labels.insert(format!("{BIB}{BIB}{key}"), m.to_string());
             let value = match label {
                 Some(l) if l.contains(['\\', '{', '}']) => continue,
                 Some(l) => l.to_string(),
@@ -4533,6 +7875,15 @@ fn predict_bib(body: &str, first: Option<usize>, labels: &mut std::collections::
 
 /// hyperref's anchor of a theorem numbered by counter `env`: `env.\theH<env>`, which is
 /// `\theH<level>.\arabic{env}` when a level resets it, the counters in arabic.
+/// An equation's anchor: in `subequations` under hyperref `equation.` and
+/// `\theHparentequation\alph{equation}`, else [`theorem_href`].
+fn eq_anchor(sub_h: Option<&str>, sec: &[u32], within: Option<usize>, n: u32) -> String {
+    match sub_h {
+        Some(h) => format!("equation.{h}{}", alph(n as i32, b'a').collect::<String>()),
+        None => theorem_href("equation", sec, within, n),
+    }
+}
+
 fn theorem_href(env: &str, sec: &[u32], within: Option<usize>, n: u32) -> String {
     let mut s = env.to_string();
     for c in within.map_or(&[][..], |w| &sec[..=w]) {
@@ -4559,7 +7910,14 @@ struct TocEntry {
     level: usize,
     number: String,
     title: String,
+    /// A caption's hyperref anchor (`table.1.1`); empty for a heading.
+    href: String,
 }
+
+/// The levels of a caption's `\addcontentsline{lof}{figure}` and `{lot}{table}` among the
+/// contents entries (`TocEntry::level`): 9 plus `\@captype` (figure 1, table 2).
+const LOF: usize = 10;
+const LOT: usize = 11;
 
 /// The contents level of `\addcontentsline`'s level name: report's and book's `chapter` 0,
 /// the sections one deeper there.
@@ -4598,13 +7956,39 @@ fn heading_title(rest: &str) -> Option<&str> {
     None
 }
 
+/// A caption's text without its `\label{key}`s, as `\addcontentsline` writes it.
+fn strip_labels(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(p) = rest.find("\\label{") {
+        out.push_str(&rest[..p]);
+        rest = rest[p + 7..].split_once('}').map_or("", |(_, r)| r);
+    }
+    out.push_str(rest);
+    out
+}
+
 /// A title the contents can take from the source as the `.toc` file would give it back:
 /// text, `~` and the robust commands below (a `\write` leaves them as they are); not
 /// `\label` (gobbled there), `\footnote`, `\\` or a macro (expanded there).
+/// fontmath.ltx's `\DeclareMathSymbol`s (each a `\mathchardef`) and their `\let`s that a
+/// heading's math may hold: `\pdfstringdef` cannot expand them and removes them.
+const MATH_SYMBOLS: [&str; 66] = [
+    "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta", "theta", "vartheta", "iota", "kappa", "lambda", "mu", "nu", "xi", "pi", "varpi", "rho", "varrho", "sigma", "varsigma", "tau", "upsilon", "phi", "varphi", "chi", "psi", "omega",
+    "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon", "Phi", "Psi", "Omega",
+    "infty", "partial", "nabla", "pm", "mp", "times", "cdot", "div", "leq", "le", "geq", "ge", "rightarrow", "to", "leftarrow", "Rightarrow", "Leftarrow", "approx", "sim", "simeq", "equiv", "propto", "ell", "in", "forall", "exists",
+];
+
 fn toc_safe(title: &str) -> bool {
+    toc_safe_own(title, &[])
+}
+
+/// [`toc_safe`], the document's own macros `own` ([`toc_own_macros`]) safe too.
+fn toc_safe_own(title: &str, own: &[&str]) -> bool {
     const SAFE: [&str; 22] = ["emph", "textbf", "textmd", "textit", "textsl", "textsc", "textup", "textrm", "textsf", "texttt", "LaTeX", "TeX", "ldots", "dots", "textellipsis", "textunderscore", "thinspace", "nobreakspace", "H", "u", "v", "r"];
     let b = title.as_bytes();
     let mut i = 0;
+    let mut math = false;
     while i < b.len() {
         match b[i] {
             b'\\' => {
@@ -4616,11 +8000,19 @@ fn toc_safe(title: &str) -> bool {
                     i += 2;
                     continue;
                 }
-                if !SAFE.contains(&&title[i + 1..i + 1 + n]) {
+                let word = &title[i + 1..i + 1 + n];
+                // In math, fontmath.ltx's `\mathchardef` symbols (the bookmark drops them,
+                // `bookmark_math`, after checking their meaning).
+                if !SAFE.contains(&word) && !own.contains(&word) && !(math && MATH_SYMBOLS.contains(&word)) {
                     return false;
                 }
                 i += 1 + n;
             }
+            b'$' => {
+                math = !math;
+                i += 1;
+            }
+            b'^' if math => i += 1,
             b'%' | b'#' | b'^' | b'&' | b'@' => return false,
             _ => i += 1,
         }
@@ -4628,7 +8020,109 @@ fn toc_safe(title: &str) -> bool {
     true
 }
 
+/// The preamble's macros (`\def`, `\gdef`, `\newcommand`, `\renewcommand`) whose text holds
+/// amsmath's `\tag`: a use in a display takes hyperref's link counter as `\tag` does
+/// (`ams_align_begin`'s `tags_in`), and its text is not read here.
+fn tag_macros(pre: &str) -> Vec<&str> {
+    macros_holding(pre, |text| text.match_indices("\\tag").any(|(p, _)| !text[p + 4..].starts_with(|c: char| c.is_ascii_alphabetic())))
+}
+
+/// The preamble's macros (`\def`, `\gdef`, `\newcommand`, `\renewcommand`) whose text `hold`s.
+fn macros_holding(pre: &str, hold: impl Fn(&str) -> bool) -> Vec<&str> {
+    let mut out = Vec::new();
+    for d in ["\\def", "\\gdef", "\\newcommand", "\\renewcommand"] {
+        for (k, _) in pre.match_indices(d) {
+            let after = &pre[k + d.len()..];
+            if after.starts_with(|c: char| c.is_ascii_alphabetic()) {
+                continue;
+            }
+            let r = after.trim_start_matches('*').trim_start();
+            let r = r.strip_prefix('{').unwrap_or(r);
+            let Some(r) = r.strip_prefix('\\') else { continue };
+            let n = r.bytes().take_while(u8::is_ascii_alphabetic).count();
+            let Some(open) = r[n..].find('{') else { continue };
+            let Some(len) = balanced(&r[n + open + 1..]) else { continue };
+            let text = &r[n + open + 1..n + open + 1 + len];
+            if n > 0 && hold(text) {
+                out.push(&r[..n]);
+            }
+        }
+    }
+    out
+}
+
+/// The uses of [`tag_macros`] in `s`.
+fn tag_macro_uses(s: &str, names: &[&str]) -> usize {
+    names.iter().map(|m| s.match_indices(&format!("\\{m}")).filter(|(p, _)| !s[p + 1 + m.len()..].starts_with(|c: char| c.is_ascii_alphabetic())).count()).sum()
+}
+
+/// The document's own macros a contents line may hold (`\section{\pair{x}{y}}`): each one
+/// `\newcommand`ed once in the preamble (before `start`) and defined nowhere else, with at
+/// most a number of parameters (no default) and a text of [`toc_safe`] commands and `#n`.
+/// The `.toc` line `\addcontentsline`'s `\protected@write` makes is the macro's expansion:
+/// the same tokens the title gives when the contents line expands the macro itself.
+fn toc_own_macros<'a>(src: &str, start: usize, quiet: &[&'a str]) -> Vec<&'a str> {
+    const DEFS: [&str; 10] = ["\\newcommand", "\\renewcommand", "\\providecommand", "\\def", "\\gdef", "\\edef", "\\xdef", "\\let", "\\DeclareRobustCommand", "\\NewDocumentCommand"];
+    // Every definition's command, place and the text after its `\\`, found once in `DEFS`
+    // order (a scan of the source per macro and command cost tens of millions of
+    // instructions on a document with many macros).
+    let defs: Vec<(&str, usize, &str)> = DEFS
+        .iter()
+        .flat_map(|&d| {
+            src.match_indices(d).filter_map(move |(k, _)| {
+                let after = &src[k + d.len()..];
+                if after.starts_with(|c: char| c.is_ascii_alphabetic()) {
+                    return None;
+                }
+                let r = after.trim_start_matches('*').trim_start();
+                let r = r.strip_prefix('{').unwrap_or(r);
+                Some((d, k, r.strip_prefix('\\')?))
+            })
+        })
+        .collect();
+    quiet.iter().copied().filter(|name| {
+        let mut found = None;
+        for &(d, k, r) in &defs {
+            let Some(r) = r.strip_prefix(name) else { continue };
+            if r.starts_with(|c: char| c.is_ascii_alphabetic() || c == '@') {
+                continue;
+            }
+            if found.is_some() || d != "\\newcommand" || k >= start {
+                return false;
+            }
+            found = Some(r);
+        }
+        let Some(r) = found else { return false };
+        let r = r.strip_prefix('}').unwrap_or(r).trim_start();
+        let r = match r.strip_prefix('[') {
+            Some(o) => match o.split_once(']') {
+                Some((n, a)) if n.trim().parse::<u8>().is_ok_and(|n| n <= 9) => a.trim_start(),
+                _ => return false,
+            },
+            None => r,
+        };
+        if r.starts_with('[') {
+            return false;
+        }
+        let Some(body) = r.strip_prefix('{') else { return false };
+        let mut depth = 1usize;
+        let Some(end) = body.bytes().position(|c| {
+            match c {
+                b'{' => depth += 1,
+                b'}' => depth -= 1,
+                _ => {}
+            }
+            depth == 0
+        }) else {
+            return false;
+        };
+        let text = (1..=9).fold(body[..end].to_string(), |t, d| t.replace(&format!("#{d}"), ""));
+        toc_safe(&text)
+    }).collect()
+}
+
 /// A native job's result.
+#[derive(Clone)]
 pub struct Output {
     pub pdf: Vec<u8>,
     pub pages: usize,
@@ -4679,20 +8173,61 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
         }
     };
     lap("the job starts");
+    // Whether every file the last compile read from disk still reads the same bytes (or is
+    // still absent). A file found where it was with the same stamp is not read again.
+    let reads_same = session.as_deref().and_then(|s| s.last.as_ref().map(|o| (s, o))).is_some_and(|(s, o)| {
+        let none = |_: &str| None;
+        let disk: &Read<'_> = read.unwrap_or(&none);
+        let hash = |name: &str| match locate {
+            Some(l) => super::engine_checkpoint::hash_stamped(&s.stamps, name, l, disk),
+            None => super::engine_checkpoint::file_hash(disk(name).as_deref()),
+        };
+        // A file read several times (a figure: its size, then its page, then the PDF) is
+        // looked at once per hash its reads gave.
+        let mut seen = std::collections::HashSet::new();
+        o.reads.iter().all(|(name, h)| !seen.insert((name.as_str(), *h)) || hash(name) == *h)
+    });
+    if timed {
+        lap(&format!("reads checked ({})", session.as_deref().and_then(|s| s.last.as_ref()).map_or(0, |o| o.reads.len())));
+    }
+    // A session's save that changed nothing the job reads (the same source, every file it
+    // read the same, the same date as far as the job reads it: `Prescan::minute`) is the last
+    // compile's output: the job reads nothing else.
+    if let Some(s) = session.as_deref_mut().filter(|_| reads_same) {
+        if let Some(o) = s.last.as_ref().filter(|o| o.src == src && o.prescan.minute == if src.contains("\\time") { now.div_euclid(60) } else { now.div_euclid(86_400) }) {
+            let out = o.out.clone();
+            s.how = "unchanged".to_string();
+            lap("unchanged: the last output");
+            return Ok(out);
+        }
+    }
     // A session scans again only around the edit (`engine_prescan`).
     let body = match session.as_deref_mut() {
         Some(s) => s.prescan.scan(src),
         None => scan(src),
     };
-    let body = body.map_err(|what| format!("the pre-scan: {what}"))?;
-    session.as_deref_mut().map_or_else(|| well_formed(body), |s| s.prescan.well_formed(body)).map_err(|what| format!("an error pdfLaTeX reports: {what}"))?;
+    // `RT_NATIVE_ALL=1`: past the pre-scan's stops (printed), to the body's declines.
+    let body = match body {
+        Err(what) if native_all() => {
+            eprintln!("decline: the pre-scan: {what}");
+            &src[..src.find("\\end{document}").unwrap_or(src.len())]
+        }
+        b => b.map_err(|what| format!("the pre-scan: {what}"))?,
+    };
+    let formed = session.as_deref_mut().map_or_else(|| well_formed(body), |s| s.prescan.well_formed(body)).map_err(|what| format!("an error pdfLaTeX reports: {what}"));
+    match formed {
+        Err(what) if native_all() => eprintln!("decline: {what}"),
+        f => f?,
+    }
     lap("pre-scan: scan");
     let src_class = src.find("\\documentclass").map(|i| &src[i + "\\documentclass".len()..]).ok_or("no \\documentclass")?;
     let (size, key, cls) = class_options(src_class).map_err(|what| format!("the class options: {what}"))?;
     let class = data_class::class_size(cls, size).ok_or("no class table in this build")?;
     let text = format!("{body}\\enddocument ");
     // Files come from the binary first (`carried`); `read` only for others. A font outside
-    // the TFM table may have a map line `rushtex.map` lacks: the job runs again on `read`.
+    // the TFM table may have a map line `rushtex.map` lacks: from then on the job reads the
+    // installation's `pdftex.map` (the shipout's map is read again for a font it lacks,
+    // `Machine::classify_fonts`); a session's job runs again on `read` instead.
     let outside = std::cell::Cell::new(false);
     let none = |_: &str| None;
     let disk: &Read<'_> = read.unwrap_or(&none);
@@ -4703,6 +8238,17 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
     // the whole process).
     let carry = |name: &str| {
         let Some(c) = cache else { return carried(name) };
+        // `pdftex.map` grows with the font packs loaded: the binary's part (`rushtex.map`) is
+        // kept decompressed, the packs' lines added each time.
+        if name == "pdftex.map" && crate::data::data_embed::embedded().is_some_and(|e| e.contains("rushtex.map")) {
+            if let Some(mut b) = c.carried("rushtex.map", || match carried("rushtex.map") {
+                Carried::File(b) => Some(b),
+                _ => None,
+            }) {
+                b.extend_from_slice(&crate::data::data_pack::loaded_maps());
+                return Carried::File(b);
+            }
+        }
         let mut other = Carried::Unknown;
         match c.carried(name, || match carried(name) {
             Carried::File(b) => Some(b),
@@ -4715,12 +8261,16 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
             None => other,
         }
     };
-    let first = |name: &str| match carry(name) {
+    let first = |name: &str| match if name == "pdftex.map" && outside.get() && read.is_some() { Carried::Unknown } else { carry(name) } {
         Carried::File(b) => Some(b),
         Carried::Absent => None,
         Carried::Unknown => {
             if name.ends_with(".tfm") {
                 outside.set(true);
+                // `RT_NATIVE_WHY=1`: which fonts are read from the installation.
+                if std::env::var_os("RT_NATIVE_WHY").is_some() {
+                    eprintln!("font outside the TFM table: {name}");
+                }
             }
             let b = disk(name);
             if logging {
@@ -4734,7 +8284,23 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
     let slashes = session.as_deref_mut().map_or_else(|| backslashes(body), |s| s.prescan.slashes(body));
     let names = |n: &[&[u8]]| slashes.iter().find(|&&k| n.iter().any(|n| body.as_bytes()[k..].starts_with(n))).copied();
     // hyperref's bookmarks need the contents entries before the body.
-    let mut predicted = if names(&[b"\\ref", b"\\eqref", b"\\tableofcontents"]).is_some() || text.contains("hyperref") { session.as_deref_mut().map_or_else(|| predict(body, &slashes), |s| s.prescan.predict(body, &slashes)) } else { Predicted::default() };
+    // The document's own heading macros expanded first (`engine_predict_macros`), in one
+    // whole walk.
+    let mut predicted = if names(&[b"\\ref", b"\\eqref", b"\\subref", b"\\tableofcontents", b"\\listoftables", b"\\listoffigures", b"\\cref", b"\\Cref", b"\\labelcref"]).is_some() || text.contains("hyperref") {
+        // A session predicts the expanded text from the last save's too (its own marks).
+        match predict_macros::expand_heading_macros(body) {
+            Some(x) => match session.as_deref_mut() {
+                Some(s) => {
+                    let slashes = s.expanded.slashes(&x);
+                    s.expanded.predict(&x, &slashes)
+                }
+                None => predict(&x, &backslashes(&x)),
+            },
+            None => session.as_deref_mut().map_or_else(|| predict(body, &slashes), |s| s.prescan.predict(body, &slashes)),
+        }
+    } else {
+        Predicted::default()
+    };
     if names(&[b"\\cite"]).is_some() {
         predict_bib(body, names(&[b"\\begin{thebibliography}"]), &mut predicted.labels);
     }
@@ -4748,7 +8314,8 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
             c.sweep();
         }
     };
-    // A font outside the TFM table: the job runs again on `read`, without checkpoints.
+    // A font outside the TFM table in a session: the job runs again on `read`, without
+    // checkpoints (one read before a checkpoint is not read again after a resume).
     let again = || {
         if let Some(c) = cache {
             c.set_carried_job(false);
@@ -4759,16 +8326,13 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
     };
     let Some(session) = session else {
         let out = job(&text, class, key, now, &first, &predicted, cache, None)?;
-        if !outside.get() || read.is_none() {
-            sweep();
-            return Ok(out);
-        }
-        return again();
+        sweep();
+        return Ok(out);
     };
-    let prescan = Prescan { class: class as *const ClassTable<'static> as usize, key, minute: if src.contains("\\time") { now.div_euclid(60) } else { now.div_euclid(86_400) }, labels: predicted.labels.clone(), hrefs: predicted.hrefs.clone(), toc: predicted.complete.then(|| predicted.toc.clone()), the_prefix: the_prefixes(&text), bibstyles: if text.contains("natbib") { natbib::styles(&text) } else { Vec::new() } };
+    let prescan = Prescan { class: class as *const ClassTable<'static> as usize, key, minute: if src.contains("\\time") { now.div_euclid(60) } else { now.div_euclid(86_400) }, labels: predicted.labels.clone(), hrefs: predicted.hrefs.clone(), toc: predicted.complete.then(|| predicted.toc.clone()), bibstyles: if text.contains("natbib") { natbib::styles(&text) } else { Vec::new() } };
     // The checkpoint to start from: the last compile's pre-scan outputs equal, every file it
     // read before the checkpoint unchanged, and the text unchanged up to the checkpoint's mark.
-    let old = session.last.take();
+    let mut old = session.last.take();
     // Changed predictions (a label or heading edited) keep a checkpoint whose run read none
     // of what changed.
     let resume = old.as_ref().filter(|o| o.prescan.same_but_predictions(&prescan)).and_then(|o| {
@@ -4781,10 +8345,10 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
             Some(l) => super::engine_checkpoint::hash_stamped(&session.stamps, name, l, disk),
             None => super::engine_checkpoint::file_hash(disk(name).as_deref()),
         };
-        o.reads[..n].iter().all(|(name, h)| hash(name) == *h).then_some(k)
+        (reads_same || o.reads[..n].iter().all(|(name, h)| hash(name) == *h)).then_some(k)
     });
     let old_pages = old.as_ref().and_then(|o| o.snaps.last()).map_or(0, |s| s.outputs);
-    let mut ck = super::engine_checkpoint::Checkpoints { log: log.clone(), ..Default::default() };
+    let mut ck = super::engine_checkpoint::Checkpoints { log: log.clone(), spare: old.as_mut().and_then(|o| o.spare.take()), ..Default::default() };
     let resumed = resume.is_some();
     session.how = "from the class".to_string();
     // An early cutoff takes the last run's rest, which reads the predictions to its end: with
@@ -4795,8 +8359,11 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
             // The last run's checkpoints past the resume point, text, reads, final state and
             // pages stay for the early cutoff; pages just past the resume point get a
             // checkpoint each.
+            // The early cutoff takes the last run's rest with the files it read: none may
+            // have changed (a changed one read before the cutoff point fails the cutoff's own
+            // test; one read after it would not).
             ck.old = o.snaps.split_off(k + 1);
-            if !rest_holds(&o) {
+            if !rest_holds(&o) || !reads_same {
                 ck.old.clear();
             }
             let n = o.snaps[k].reads;
@@ -4811,15 +8378,17 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
             ck.old_log = o.reads;
             ck.old_fin = o.fin;
             ck.old_pages = o.pages;
+            ck.old_ship = o.ship;
         }
         // From the class (the edit is before the first checkpoint): the last run's
         // checkpoints all stay for the early cutoff.
-        (Some(o), None) if o.prescan.same_but_predictions(&prescan) && rest_holds(&o) => {
+        (Some(o), None) if o.prescan.same_but_predictions(&prescan) && rest_holds(&o) && reads_same => {
             ck.old = o.snaps;
             ck.old_text = o.text;
             ck.old_log = o.reads;
             ck.old_fin = o.fin;
             ck.old_pages = o.pages;
+            ck.old_ship = o.ship;
         }
         _ => {}
     }
@@ -4832,9 +8401,9 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
         return again();
     }
     sweep();
-    if out.is_ok() {
+    if let Ok(o) = &out {
         let reads = log.borrow().clone();
-        session.last = Some(Kept { text, base: body.as_ptr() as usize - src.as_ptr() as usize, prescan, reads, snaps: std::mem::take(&mut ck.snaps), pages: std::mem::take(&mut ck.pages), fin: ck.fin.take() });
+        session.last = Some(Kept { text, base: body.as_ptr() as usize - src.as_ptr() as usize, prescan, reads, snaps: std::mem::take(&mut ck.snaps), pages: std::mem::take(&mut ck.pages), fin: ck.fin.take(), ship: std::mem::take(&mut ck.ship), src: src.to_string(), out: o.clone(), spare: ck.spare.take() });
     }
     out
 }
@@ -4892,6 +8461,10 @@ impl Doc {
     }
 }
 
+/// Where each contents page-number box sits (`lines_holding`): its line's parent list's
+/// box, the line's index there, and the line.
+type Lines = std::collections::HashMap<u32, (u32, usize, u32)>;
+
 /// What a watch session keeps of the last native compile: its text, its pre-scan outputs, the
 /// files it read from disk (name and hash, in order) and its checkpoints.
 #[derive(Default)]
@@ -4901,6 +8474,8 @@ pub struct Session {
     how: String,
     /// The last pre-scan's marks, kept whether or not its job ran (`engine_prescan`).
     prescan: prescan::Cache,
+    /// The same for the text with the heading macros expanded (`engine_predict_macros`).
+    expanded: prescan::Cache,
     /// The disk files' stamps and hashes for the resume check (`run_session`'s `locate`).
     stamps: std::cell::RefCell<std::collections::HashMap<String, super::engine_checkpoint::Stamped>>,
 }
@@ -4925,6 +8500,8 @@ impl Session {
 }
 
 struct Kept {
+    /// The last run's live engine (`Checkpoints::spare`).
+    spare: Option<Box<super::Engine>>,
     text: String,
     /// Where the job's text (the body) starts in the source.
     base: usize,
@@ -4935,6 +8512,12 @@ struct Kept {
     /// end of the body (for an early cutoff).
     pages: Vec<super::engine_ship::ShippedPage>,
     fin: Option<super::engine_checkpoint::Snap>,
+    /// Its kept pages as `finish_contents` shipped them.
+    ship: super::engine_checkpoint::ShipMemo,
+    /// The source it compiled (the `.bbl` spliced in) and its output, for a save that
+    /// changed nothing it reads.
+    src: String,
+    out: Output,
 }
 
 /// What the job takes from the whole document before it runs (the class and its options,
@@ -4949,7 +8532,6 @@ struct Prescan {
     labels: std::collections::HashMap<String, String>,
     hrefs: std::collections::HashMap<String, String>,
     toc: Option<Vec<TocEntry>>,
-    the_prefix: [String; 3],
     bibstyles: Vec<String>,
 }
 
@@ -4957,7 +8539,7 @@ impl Prescan {
     /// Equal but for the predictions (labels, hrefs, contents), which a checkpoint may still
     /// serve ([`Doc::reads_same`]).
     fn same_but_predictions(&self, o: &Prescan) -> bool {
-        (self.class, self.key, self.minute, &self.the_prefix, &self.bibstyles) == (o.class, o.key, o.minute, &o.the_prefix, &o.bibstyles)
+        (self.class, self.key, self.minute, &self.bibstyles) == (o.class, o.key, o.minute, &o.bibstyles)
     }
 
     fn predictions(&self) -> Predictions<'_> {
@@ -5033,7 +8615,13 @@ fn job(text: &str, class: &'static ClassTable<'static>, key: u32, now: i64, read
         None => (None, None),
     };
     let mut e = match &snap {
-        Some(s) => s.engine.thaw(),
+        Some(s) => match ck.as_mut().and_then(|c| c.spare.take()) {
+            Some(mut e) => {
+                s.engine.thaw_into(&mut e);
+                *e
+            }
+            None => s.engine.thaw(),
+        },
         None => super::Engine::default(),
     };
     if snap.is_none() {
@@ -5063,7 +8651,6 @@ fn job(text: &str, class: &'static ClassTable<'static>, key: u32, now: i64, read
         if let Some(doc) = m.doc.as_mut() {
             doc.options = key;
             doc.predicted = std::sync::Arc::new(predicted.labels.clone());
-            doc.the_prefix = the_prefixes(text);
             doc.predicted_hrefs = std::sync::Arc::new(predicted.hrefs.clone());
             doc.contents = predicted.complete.then(|| std::sync::Arc::new(predicted.toc.clone()));
             if text.contains("natbib") {
@@ -5104,7 +8691,16 @@ fn job(text: &str, class: &'static ClassTable<'static>, key: u32, now: i64, read
     if let Some(first) = m.errors.first() {
         return Err(format!("not native yet: an error in the native job: {first}"));
     }
+    // A session's kept pages: the last run's walks of the trees this run did not typeset
+    // again (`engine_checkpoint::ShipMemo`).
+    if let Some(c) = ck.as_mut() {
+        let fresh = c.resumed_pages..c.fresh_end.unwrap_or(usize::MAX);
+        m.ship_memo = Some(Box::new(super::engine_checkpoint::ShipRun { old: std::mem::take(&mut c.old_ship), new: Default::default(), fresh, at: usize::MAX }));
+    }
     m.finish_contents()?;
+    if let (Some(c), Some(s)) = (ck.as_mut(), m.ship_memo.take()) {
+        c.ship = s.new;
+    }
     if m.hyper() {
         m.set_page_labels();
     }
@@ -5112,10 +8708,13 @@ fn job(text: &str, class: &'static ClassTable<'static>, key: u32, now: i64, read
     let pages = m.page.pages;
     let pdf = m.pdf_cached(cache);
     lap("pdf");
+    let out = Output { pdf, pages, errors: std::mem::take(&mut m.errors) };
     if let Some(c) = ck {
         c.pages = std::mem::take(&mut m.page.pdf);
+        drop(m);
+        c.spare = Some(Box::new(e));
     }
-    Ok(Output { pdf, pages, errors: std::mem::take(&mut m.errors) })
+    Ok(out)
 }
 
 /// The name of native command `i`, for `\\show` and `\\meaning`.
@@ -5138,6 +8737,13 @@ fn kernel_alphabets() -> impl Iterator<Item = &'static str> {
 impl Machine<'_, '_> {
     /// The class's state from table `t`: parameters, codes, fonts, and `\output` as the
     /// native routine. Public for `rushtex-gen class`, which checks it against the oracle.
+    /// The parameters of `tfm` at `size` as its TFM file gives them (`rushtex-gen class`
+    /// keeps the ones a class changed).
+    pub fn tfm_params(&mut self, tfm: &str, size: i32) -> Vec<i32> {
+        let id = self.find_font(tfm, size, None);
+        self.e.fonts.params(id).to_vec()
+    }
+
     pub fn load_class(&mut self, t: &'static ClassTable<'static>) {
         // The base combination is in every table.
         let _ = self.load_class_with(t, 0);
@@ -5167,8 +8773,15 @@ impl Machine<'_, '_> {
             eqtb.set_catcode(c as u8, Cat::from_u8(cat).unwrap_or(Cat::Other), true);
         }
         let mut normal_font = 0;
-        for f in t.fonts() {
+        for (i, f) in t.fonts().enumerate() {
             let id = self.find_font(f.tfm, f.size, None);
+            // The parameters the class set (IEEEtran's `\@IEEEtunefonts`), global as all
+            // `\fontdimen` assignments are.
+            for (_, k, v) in t.font_dims().filter(|d| d.0 == i) {
+                if let Some(p) = self.e.fonts.params_mut(id).get_mut(k - 1) {
+                    *p = v;
+                }
+            }
             let font = &mut self.e.fonts.list[id as usize];
             font.hyphen_char = f.hyphen_char;
             font.skew_char = f.skew_char;
@@ -5192,7 +8805,7 @@ impl Machine<'_, '_> {
             ids[i] = self.e.cs.intern(name);
             self.e.eqtb.set_meaning(ids[i], Meaning::Doc(i as u16), true);
         }
-        let named = NAMED.map(|name| self.e.cs.intern(name));
+        let named: [u32; NAMED.len()] = std::array::from_fn(|i| self.e.cs.intern(NAMED[i]));
         // utf8.def's active lead bytes (`\UTFviii@two@octets` and the rest).
         for c in 0xC2u8..=0xF4 {
             let id = self.e.cs.intern(super::engine_run::active_key(char::from(c), &mut [0; 5]));
@@ -5273,6 +8886,7 @@ impl Machine<'_, '_> {
             let id = self.e.cs.intern(name);
             self.e.eqtb.set_meaning(id, Meaning::Reg(r), true);
         }
+        self.picture_init();
         self.e.eqtb.set_glue(FILL, Glue { stretch: 65536, stretch_order: 2, ..Glue::default() }, true);
         let id = self.e.cs.intern("fill");
         self.e.eqtb.set_meaning(id, Meaning::Reg(FILL), true);
@@ -5284,7 +8898,7 @@ impl Machine<'_, '_> {
                 self.e.eqtb.set_meaning(id, Meaning::Reg(r), true);
             }
         }
-        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, multicol: None, ids, named, big_pending: 0, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, tx: None, tab_to: None, tx_delta: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), booktabs: None, ams_display: 0, df_label: None, df_tag: None, big_size: 0, align: None, eqnarray: None, wrong_shapes: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, eq_within: None, appendix: false, the_prefix: Default::default(), sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), thanks: None, fn_symbol: false, footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, theorems: Vec::new(), thm_values: Vec::new(), thm_item: Vec::new(), thm_style: PLAIN, thm_current: 0, trivlist_then: |_| {}, dated: false, authored: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_next: 0, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), fam_fonts: std::collections::HashMap::new(), eqpen: 0, aligned: None, replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special: None, empty_foot: false, geometry: None, colors: Vec::new(), color_names: Vec::new(), url_penalties: [500, 700], shipped: false, label_hrefs: Default::default(), predicted_hrefs: Default::default(), link: None, hy: Default::default(), uri: None, anchor: None, hfootnote: 0, items: 0, enum_templates: Vec::new(), enit_set: Vec::new(), pbox: Vec::new(), colorboxes: Vec::new(), raises: Vec::new(), fancy: None, titlesec: None, natbib: None, babel: None, bibstyles: Vec::new(), coltypes: Vec::new(), lt: None, report: false, koma: false, book: false, openright: false, mainmatter: true, headings: false, marks: 0, page_style: 0, head_page: false, mark_title: Vec::new(), abs_page: 0, page_label_last: None, page_labels: String::new(), display_pen: 10000, t1: false, thm_anchor: None, link_counter: 0, star_anchor: None, mt_fonts: Vec::new(), regs, letter: None, ams: None, toc_shown: Vec::new(), biblatex: None, memoir: false, class_em_ex: (0, 0), ct_specs: Vec::new(), ct_num: 0, ct_row: None, size_asked: Vec::new() }));
+        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, multicol: None, ids, named, big_pending: 0, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, titlepage: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, tx: None, tab_to: None, tab_ecs: Vec::new(), tx_delta: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), booktabs: None, ams_display: 0, df_label: None, df_tag: None, big_size: 0, align: None, eqnarray: None, wrong_shapes: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, eq_within: None, appendix: false, the_prefix: Default::default(), sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), thanks: None, fn_symbol: false, footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, theorems: Vec::new(), thm_values: Vec::new(), thm_item: Vec::new(), thm_style: PLAIN, thm_current: 0, trivlist_then: |_| {}, dated: false, authored: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_next: 0, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), fam_fonts: std::collections::HashMap::new(), eqpen: 0, aligned: None, replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special: None, empty_foot: false, geometry: None, colors: Vec::new(), default_color: None, preamble_colors: Vec::new(), color_names: Vec::new(), url_penalties: [500, 700], shipped: false, label_hrefs: Default::default(), predicted_hrefs: Default::default(), link: None, uri: None, anchor: None, hfootnote: 0, items: 0, enum_templates: Vec::new(), pbox: Vec::new(), colorboxes: Vec::new(), raises: Vec::new(), fancy: None, titlesec: None, babel: None, bibstyles: Vec::new(), coltypes: Vec::new(), lt: None, report: false, koma: false, book: false, openright: false, mainmatter: true, headings: false, my_headings: false, std_heads: false, marks: 0, page_style: 0, head_page: false, mark_title: Vec::new(), abs_page: 0, page_label_last: None, page_labels: String::new(), display_pen: 10000, t1: false, thm_anchor: None, link_counter: 0, star_anchor: None, mt_fonts: Vec::new(), regs, letter: None, ams: None, ieee: None, toc_shown: Vec::new(), toc_list: 0, toc_name: "Contents", biblatex: None, memoir: false, memoir_style: 0, memoir_secnum: 1, memoir_tocdepth: 1, secnum: None, fig_within: [None, None], class_em_ex: (0, 0), size_asked: Vec::new(), authblk: None, hooks: &KERNEL_HOOKS, pkg: Default::default(), normal_fam: 0, bottom: None, own_counters: Vec::new(), own_lengths: 0, set_to: Vec::new(), qed: Vec::new(), eq_chapter: false, sub_eq: None, sub_eq_h: None, display_env: 0, eq_qed: false }));
         self.strut_update();
         let fixed = FONT_FIXED.iter().map(|name| {
             let id = self.e.cs.intern(name);
@@ -5388,6 +9002,16 @@ impl Machine<'_, '_> {
         if self.doc.as_ref().is_some_and(|d| d.lt.as_ref().is_some_and(|l| l.output)) {
             return self.lt_output(p);
         }
+        // `\enlargethispage`'s `\@kludgeins` outside scrlttr2: only a page's own output
+        // (`\@reinserts` in the float outputs, longtable's and multicol's are not ported).
+        if self.e.eqtb.box_reg(200).is_some() && self.doc.as_ref().is_some_and(|d| d.pkg.lttr.is_none()) && (p < -10000 || self.memoir()) {
+            return self.not_native("\\enlargethispage before a float's or \\clearpage's output");
+        }
+        // An output routine run with listings' `\vskip` (`fire_up` in a listing's caption
+        // group): only the plain column and page put the penalties around their skips.
+        if self.lst_out_nobreak() && (p < -10000 || self.memoir() || self.e.eqtb.box_reg(200).is_some() || self.e.eqtb.box_reg(FOOTINS).is_some() || self.doc.as_ref().is_some_and(|d| d.floats.has_bottom() || d.letter.is_some() || d.multicol.is_some() || d.floats.twocol || d.lt.is_some())) {
+            return self.not_native("a page break inside a listing's caption, with floats, footnotes or another output");
+        }
         if p < -10000 {
             return self.special_output(p);
         }
@@ -5432,6 +9056,9 @@ impl Machine<'_, '_> {
             self.cur.extend_from_slice(self.e.nodes.get(a.list));
             self.e.nodes.free_block(a.list);
         }
+        if removed.is_some() && self.lst_out_nobreak() {
+            return self.not_native("a page break inside a listing's caption before infinite glue");
+        }
         if let Some(g) = removed {
             if depth > 0 && footins.is_none() && !bottom {
                 let w = depth.min(self.dimen_param(super::engine_page::MAX_DEPTH));
@@ -5454,7 +9081,7 @@ impl Machine<'_, '_> {
             // `\color@begingroup \normalcolor \footnoterule \unvbox\footins \color@endgroup`.
             let colored = self.colored();
             if colored {
-                self.color_stack(Some(DEFAULT_COLOR));
+                self.push_default_color();
             }
             if self.ams_on() {
                 self.ams_footnote_rule();
@@ -5464,7 +9091,7 @@ impl Machine<'_, '_> {
                 // scrartcl's `\footnoterule`: `\kern-\dimexpr2.6\p@+\ftn@rule@height\relax` (the
                 // same -3pt), then `\ifx\@textbottom\relax\else\vskip\z@\@plus.05fil\fi` (.05 is
                 // 3277sp, §452), then `\hrule\@height.4\p@\@width.4\columnwidth` and `\kern2.6\p@`.
-                if class.flag("raggedbottom") && self.doc.as_ref().is_some_and(|d| d.koma) {
+                if self.bottom_ragged() && self.doc.as_ref().is_some_and(|d| d.koma) {
                     let n = self.e.nodes.glue_node(Glue { stretch: 3277, stretch_order: 1, ..Glue::default() }, 0);
                     self.cur.push(n);
                 }
@@ -5488,24 +9115,47 @@ impl Machine<'_, '_> {
             self.cur.extend_from_slice(self.e.nodes.get(c.list));
             self.e.nodes.free_block(c.list);
         }
+        let before = self.cur.len();
         let depth = self.attach_floats(start, depth);
+        if self.cur.len() != before && self.lst_out_nobreak() {
+            return self.not_native("a page break inside a listing's caption, with floats");
+        }
         // letter.cls's `\@texttop`: `\ifnum\c@page=1\vskip \z@ plus.00006fil\relax\fi`
         // first; .00006 is 4sp (§452).
         if self.doc.as_ref().is_some_and(|d| d.letter.is_some() && d.page == 1) {
             let n = self.e.nodes.glue_node(Glue { stretch: 4, stretch_order: 1, ..Glue::default() }, 0);
             self.cur.insert(start, n);
         }
-        let n = self.e.nodes.glue_node(Glue { width: -depth, ..Glue::default() }, 0);
-        self.cur.push(n);
-        if class.flag("raggedbottom") {
+        self.out_vskip(Glue { width: -depth, ..Glue::default() });
+        if self.bottom_ragged() {
             // `\vskip \z@ \@plus.0001fil`: .0001 is 7sp (§452 `round_decimals`).
-            let n = self.e.nodes.glue_node(Glue { stretch: 7, stretch_order: 1, ..Glue::default() }, 0);
-            self.cur.push(n);
+            self.out_vskip(Glue { stretch: 7, stretch_order: 1, ..Glue::default() });
         }
         let d = self.dimen_param(super::engine_pack::BOX_MAX_DEPTH);
         // `\vbox to\@colht` (`\textheight` less a two-column top).
         let colht = self.doc.as_ref().map_or(0, |d| d.floats.colht);
-        let column = self.vpack(start, colht, true, d);
+        // `\@make@specialcolbox` when `\@kludgeins` (insert 200, scrlttr2's
+        // `enlargefirstpage`) holds `\enlargethispage`'s `\vskip`: no `\@texttop`, `\vbox
+        // to\@colht{\vbox to(\@colht-\ht\@kludgeins){..\@textbottom}\vss}`; the box is voided.
+        let kludge = self.e.eqtb.box_reg(200);
+        let column = match kludge {
+            Some(k) => {
+                let r = self.e.nodes.boxes[k as usize];
+                self.e.eqtb.replace_box(200, None);
+                self.e.nodes.free_block(r.list);
+                self.e.nodes.free_box(k);
+                if r.width != 0 {
+                    return self.not_native("\\enlargethispage*");
+                }
+                let inner = self.vpack(start, colht - r.height, true, d);
+                let inner = self.e.nodes.add_box(BoxRec { vertical: true, ..inner });
+                self.cur.push(Node::new(Kind::Box, inner as i32));
+                let n = self.e.nodes.glue_node(Glue { stretch: 65536, stretch_order: 1, shrink: 65536, shrink_order: 1, ..Glue::default() }, 0);
+                self.cur.push(n);
+                self.vpack(start, colht, true, d)
+            }
+            None => self.vpack(start, colht, true, d),
+        };
         let column = self.e.nodes.add_box(BoxRec { vertical: true, ..column });
         if let Some(doc) = self.doc.as_mut() {
             doc.column = Some(column);
@@ -5525,21 +9175,49 @@ impl Machine<'_, '_> {
             d.empty_foot
         });
         let this = self.doc.as_mut().and_then(|d| d.fancy.as_mut()).is_some_and(|f| std::mem::take(&mut f.this));
-        let fancy = (this || !empty && special.is_none()) && self.fancy_page(this, page);
+        // `\thispagestyle{plain}` after `\fancypagestyle{plain}`: fancyhdr's `\ps@plain`.
+        let plain = !this && special == Some(false) && self.doc.as_ref().and_then(|d| d.fancy.as_ref()).is_some_and(|f| f.plain.is_some());
+        let fancy = if plain { self.fancy_page(false, page, true) } else { (this || !empty && special.is_none()) && self.fancy_page(this, page, false) };
         self.push_nest(Mode::Horizontal, true, 1000);
         if self.ams_on() {
             let mut t = self.ams_page_tokens(page);
             t.push(self.doc_id(OUTPUT_FOOT));
             return self.back_list(&t);
         }
-        // memoir's `headings` (`engine_memoir`); its other page styles stop in the pre-scan.
+        // IEEEtran: the head of `headings` and `IEEEtitlepagestyle`, no foot; nothing in
+        // conference mode.
+        if self.ieee_on() {
+            let mut t = match self.ieee_page_tokens(page) {
+                Some(t) => t,
+                None => {
+                    if let Some(d) = self.doc.as_mut() {
+                        d.empty_foot = true;
+                    }
+                    Vec::new()
+                }
+            };
+            t.push(self.doc_id(OUTPUT_FOOT));
+            return self.back_list(&t);
+        }
+        // memoir's `headings`, and `plain` or `empty` by `\thispagestyle` (`engine_memoir`);
+        // its other page styles stop in the pre-scan.
         if self.memoir() {
-            let mut t = self.memoir_page_tokens(page);
+            let mut t = self.memoir_page_tokens(page, special);
+            t.push(self.doc_id(OUTPUT_FOOT));
+            return self.back_list(&t);
+        }
+        // scrbook's `headings` and `plain` (`koma_page_tokens`).
+        if !fancy && !empty && self.doc.as_ref().is_some_and(|d| d.pkg.koma.book) {
+            let head = special.is_none() && self.doc.as_ref().is_some_and(|d| d.headings);
+            if let Some(d) = self.doc.as_mut() {
+                (d.empty_foot, d.head_page) = (false, true);
+            }
+            let mut t = self.koma_page_tokens(page, head);
             t.push(self.doc_id(OUTPUT_FOOT));
             return self.back_list(&t);
         }
         // book's `headings`: the head from the page's marks, an empty foot.
-        if special.is_none() && !fancy && self.doc.as_ref().is_some_and(|d| d.headings) {
+        if special.is_none() && !fancy && self.doc.as_ref().is_some_and(|d| d.headings || d.my_headings) {
             if let Some(d) = self.doc.as_mut() {
                 (d.empty_foot, d.head_page) = (true, true);
             }
@@ -5548,7 +9226,7 @@ impl Machine<'_, '_> {
             return self.back_list(&t);
         }
         if fancy {
-            let mut t = self.fancy_tokens(page);
+            let mut t = self.fancy_tokens(page, plain);
             t.push(self.doc_id(OUTPUT_FOOT));
             return self.back_list(&t);
         }
@@ -5560,7 +9238,15 @@ impl Machine<'_, '_> {
         self.select_font(font, false);
         let n = self.e.nodes.glue_node(Glue { stretch: 65536, stretch_order: 1, ..Glue::default() }, 0);
         self.cur.push(n);
+        // scrartcl's `\pagemark`: `{\usekomafont{pagenumber}{\thepage}}`, `\normalfont\normalcolor`.
+        let koma_color = self.doc.as_ref().is_some_and(|d| d.koma) && self.colored();
+        if koma_color {
+            self.push_default_color();
+        }
         let mut list: Vec<Token> = self.the_page(page).chars().map(|c| Token::char(Cat::Other, c)).collect();
+        if koma_color {
+            list.push(self.doc_id(doc!("rt@resetcolor")));
+        }
         list.push(self.doc_id(OUTPUT_FOOT));
         self.back_list(&list);
     }
@@ -5584,6 +9270,20 @@ impl Machine<'_, '_> {
         let one_inch = 4736286;
         let start = self.cur.len();
         if !picture {
+            // screenplay's geometry `dvips`: `\special{papersize=\the\paperwidth,\the
+            // \paperheight}` in `shipout/firstpage`.
+            if self.doc.as_ref().is_some_and(|d| d.pkg.screenplay.is_some()) {
+                // The class's `\setlength{\paperwidth}{8.5in}`, `\setlength{\paperheight}{11in}`.
+                let (w, h) = (self.glue_of("8.5in").width, self.glue_of("11in").width);
+                let mut s = String::from("papersize=");
+                crate::engine::engine_value::print_scaled(w, &mut s);
+                s.push_str("pt,");
+                crate::engine::engine_value::print_scaled(h, &mut s);
+                s.push_str("pt");
+                let list: Vec<Token> = s.chars().map(|c| Token::char(if c.is_ascii_alphabetic() { Cat::Letter } else { Cat::Other }, c)).collect();
+                let span = self.e.toks.store(&list);
+                self.cur.push(Node { kind: Kind::Whatsit, sub: super::engine_whatsit::SPECIAL, font: 0, a: span.start as i32, b: span.end as i32 });
+            }
             let tmp = self.hpack(start, 0, false);
             let tmp = self.e.nodes.add_box(tmp);
             self.cur.push(Node::new(Kind::Box, tmp as i32));
@@ -5593,6 +9293,12 @@ impl Machine<'_, '_> {
         // `\put(\hoffset-1in,\voffset-1in){\pgfutil@abe\unhbox\pgfutil@abb\pgfutil@abc}`, its
         // material empty while no picture puts page-level objects there:
         // `\raise(\voffset-1in)\hbox to\z@{\kern(\hoffset-1in)\hss}`.
+        // pdftex.def's page colour (`page_color_put`), before the hook's code.
+        if let Some(lit) = self.doc.as_ref().and_then(|d| d.pkg.page_color.clone()) {
+            if !self.page_color_put(&lit) {
+                self.not_native("\\pagecolor with \\hoffset or \\voffset");
+            }
+        }
         if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"pgfrcs")) {
             let [ho, vo] = [param!("hoffset"), param!("voffset")].map(|r| self.e.eqtb.word(r));
             let s = self.cur.len();
@@ -5642,7 +9348,13 @@ impl Machine<'_, '_> {
         doc.page += 1;
         let class = doc.class;
         let empty = doc.empty_foot;
-        let fancy = doc.fancy.as_mut().is_some_and(|f| std::mem::take(&mut f.page)) | std::mem::take(&mut doc.head_page) | doc.ams.as_mut().is_some_and(|a| std::mem::take(&mut a.page));
+        // scrlttr2's pages after a letter's first (`\ps@plain` with `nexthead`, `nextfoot`).
+        if !empty && doc.pkg.lttr.is_some() {
+            doc.column = Some(column);
+            doc.page -= 1;
+            return self.not_native("a scrlttr2 page after the first");
+        }
+        let fancy = doc.fancy.as_mut().is_some_and(|f| std::mem::take(&mut f.page)) | std::mem::take(&mut doc.head_page) | doc.ams.as_mut().is_some_and(|a| std::mem::take(&mut a.page)) | doc.ieee.as_mut().is_some_and(|a| std::mem::take(&mut a.page));
         let width = class.dimen("textwidth");
         let fil = Glue { stretch: 65536, stretch_order: 1, ..Glue::default() };
         // The foot: `\hb@xt@\textwidth{\hfil 1\hfil}` in `\color@hbox` (empty for `\ps@empty`);
@@ -5703,8 +9415,7 @@ impl Machine<'_, '_> {
         }
         self.e.eqtb.set_word(Reg { region: Region::Dimen, slot: super::engine_pack::LINE_SKIP_LIMIT }, 0, false);
         self.append_to_vlist(head);
-        let n = self.e.nodes.glue_node(Glue { width: class.dimen("headsep"), ..zero }, 0);
-        self.cur.push(n);
+        self.out_vskip(Glue { width: class.dimen("headsep"), ..zero });
         self.append_to_vlist(column);
         self.e.eqtb.set_glue(Reg { region: Region::Glue, slot: super::engine_pack::BASELINE_SKIP }, Glue { width: class.dimen("footskip"), ..zero }, false);
         self.append_to_vlist(foot);
@@ -5717,8 +9428,8 @@ impl Machine<'_, '_> {
         // The shipped box.
         let start = self.cur.len();
         self.aux = super::engine_node::IGNORE_DEPTH;
-        let n = self.e.nodes.glue_node(Glue { width: class.dimen("topmargin"), ..zero }, 0);
-        self.cur.push(n);
+        self.out_vskip(Glue { width: class.dimen("topmargin"), ..zero });
+        self.lst_out_done();
         self.append_to_vlist(page_box);
         let mut shipped = self.vpack(start, 0, false, d);
         // The kernel's `\shipout`, as the engine's boxes show it: `shipout/before` (hyperref's
@@ -5735,7 +9446,7 @@ impl Machine<'_, '_> {
         if self.doc.as_ref().is_some_and(|d| d.packages.iter().any(|p| matches!(*p, "graphicx" | "color" | "xcolor"))) {
             shipped = self.page_background(shipped, d, true);
         }
-        if self.hyper() && self.doc.as_mut().is_some_and(|d| !std::mem::replace(&mut d.shipped, true)) {
+        if (self.hyper() || self.doc.as_ref().is_some_and(|d| d.pkg.screenplay.is_some())) && self.doc.as_mut().is_some_and(|d| !std::mem::replace(&mut d.shipped, true)) {
             shipped = self.page_background(shipped, d, false);
         }
         let shipped = self.e.nodes.add_box(BoxRec { vertical: true, ..shipped });
@@ -5744,8 +9455,8 @@ impl Machine<'_, '_> {
             self.e.eqtb.set_glue(Reg { region: Region::Glue, slot: p }, g, false);
         }
         self.e.eqtb.set_word(Reg { region: Region::Dimen, slot: super::engine_pack::LINE_SKIP_LIMIT }, old_limit, false);
-        if self.doc.as_ref().is_some_and(|d| d.defer) {
-            // A contents list waits for the pages: the page records now, the shipping at the
+        if self.doc.as_ref().is_some_and(|d| d.defer || d.pkg.lastpage > 0) {
+            // A contents list (or lastpage's number) waits for the pages: the page records now, the shipping at the
             // end (`finish_contents`), in order.
             self.out_whats(shipped, false, &mut [].iter());
             self.page.dead_cycles = 0;
@@ -5780,6 +9491,13 @@ impl Machine<'_, '_> {
     pub(super) fn not_native(&mut self, what: &str) {
         if let Some(doc) = self.doc.as_mut() {
             doc.unsupported.get_or_insert_with(|| what.to_string());
+        }
+        // `RT_NATIVE_ALL=1` (a census diagnostic, not in the help): every decline is printed
+        // and the job goes on past it, so a document's later blockers show too; only the
+        // first is exact, the job's state after a decline is not LaTeX's.
+        if native_all() {
+            eprintln!("decline: {what}");
+            return;
         }
         self.halted = true;
     }
@@ -5847,7 +9565,8 @@ impl Machine<'_, '_> {
                 let Some(doc) = self.doc.as_mut() else { return };
                 if doc.nobreak {
                     doc.nobreak = false;
-                    let drop = !doc.afterindent;
+                    // indentfirst's `\let\@afterindentfalse\@afterindenttrue`: never false.
+                    let drop = !doc.afterindent && !doc.packages.contains(&"indentfirst");
                     self.set_int_named(param!("clubpenalty"), 10000);
                     if drop {
                         self.drop_last_box();
@@ -5859,6 +9578,8 @@ impl Machine<'_, '_> {
                 }
             }
             ITEM => self.item_everypar(),
+            ENIT_DESC => self.enit_desc_everypar(),
+            LST_LINE => self.lst_everypar(),
             MT_PROT => self.left_protrusion(),
             TTL_STRUT => {
                 self.drop_last_box();
@@ -5885,6 +9606,7 @@ impl Machine<'_, '_> {
                 }
             }
             RUN_IN => self.run_in(),
+            TTL_RUN_IN => self.ttl_run_in(),
             ENDPE => {
                 // `\@doendpe`: `{\setbox\z@\lastbox}\everypar{}\@endpefalse`.
                 self.drop_last_box();
@@ -6117,11 +9839,39 @@ impl Machine<'_, '_> {
     /// report's `\chapter` (`openany`): `\clearpage \thispagestyle{plain}`, then the rest
     /// (`chapter_head`); book's `\if@openright\cleardoublepage`.
     fn chapter(&mut self) {
-        let clear = if self.doc.as_ref().is_some_and(|d| d.openright) { doc!("cleardoublepage") } else { doc!("clearpage") };
+        if self.memoir() {
+            return self.memoir_chapter();
+        }
+        let clear =if self.doc.as_ref().is_some_and(|d| d.openright) { doc!("cleardoublepage") } else { doc!("clearpage") };
         let mut t = vec![self.doc_id(clear), self.doc_id(doc!("thispagestyle"))];
         t.extend(self.tex_tokens("{plain}"));
         t.push(self.doc_id(doc!("rt@chapter")));
         self.back_list(&t);
+    }
+
+    /// `\refstepcounter{chapter}` with its `\@addtoreset` list (section, equation, figure,
+    /// table, footnote, the theorems numbered within it), `\@currentlabel`; `\thechapter`.
+    fn chapter_step(&mut self) -> String {
+        let Some(doc) = self.doc.as_mut() else { return String::new() };
+        doc.counters[0] += 1;
+        doc.counters[1..].fill(0);
+        Self::reset_own_within(doc, 0);
+        doc.equation = 0;
+        doc.footnote = 0;
+        for t in 0..doc.theorems.len() {
+            let within = |k: usize| doc.theorems[k].within.is_some();
+            if within(t) || doc.theorems[t].parent.is_some_and(within) {
+                doc.thm_values[t] = 0;
+            }
+        }
+        let number = heading_number(&doc.counters, 0, doc.appendix);
+        // `\theequation`, `\thefigure`, `\thetable`: `\thechapter.` first.
+        doc.the_prefix = std::array::from_fn(|_| format!("{number}."));
+        self.store_current_label(&number);
+        self.cref_heading_step(0);
+        self.set_rw(R_FIGURE, 0, true);
+        self.set_rw(R_FIGURE + 1, 0, true);
+        number
     }
 
     /// `\global\@topnum\z@ \@afterindentfalse \secdef\@chapter\@schapter`. `\@chapter`:
@@ -6132,6 +9882,9 @@ impl Machine<'_, '_> {
     /// (`\@makeschapterhead`).
     fn chapter_head(&mut self) {
         self.fl().topnum = 0;
+        if self.memoir() {
+            return self.memoir_chapter_head();
+        }
         let star = self.next_is('*');
         let mut title = Vec::new();
         let short = if !star && self.next_is('[') { Some(self.bracket_arg()) } else { None };
@@ -6143,7 +9896,26 @@ impl Machine<'_, '_> {
         }
         // book outside `\mainmatter`: `\@chapter` steps no counter and the head has no
         // "Chapter N" line (`\if@mainmatter`).
-        let unnumbered = !star && doc.book && !doc.mainmatter;
+        let unnumbered = !star && ((doc.book || doc.pkg.koma.book) && !doc.mainmatter || doc.pkg.koma.addchap);
+        let koma = doc.koma;
+        // scrbook outside the main matter: `\scr@@startchapter`'s `\cl@chapter` as `\addchap`'s.
+        if std::mem::take(&mut doc.pkg.koma.addchap) || unnumbered && doc.pkg.koma.book {
+            // `\scr@@startchapter` without a number (KOMA-Script 3.15 on): `\cl@chapter`'s
+            // counters through `\@stpelt`, globally: section and below, equation, figure,
+            // table, footnote, and the theorems numbered within them.
+            doc.counters[1..].fill(0);
+            doc.equation = 0;
+            doc.footnote = 0;
+            for t in 0..doc.theorems.len() {
+                let within = |k: usize| doc.theorems[k].within.is_some();
+                if within(t) || doc.theorems[t].parent.is_some_and(within) {
+                    doc.thm_values[t] = 0;
+                }
+            }
+            self.set_rw(R_FIGURE, 0, true);
+            self.set_rw(R_FIGURE + 1, 0, true);
+        }
+        let Some(doc) = self.doc.as_mut() else { return };
         doc.afterindent = false;
         doc.level = 0;
         doc.numbered = !star && !unnumbered;
@@ -6158,42 +9930,34 @@ impl Machine<'_, '_> {
                 let name = hyperref::star_chapter_anchor(doc.appendix, doc.link_counter);
                 self.set_current_href(&name);
                 self.vertical_anchor(name);
-                self.aux_write(0);
+                self.bookmark_write(0);
             }
             self.contents_write();
-            self.chapter_mark("", short.as_deref().unwrap_or(&title));
+            // scrreprt's `\chaptermark` does nothing under `plain`; fancyhdr's (book) puts
+            // `\@chapapp\ \thechapter. \ ` before the title outside the main matter too.
+            if self.fancy_defs() {
+                self.fancy_marks();
+            } else if self.doc.as_ref().is_some_and(|d| d.pkg.koma.book) {
+                self.koma_chapter_mark("", short.as_deref().unwrap_or(&title));
+            } else if !koma {
+                self.chapter_mark("", short.as_deref().unwrap_or(&title));
+            }
             self.aux_write(0);
             self.aux_write(0);
         } else if !star {
-            doc.counters[0] += 1;
-            doc.counters[1..].fill(0);
-            doc.equation = 0;
-            doc.footnote = 0;
-            for t in 0..doc.theorems.len() {
-                let within = |k: usize| doc.theorems[k].within.is_some();
-                if within(t) || doc.theorems[t].parent.is_some_and(within) {
-                    doc.thm_values[t] = 0;
-                }
-            }
-            number = heading_number(&doc.counters, 0, doc.appendix);
-            // `\theequation`, `\thefigure`, `\thetable`: `\thechapter.` first.
-            doc.the_prefix = std::array::from_fn(|_| format!("{number}."));
-            let counters = doc.counters;
-            self.store_current_label(&number);
-            self.set_rw(R_FIGURE, 0, true);
-            self.set_rw(R_FIGURE + 1, 0, true);
-            if self.hyper() {
-                // `\refstepcounter{chapter}`'s anchor `chapter.\theHchapter` in vertical mode
-                // (hpdftex's `\@chapter` adds none of its own with `secnumdepth` above -1),
-                // then the bookmark's `\protected@write` before `\addcontentsline`'s.
-                self.heading_anchor(0, &counters);
-                self.aux_write(0);
-            }
+            number = self.chapter_step();
+            // `\refstepcounter{chapter}`'s anchor (hpdftex's `\@chapter` adds none of its own
+            // with `secnumdepth` above -1), then the bookmark's `\protected@write` before
+            // `\addcontentsline`'s.
+            self.numbered_chapter_anchor();
+            self.bookmark_write(0);
             self.contents_write();
-            // book's `\chaptermark` (fancyhdr is not native under book), else fancyhdr's;
-            // then `\addtocontents{lof}` and `{lot}`.
-            if self.book() {
+            // book's `\chaptermark`, or fancyhdr's while its definitions stand; then
+            // `\addtocontents{lof}` and `{lot}`.
+            if self.book() && !self.fancy_defs() {
                 self.chapter_mark(&number, short.as_deref().unwrap_or(&title));
+            } else if self.doc.as_ref().is_some_and(|d| d.pkg.koma.book) {
+                self.koma_chapter_mark(&number, short.as_deref().unwrap_or(&title));
             } else {
                 self.fancy_marks();
             }
@@ -6207,14 +9971,29 @@ impl Machine<'_, '_> {
             self.set_current_href(&name);
             self.vertical_anchor(name);
         }
+        if koma {
+            return self.koma_chapter_head(&number, title);
+        }
+        // `\titleformat{\chapter}`: titlesec's `\ttl@mkchap` for both heads.
+        if self.doc.as_ref().and_then(|d| d.titlesec.as_ref()).is_some_and(|t| t.chapter) {
+            return self.ttl_chapter_head(title);
+        }
         let mut t = vec![self.doc_id(doc!("vspace"))];
         t.extend(self.tex_tokens("*{50pt}{\\parindent0pt"));
         t.extend([self.doc_id(doc!("raggedright")), self.doc_id(doc!("normalfont"))]);
         if !star && !unnumbered {
             t.extend([self.doc_id(doc!("huge")), self.doc_id(doc!("bfseries"))]);
             // `\@chapapp\space\thechapter`: `\appendix` makes `\@chapapp` `\appendixname`.
-            let chapapp = if self.doc.as_ref().is_some_and(|d| d.appendix) { "Appendix" } else { "Chapter" };
-            t.extend(self.tex_tokens(&format!("{chapapp} {number}")));
+            let chapapp = self.head_name(if self.doc.as_ref().is_some_and(|d| d.appendix) { babel::HEAD_APPENDIX } else { babel::HEAD_CHAPTER });
+            // A `\renewcommand{\chaptername}` of the document's: the macro, then `\space`.
+            let Some(own) = self.own_chapapp() else { return };
+            match own {
+                Some(cs) => {
+                    t.extend([cs, Token::char(Cat::Space, ' ')]);
+                    t.extend(self.tex_tokens(&number));
+                }
+                None => t.extend(self.tex_tokens(&format!("{chapapp} {number}"))),
+            }
             t.extend([self.named_cs(named!("par")), self.doc_id(doc!("nobreak"))]);
             t.extend(self.tex_tokens("\\vskip20pt"));
         }
@@ -6234,14 +10013,37 @@ impl Machine<'_, '_> {
     /// `\noindent`, the box, `\interlinepenalty\@M`, the title, `\par`. Then `\@xsect`. The
     /// table of contents line and the mark have no effect on the page and are not made.
     fn section(&mut self, level: usize) {
+        // `\@startsection`'s `\if@noskipsec \leavevmode \fi`: a run-in heading still waiting
+        // for its paragraph gets one now (its `\everypar` sets it, `run_in`), and this
+        // heading runs again there, its `\par` ending that paragraph.
+        if self.mode == Mode::Vertical && self.doc.as_ref().is_some_and(|d| d.noskipsec) && self.leave_vmode() {
+            return;
+        }
         // `\@ifstar`, then `\@dblarg`'s optional short title (for the contents only).
         let star = self.next_is('*');
+        if !star && self.koma_front_numbers("a numbered heading") {
+            return;
+        }
+        // `\subparagraph` as article, report and book define it: past `tocdepth`, its
+        // contents line shows nothing; under hyperref its `section*.N` anchor (`predict_from`).
+        if level == 4 && self.doc.as_ref().is_some_and(|d| d.koma || d.memoir || d.ieee.is_some() || d.ams.is_some() || d.packages.contains(&"titlesec")) {
+            return self.not_native("\\subparagraph under this class or titlesec");
+        }
+        // IEEEtran after `\appendix`: `\section` is `\@IEEEdestroythesectionargument`.
+        if !star && level == 0 && self.doc.as_ref().and_then(|d| d.ieee.as_ref()).is_some_and(|i| i.appendix) {
+            if self.next_is('[') {
+                return self.not_native("IEEEtran: \\section[..] after \\appendix");
+            }
+            let mut arg = Vec::new();
+            return self.read_arg(&mut arg);
+        }
         let mut title = self.doc.as_mut().map(|d| std::mem::take(&mut d.title)).unwrap_or_default();
         if !star && level == 0 && self.doc.as_ref().is_some_and(|d| d.book && d.class.flag("twoside")) && self.next_is('[') {
             return self.not_native("book: a two-sided \\section's short title (its mark)");
         }
         if !star && self.next_is('[') {
             let mut depth = 0;
+            let mut short = Vec::new();
             while let Some(t) = self.get_token() {
                 match t.cat() {
                     Some(Cat::BeginGroup) => depth += 1,
@@ -6249,6 +10051,11 @@ impl Machine<'_, '_> {
                     _ if depth == 0 && t == Token::char(Cat::Other, ']') => break,
                     _ => {}
                 }
+                short.push(t);
+            }
+            // scrbook's `\sectionmark` takes the short title (`head={#2}`).
+            if let Some(doc) = self.doc.as_mut().filter(|d| d.pkg.koma.book && level == 0) {
+                doc.pkg.koma.short = Some(short);
             }
         }
         self.read_arg(&mut title);
@@ -6257,17 +10064,16 @@ impl Machine<'_, '_> {
         let level = level + doc.report as usize;
         doc.title = title;
         // memoir.cls: `\setsecnumdepth{section}` (`\c@secnumdepth` 1).
-        doc.numbered = !star && level < if doc.memoir { 2 } else { SECNUMDEPTH };
+        // memoir: -10 outside the main matter (`\frontmatter`, `\backmatter`).
+        doc.numbered = !star && level < if doc.memoir { doc.memoir_secnum as usize + 1 } else { doc.secnum.map_or(SECNUMDEPTH, |d| (d as usize) + doc.report as usize) } && (!doc.memoir || doc.mainmatter);
+        // `myheadings` lets `\sectionmark` be `\@gobble`; book's `headings` reads `secnumdepth`
+        // in its `\sectionmark`, scrbook's `\Ifnumbered{section}` (`section_marks`).
         // amsart's starred heading is `\@sect` at level `\@m`: its `\@tocwrite` stays.
         doc.toc = !star || doc.ams.is_some();
         doc.level = level;
         let noskipsec = doc.noskipsec;
-        if doc.koma && doc.packages.iter().any(|p| matches!(*p, "color" | "xcolor")) {
-            // `\sectfont`'s `\normalcolor` is `\relax` until a colour package defines it.
-            return self.not_native("scrartcl: a heading's \\normalcolor with a colour package");
-        }
-        if doc.packages.contains(&"hyperref") && ((!doc.numbered && !star) || doc.contents.is_none() || level > 2) {
-            return self.not_native("hyperref: an unnumbered heading, or headings without their bookmarks");
+        if doc.packages.contains(&"hyperref") && (doc.contents.is_none() || level > 2 && doc.numbered) {
+            return self.not_native("hyperref: a numbered or run-in heading past subsubsection, or headings without their bookmarks");
         }
         if doc.numbered {
             // `\refstepcounter`'s `\@currentlabel`: the number as `\@sect` steps it.
@@ -6276,6 +10082,7 @@ impl Machine<'_, '_> {
             c[level + 1..].fill(0);
             let text = heading_number(&c, level, doc.appendix);
             self.store_current_label(&text);
+            self.cref_heading_step(level);
         }
         // `\@startsection`: `\if@noskipsec \leavevmode \fi \par`.
         if noskipsec {
@@ -6315,12 +10122,16 @@ impl Machine<'_, '_> {
         if !afterindent {
             before = neg(before);
         }
-        // spanish.ldf's layout: `\let\@afterindentfalse\@afterindenttrue`.
-        afterindent |= self.doc.as_ref().and_then(|d| d.babel.as_ref()).is_some_and(|b| b.layout());
-        let after = match ams {
+        // spanish.ldf's layout, french's `IndentFirst`: `\let\@afterindentfalse\@afterindenttrue`.
+        afterindent |= self.doc.as_ref().and_then(|d| d.babel.as_ref()).is_some_and(|b| b.indent_first());
+        let mut after = match ams {
             Some(l) => Glue { width: crate::backend::scaled::xn_over_d(l, 0x8000, 0x10000), ..Glue::default() },
             None => self.sec_glue(sec.after),
         };
+        if self.ieee_on() {
+            (before, after) = self.ieee_section_skips(level);
+            afterindent = true;
+        }
         let Some(doc) = self.doc.as_mut() else { return };
         doc.afterindent = afterindent;
         doc.after = after;
@@ -6363,6 +10174,9 @@ impl Machine<'_, '_> {
         }
         doc.nobreak = false;
         doc.noskipsec = true;
+        // hpdftex's `\@ssect` and its `\@sect` past `secnumdepth`: `\Hy@MakeCurrentHrefAuto
+        // {section*}` now, the anchor first in the title `\@svsechd` sets (`run_in`).
+        self.unnumbered_section_anchor();
         self.set_everypar(RUN_IN);
         self.ignore_spaces();
     }
@@ -6399,10 +10213,20 @@ impl Machine<'_, '_> {
             self.cur.push(Node::new(Kind::Penalty, 10000));
             self.cur.push(Node::new(Kind::Penalty, 10000));
         }
-        // `\hskip\z@`: a new specification, not `zero_glue` (protrusion stops at it).
-        let mut g = self.e.nodes.glue_node(Glue::default(), 0);
+        // `\hskip #3\relax`: `\hskip\z@`, a new specification, not `zero_glue` (protrusion
+        // stops at it); `\subparagraph`'s `#3` is `\parindent` (article.cls:318).
+        let sub = self.doc.as_ref().is_some_and(|d| d.level - d.report as usize == 4);
+        let width = if sub { self.e.eqtb.word(param!("parindent")) } else { 0 };
+        let mut g = self.e.nodes.glue_node(Glue { width, ..Glue::default() }, 0);
         g.font = 1;
         self.cur.push(g);
+        // hyperref: `\Hy@SectionAnchorHref{\@currentHref}` first in `#8`, its `\kern
+        // -\Hy@SectionHShift` the `#3` just skipped.
+        let mut t = self.section_anchor_tokens_at(width);
+        if !t.is_empty() {
+            t.append(&mut list);
+            list = t;
+        }
         list.push(self.doc_id(RUN_IN_END));
         self.back_list(&list);
     }
@@ -6425,6 +10249,7 @@ impl Machine<'_, '_> {
         let Some(doc) = self.doc.as_mut() else { return String::new() };
         doc.counters[level] += 1;
         doc.counters[level + 1..].fill(0);
+        Self::reset_own_within(doc, level);
         // `\@addtoreset`: theorems and equations numbered within this level or a lower one.
         if doc.eq_within.is_some_and(|w| w >= level) {
             doc.equation = 0;
@@ -6436,7 +10261,15 @@ impl Machine<'_, '_> {
                 doc.thm_values[t] = 0;
             }
         }
-        heading_number(&doc.counters, level, doc.appendix)
+        let number = heading_number(&doc.counters, level, doc.appendix);
+        // `figure` and `table` within this level or a lower one (`float_within`).
+        let floats = doc.fig_within.map(|w| w.is_some_and(|w| w as usize >= level));
+        for (t, reset) in floats.into_iter().enumerate() {
+            if reset {
+                self.set_rw(R_FIGURE + t, 0, true);
+            }
+        }
+        number
     }
 
     /// `\@sect`: `\refstepcounter`, whose `\stepcounter` resets the levels below, then the
@@ -6451,17 +10284,17 @@ impl Machine<'_, '_> {
                 let counters = self.doc.as_ref().map(|d| d.counters).unwrap_or_default();
                 self.heading_anchor(level, &counters);
             }
-        } else if let Some(doc) = self.doc.as_mut().filter(|d| d.packages.contains(&"hyperref")) {
-            // hpdftex's `\@ssect`: `\Hy@MakeCurrentHrefAuto{section*}`, the anchor first in
-            // the title (`section_title`).
-            doc.link_counter += 1;
-            let name = format!("section*.{}", doc.link_counter);
-            doc.star_anchor = Some(name.clone());
-            self.set_current_href(&name);
+        } else {
+            self.unnumbered_section_anchor();
         }
         let Some(doc) = self.doc.as_ref() else { return };
         let sec = &SECS[level - doc.report as usize];
         let (koma, ams) = (doc.koma, doc.ams.is_some());
+        if doc.ieee.is_some() {
+            let (numbered, count) = (doc.numbered, doc.counters[level]);
+            self.begin_group(SEMI_SIMPLE_GROUP);
+            return self.ieee_section_start(level, numbered, count);
+        }
         self.begin_group(SEMI_SIMPLE_GROUP);
         if ams {
             // amsart: `\normalfont\scshape\centering`.
@@ -6487,7 +10320,8 @@ impl Machine<'_, '_> {
         if koma {
             // `\normalfont\sectfont\nobreak\usekomafont{section}`, then `\scr@sect`'s
             // `#6{\nobreak\interlinepenalty\@M\sectionlinesformat…}`: two `\nobreak`s on the
-            // vertical list (scrartcl.cls, `\scr@startsection`).
+            // vertical list (scrartcl.cls, `\scr@startsection`); `\sectfont`'s `\normalcolor`.
+            self.normal_color();
             self.vpenalty(10000);
             self.vpenalty(10000);
         }
@@ -6495,7 +10329,9 @@ impl Machine<'_, '_> {
         self.push_nest(Mode::Horizontal, true, 1000);
         // `\hskip\z@`: a new specification, not `zero_glue` (protrusion stops at it).
         let mut g = self.e.nodes.glue_node(Glue::default(), 0);
-        g.font = 1;
+        // memoir's `\hskip\secindent`: the length register set to `\z@` holds `zero_glue`
+        // (tex.web §1229 `trap_zero_glue`), which protrusion looks through.
+        g.font = !self.memoir() as u16;
         self.cur.push(g);
         if ams {
             // amsart's `\@seccntformat`: `\textup{\@secnumfont\thesection\@secnumpunct}`,
@@ -6549,12 +10385,13 @@ impl Machine<'_, '_> {
         if doc.book || doc.memoir {
             doc.mark_title.clone_from(&list);
         }
+        if doc.pkg.koma.book {
+            doc.mark_title = doc.pkg.koma.short.take().unwrap_or_else(|| list.clone());
+        }
         // `\Hy@@SectionAnchor`: `\leavevmode\hbox to0pt{\kern-\Hy@SectionHShift
         // \Hy@raisedlink{\hyper@anchorstart{…}\hyper@anchorend}\hss}` (the indent is 0).
-        if let Some(name) = doc.star_anchor.take() {
-            let mut t = self.tex_tokens("\\hbox to0pt{\\kern0pt ");
-            t.extend(self.text_raised_link(name));
-            t.extend(self.tex_tokens("\\hss}"));
+        let mut t = self.section_anchor_tokens();
+        if !t.is_empty() {
             t.append(&mut list);
             list = t;
         }
@@ -6593,20 +10430,31 @@ impl Machine<'_, '_> {
         // hyperref's bookmark `\protected@write` to the `.out` file (entry 0: nothing at
         // shipout).
         if self.doc.as_ref().is_some_and(|d| d.toc) {
-            // fancyhdr's `\sectionmark`, before `\addcontentsline`; book's two-sided one.
-            self.fancy_marks();
+            // fancyhdr's `\sectionmark`, before `\addcontentsline`; book's two-sided one
+            // when book's `\pagestyle{headings}` came after fancyhdr.
+            let fancy = self.fancy_defs() || !self.book();
+            if fancy {
+                self.fancy_marks();
+            }
             // memoir's two-sided `headings`: `\createmark{section}{right}{shownumber}{}{. \ }`.
-            if let Some(doc) = self.doc.as_mut().filter(|d| (d.book || d.memoir) && d.level == 1) {
+            if let Some(doc) = self.doc.as_mut().filter(|d| (d.book && !fancy || d.memoir) && d.level == 1) {
                 let title = std::mem::take(&mut doc.mark_title);
-                let number = heading_number(&doc.counters, 1, doc.appendix);
+                // book.cls's `\ifnum \c@secnumdepth >\z@ \thesection. \ \fi`.
+                let number = if doc.secnum == Some(0) { String::new() } else { heading_number(&doc.counters, 1, doc.appendix) };
                 self.section_mark(&number, &title);
+            }
+            // scrbook's `\sectionmark` (`koma_section_mark`), before `\addcontentsline`.
+            if let Some(doc) = self.doc.as_mut().filter(|d| d.pkg.koma.book && d.level == 1) {
+                let title = std::mem::take(&mut doc.mark_title);
+                // `\Ifnumbered{section}`: no number past `secnumdepth`.
+                let number = if doc.numbered { heading_number(&doc.counters, 1, doc.appendix) } else { String::new() };
+                self.koma_section_mark(&number, &title);
             }
             if self.doc.as_ref().is_some_and(|d| d.unsupported.is_some()) {
                 return;
             }
-            if self.hyper() {
-                self.aux_write(0);
-            }
+            let level = self.doc.as_ref().map_or(0, |d| d.level);
+            self.bookmark_write(level);
             self.contents_write();
         }
         let Some(after) = self.doc.as_ref().map(|d| d.after) else { return };
@@ -6731,7 +10579,13 @@ impl Machine<'_, '_> {
     /// `\DeclareMathSizes` for text size `size`: the text, script and scriptscript sizes
     /// (`\tf@size`, `\sf@size`, `\ssf@size`); a size no command sets keeps itself.
     fn math_sizes(&self, size: &'static str) -> (&'static str, &'static str, &'static str) {
-        (0..data_class::SIZE_COMMANDS.len()).map(|i| self.size_row(i)).find(|r| r.fsize == size).map_or((size, size, size), |r| (r.fsize, r.sf, r.ssf))
+        if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathpazo")) {
+            return pazo_math_sizes(size).unwrap_or((size, size, size));
+        }
+        match (0..data_class::SIZE_COMMANDS.len()).map(|i| self.size_row(i)).find(|r| r.fsize == size) {
+            Some(r) => (r.fsize, r.sf, r.ssf),
+            None => calculated_math_sizes(size).unwrap_or((size, size, size)),
+        }
     }
 
     /// The second half of [`Self::font_key`] alone (`\f@size`), without making the key.
@@ -6770,6 +10624,19 @@ impl Machine<'_, '_> {
     /// font selected; `None` when that name stays undefined (the first selection of a
     /// substituted shape) or the shape is undefined.
     fn select_nfss_cs(&mut self, key: &str, size: &'static str) -> Option<u32> {
+        // extarticle.cls redeclares the Computer Modern shapes: OT1/cmr's `cmr17` up to
+        // 51.59pt (the kernel's `ot1cmr.fd` stops at 24.88pt), T1/cmr's EC fonts up to
+        // 51.59pt (`t1cmr.fd` goes to 107pt). Beyond those the native table's are not its.
+        if self.doc.as_ref().is_some_and(|d| d.pkg.ext) {
+            let z: f64 = size.parse().unwrap_or(0.0);
+            if key.starts_with("OT1/cmr/") && z > 24.88 || key.starts_with("T1/cmr/") && z > 51.59 {
+                self.not_native("extarticle's Computer Modern shapes past the kernel's sizes");
+                return None;
+            }
+            if key == "OMX/cmex/m/n" {
+                return self.exscale_font(key, size, z);
+            }
+        }
         // After a substituted `\fontsize`, LaTeX selects at the asked `\f@size`: the same
         // font only when this shape's size for it is the one passed here.
         let k = self.e.eqtb.word(SIZE_SUBST);
@@ -6813,8 +10680,10 @@ impl Machine<'_, '_> {
             (None, Some(k)) => (k, false),
             // A text family no table holds: LaTeX would read its `.fd` file, which the native
             // job does not have (`rushtex-gen nfss` pins them). Other encodings in a text
-            // family (`OMS/cmtt` for `\{`) often have none, and LaTeX substitutes.
-            (None, None) if matches!(key.split('/').next(), Some("OT1" | "T1")) && key.split('/').nth(1).is_some_and(|fam| {
+            // family (`OMS/cmtt` for `\{`) often have none, and LaTeX substitutes. A `U`
+            // family is a math package's own font (`ulasy.fd`, `Udsrom.fd`): substituting
+            // `U/cmr` for it would be silently wrong.
+            (None, None) if matches!(key.split('/').next(), Some("OT1" | "T1" | "U")) &&key.split('/').nth(1).is_some_and(|fam| {
                 let family = format!("{}+{fam}", key.split('/').next().unwrap_or(""));
                 packages.iter().filter_map(|p| crate::data::data_kernel::package_shapes(p)).chain(data_nfss::nfss()).all(|t| t.family(&family).is_none())
             }) =>
@@ -6886,7 +10755,38 @@ impl Machine<'_, '_> {
         (!first).then_some(cs)
     }
 
+    /// exscale.sty's `OMX/cmex/m/n` (extarticle loads it): `<-8>sfixed*cmex7`, `<8>cmex8`,
+    /// `<9>cmex9`, `<10><10.95><12><14.4><17.28><20.74><24.88>cmex10`; a size it does not
+    /// list would be LaTeX's substitution, not ported.
+    fn exscale_font(&mut self, key: &str, size: &'static str, z: f64) -> Option<u32> {
+        let (name, at) = match size {
+            _ if z < 8.0 => ("cmex7", -1000),
+            "8" => ("cmex8", -1000),
+            "9" => ("cmex9", -1000),
+            "10" | "10.95" | "12" | "14.4" | "17.28" | "20.74" | "24.88" => ("cmex10", data_nfss::decimal_sp(size).unwrap_or(-1000)),
+            _ => {
+                self.not_native("exscale's cmex at a size it does not declare");
+                return None;
+            }
+        };
+        let cs = self.e.cs.intern(&format!("{key}/{size}"));
+        let f = match self.e.eqtb.meaning(cs) {
+            Meaning::Font(f) => f,
+            _ => {
+                let f = self.find_font(name, at, Some(cs));
+                self.e.fonts.list[f as usize].ident = cs;
+                self.e.eqtb.set_meaning(cs, Meaning::Font(f), true);
+                f
+            }
+        };
+        self.select_font(f, false);
+        Some(cs)
+    }
+
     fn font_change(&mut self, c: Change) {
+        if let Change::Default(k) = c {
+            self.babel_family(k);
+        }
         let slot = match c {
             Change::Series("bx") => 0,
             Change::Series("m") => 1,
@@ -6931,15 +10831,21 @@ impl Machine<'_, '_> {
         self.doc.as_ref().map_or(DEFAULT_FAMILIES[k as usize], |d| d.families[k as usize])
     }
 
-    /// `\encodingdefault/\rmdefault/<series/shape>`: the key `\normalfont` and the headings start from.
+    /// `\encodingdefault/\familydefault/<series/shape>`: the key `\normalfont` and the
+    /// headings start from.
     fn rm_key(&self, series_shape: &str) -> String {
-        format!("{}/{}/{series_shape}", self.encoding(), self.family(0))
+        format!("{}/{}/{series_shape}", self.encoding(), self.normal_family())
+    }
+
+    /// The family `\familydefault` names (`\rmdefault` unless the preamble changed it).
+    fn normal_family(&self) -> &'static str {
+        self.family(self.doc.as_ref().map_or(0, |d| d.normal_fam))
     }
 
     /// The headings' font: article's `\normalfont\bfseries`, scrartcl's `\normalfont\sectfont`
     /// (`\normalcolor\maybesffamily\bfseries`, `\sffamily` by default).
     fn heading_key(&self) -> String {
-        let fam = self.family(self.doc.as_ref().is_some_and(|d| d.koma) as u8);
+        let fam = if self.doc.as_ref().is_some_and(|d| d.koma) { self.family(1) } else { self.normal_family() };
         format!("{}/{fam}/bx/n", self.encoding())
     }
 
@@ -6961,11 +10867,28 @@ impl Machine<'_, '_> {
     /// defaults) are read nowhere natively, so a document that changes one goes to the engine.
     fn font_defaults(&mut self) {
         let fixed = self.doc.as_ref().map(|d| d.font_fixed.clone()).unwrap_or_default();
+        // `\renewcommand{\familydefault}{\sfdefault}` (or `\ttdefault`): `\normalfont` takes
+        // that family (`normal_family`); the others stay as the class has them.
+        let mut normal = 0;
         if FONT_FIXED.iter().zip(&fixed).any(|(name, body)| {
             let id = self.e.cs.intern(name);
-            self.macro_body(id) != *body
+            let now = self.macro_body(id);
+            if *name == "familydefault" && now != *body {
+                return match now.as_deref() {
+                    Some("\\sfdefault") => { normal = 1; false }
+                    Some("\\ttdefault") => { normal = 2; false }
+                    _ => true,
+                };
+            }
+            now != *body
         }) {
             return self.not_native("a changed font default");
+        }
+        if let Some(d) = self.doc.as_mut() {
+            if d.normal_fam != normal {
+                d.normal_fam = normal;
+                d.font_switch.clear();
+            }
         }
         for (k, name) in ["rmdefault", "sfdefault", "ttdefault"].into_iter().enumerate() {
             let id = self.e.cs.intern(name);
@@ -7023,13 +10946,23 @@ impl Machine<'_, '_> {
             self.build_rule([0, RUNNING, RUNNING]);
             self.build_penalty(10000);
         }
-        let relax = self.named_cs(named!("relax"));
-        arg.push(relax);
-        self.back_list(&arg);
-        let (g, fresh) = self.scan_glue_spec(false);
-        if self.get_token() != Some(relax) {
-            return self.not_native("\\hspace of more than glue");
-        }
+        let stretch = self.e.cs.get("stretch").map(Token::cs);
+        let (g, fresh) = if arg.first().is_some_and(|t| Some(*t) == stretch) {
+            // `\stretch{n}` (`glue_arg`).
+            match self.glue_arg(&arg) {
+                Some(g) => (g, true),
+                None => return self.not_native("\\stretch of something not a number"),
+            }
+        } else {
+            let relax = self.named_cs(named!("relax"));
+            arg.push(relax);
+            self.back_list(&arg);
+            let gf = self.scan_glue_spec(false);
+            if self.get_token() != Some(relax) {
+                return self.not_native("\\hspace of more than glue");
+            }
+            gf
+        };
         self.build_glue(g, fresh);
         if star {
             self.build_glue(Glue::default(), false);
@@ -7037,16 +10970,45 @@ impl Machine<'_, '_> {
     }
 
     /// A font declaration (`\bfseries`), or with `old` an old one (`\bf`: `\normalfont
-    /// \bfseries`). In math `\not@math@alphabet` is an error and `\bf` a math alphabet,
-    /// neither native.
+    /// \bfseries`). In math `\not@math@alphabet` is an error and `\bf` a math alphabet
+    /// (`\@fontswitch`, latex.ltx:14312), neither native but `\rm`: `\mathrm` with
+    /// `\math@bgroup` `\relax`, so `\mathgroup\symoperators\relax` in the current group.
     fn font_declaration(&mut self, c: Change, old: bool) {
         if self.mode == Mode::Math {
-            return self.not_native("a font declaration in math");
+            let rm = old && matches!(c, Change::Default(0));
+            let fam = self.doc.as_ref().and_then(|d| d.alphabets.iter().find(|a| a.0 == "mathrm")).and_then(|a| match a.2 {
+                Alphabet::Fam(f) if a.1 => Some(f),
+                _ => None,
+            });
+            return match fam.filter(|_| rm) {
+                Some(f) => self.set_cur_fam(f as i32),
+                None => self.not_native("a font declaration in math"),
+            };
         }
         if old {
             self.normal_font();
         }
         self.font_change(c);
+    }
+
+    /// article.cls's `\cal` (`\@fontswitch\relax\mathcal`, report and book the same): in math
+    /// `\mathcal` with `\math@bgroup` `\relax`, i.e. `\mathgroup` the alphabet's family for
+    /// the rest of the group; `\relax` in text.
+    fn old_math_alphabet(&mut self, name: &str) {
+        if self.doc.as_ref().is_some_and(|d| d.koma || d.memoir || d.ams.is_some() || d.ieee.is_some() || d.letter.is_some()) {
+            return self.not_native("\\cal outside article, report and book");
+        }
+        if self.mode != Mode::Math {
+            return;
+        }
+        let fam = self.doc.as_ref().and_then(|d| d.alphabets.iter().find(|a| a.0 == name)).and_then(|a| match a.2 {
+            Alphabet::Fam(f) if a.1 => Some(f),
+            _ => None,
+        });
+        match fam {
+            Some(f) => self.set_cur_fam(f as i32),
+            None => self.not_native("an old font declaration in math"),
+        }
     }
 
     /// `\DeclareTextFontCommand` (ltfntcmd.dtx): `\hmode@bgroup`, `\text@command`, the
@@ -7142,6 +11104,7 @@ impl Machine<'_, '_> {
             ("OML", 60) => 60,
             ("OML", 62) => 62,
             ("TS1", 167) => 159,
+            ("TS1", 163) => 191,
             ("TS1", 36) => 36,
             ("OT1", 95) => 95,
             _ => return false,
@@ -7329,7 +11292,9 @@ impl Machine<'_, '_> {
     fn ellipsis(&mut self) {
         // amsmath: `\ldots` in math is `\mathellipsis`, `\dots` the dots its next token
         // calls for (`\mdots@`).
-        if self.mode == Mode::Math && self.ams() {
+        // The kernel's `\ldots` in math is `\mathellipsis`, `\mathinner{\ldotp\ldotp\ldotp}`,
+        // as amsmath's.
+        if self.mode == Mode::Math {
             return self.math_dots(false, false);
         }
         if self.leave_vmode() {
@@ -7337,9 +11302,14 @@ impl Machine<'_, '_> {
         }
         let f = self.cur_font();
         let stretch = self.e.fonts.params(f).get(2).copied().unwrap_or(0);
-        for _ in 0..3 {
+        // french's `\FBtextellipsis`: `.\kern\fontdimen3\font.\kern\fontdimen3\font.\xspace`
+        // (`\xspace` `\relax`, `\providecommand`ed at `\begin{document}`).
+        let french = self.babel_french();
+        for k in 0..3 {
             self.char_alone(f, b'.');
-            self.hkern(stretch);
+            if k < 2 || !french {
+                self.hkern(stretch);
+            }
         }
     }
 
@@ -7432,12 +11402,20 @@ impl Machine<'_, '_> {
     }
 
     /// `\newcommand{\name}[n]{text}` is `\long\def\name#1..#n{text}` (`\@yargdef`); the
-    /// starred form is not `\long`. The engine's own `\def` reads the text.
-    fn new_command(&mut self) {
+    /// starred form is not `\long`. The engine's own `\def` reads the text. `\newcommand` of
+    /// a defined name is `\@notdefinable`'s error, which keeps the old meaning: the engine
+    /// runs it (`\providecommand`'s `\rt@reserveda` excepted). A package's or class's
+    /// native is left to the definition: the native job holds other classes' natives
+    /// (amsart's `\keywords`) that article lacks.
+    fn new_command(&mut self, renew: bool) {
         let long = !self.next_is('*');
         let mut name = Vec::new();
         self.read_arg(&mut name);
         let Some(&cs) = name.first() else { return };
+        self.mark_own_name(cs);
+        if !renew && !matches!(self.meaning(cs), Meaning::Undefined) && !matches!(self.meaning(cs), Meaning::Doc(i) if i as usize >= KERNEL_NATIVES.len()) && cs != self.named_cs(named!("rt@reserveda")) {
+            return self.not_native("\\newcommand of a defined name");
+        }
         let mut n = 0u8;
         if self.next_is('[') {
             while let Some(t) = self.get_token() {
@@ -7448,7 +11426,21 @@ impl Machine<'_, '_> {
                 }
             }
             if self.next_is('[') {
-                return self.not_native("\\newcommand with a default argument");
+                // `\@xargdef`: `\name` tests for `[`, and `\\name[#1]#2..#n` is the text
+                // (`\@yargdef`, `\long` unless starred: `n` is at least 1).
+                let default = self.read_default();
+                let Some(inner) = self.default_arg_macro(cs, &default) else { return self.not_native("\\newcommand's name") };
+                let mut list = Vec::with_capacity(5 + 2 * n as usize);
+                if long {
+                    list.push(self.named_cs(named!("long")));
+                }
+                list.extend([self.named_cs(named!("def")), inner, Token::char(Cat::Other, '['), Token::char(Cat::Param, '#'), Token::char(Cat::Other, '1'), Token::char(Cat::Other, ']')]);
+                for k in 2..=n {
+                    list.push(Token::char(Cat::Param, '#'));
+                    list.push(Token::char(Cat::Other, (b'0' + k) as char));
+                }
+                self.new_command_text(&mut list);
+                return self.back_list(&list);
             }
         }
         let mut list = Vec::with_capacity(4 + 2 * n as usize);
@@ -7461,13 +11453,29 @@ impl Machine<'_, '_> {
             list.push(Token::char(Cat::Param, '#'));
             list.push(Token::char(Cat::Other, (b'0' + k) as char));
         }
+        self.new_command_text(&mut list);
         self.back_list(&list);
+    }
+
+    /// The definition's text is `\@yargdef`'s undelimited argument (`\def\name..{#2}`): spaces
+    /// before it skipped, and one token without braces (`\newcommand\eps \epsilon`) is the
+    /// whole text. A `{` stays in the input for `\def` to read the group.
+    fn new_command_text(&mut self, list: &mut Vec<Token>) {
+        let Some(t) = self.next_unblank() else { return };
+        if t.cat() == Some(Cat::BeginGroup) {
+            // §325 `back_input`: a `{` put back is not counted twice by the alignment state
+            // (a macro defined inside a `tabular` cell: `\renewcommand{\arraystretch}{1.15}`).
+            self.input.align_state -= 1;
+            list.push(t);
+        } else {
+            list.extend([Token::char(Cat::BeginGroup, '{'), t, Token::char(Cat::EndGroup, '}')]);
+        }
     }
 
     /// `\newenvironment{name}[n]{begin}{end}` (latex.ltx `\@newenv`): `\new@command
     /// \name[n]{begin}` and `\def\endname{end}`, both `\long` unless starred
     /// (`\@star@or@long`); `\renewenvironment` first `\let`s both to `\relax`, which the
-    /// definitions replace. An optional argument's default is not native.
+    /// definitions replace. An optional argument's default is `\@newenvb`'s (`default_arg_macro`).
     fn new_environment(&mut self) {
         let long = !self.next_is('*');
         let name = self.env_name();
@@ -7480,10 +11488,16 @@ impl Machine<'_, '_> {
                     _ => {}
                 }
             }
-            if self.next_is('[') {
-                return self.not_native("\\newenvironment with a default argument");
-            }
         }
+        // `\@newenvb`: `[n][{default}]`, then `\new@command` as above (`\@xargdef`).
+        let default = if self.next_is('[') {
+            if n == 0 {
+                return self.not_native("\\newenvironment with a default and no arguments");
+            }
+            Some(self.read_default())
+        } else {
+            None
+        };
         let (mut begin, mut end) = (Vec::new(), Vec::new());
         self.read_arg(&mut begin);
         self.read_arg(&mut end);
@@ -7494,8 +11508,18 @@ impl Machine<'_, '_> {
                 list.push(self.named_cs(named!("long")));
             }
             list.push(self.named_cs(named!("def")));
-            list.push(Token::cs(self.e.cs.intern(&if k == 0 { name.clone() } else { format!("end{name}") })));
-            for j in 1..=if k == 0 { n } else { 0 } {
+            let mut cs = Token::cs(self.e.cs.intern(&if k == 0 { name.clone() } else { format!("end{name}") }));
+            let mut first = 1;
+            if let Some(d) = default.as_ref().filter(|_| k == 0) {
+                let Some(inner) = self.default_arg_macro(cs, d) else { return };
+                cs = inner;
+                first = 2;
+            }
+            list.push(cs);
+            if first == 2 {
+                list.extend([Token::char(Cat::Other, '['), Token::char(Cat::Param, '#'), Token::char(Cat::Other, '1'), Token::char(Cat::Other, ']')]);
+            }
+            for j in first..=if k == 0 { n } else { 0 } {
                 list.push(Token::char(Cat::Param, '#'));
                 list.push(Token::char(Cat::Other, (b'0' + j) as char));
             }
@@ -7632,7 +11656,11 @@ impl Machine<'_, '_> {
         let ch = |c: char| next.is_some_and(|t| t.cs_id().is_none() && t.chr() == c && t.cat() == Some(Cat::Other));
         let kind = match kind {
             Dots::Auto => {
-                if is(self, named!("boldsymbol")) || next.is_some_and(|t| matches!(t.cs_id().map(|c| self.e.eqtb.meaning(c)), Some(Meaning::Doc(_)))) && !self.extra_known(next) {
+                // An entry's end in a math `array` (amsmath's matrices): `\futurelet` meets
+                // the template's `$` (the kernel's `\@arrayclassz`) or array.sty's protected
+                // `\textonly@unskip`, whose meaning `\mdots@@` reads as no macro: `\dotso`.
+                let kernel_end = next.is_some_and(|t| t.cs_id().is_some_and(|c| self.e.eqtb.meaning(c) == Meaning::Doc(TAB_V as u16))) && self.doc.as_ref().and_then(|d| d.tabs.last()).is_some_and(|t| t.math);
+                if is(self, named!("boldsymbol")) || next.is_some_and(|t| matches!(t.cs_id().map(|c| self.e.eqtb.meaning(c)), Some(Meaning::Doc(_)))) && !self.extra_known(next) && !kernel_end {
                     return self.not_native("\\dots before a command the native job does not classify");
                 }
                 if ch(',') {
@@ -8048,8 +12076,10 @@ impl Machine<'_, '_> {
     /// {below}\mkern b mu$}\hbox{…above…}\copy0}\hbox to\wd2{\unhbox0}}\limits^{…}_{…}}`,
     /// the fill `\arrowfill@`'s `$\m@th…\displaystyle L\mkern-7mu\cleaders\hbox{$\displaystyle
     /// \mkern-2mu\relbar\mkern-2mu$}\hfill\mkern-7mu R$`, each script only when its argument
-    /// is not empty (`\@ifnotempty`).
-    fn ext_arrow(&mut self, left: bool) {
+    /// is not empty (`\@ifnotempty`). mathtools' `\xleftrightarrow` (2) is `\ext@arrow 3095`
+    /// with `\arrowfill@\leftarrow\relbar\rightarrow`, `\xmapsto` (3) `\ext@arrow 0395` with
+    /// `\arrowfill@{\mapstochar\relbar}\relbar\rightarrow`.
+    fn ext_arrow(&mut self, kind: u8) {
         if self.mode != Mode::Math {
             return self.not_native("an amsmath extensible arrow outside math");
         }
@@ -8072,9 +12102,11 @@ impl Machine<'_, '_> {
         let ch = |c: char| Token::char(if c.is_ascii_alphabetic() { Cat::Letter } else { Cat::Other }, c);
         let (open, close, shift) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'), Token::char(Cat::MathShift, '$'));
         let mkern = |t: &mut Vec<Token>, v: &str| self.mkern_tokens(t, v);
-        let (a, b) = if left { ("9", "5") } else { ("5", "9") };
+        // `\ext@arrow`'s #1 (a script's kern before) and #3#4 (the measuring kerns).
+        let left = matches!(kind, 1 | 2);
+        let (a, b) = if kind == 0 { ("5", "9") } else { ("9", "5") };
         let mut t = vec![cs(named!("mathrel")), open, cs(named!("mathop")), open, cs(named!("setbox")), ch('0'), cs(named!("hbox")), open];
-        self.arrow_fill(&mut t, if left { 1 } else { 0 }, named!("displaystyle"));
+        self.arrow_fill(&mut t, kind, named!("displaystyle"));
         t.extend([close, cs(named!("setbox")), ch('2'), cs(named!("vbox")), open, cs(named!("mathsurround"))]);
         t.extend(ZERO_PT);
         for arg in [&below, &above] {
@@ -8205,15 +12237,15 @@ impl Machine<'_, '_> {
         t.extend([self.named_cs(named!("halign")), open]);
     }
 
-    /// amsmath's `\rightarrowfill@` (0), `\leftarrowfill@` (1) and `\leftrightarrowfill@` (2)
-    /// in `style`, `\arrowfill@`: `$\m@th\thickmuskip0mu\medmuskip\thickmuskip\thinmuskip
+    /// amsmath's `\rightarrowfill@` (0), `\leftarrowfill@` (1) and `\leftrightarrowfill@` (2),
+    /// and mathtools' `\MT_mapsto_fill:` (3, L `\mapstochar\relbar`) in `style`, `\arrowfill@`: `$\m@th\thickmuskip0mu\medmuskip\thickmuskip\thinmuskip
     /// \thickmuskip\relax style L\mkern-7mu\cleaders\hbox{$style\mkern-2mu\relbar\mkern-2mu$}
     /// \hfill\mkern-7mu R$`.
     fn arrow_fill(&self, t: &mut Vec<Token>, kind: u8, style: usize) {
         let cs = |i: usize| self.named_cs(i);
         let (open, close, shift) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'), Token::char(Cat::MathShift, '$'));
         let (l, r) = match kind {
-            0 => (named!("relbar"), named!("rightarrow")),
+            0 | 3 => (named!("relbar"), named!("rightarrow")),
             1 => (named!("leftarrow"), named!("relbar")),
             _ => (named!("leftarrow"), named!("rightarrow")),
         };
@@ -8228,7 +12260,15 @@ impl Machine<'_, '_> {
         // and a style node adds no spacing (§762). The pre-scan sends a document that
         // redefines `\relbar` to the engine (`READ_INTERNALLY`).
         let relbar = |t: &mut Vec<Token>| t.extend([cs(named!("mathrel")), open, self.doc_id(doc!("mathsm@sh")), cs(style), open, Token::cs(self.e.cs.get("std@minus").unwrap_or(0)), close, close]);
-        if l == named!("relbar") { relbar(t) } else { t.push(cs(l)) }
+        if kind == 3 {
+            // The macro argument `{\mapstochar\relbar}` loses its braces (§400).
+            t.push(Token::cs(self.e.cs.get("mapstochar").unwrap_or(0)));
+            relbar(t);
+        } else if l == named!("relbar") {
+            relbar(t)
+        } else {
+            t.push(cs(l))
+        }
         self.mkern_tokens(t, "-7");
         t.extend([cs(named!("cleaders")), cs(named!("hbox")), open, shift, cs(style)]);
         self.mkern_tokens(t, "-2");
@@ -8559,10 +12599,18 @@ impl Machine<'_, '_> {
         let mut word = Vec::new();
         self.read_arg(&mut word);
         let Some(&cs) = name.first().filter(|_| name.len() == 1) else { return self.not_native("\\DeclareMathOperator's name") };
-        if self.meaning(cs) != Meaning::Undefined {
+        let Some(id) = cs.cs_id() else { return self.not_native("\\DeclareMathOperator's name") };
+        // `\@ifdefinable`: `\@ifundefined` takes `\relax` as undefined (`\let\o\relax` first),
+        // but not for `\relax` itself or a name that starts with `end`.
+        let relax = self.e.eqtb.meaning(self.e.cs.intern("relax"));
+        let name_text = self.e.cs.name(id);
+        let definable = match self.meaning(cs) {
+            Meaning::Undefined => true,
+            m => m == relax && name_text != "relax" && !name_text.starts_with("end"),
+        };
+        if !definable {
             return self.not_native("\\DeclareMathOperator of a defined name");
         }
-        let Some(id) = cs.cs_id() else { return self.not_native("\\DeclareMathOperator's name") };
         let mut t = vec![Token::END_MATCH];
         t.push(self.named_cs(named!("rt@operatorname")));
         if star {
@@ -8609,6 +12657,34 @@ impl Machine<'_, '_> {
     /// `\label{key}`: `\@bsphack`, the key's value (`\@currentlabel`) kept in memory, the
     /// `.aux` write's whatsit, `\@esphack`.
     fn label(&mut self) {
+        // algorithmicx's `\def\@currentlabel{\theALG@line}`: the line's number (`predict`
+        // counts the lines too); cleveref would type it by `\@currentcounter`.
+        if self.alg_open() {
+            if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"cleveref")) {
+                return self.not_native("algorithmicx: a \\label on a line with cleveref");
+            }
+            let n = self.alg_line();
+            self.store_current_label(&n.to_string());
+        }
+        // caption.sty's `\caption@xlabel` in a float; subcaption's `\subcaption@label`.
+        if self.caption_pkg() {
+            // subfig's `\subfloat@label` in a subfloat's body.
+            if self.subfloat_open() {
+                return self.subfloat_label();
+            }
+            if !self.caption_xlabel() {
+                return;
+            }
+            if self.caption_in_sub() {
+                return self.subcaption_label();
+            }
+        }
+        // threeparttable's `\TPT@gatherlabel`: after a held caption, added to it.
+        if self.tpt_holds_caption() {
+            let mut key = Vec::new();
+            self.read_arg(&mut key);
+            return self.tpt_gather_label(key);
+        }
         // amsmath's `\label@in@display`: `\gdef\df@label{key}`, written after the tag.
         if self.doc.as_ref().is_some_and(|d| d.ams_display == 3 || d.ams_display != 0 && self.mode == Mode::Math && !self.inner) {
             let mut key = Vec::new();
@@ -8643,6 +12719,7 @@ impl Machine<'_, '_> {
         if !self.defined_once(&key, &value) {
             return;
         }
+        self.cref_label_type(&key, &value);
         let href: String = self.e.toks.get(self.e.eqtb.toks(CURRENT_HREF)).iter().map(|t| t.chr()).collect();
         let Some(doc) = self.doc.as_mut() else { return };
         if doc.packages.contains(&"hyperref") {
@@ -8655,6 +12732,7 @@ impl Machine<'_, '_> {
         doc.label_keys.push(key.clone());
         let entry = doc.label_keys.len() as i32;
         doc.labels.insert(key, value);
+        let cref = doc.pkg.cref.is_some();
         self.aux_write(entry);
         // `\@esphack`: `\spacefactor\@savsf \ifdim\@savsk>\z@ \nobreak \hskip\z@skip
         // \ignorespaces \fi`.
@@ -8668,8 +12746,46 @@ impl Machine<'_, '_> {
                 self.cur.push(Node::new(Kind::Penalty, 10000));
                 let g = self.e.nodes.glue_node(Glue::default(), 0);
                 self.cur.push(g);
-                self.ignore_spaces();
+                // cleveref's `\label@noarg` goes on with `\@bsphack`: this `\ignorespaces`
+                // meets no space.
+                if !cref {
+                    self.ignore_spaces();
+                }
             }
+        }
+        // cleveref's `\protected@write\@auxout{}{\string\newlabel{key@cref}…}` in a second
+        // `\@bsphack`/`\@esphack`: `\@savsk` is 0 now, so no glue; in vertical mode the
+        // `\nobreak` again.
+        if cref {
+            self.aux_write(0);
+            if self.mode == Mode::Vertical && self.doc.as_ref().is_some_and(|d| d.nobreak || d.noskipsec) {
+                self.cur.push(Node::new(Kind::Penalty, 10000));
+            }
+        }
+    }
+
+    /// `\index{entry}` (latex.ltx): `\@bsphack\begingroup\@sanitize`, then after
+    /// `\makeindex` `\@wrindex` (`\protected@write\@indexfile`: the write's whatsit, and
+    /// `\nobreak` in vertical mode after a heading), else `\@index` (nothing);
+    /// `\endgroup\@esphack`. The entry is not typeset.
+    fn index(&mut self) {
+        let horizontal = self.mode == Mode::Horizontal;
+        if horizontal {
+            let saved = (self.last_skip(), self.aux);
+            if let Some(doc) = self.doc.as_mut() {
+                doc.sphack.push(saved);
+            }
+        }
+        let mut entry = Vec::new();
+        self.read_arg(&mut entry);
+        if self.doc.as_ref().is_some_and(|d| d.pkg.index_file) {
+            self.aux_write(0);
+        }
+        if horizontal {
+            self.esphack_end();
+        } else if self.mode == Mode::Vertical && self.doc.as_ref().is_some_and(|d| d.nobreak || d.noskipsec) {
+            // `\@esphack` in vertical mode: `\if@nobreak\nobreak\else\if@noskipsec\nobreak\fi\fi`.
+            self.cur.push(Node::new(Kind::Penalty, 10000));
         }
     }
 
@@ -8686,17 +12802,31 @@ impl Machine<'_, '_> {
             Some(v) => v.clone(),
             None => match doc.predicted.get(&key) {
                 Some(p) => {
-                    let v = label_tokens(p);
+                    let p = p.clone();
                     doc.forward.insert(key.clone(), p.clone());
-                    v
+                    // A tag of commands or math (`tag_text`): the `.aux` file's `\newlabel`
+                    // holds its tokens, read here from the source.
+                    // A macro there is expanded by `\protected@write`: not followed.
+                    match p.strip_prefix('\u{ffff}') {
+                        Some(raw) => {
+                            let t = self.tag_source_tokens(raw);
+                            if t.iter().any(|x| x.cs_id().is_some_and(|c| matches!(self.e.eqtb.meaning(c), Meaning::Macro(_) | Meaning::Undefined))) {
+                                return self.not_native("a \\ref ahead of a \\tag holding a macro");
+                            }
+                            t
+                        }
+                        None => label_tokens(&p),
+                    }
                 }
                 None => return self.not_native("a \\ref with no \\label"),
             },
         };
-        if doc.packages.contains(&"hyperref") {
+        if self.hyper() {
             return self.ref_link(&key, v);
         }
-        doc.used.insert(key);
+        if let Some(doc) = self.doc.as_mut() {
+            doc.used.insert(key);
+        }
         v.extend([self.named_cs(named!("hbox")), Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}')]);
         self.back_list(&v);
     }
@@ -8711,6 +12841,15 @@ impl Machine<'_, '_> {
             self.not_native("a \\label or \\bibitem defined twice");
             return false;
         }
+        // A tag of tokens (`tag_text`, `reference`): the run's tokens against the source's.
+        if let Some(raw) = doc.forward.get(key).and_then(|p| p.strip_prefix('\u{ffff}')).map(str::to_string) {
+            if self.tag_source_tokens(&raw) != value {
+                self.not_native("a \\label or \\bibitem the pre-scan numbered differently");
+                return false;
+            }
+            return true;
+        }
+        let Some(doc) = self.doc.as_ref() else { return false };
         if doc.forward.get(key).is_some_and(|p| *p != text) {
             self.not_native("a \\label or \\bibitem the pre-scan numbered differently");
             return false;
@@ -8722,7 +12861,8 @@ impl Machine<'_, '_> {
     /// Each key, its leading spaces dropped (`\@firstofone`), is `\hbox{\b@key}`
     /// (`\@cite@ofmt`), the keys separated by `,\penalty\@m\ `. `\b@key` is the
     /// `\bibitem`'s value, kept in memory (the key `BIB` and the name), or the pre-scan's
-    /// for a `\bibitem` ahead. An undefined key (pdfLaTeX's bold `?`) is not native.
+    /// for a `\bibitem` ahead. An undefined key is pdfLaTeX's bold `?` when no `\bibitem`
+    /// exists at all (no `.bbl`), else not native.
     fn cite(&mut self) {
         // `\leavevmode` first (`\@citex`): the paragraph starts, then `\cite` again.
         if self.leave_vmode() {
@@ -8763,8 +12903,9 @@ impl Machine<'_, '_> {
                     }
                     // `\@citex`'s `\@ifundefined{b@\@citeb}`: `\hbox{\reset@font\bfseries ?}`,
                     // with no bibliography or `.bbl` file at all (the oracle's last run is
-                    // the same). Under hyperref the key's link stays the engine's.
-                    None if !hyper && !doc.labels.keys().chain(doc.predicted.keys()).any(|k| k.starts_with(BIB)) => {
+                    // the same). hyperref leaves the kernel's `\@citex` (only `\bibcite`
+                    // makes links), so the `?` has no link under it either.
+                    None if !doc.labels.keys().chain(doc.predicted.keys()).any(|k| k.starts_with(BIB)) => {
                         labels.push(None);
                         continue;
                     }
@@ -8776,6 +12917,9 @@ impl Machine<'_, '_> {
                 return self.not_native("a \\cite label outside 8-bit characters");
             };
             labels.push(Some(bytes));
+        }
+        if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"cite")) {
+            return self.cite_sty(opt, &labels, &names);
         }
         // `\@cite{#1}{#2}`: `[{#1\if@tempswa , #2\fi}]`, with `\@citex`'s `#1` each label
         // in an `\hbox` and `,\penalty\@m\ ` between them. The group holds no assignment
@@ -8830,11 +12974,132 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// cite.sty's `\@cite`: `\cite@adjust` (the space before taken away, `\citeprepenalty`
+    /// when no penalty is there, and the space put back, `\ ` when there was none or after
+    /// a sentence), then `\citeleft{\@cite@n{keys}\citemid note\spacefactor\@m}\citeright`.
+    /// `\@cite@n` sets the undefined keys first (`{\bfseries ?}`, no box), then the numbers
+    /// sorted, a run of three or more as `first\citedash last`, `\citepunct` between; each
+    /// label is `\b@key` itself, hyperref's link and all. Labels other than plain numbers
+    /// (cite.sty's letter and suffix forms) are not native.
+    fn cite_sty(&mut self, opt: Option<Vec<Token>>, labels: &[Option<Vec<u8>>], names: &[String]) {
+        let mut numbers: Vec<(u32, usize)> = Vec::new();
+        for (k, label) in labels.iter().enumerate() {
+            let Some(label) = label else { continue };
+            let n = std::str::from_utf8(label).ok().filter(|t| !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit())).and_then(|t| t.parse::<u32>().ok());
+            match n {
+                Some(n) if n > 0 && numbers.iter().all(|x| x.0 != n) => numbers.push((n, k)),
+                _ => return self.not_native("cite.sty: a label that is not a number, or one cited twice"),
+            }
+        }
+        numbers.sort_unstable();
+        // `\cite@adjust`.
+        let skip = self.last_item(Kind::Glue).map(|n| self.e.nodes.glue(&n)).unwrap_or_default();
+        self.unskip();
+        if self.last_item(Kind::Penalty).map_or(0, |n| n.a) == 0 {
+            self.build_penalty(301);
+        }
+        if skip == Glue::default() {
+            self.aux = 1001;
+        }
+        if self.aux > 1000 {
+            self.build_control_space();
+        } else {
+            self.build_glue(skip, false);
+        }
+        self.build_text(b"[");
+        // `\citepunct`: `,\penalty\citepunctpenalty\hskip.13emplus.1emminus.1em`.
+        let punct = |m: &mut Self| {
+            m.build_text(b",");
+            m.build_penalty(1000);
+            let g = m.glue_of(".13em plus.1em minus.1em");
+            m.build_glue(g, true);
+        };
+        let out = |m: &mut Self, k: usize| {
+            let Some(label) = labels[k].as_deref() else { return };
+            match names.get(k) {
+                Some(name) => {
+                    if let Some(doc) = m.doc.as_mut() {
+                        doc.link = Some((hyperref::CITE, name.clone()));
+                    }
+                    m.start_link();
+                    m.build_text(label);
+                    m.end_link();
+                }
+                None => m.build_text(label),
+            }
+        };
+        let mut any = false;
+        for _ in labels.iter().filter(|l| l.is_none()) {
+            if any {
+                punct(self);
+            }
+            self.begin_group(SIMPLE_GROUP);
+            self.font_change(Change::Series("bx"));
+            self.build_text(b"?");
+            self.end_group(SIMPLE_GROUP);
+            any = true;
+        }
+        // `\@compress@cite`: a successor of the last number is held; a held successor of a
+        // held one becomes `\citedash` (`\hbox{--}\penalty\citepunctpenalty`) and it.
+        let (mut held, mut run, mut prev): (Option<(bool, usize)>, bool, Option<u32>) = (None, false, None);
+        let release = |m: &mut Self, held: Option<(bool, usize)>| {
+            if let Some((dash, k)) = held {
+                if dash {
+                    m.build_hbox(|m| m.build_text(b"--"));
+                    m.build_penalty(1000);
+                } else {
+                    punct(m);
+                }
+                out(m, k);
+            }
+        };
+        for &(n, k) in &numbers {
+            let next = prev.is_some_and(|p| p + 1 == n);
+            if next {
+                held = Some((run, k));
+                run = true;
+            } else {
+                release(self, held.take());
+                run = false;
+                if any {
+                    punct(self);
+                }
+                out(self, k);
+            }
+            any = true;
+            prev = Some(n);
+        }
+        release(self, held);
+        let close = Token::char(Cat::Other, ']');
+        match opt {
+            // `\citemid`: `,\penalty\citemidpenalty\ ` (`\@medpenalty`, 151).
+            Some(note) => {
+                self.build_text(b",");
+                self.build_penalty(151);
+                self.build_control_space();
+                self.begin_group(SIMPLE_GROUP);
+                self.input.align_state += 1;
+                let mut t = note;
+                t.extend(self.tex_tokens("\\@"));
+                t.push(Token::char(Cat::EndGroup, '}'));
+                t.push(close);
+                self.back_list(&t);
+            }
+            None => {
+                self.space_factor_1000();
+                self.back_list(&[close]);
+            }
+        }
+    }
+
     /// `\bibitem[#1]{#2}` (`\@lbibitem`): `\item[\@biblabel{#1}\hfill]`, `\bibcite{#2}{#1}`
     /// kept in memory. `\bibitem{#1}` (`\@bibitem`): `\item`, `\bibcite{#1}{\the\value
     /// {\@listctr}}`. Each `\bibcite` is an `\immediate\write`: no node. A `#1` with
     /// commands or braces (written expanded) is not native.
     fn bibitem(&mut self) {
+        if self.doc.as_ref().is_some_and(|d| d.pkg.natbib.is_some()) {
+            return self.nat_bibitem();
+        }
         let opt = if self.next_is('[') { Some(self.bracket_arg()) } else { None };
         let mut key = Vec::new();
         self.read_arg(&mut key);
@@ -8874,9 +13139,8 @@ impl Machine<'_, '_> {
         }
         let label = opt.map(|o| {
             let mut l = raised;
-            l.push(Token::char(Cat::Other, '['));
-            l.extend(o);
-            l.extend([Token::char(Cat::Other, ']'), self.named_cs(named!("hfill"))]);
+            self.bib_label_tokens(&o, &mut l);
+            l.push(self.named_cs(named!("hfill")));
             l
         });
         if label.is_none() {
@@ -9110,6 +13374,9 @@ impl Machine<'_, '_> {
         self.read_arg(&mut key);
         let key: String = key.iter().map(|t| t.chr()).collect();
         let Some(doc) = self.doc.as_mut() else { return };
+        if key == "LastPage" && doc.packages.contains(&"lastpage") {
+            return self.lastpage_ref();
+        }
         let Some(&page) = doc.label_pages.get(&key) else { return self.not_native("a \\pageref to a page not yet shipped") };
         if doc.packages.contains(&"hyperref") {
             return self.ref_link(&key, label_tokens(&book::page_text(page)));
@@ -9120,6 +13387,11 @@ impl Machine<'_, '_> {
         self.back_list(&v);
     }
 
+    /// Whether the kept pages are shipping at the end of the job (`finish_contents`).
+    pub(super) fn replaying(&self) -> bool {
+        self.doc.as_ref().is_some_and(|d| d.replay)
+    }
+
     /// At shipout, an `.aux` whatsit's entry: the label's `\thepage`. `output_page` has
     /// already stepped the page counter (`\stepcounter{page}` follows `\shipout`).
     pub(super) fn shipped_entry(&mut self, entry: i32) {
@@ -9128,7 +13400,20 @@ impl Machine<'_, '_> {
             return;
         }
         if entry < 0 {
-            if let Some(p) = doc.toc_pages.get_mut((-entry) as usize - 1) {
+            // A list of figures or tables is set from `predict`'s entries, in source order, but
+            // LaTeX writes each `\addcontentsline{lof}` when its float's page is shipped (the
+            // `\write` sits in the float box, latex.ltx `\@caption`). A float shipped before an
+            // earlier one of the same list (an `[H]` float overtaking a deferred `[b]` or
+            // `figure*`) would be listed out of order by pdfLaTeX: declined.
+            let k = (-entry) as usize - 1;
+            let level = doc.contents.as_ref().and_then(|c| c.get(k)).map(|e| e.level).filter(|&l| l >= LOF);
+            if let (Some(level), Some(c)) = (level, doc.contents.as_ref()) {
+                if c.iter().take(k).enumerate().any(|(j, e)| e.level == level && doc.toc_pages.get(j).is_some_and(|p| p.is_none())) {
+                    return self.not_native("a float shipped before an earlier one of its list (LaTeX lists it in shipping order)");
+                }
+            }
+            let Some(doc) = self.doc.as_mut() else { return };
+            if let Some(p) = doc.toc_pages.get_mut(k) {
                 *p = Some(book::page_value(doc.page - 1, doc.page_style));
             }
         } else if let Some(key) = doc.label_keys.get(entry as usize - 1) {
@@ -9166,8 +13451,8 @@ impl Machine<'_, '_> {
         if doc.defer && doc.contents.as_ref().and_then(|t| t.get(doc.toc_seen)).is_none_or(|e| !e.number.starts_with('#')) {
             return self.not_native("an \\addcontentsline the pre-scan did not see");
         }
-        if doc.packages.contains(&"hyperref") && doc.contents.as_ref().and_then(|t| t.get(doc.toc_seen)).is_some_and(|e| e.number.len() > 1) {
-            self.aux_write(0);
+        if doc.contents.as_ref().and_then(|t| t.get(doc.toc_seen)).is_some_and(|e| e.number.len() > 1) {
+            self.bookmark_write(k);
         }
         let Some(doc) = self.doc.as_mut() else { return };
         let saved = std::mem::replace(&mut doc.level, k);
@@ -9189,12 +13474,17 @@ impl Machine<'_, '_> {
         if self.fancy_mkboth(true) {
             return;
         }
-        if self.parskip() {
-            return self.not_native("parskip: \\tableofcontents");
+        // babel's `\contentsname` of another language ([`babel::HEADS`]); the other classes'
+        // contents heads keep their own names.
+        if self.babel_date().is_some_and(|k| k > babel::BRITISH) && self.doc.as_ref().is_some_and(|d| d.koma || d.memoir || d.ams.is_some() || d.ieee.is_some()) {
+            return self.not_native("babel: \\tableofcontents in another language under this class");
         }
-        // babel's `\contentsname` of another language.
-        if self.babel_date().is_some_and(|k| k > babel::BRITISH) {
-            return self.not_native("babel: \\tableofcontents in another language");
+        let name = self.head_name(babel::HEAD_CONTENTS);
+        let Some(own) = self.own_head_name("contentsname") else { return };
+        // A name with an accent (`Sum\'ario`) in a running head: `\MakeUppercase` of it is
+        // not ported.
+        if name.contains('\\') && (self.fancy_on_now() || self.doc.as_ref().is_some_and(|d| d.headings)) {
+            return self.not_native("babel: a contents name with an accent in a running head");
         }
         let Some(doc) = self.doc.as_mut() else { return };
         let entries = match doc.contents.take() {
@@ -9203,6 +13493,7 @@ impl Machine<'_, '_> {
         };
         doc.defer = true;
         doc.toc_shown = entries.iter().enumerate().filter(|(_, e)| e.level < 3).map(|(i, _)| i as u32).collect();
+        (doc.toc_list, doc.toc_name) = (0, name);
         doc.contents = Some(entries);
         doc.toc_next = 0;
         let (open, close) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'));
@@ -9210,20 +13501,126 @@ impl Machine<'_, '_> {
         // `\l@subsection` set a level as article's do the same level (`tocdepth` 2 there).
         let head = if self.doc.as_ref().is_some_and(|d| d.report) { doc!("chapter") } else { doc!("section") };
         let mut t = vec![self.doc_id(head), Token::char(Cat::Other, '*'), open];
-        t.extend(label_tokens("Contents"));
+        match own {
+            Some(cs) => t.push(cs),
+            None => t.extend(self.tex_tokens(name)),
+        }
+        // scrreprt: tocbasic's head and `tocline` entries (`koma_toc_open`).
+        if self.doc.as_ref().is_some_and(|d| d.koma) {
+            t.extend([close, self.doc_id(doc!("rt@kmtocopen"))]);
+            return self.back_list(&t);
+        }
         // book's `\@mkboth{\MakeUppercase\contentsname}{…}` in the title (`headings`).
         if self.book() {
             t.push(self.doc_id(doc!("rt@mkboth")));
-        } else if self.doc.as_ref().is_some_and(|d| d.report && d.titlesec.is_none()) && self.fancy_on_now() {
+        } else if self.doc.as_ref().is_some_and(|d| if d.report { !d.titlesec.as_ref().is_some_and(|t| t.chapter) } else { d.titlesec.is_none() && !d.koma && !d.memoir && d.ams.is_none() && d.ieee.is_none() }) && self.fancy_on_now() {
             t.push(self.doc_id(doc!("rt@fancytocmk")));
         }
         t.extend([close, self.doc_id(doc!("rt@tocopen"))]);
         self.back_list(&t);
     }
 
+    /// article's `\listoffigures` and `\listoftables`: `\section*{\listfigurename}
+    /// \@mkboth{\MakeUppercase\listfigurename}{…}\@starttoc{lof}`; report's and book's
+    /// `\chapter*{…}` (one column). The entries are the captions' `\addcontentsline`s that
+    /// [`predict`] read (`LOF`, `LOT`), each set as `\l@figure` (`\@dottedtocline{1}{1.5em}
+    /// {2.3em}`), and each `\@chapter`'s `\addvspace{10\p@}`; their pages are filled in as
+    /// the contents' are (`finish_contents`).
+    /// float.sty's `\listof{type}{title}` (algorithm.sty's `\listofalgorithms` is
+    /// `\listof{algorithm}{\listalgorithmname}`): `\l@type` `\@dottedtocline{1}{1.5em}{2.3em}`,
+    /// `\float@listhead{title}` (`\section*`, or `\chapter*` with chapters, of
+    /// `title\@mkboth{..}{..}`: inside the heading, so declined where `\@mkboth` marks),
+    /// then `\@starttoc{\ext@type}` with `\parskip` zero. The entries are the type's
+    /// captions `predict` read (`LOF + 2 + k`), with no `\@chapter` spacing.
+    fn list_of_float(&mut self, ty: &str, title: Vec<Token>) {
+        if self.parskip() {
+            return self.not_native("parskip: a list of a float type");
+        }
+        if self.two_columns() || self.doc.as_ref().is_some_and(|d| d.titlesec.is_some() || d.koma || d.memoir || d.ams.is_some() || d.headings) || self.fancy_on_now() {
+            return self.not_native("a \\listof in two columns, with running heads or under this class or titlesec");
+        }
+        let Some(k) = self.flr().types.iter().position(|t| t.name == ty) else {
+            return self.not_native("float: \\listof of a type it does not know");
+        };
+        let list = LOF + 2 + k;
+        let Some(doc) = self.doc.as_mut() else { return };
+        let report = doc.report;
+        let Some(entries) = doc.contents.take() else {
+            return self.not_native("a list of a float type the pre-scan cannot read whole");
+        };
+        doc.defer = true;
+        doc.toc_shown = entries.iter().enumerate().filter(|(_, e)| e.level == list).map(|(i, _)| i as u32).collect();
+        doc.contents = Some(entries);
+        doc.toc_next = 0;
+        doc.toc_list = list;
+        doc.toc_name = "Contents";
+        let (open, close) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'));
+        let head = if report { doc!("chapter") } else { doc!("section") };
+        let mut t = vec![self.doc_id(head), Token::char(Cat::Other, '*'), open];
+        t.extend(title);
+        t.push(close);
+        t.extend(self.tex_tokens("\\begingroup\\parskip=0pt\\relax"));
+        t.extend([self.doc_id(doc!("rt@tocopen")), self.named_cs(named!("endgroup"))]);
+        self.back_list(&t);
+    }
+
+    fn list_of(&mut self, list: usize) {
+        if self.two_columns() || self.doc.as_ref().is_some_and(|d| d.titlesec.is_some() || d.koma || d.memoir || d.ams.is_some()) {
+            return self.not_native("a list of figures or tables in two columns or under this class or titlesec");
+        }
+        if !self.doc.as_ref().is_some_and(|d| d.report) && self.fancy_on_now() {
+            return self.not_native("fancyhdr: the marks of a list of figures or tables");
+        }
+        let name = self.head_name(if list == LOF { babel::HEAD_LOF } else { babel::HEAD_LOT });
+        let Some(own) = self.own_head_name(if list == LOF { "listfigurename" } else { "listtablename" }) else { return };
+        if name.contains('\\') && (self.fancy_on_now() || self.doc.as_ref().is_some_and(|d| d.headings)) {
+            return self.not_native("babel: a list name with an accent in a running head");
+        }
+        let Some(doc) = self.doc.as_mut() else { return };
+        let report = doc.report;
+        let Some(entries) = doc.contents.take() else {
+            return self.not_native("a list of figures or tables the pre-scan cannot read whole");
+        };
+        doc.defer = true;
+        doc.toc_shown = entries.iter().enumerate().filter(|(_, e)| e.level == list || report && e.level == 0 && !e.number.starts_with('#')).map(|(i, _)| i as u32).collect();
+        doc.contents = Some(entries);
+        doc.toc_next = 0;
+        doc.toc_list = list;
+        doc.toc_name = name;
+        let (open, close) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'));
+        let head = if report { doc!("chapter") } else { doc!("section") };
+        let mut t = vec![self.doc_id(head), Token::char(Cat::Other, '*'), open];
+        match own {
+            Some(cs) => t.push(cs),
+            None => t.extend(self.tex_tokens(name)),
+        }
+        t.extend([close, self.doc_id(doc!("rt@lotmarks")), self.doc_id(doc!("rt@tocopen"))]);
+        self.back_list(&t);
+    }
+
+    /// The list's `\@mkboth{\MakeUppercase\name}{\MakeUppercase\name}` after its heading:
+    /// fancyhdr's `\markboth`, book's `headings`, or nothing (`\@gobbletwo`).
+    fn list_of_marks(&mut self) {
+        let name = self.doc.as_ref().map_or("Contents", |d| d.toc_name);
+        if self.fancy_on_now() {
+            return self.fancy_mkboth_upper(name);
+        }
+        self.mkboth_upper(name);
+    }
+
     /// The contents' group, then its first entry.
     fn toc_open(&mut self) {
         self.begin_group(SEMI_SIMPLE_GROUP);
+        // parskip.sty's patch of `\@starttoc` after `\begingroup\makeatletter`: `\skip@
+        // \lastskip \advance\skip@\parskip \vskip-\lastskip \vskip\skip@ \parskip
+        // \parskip@tocskip` (the `tocskip` option's default, 0pt).
+        if self.parskip() {
+            let last = self.last_skip();
+            let skip = glue_add(last, self.e.eqtb.glue(param!("parskip")));
+            self.vskip(neg(last));
+            self.vskip(skip);
+            self.set_glue_named(param!("parskip"), Glue::default());
+        }
         self.toc_entry();
     }
 
@@ -9233,6 +13630,13 @@ impl Machine<'_, '_> {
     fn toc_entry(&mut self) {
         let Some(doc) = self.doc.as_mut() else { return };
         let next = doc.toc_entry(doc.toc_next).map(|e| (e.level, e.title.clone()));
+        // report's `\@chapter`: `\addtocontents{lof}{\protect\addvspace{10\p@}}`, and `{lot}`.
+        if doc.toc_list != 0 && next.as_ref().is_some_and(|e| e.0 == 0) {
+            doc.toc_next += 1;
+            let g = Glue { width: 10 << 16, ..Glue::default() };
+            self.add_vspace(g);
+            return self.toc_entry();
+        }
         let Some((level, title)) = next else {
             doc.nobreak = false;
             return self.end_group(SEMI_SIMPLE_GROUP);
@@ -9243,7 +13647,12 @@ impl Machine<'_, '_> {
             t
         };
         let mut t = Vec::with_capacity(title.len() + 5);
-        if level == 0 {
+        // memoir's `\l@chapapp` and `\l@section` (`engine_memoir`).
+        if self.memoir() {
+            t.push(self.doc_id(doc!("rt@memtocopen")));
+            t.extend(title);
+            t.extend([self.doc_id(doc!("rt@memtoctail")), self.named_cs(named!("par")), self.doc_id(doc!("rt@tocentryend"))]);
+        } else if level == 0 {
             t.extend([self.doc_id(doc!("rt@tocsec")), self.doc_id(doc!("rt@tocsecopen"))]);
             t.extend(title);
             t.extend([self.doc_id(doc!("rt@tocsectail")), self.named_cs(named!("par")), self.doc_id(doc!("rt@tocentryend"))]);
@@ -9258,7 +13667,14 @@ impl Machine<'_, '_> {
     /// The entry being set.
     fn toc_current(&self) -> Option<(usize, String)> {
         let doc = self.doc.as_ref()?;
-        doc.toc_entry(doc.toc_next).map(|e| (e.level, e.number.clone()))
+        // `\l@figure` and `\l@table` are `\@dottedtocline{1}{1.5em}{2.3em}`, a level-1 line.
+        doc.toc_entry(doc.toc_next).map(|e| (if e.level >= LOF { 1 } else { e.level }, e.number.clone()))
+    }
+
+    /// The caption's anchor of the entry being set (`table.1.1`), `None` for a heading.
+    fn toc_current_href(&self) -> Option<String> {
+        let doc = self.doc.as_ref()?;
+        doc.toc_entry(doc.toc_next).filter(|e| !e.href.is_empty()).map(|e| e.href.clone())
     }
 
     fn set_skip(&mut self, slot: u32, g: Glue) {
@@ -9277,11 +13693,13 @@ impl Machine<'_, '_> {
         let left = Glue { width: left.width + w, ..left };
         self.set_skip(LEFT_SKIP, left);
         self.build_glue(neg(left), false);
+        // The link to the entry's own anchor when the pre-scan named one (a heading past
+        // `secnumdepth`: `section*.N`), else to the numbered heading's.
         if self.hyper() {
-            self.toc_link_start(0, number);
+            self.contents_link_start(0, number);
         }
-        // An entry with no `\numberline`.
-        if unnumbered(number) {
+        // An entry with no `\numberline` (a heading past `secnumdepth`: no number).
+        if unnumbered(number) || number.is_empty() {
             return;
         }
         self.build_hbox_to(w, |m| {
@@ -9305,7 +13723,7 @@ impl Machine<'_, '_> {
         self.build_hbox_to(w, |m| {
             m.build_glue(fil, false);
             if colored {
-                m.color_stack(Some(DEFAULT_COLOR));
+                m.push_default_color();
             }
             m.build_text(b"0");
             m.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, -(1 << 16)) });
@@ -9392,9 +13810,13 @@ impl Machine<'_, '_> {
         self.build_glue(neg(left), false);
         self.begin_group(SIMPLE_GROUP);
         if self.hyper() {
-            self.toc_link_start(level, &number);
+            match self.toc_current_href() {
+                Some(name) => self.toc_link_start_named(name),
+                None => self.toc_link_start(level, &number),
+            }
         }
-        if unnumbered(&number) {
+        // No `\numberline`: a `*N` entry, or a heading past `secnumdepth` (no number).
+        if unnumbered(&number) || number.is_empty() {
             return;
         }
         self.build_hbox_to(w, |m| {
@@ -9402,7 +13824,7 @@ impl Machine<'_, '_> {
             m.build_glue(Glue { stretch: 1 << 16, stretch_order: 1, ..Glue::default() }, false);
         });
         // microtype's `toc` patch: `\numberline` ends with `\leftprotrusion`.
-        if self.microtype() && !number.is_empty() {
+        if self.microtype() {
             self.left_protrusion();
         }
     }
@@ -9433,7 +13855,7 @@ impl Machine<'_, '_> {
     /// then the next entry.
     fn toc_entry_end(&mut self) {
         let Some((level, _)) = self.toc_current() else { return };
-        if level == 0 {
+        if level == 0 && !self.memoir() {
             // report's `\l@chapter`: `\par\penalty\@highpenalty\endgroup`.
             if self.doc.as_ref().is_some_and(|d| d.report) {
                 self.build_penalty(HIGH_PENALTY);
@@ -9475,8 +13897,7 @@ impl Machine<'_, '_> {
     fn toc_page_box(&mut self) {
         let Some(&Node { kind: Kind::Box, a, .. }) = self.cur.last() else { return self.not_native("a contents page box") };
         let Some(doc) = self.doc.as_mut() else { return };
-        let n = doc.toc_boxes.len();
-        let entry = doc.contents.as_ref().and(doc.toc_shown.get(n)).map(|&i| i as usize);
+        let entry = doc.contents.as_ref().and(doc.toc_shown.get(doc.toc_next)).map(|&i| i as usize);
         match entry {
             Some(i) => doc.toc_boxes.push((a as u32, i)),
             None => self.not_native("a contents page box"),
@@ -9488,16 +13909,21 @@ impl Machine<'_, '_> {
     /// kerns between digits), then the kept pages ship in order.
     pub(super) fn finish_contents(&mut self) -> Result<(), String> {
         let Some(doc) = self.doc.as_mut() else { return Ok(()) };
-        if !doc.defer {
+        if !doc.defer && doc.pkg.lastpage == 0 {
             return Ok(());
         }
-        if doc.contents.as_ref().is_none_or(|t| t.len() != doc.toc_seen) {
+        if doc.defer && doc.contents.as_ref().is_none_or(|t| t.len() != doc.toc_seen) {
             return Err("not native yet: headings the pre-scan did not see".into());
         }
         let boxes = std::mem::take(&mut doc.toc_boxes);
         let pages = doc.toc_pages.clone();
-        // Where each page-number box sits, found in one walk of the kept pages.
-        let lines = self.lines_holding(boxes.iter().map(|&(b, _)| b));
+        // Where each page-number box sits, found in one walk of the kept pages; a session's
+        // last run says on which (walking them all was 1.8M instructions on master.tex).
+        let first = self.ship_memo.as_ref().map_or(&[][..], |s| &s.old.toc_roots[..]);
+        let (lines, held) = self.lines_holding(boxes.iter().map(|&(b, _)| b), first);
+        if let Some(s) = self.ship_memo.as_mut() {
+            s.new.toc_roots = held;
+        }
         for (b, entry) in boxes {
             let page = pages.get(entry).copied().flatten().ok_or("not native yet: a contents entry never shipped")?;
             let old = self.e.nodes.boxes[b as usize];
@@ -9518,10 +13944,25 @@ impl Machine<'_, '_> {
                 self.refit_contents_line(lines.get(&b).copied())?;
             }
         }
+        self.lastpage_fill()?;
         let Some(doc) = self.doc.as_mut() else { return Ok(()) };
         doc.replay = true;
-        for b in std::mem::take(&mut doc.deferred) {
+        // A session's last run shipped its pages with the same contents' page numbers, or
+        // none of its walks hold (`ShipRun`); `\pdfliteral shipout` writes into the tree.
+        if let Some(s) = self.ship_memo.as_mut() {
+            if s.old.toc_pages != doc.toc_pages || self.page.late_literals {
+                s.old.pages.clear();
+            }
+            s.new.toc_pages.clone_from(&doc.toc_pages);
+        }
+        for (i, b) in std::mem::take(&mut doc.deferred).into_iter().enumerate() {
+            if let Some(s) = self.ship_memo.as_mut() {
+                s.at = i;
+            }
             self.ship_out(b);
+        }
+        if let Some(s) = self.ship_memo.as_mut() {
+            s.at = usize::MAX;
         }
         Ok(())
     }
@@ -9627,18 +14068,21 @@ impl Machine<'_, '_> {
         Ok(())
     }
 
-    /// For each box of `wanted`, the first box in the kept pages' trees (in order, depth
-    /// first) whose list holds it: its parent list's box, its index there, and the box. One
-    /// walk for all of them, ended when each is found.
-    fn lines_holding(&self, wanted: impl Iterator<Item = u32>) -> std::collections::HashMap<u32, (u32, usize, u32)> {
+    /// For each box of `wanted`, the box in the kept pages' trees (in order, depth first)
+    /// whose list holds it: its parent list's box, its index there, and the box. One walk for
+    /// all of them, ended when each is found; the kept pages of `first` (where a session's
+    /// last run found them) are walked first. Also gives the kept pages where any was found.
+    fn lines_holding(&self, wanted: impl Iterator<Item = u32>, first: &[usize]) -> (Lines, Vec<usize>) {
         let mut found: std::collections::HashMap<u32, Option<(u32, usize, u32)>> = wanted.map(|b| (b, None)).collect();
         let mut left = found.len();
         let roots = self.doc.as_ref().map_or(&[][..], |d| &d.deferred[..]);
         let mut stack: Vec<(u32, usize)> = Vec::new();
-        for &root in roots {
+        let mut held = Vec::new();
+        for i in first.iter().copied().filter(|&i| i < roots.len()).chain(0..roots.len()) {
             if left == 0 {
                 break;
             }
+            let (root, before) = (roots[i], left);
             stack.push((root, 0));
             // Each frame: a box and the next index of its list to visit.
             while let Some(&mut (g, ref mut at)) = stack.last_mut() {
@@ -9660,8 +14104,11 @@ impl Machine<'_, '_> {
                 stack.push((c, 0));
             }
             stack.clear();
+            if left < before {
+                held.push(i);
+            }
         }
-        found.into_iter().filter_map(|(b, at)| Some((b, at?))).collect()
+        (found.into_iter().filter_map(|(b, at)| Some((b, at?))).collect(), held)
     }
 
     /// A contents title from the source, lexed as the document's text is: inside braces, so
@@ -9685,6 +14132,11 @@ impl Machine<'_, '_> {
     fn store(&mut self, i: usize) {
         let mut arg = Vec::new();
         self.read_arg(&mut arg);
+        // hyperref's `pdfusetitle` reads `\title` and `\author` at `\begin{document}`
+        // (`use_title`); pdfLaTeX's `\Hy@title` would take one given later.
+        if i < 2 && self.doc.as_ref().is_some_and(|d| d.body && d.pkg.hy.usetitle) {
+            return self.not_native("hyperref: pdfusetitle with \\title or \\author after \\begin{document}");
+        }
         if let Some(doc) = self.doc.as_mut() {
             doc.stored[i] = arg;
         }
@@ -9706,12 +14158,42 @@ impl Machine<'_, '_> {
         if name == "proof" && self.amsthm() {
             return self.proof_begin();
         }
+        // tcolorbox's boxes (`engine_tcolorbox`): `\tcolorbox` inside `\begin`'s group.
+        let tcb = self.doc.as_ref().is_some_and(|d| d.packages.contains(&"tcolorbox"));
+        if tcb && (name == "tcolorbox" || self.tcb_env(&name).is_some()) {
+            self.begin_group(SEMI_SIMPLE_GROUP);
+            if let Some(doc) = self.doc.as_mut() {
+                doc.endpe = false;
+            }
+            return match self.tcb_env(&name) {
+                Some(k) => self.tcb_env_begin(k),
+                None => self.tcolorbox_begin(),
+            };
+        }
+        // threeparttable hooks `tabular*` and `tabularx` too, and nothing else may come in
+        // its table.
+        if matches!(self.tpt_phase(), threeparttable::BEFORE | threeparttable::IN_TABLE) && name != "tabular" {
+            return self.not_native("a threeparttable holding more than a tabular");
+        }
+        // float.sty's `\newfloat` types: `\fst@<type> \@float@setevery{type} \@float{type}`
+        // (`\@dblfloat` for `type*`, one column only).
+        if let Some(t) = self.new_float_type(&name) {
+            if name.ends_with('*') && self.two_columns() {
+                return self.not_native("a double-column float");
+            }
+            self.begin_group(SEMI_SIMPLE_GROUP);
+            if let Some(doc) = self.doc.as_mut() {
+                doc.endpe = false;
+            }
+            return self.float_open(t);
+        }
         match name.as_str() {
             "document" => {
                 self.begin_group(SEMI_SIMPLE_GROUP);
                 self.document();
             }
             "letter" if self.doc.as_ref().is_some_and(|d| d.letter.is_some()) => self.letter_begin(),
+            "letter" if self.doc.as_ref().is_some_and(|d| d.pkg.lttr.is_some()) => self.lttr_begin(),
             // The classes' `titlepage` in one column: `\newpage \thispagestyle{empty}
             // \setcounter{page}\@ne`.
             "titlepage" => {
@@ -9730,9 +14212,35 @@ impl Machine<'_, '_> {
                 t.extend(self.tex_tokens("{page}{1}"));
                 self.back_list(&t);
             }
+            // memoir's `titlingpage` (memoir.cls:2589, `mem@titlingpage`), one column:
+            // `\thispagestyle{titlingpage}` (`empty`), `\setcounter{page}{\@ne}`; no new page.
+            // screenplay's `dialogue` (`engine_screenplay`): `\begin`'s group, `\@endpefalse`.
+            "dialogue" if self.doc.as_ref().is_some_and(|d| d.pkg.screenplay.is_some()) => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                self.sp_dialogue_begin();
+            }
+            "titlingpage" if self.memoir() => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                let mut t = vec![self.doc_id(doc!("thispagestyle"))];
+                t.extend(self.tex_tokens("{empty}"));
+                t.push(self.doc_id(doc!("setcounter")));
+                t.extend(self.tex_tokens("{page}{1}"));
+                self.back_list(&t);
+            }
             "em" => {
                 self.begin_group(SEMI_SIMPLE_GROUP);
                 self.font_change(Change::Em);
+            }
+            // algorithmicx's `algorithmic` (`engine_algorithm`): `\begin`'s group, `\@endpefalse`.
+            "algorithmic" if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"algorithmicx")) => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                self.alg_begin();
             }
             "quote" | "quotation" | "verse" | "itemize" | "enumerate" | "center" | "flushleft" | "flushright" | "description" => {
                 // `\begin`: `\@endpefalse` inside the group.
@@ -9748,6 +14256,14 @@ impl Machine<'_, '_> {
             }
             // TikZ's overlay page frames (`engine_tikz`): the picture is read with its end.
             "tikzpicture" if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"tikz")) => self.tikz_picture(),
+            // listings' `lstlisting` (`engine_listings`).
+            "lstlisting" if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"listings")) => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                self.lst_begin();
+            }
             "verbatim" => {
                 self.begin_group(SEMI_SIMPLE_GROUP);
                 if let Some(doc) = self.doc.as_mut() {
@@ -9759,6 +14275,35 @@ impl Machine<'_, '_> {
             // `\abstractname` with `\vspace{-.5em}\vspace{\z@}`, then `\quotation` without a
             // group of its own.
             "abstract" if self.ams_on() => self.ams_abstract_begin(),
+            "abstract" | "IEEEkeywords" if self.ieee_on() => self.ieee_abstract_begin(name == "IEEEkeywords"),
+            // report.cls (article.cls with `titlepage`), `\if@titlepage`: `\titlepage \null\vfil
+            // \@beginparpenalty\@lowpenalty \begin{center}\bfseries\abstractname \@endparpenalty\@M
+            // \end{center}`, `\titlepage` without a group of its own (one column: `\newpage`,
+            // `\thispagestyle{empty}`, `\setcounter{page}\@ne`).
+            "abstract" if self.doc.as_ref().is_some_and(|d| d.titlepage) => {
+                if self.two_columns() || self.book() {
+                    return self.not_native("a title page abstract in two columns or in book");
+                }
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                let mut t = vec![self.doc_id(NEW_PAGE), self.doc_id(doc!("thispagestyle"))];
+                t.extend(self.tex_tokens("{empty}"));
+                t.push(self.doc_id(doc!("setcounter")));
+                t.extend(self.tex_tokens("{page}{1}\\hbox{}\\vfil"));
+                // `\@lowpenalty` is 51, `\@M` 10000.
+                let (bp, ep) = (Token::cs(self.e.cs.intern("@beginparpenalty")), Token::cs(self.e.cs.intern("@endparpenalty")));
+                t.push(bp);
+                t.extend(self.tex_tokens("51 "));
+                let (open, close) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'));
+                t.extend([self.doc_id(doc!("begin")), open]);
+                t.extend(label_tokens("center"));
+                t.extend([close, self.doc_id(doc!("rt@bfseries")), self.named_cs(named!("abstractname"))]);
+                t.push(ep);
+                t.extend(self.tex_tokens("10000 "));
+                t.extend([self.doc_id(doc!("end")), open]);
+                t.extend(label_tokens("center"));
+                t.push(close);
+                self.back_list(&t);
+            }
             "abstract" => {
                 self.begin_group(SEMI_SIMPLE_GROUP);
                 if let Some(doc) = self.doc.as_mut() {
@@ -9783,15 +14328,14 @@ impl Machine<'_, '_> {
             }
             // article.cls: `\section*{\refname}`, then the list (`bib_open`). report.cls and
             // book.cls: `\chapter*{\bibname}\@mkboth{\MakeUppercase\bibname}{\MakeUppercase
-            // \bibname}` (`bib_marks`); `\bibname` is the class's `Bibliography` (a document
-            // that names `\bibname` declines in the pre-scan).
+            // \bibname}` (`bib_marks`); `\bibname` is the class's `Bibliography` or the document's (`own_head_name`;
+            // a `\def` of it declines in the pre-scan).
+            "thebibliography" if self.doc.as_ref().is_some_and(|d| d.pkg.natbib.is_some()) => self.nat_bib_begin(),
             "thebibliography" => {
                 let report = self.doc.as_ref().is_some_and(|d| d.report);
-                if report && self.babel_date().is_some_and(|k| k > babel::BRITISH) {
-                    return self.not_native("babel: thebibliography's \\bibname in another language");
-                }
-                if !report && self.fancy_mkboth(false) {
-                    return;
+                let fancy_marks = !report && self.fancy_on_now();
+                if fancy_marks && self.doc.as_ref().is_some_and(|d| d.babel.is_some()) {
+                    return self.not_native("fancyhdr: the marks of article's thebibliography under babel");
                 }
                 let mut arg = Vec::new();
                 self.read_arg(&mut arg);
@@ -9802,15 +14346,26 @@ impl Machine<'_, '_> {
                 let (open, close) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'));
                 let mut t = if report {
                     let mut t = vec![self.doc_id(doc!("chapter")), Token::char(Cat::Other, '*'), open];
-                    t.extend(label_tokens("Bibliography"));
+                    let name = self.head_name(babel::HEAD_BIB);
+                    let Some(own) = self.own_head_name("bibname") else { return };
+                    match own {
+                        Some(cs) => t.push(cs),
+                        None => t.extend(self.tex_tokens(name)),
+                    }
                     t.extend([close, self.doc_id(doc!("rt@bibmk"))]);
                     t
                 } else {
-                    vec![self.doc_id(doc!("section")), Token::char(Cat::Other, '*'), open, self.named_cs(named!("refname")), close]
+                    let mut t = vec![self.doc_id(doc!("section")), Token::char(Cat::Other, '*'), open, self.named_cs(named!("refname")), close];
+                    // `\@mkboth{\MakeUppercase\refname}{…}` after the `\section*`: fancyhdr's
+                    // `\markboth` of the kernel's `References`, as natbib's `\bibsection` makes it.
+                    if fancy_marks {
+                        t.push(self.doc_id(doc!("rt@natbibmk")));
+                    }
+                    t
                 };
-                t.extend([self.doc_id(doc!("rt@bibbox")), Token::char(Cat::Other, '[')]);
-                t.extend(arg);
-                t.extend([Token::char(Cat::Other, ']'), close, self.doc_id(doc!("rt@bibopen"))]);
+                t.push(self.doc_id(doc!("rt@bibbox")));
+                self.bib_label_tokens(&arg, &mut t);
+                t.extend([close, self.doc_id(doc!("rt@bibopen"))]);
                 self.back_list(&t);
             }
             // `\@dblfloat` (two columns): not native yet.
@@ -9822,6 +14377,14 @@ impl Machine<'_, '_> {
                 }
                 self.float_open(if name.starts_with("figure") { 1 } else { 2 });
             }
+            // subcaption's `\subcaption@minipage` inside `\begin`'s group (`engine_caption`).
+            "subfigure" | "subtable" if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"subcaption")) => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                self.subfig_open(if name == "subfigure" { 1 } else { 2 });
+            }
             // multicol.sty's `\multicols` inside `\begin`'s group.
             "multicols" | "multicols*" if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"multicol")) => {
                 self.begin_group(SEMI_SIMPLE_GROUP);
@@ -9829,6 +14392,15 @@ impl Machine<'_, '_> {
                     doc.endpe = false;
                 }
                 self.multicols_begin(name == "multicols*");
+            }
+            // `\picture` inside `\begin`'s group (`\@endpefalse`).
+            "picture" => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                let t = self.doc_id(doc!("rt@picture"));
+                self.input.back(t);
             }
             // `\minipage` inside `\begin`'s group (`\@endpefalse`).
             "minipage" => {
@@ -9872,14 +14444,55 @@ impl Machine<'_, '_> {
                 }
                 self.tabularx_begin();
             }
-            // `\tabular` inside `\begin`'s group (`\@endpefalse`).
+            // `\tabular` inside `\begin`'s group (`\@endpefalse`); in a `threeparttable`
+            // (`engine_threeparttable`) inside its box.
             "tabular" => {
+                if self.tpt_phase() == threeparttable::IN_TABLE {
+                    return self.not_native("a tabular in a threeparttable's table");
+                }
                 self.begin_group(SEMI_SIMPLE_GROUP);
                 if let Some(doc) = self.doc.as_mut() {
                     doc.endpe = false;
                 }
+                let mut t = Vec::new();
+                if self.tpt_phase() == threeparttable::BEFORE {
+                    match self.tpt_table_open() {
+                        Some(o) => t = o,
+                        None => return self.not_native("a threeparttable with more than its table"),
+                    }
+                }
+                t.push(self.doc_id(TABULAR));
+                self.back_list(&t);
+            }
+            // `\@namedef{tabular*}#1{\setlength\dimen@{#1}\edef\@halignto{to\the\dimen@}\@tabular}`.
+            "tabular*" => {
+                if self.tpt_phase() != 0 {
+                    return self.not_native("a tabular* in a threeparttable");
+                }
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                let mut arg = Vec::new();
+                self.read_arg(&mut arg);
+                let w = self.dimen_arg(arg);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.tab_to = Some(w);
+                }
                 let t = self.doc_id(TABULAR);
                 self.input.back(t);
+            }
+            "@twocolumnfalse" => self.twocolumn_false_begin(),
+            "threeparttable" | "tablenotes" if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"threeparttable")) => {
+                self.begin_group(SEMI_SIMPLE_GROUP);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.endpe = false;
+                }
+                if name == "threeparttable" {
+                    self.tpt_begin();
+                } else {
+                    self.tpt_notes_begin();
+                }
             }
             // `\equation`: `\dollardollar@begin` (`$$`), then `\refstepcounter{equation}`
             // inside the display.
@@ -9902,6 +14515,10 @@ impl Machine<'_, '_> {
                 self.back_list(&t);
             }
             "align" | "align*" if self.ams() => self.align_begin(name == "align*"),
+            n if MT_CASES.contains(&n) && self.mathtools() => self.mt_cases_begin(&name),
+            n if MT_MATRICES.contains(&n) && self.mathtools() => self.mt_matrix_begin(&name),
+            "alignat" | "alignat*" if self.ams() => self.alignat_begin(name == "alignat*", 0),
+            "flalign" | "flalign*" if self.ams() => self.alignat_begin(name == "flalign*", 2),
             "gather" | "gather*" if self.ams() => self.gather_begin(name == "gather*"),
             "multline" | "multline*" if self.ams() => self.multline_begin(name == "multline*"),
             "aligned" | "gathered" if self.ams() => self.aligned_begin(name == "gathered"),
@@ -9964,6 +14581,7 @@ impl Machine<'_, '_> {
                 self.back_list(&t);
             }
             // amsmath's `equation*`: `\mathdisplay` with `\@eqnswfalse`.
+            "subequations" if self.ams() => self.subequations_begin(),
             "equation*" if self.ams() => {
                 self.begin_group(SEMI_SIMPLE_GROUP);
                 if let Some(doc) = self.doc.as_mut() {
@@ -9992,6 +14610,7 @@ impl Machine<'_, '_> {
         if self.groups.last() == Some(&SEMI_SIMPLE_GROUP) {
             self.end_group(SEMI_SIMPLE_GROUP);
         }
+        self.a0poster_fonts();
         if self.hyper() {
             self.hyper_colors();
         }
@@ -9999,22 +14618,42 @@ impl Machine<'_, '_> {
         let n = self.named_id(named!("@preamblecmds"));
         self.e.eqtb.set_meaning(n, Meaning::Doc(NOTPRERR as u16), true);
         // article.cls's closing `\onecolumn`: `\clearpage`'s `\@@write\m@ne{}` on the main
-        // list. amsart.cls calls no `\onecolumn`.
-        if !self.ams_on() {
+        // list. amsart.cls calls no `\onecolumn`; a0poster's `\LoadClass{article}` made it
+        // before the class's own whatsits (`engine_a0poster`).
+        if !self.ams_on() && !self.doc.as_ref().is_some_and(|d| d.pkg.a0poster) {
             self.aux_write(0);
         }
-        // babel's `\AtBeginDocument{\selectlanguage{<main>}}`.
-        self.babel_begin_document();
         // xcolor ends with `\color{black}`: a push (no pop at group level 0) on the main list
         // in the preamble, after the kernel's `\write`, which the native job makes here.
         if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"xcolor")) {
-            self.color_stack(Some(DEFAULT_COLOR));
+            self.push_default_color();
+        }
+        // qrcode's preamble `\write\@auxout`, after the xcolor it loads (`engine_qrcode`).
+        if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"qrcode")) {
+            self.qr_write();
+        }
+        // The preamble's own `\color`s, then color.sty's `\AtBeginDocument{\let
+        // \default@color\current@color}` (xcolor.sty:1408): the current colour is the default.
+        for c in self.doc.as_mut().map(|d| std::mem::take(&mut d.preamble_colors)).unwrap_or_default() {
+            self.color_stack(Some(&c));
+        }
+        if self.e.eqtb.word(CURRENT_COLOR) != 0 {
+            let c = self.current_color();
+            if let Some(d) = self.doc.as_mut() {
+                d.default_color = Some(c);
+            }
+            self.e.eqtb.set_word(CURRENT_COLOR, 0, false);
         }
         // babel's `\AtBeginDocument{\selectlanguage{<main>}}` (its `\babel@aux` write after
         // xcolor's push, which the preamble made).
         self.babel_begin_document();
         if self.hyper() {
             self.hyper_begin_document();
+        }
+        // The document's `\AtBeginDocument` code (`top-level`, after every package's), then
+        // `\ignorespaces`.
+        if self.run_begin_hook() {
+            return;
         }
         self.ignore_spaces();
     }
@@ -10027,6 +14666,8 @@ impl Machine<'_, '_> {
     fn begin_document_values(&mut self) {
         // natbib's `\bibstyle` lines from the aux file, then its `\AtBeginDocument`.
         self.natbib_begin_document();
+        // apacite's `english.apc` (`apacite_begin_document`).
+        self.apacite_begin_document();
         // mathtools's `\AtBeginDocument{\RequirePackage{graphicx}}` (mathtools.sty:1383).
         if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathtools")) {
             self.load_package("graphicx");
@@ -10040,9 +14681,21 @@ impl Machine<'_, '_> {
         if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"siunitx") && !d.packages.contains(&"xcolor")) {
             self.load_package("color");
         }
+        // units' `\unit` and siunitx's: the later package's, or LaTeX's error.
+        if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"units") && d.packages.contains(&"siunitx")) {
+            return self.not_native("units with siunitx");
+        }
+        // gensymb's `\AtBeginDocument` with textcomp: `\DeclareSymbolFont{gns@font}`, one
+        // family more (LaTeX errs past 16).
+        if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"gensymb") && d.packages.contains(&"textcomp") && d.fams.len() >= 16) {
+            return self.not_native("gensymb's symbol font past 16 families");
+        }
         let geometry: Vec<i32> = (0..data_class::CLASS_DIMENS.len()).map(|i| self.e.eqtb.word(Reg { region: Region::Dimen, slot: GEOMETRY + i as u32 })).collect();
         let max_depth = self.dimen_param(super::engine_page::MAX_DEPTH);
         self.e.eqtb.set_word(COLUMN_WIDTH, geometry[0], true);
+        if let Some(c) = self.checkpoints.as_mut() {
+            c.body_starts(&mut self.collect_at);
+        }
         let Some(doc) = self.doc.as_mut() else { return };
         doc.body = true;
         doc.class.vals[..geometry.len()].copy_from_slice(&geometry);
@@ -10053,14 +14706,34 @@ impl Machine<'_, '_> {
         // `\paperwidth` by `\paperheight`, the class's paper option's.
         // geometry's `\AtBeginDocument` sets them from its `\paperwidth` the same way.
         // hyperref's hpdftex.def sets them as pdftex.def does.
+        // `\paperwidth` and `\paperheight` in the body: geometry's, else the class option's
+        // (article, report, book; KOMA's typearea and memoir set their own).
+        let paper = match doc.geometry {
+            Some(g) => Some(g.page()),
+            None if doc.pkg.a0poster => Some(a0poster::a0poster_paper(doc.options)),
+            None if !doc.koma && !doc.memoir => {
+                let [pw, ph] = PAPER_SIZES[(doc.options & 7) as usize];
+                Some(if doc.options & 8 != 0 { [ph, pw] } else { [pw, ph] })
+            }
+            None => None,
+        };
+        if let Some([pw, ph]) = paper {
+            for (name, r, v) in [("paperwidth", PAPER_WIDTH, pw), ("paperheight", PAPER_HEIGHT, ph)] {
+                self.e.eqtb.set_word(r, v, true);
+                let id = self.e.cs.intern(name);
+                self.e.eqtb.set_meaning(id, Meaning::Reg(r), true);
+            }
+        }
         if let Some(g) = doc.geometry {
             let [pw, ph] = g.page();
             self.e.eqtb.set_word(Reg { region: Region::Dimen, slot: PDF_PAGE_WIDTH }, pw, false);
             self.e.eqtb.set_word(Reg { region: Region::Dimen, slot: PDF_PAGE_WIDTH + 1 }, ph, false);
         } else if doc.packages.iter().any(|p| PAGE_SIZE_PACKAGES.contains(p)) {
             // scrartcl's combination without a paper option is typearea's a4.
-            let paper = if doc.koma && doc.options & 7 == 0 { 3 } else { doc.options & 7 };
-            let [mut pw, mut ph] = PAPER_SIZES[paper as usize];
+            // scrlttr2's is a4 alone.
+            let koma = doc.koma || doc.pkg.lttr.is_some();
+            let paper = if koma && doc.options & 7 == 0 { 3 } else { doc.options & 7 };
+            let [mut pw, mut ph] = if koma { KOMA_PAPER_SIZES } else { PAPER_SIZES }[paper as usize];
             if doc.options & 8 != 0 {
                 (pw, ph) = (ph, pw);
             }
@@ -10087,7 +14760,7 @@ impl Machine<'_, '_> {
         self.set_rw(R_LINEWIDTH, width, false);
         // `\normalsize` keeps the current family; `\begin{document}`'s `\normalfont`
         // (LaTeX's begin-document hook) starts the body in `\rmdefault`.
-        let key = if self.family(0) == DEFAULT_FAMILIES[0] { self.font_key().0 } else { self.rm_key("m/n") };
+        let key = if self.normal_family() == DEFAULT_FAMILIES[0] { self.font_key().0 } else { self.rm_key("m/n") };
         self.apply_size(NORMALSIZE, &key);
         let f = self.cur_font();
         if let Some(d) = self.doc.as_mut() {
@@ -10098,13 +14771,26 @@ impl Machine<'_, '_> {
         // still the value it set (`\f@parindent`), `\parindent@update` sets it to `1em` again
         // in the current font (`\par@updaterelative`). The table holds the class's own font's
         // `1em`; a preamble font (T1, lmodern) gives another. The other two have no `em`.
-        if let Some(d) = self.doc.as_ref().filter(|d| d.koma) {
+        if let Some(d) = self.doc.as_ref().filter(|d| d.koma || d.pkg.lttr.is_some()) {
             let r = param!("parindent");
-            if self.e.eqtb.word(r) == d.class.table.dimens.get(r.slot as usize) as i32 {
-                let em = self.glue_of("1em").width;
+            let table = d.class.table.dimens.get(r.slot as usize) as i32;
+            // scrlttr2's `parskip=half`: `\setparsizes{\z@}{.5\baselineskip \@plus .5\baselineskip}
+            // {1em \@plus 1fil}`: `\parfillskip`'s `1em` follows the body's font as
+            // `\parindent`'s does (`\parfillskip@update`), while it is the class's.
+            let half = d.pkg.lttr.is_some() && d.options & 32 != 0;
+            let class_em = d.class_em_ex.0 as i32;
+            let em = self.glue_of("1em").width;
+            if self.e.eqtb.word(r) == table && table != 0 {
                 self.set_dimen_named(r, em);
             }
+            let r = param!("parfillskip");
+            let pfs = self.e.eqtb.glue(r);
+            if half && pfs.width == class_em && pfs.stretch == 65536 && pfs.stretch_order == 1 {
+                self.e.eqtb.set_glue(r, Glue { width: em, ..pfs }, false);
+            }
         }
+        self.a0poster_begin();
+        self.screenplay_begin();
     }
 
     /// `\setlength#1#2` (`#1 #2\relax`) and `\addtolength#1#2` (`\advance#1 #2\relax`), done
@@ -10146,15 +14832,28 @@ impl Machine<'_, '_> {
     fn set_counter(&mut self) {
         let mut name = Vec::new();
         self.read_arg(&mut name);
+        if self.set_own_counter(&name).is_some() {
+            return;
+        }
         let name: String = name.iter().map(|t| t.chr()).collect();
         // `secnumdepth` and `tocdepth` set to the class's own value (article 3, report and
         // book 2): nothing changes.
-        let depth = self.doc.as_ref().filter(|d| matches!(name.as_str(), "secnumdepth" | "tocdepth") && !d.koma && d.ams.is_none() && d.letter.is_none()).map(|d| if d.report { 2 } else { 3 });
+        let depth = self.doc.as_ref().filter(|d| matches!(name.as_str(), "secnumdepth" | "tocdepth") && (!d.koma || name == "secnumdepth") && d.ams.is_none() && d.letter.is_none()).map(|d| if d.report { 2 } else { 3 });
         if let Some(depth) = depth {
             let mut value = Vec::new();
             self.read_arg(&mut value);
             let text: String = value.iter().map(|t| t.chr()).collect();
-            if value.iter().all(|t| t.cs_id().is_none()) && text.trim().parse::<i32>() == Ok(depth) {
+            // `secnumdepth` set (in the preamble or the body: `\setcounter` is global) to a
+            // level the class has, chapters still numbered: `\@sect` numbers the levels below
+            // it (`Doc::secnum`); the contents prediction reads the same value (`secnum_at`).
+            let n = text.trim().parse::<i32>().ok().filter(|_| value.iter().all(|t| t.cs_id().is_none()));
+            if let Some(doc) = self.doc.as_mut().filter(|d| name == "secnumdepth" && !d.memoir && d.ieee.is_none() && !d.packages.contains(&"titlesec")) {
+                if let Some(n) = n.filter(|&n| (0..=depth).contains(&n)) {
+                    doc.secnum = (n != depth).then_some(n as i8);
+                    return;
+                }
+            }
+            if n == Some(depth) {
                 return;
             }
             return self.not_native("\\setcounter of secnumdepth or tocdepth to another value");
@@ -10193,18 +14892,35 @@ impl Machine<'_, '_> {
         let mut arg = Vec::new();
         self.read_arg(&mut arg);
         let style: String = arg.iter().map(|t| t.chr()).collect();
+        self.set_page_style(&style);
+    }
+
+    /// `\pagestyle{style}` (`\@nameuse{ps@style}`), from the document or a package's option.
+    pub(super) fn set_page_style(&mut self, style: &str) {
         // In no group but `document`'s (which the native job does not open).
         let outer = self.groups.is_empty();
         let Some(doc) = self.doc.as_mut() else { return };
-        match style.as_str() {
+        match style {
+            // After `\fancypagestyle{plain}`, `\ps@plain` is fancyhdr's.
+            "plain" if doc.fancy.as_ref().is_some_and(|f| f.plain.is_some()) => self.not_native("\\pagestyle{plain} after \\fancypagestyle{plain}"),
             "plain" | "empty" if (!doc.body || outer) && doc.fancy.as_ref().is_none_or(|f| !f.on) => {
                 doc.empty_style = style == "empty";
                 doc.headings = false;
+                doc.my_headings = false;
+            }
+            "myheadings" if doc.std_heads && !doc.body && doc.fancy.is_none() => {
+                doc.empty_style = false;
+                doc.headings = false;
+                doc.my_headings = true;
             }
             // book.cls's `\ps@headings` (`book::headings_tokens`).
-            "headings" if doc.book && (!doc.body || outer) && doc.fancy.as_ref().is_none_or(|f| !f.on) => {
+            "headings" if (doc.book || doc.pkg.koma.book) && (!doc.body || outer) && doc.fancy.as_ref().is_none_or(|f| !f.on) => {
                 doc.empty_style = false;
                 doc.headings = true;
+                doc.my_headings = false;
+                if let Some(f) = doc.fancy.as_mut() {
+                    f.defs = false;
+                }
             }
             "fancy" if !doc.body && doc.fancy.is_some() => self.fancy_on(),
             _ => self.not_native("\\pagestyle other than plain or empty, or in the body"),
@@ -10241,6 +14957,15 @@ impl Machine<'_, '_> {
     fn skip_amount(&mut self, glue: &str) {
         let mut t = vec![self.doc_id(doc!("vspace"))];
         t.extend(self.tex_tokens(glue));
+        self.back_list(&t);
+    }
+
+    /// `\smallbreak`, `\medbreak`, `\bigbreak` (latex.ltx:612): `\par\ifdim\lastskip<
+    /// \bigskipamount \removelastskip\penalty-200\bigskip\fi`, `\removelastskip` being
+    /// `\ifdim\lastskip=\z@\else\vskip-\lastskip\fi`; the amount's natural width is the
+    /// `\ifdim`'s dimension.
+    fn skip_break(&mut self, width: &str, penalty: &str, skip: &str) {
+        let t = self.tex_tokens(&format!("\\par\\ifdim\\lastskip<{width}\\relax\\ifdim\\lastskip=0pt \\else\\vskip-\\lastskip\\fi\\penalty-{penalty} \\{skip}\\fi"));
         self.back_list(&t);
     }
 
@@ -10349,12 +15074,27 @@ impl Machine<'_, '_> {
         // \@endpefalse`.
         if name == "proof" && self.amsthm() {
             self.begin_group(SEMI_SIMPLE_GROUP);
-            let t = [self.named_cs(named!("qed")), self.doc_id(doc!("rt@endproof"))];
-            return self.back_list(&t);
+            // `\qed@elt{\qed}`, or `\qed@elt{}` after a `\qedhere`.
+            let pending = self.doc.as_mut().and_then(|d| d.qed.pop()).unwrap_or(true);
+            let end = self.doc_id(doc!("rt@endproof"));
+            return if pending { self.back_list(&[self.named_cs(named!("qed")), end]) } else { self.back_list(&[end]) };
+        }
+        // `\endtcolorbox` (`engine_tcolorbox`); its `\endgroup` follows the drawing.
+        if (name == "tcolorbox" || self.tcb_env(&name).is_some()) && self.tcb_open() {
+            return self.tcolorbox_end();
+        }
+        // float.sty's `\float@end` (`\float@dblend`) of a `\newfloat` type.
+        if self.new_float_type(&name).is_some() {
+            return self.float_close();
         }
         match name.as_str() {
             "document" => self.end_document(),
+            "lstlisting" if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"listings")) => self.lst_end(),
             "em" => self.end_group(SEMI_SIMPLE_GROUP),
+            // A declaration used as an environment (`\begin{centering}`): `\csname endcentering
+            // \endcsname` is `\relax`, then `\end`'s `\endgroup`.
+            "centering" | "raggedright" | "raggedleft" | "tiny" | "scriptsize" | "footnotesize" | "small" | "normalsize" | "large" | "Large" | "LARGE" | "huge" | "Huge" | "bfseries" | "mdseries" | "itshape" | "slshape" | "scshape" | "upshape" | "rmfamily" | "sffamily" | "ttfamily" => self.back_list(&[self.named_cs(named!("endgroup"))]),
+            "algorithmic" if self.alg_open() => self.alg_end(),
             // setspace.sty's `\restore@spacing` (`\par \vskip\parskip \vskip\baselineskip
             // \endgroup \vskip-\parskip \vskip-\baselineskip`), `\endsinglespace` `\par`; then
             // `\end`'s `\endgroup`.
@@ -10366,6 +15106,26 @@ impl Machine<'_, '_> {
             // `\endtitlepage`: `\newpage`, then `\setcounter{page}\@ne` when one-sided; and
             // `\end`'s `\endgroup`.
             "letter" if self.doc.as_ref().is_some_and(|d| d.letter.is_some()) => self.letter_end(),
+            "letter" if self.doc.as_ref().is_some_and(|d| d.pkg.lttr.is_some()) => self.lttr_end(),
+            // `\endmem@titlingpage`: `\thispagestyle{titlingpage}`, `\cleardoublepage` two-sided
+            // (`\titlingpageend`), else `\clearpage`, `\setcounter{page}{\@ne}`.
+            // screenplay's `\enddialogue` (`\end{minipage}`) and `\end`'s `\endgroup`.
+            "dialogue" if self.doc.as_ref().is_some_and(|d| d.pkg.screenplay.is_some()) => {
+                // `\end{minipage}`, a space, a blank line.
+                let mut t = self.tex_tokens("\\end{minipage} \\par");
+                t.push(self.named_cs(named!("endgroup")));
+                self.back_list(&t);
+            }
+            "titlingpage" if self.memoir() => {
+                let twoside = self.doc.as_ref().is_some_and(|d| d.class.flag("twoside"));
+                let mut t = vec![self.doc_id(doc!("thispagestyle"))];
+                t.extend(self.tex_tokens("{empty}"));
+                t.push(self.doc_id(if twoside { doc!("cleardoublepage") } else { doc!("clearpage") }));
+                t.push(self.doc_id(doc!("setcounter")));
+                t.extend(self.tex_tokens("{page}{1}"));
+                t.push(self.named_cs(named!("endgroup")));
+                self.back_list(&t);
+            }
             "titlepage" => {
                 let mut t = vec![self.doc_id(NEW_PAGE)];
                 if !self.doc.as_ref().is_some_and(|d| d.class.flag("twoside")) {
@@ -10376,6 +15136,19 @@ impl Machine<'_, '_> {
                 self.back_list(&t);
             }
             "abstract" if self.ams_on() => self.ams_abstract_end(),
+            "abstract" | "IEEEkeywords" if self.ieee_on() => self.ieee_abstract_end(name == "IEEEkeywords"),
+            // report.cls's title page abstract: `\par\vfil\null\endtitlepage` (`\newpage`, and
+            // `\setcounter{page}\@ne` when one-sided), then `\end`'s group.
+            "abstract" if self.doc.as_ref().is_some_and(|d| d.titlepage) => {
+                let mut t = self.tex_tokens("\\par\\vfil\\hbox{}");
+                t.push(self.doc_id(NEW_PAGE));
+                if !self.doc.as_ref().is_some_and(|d| d.class.flag("twoside")) {
+                    t.push(self.doc_id(doc!("setcounter")));
+                    t.extend(self.tex_tokens("{page}{1}"));
+                }
+                t.push(self.named_cs(named!("endgroup")));
+                self.back_list(&t);
+            }
             // `\endabstract` in two columns: `\if@twocolumn\else\endquotation\fi`.
             "abstract" if self.two_columns() => self.end_group(SEMI_SIMPLE_GROUP),
             "quote" | "quotation" | "verse" | "itemize" | "enumerate" | "description" | "abstract" | "thebibliography" => self.end_list(),
@@ -10383,7 +15156,8 @@ impl Machine<'_, '_> {
             // `\@eqnnum` `{\normalfont \normalcolor (\theequation)}`.
             "equation" | "equation*" if self.in_split_display() => self.align_end(),
             "equation" | "equation*" if self.ams() => self.end_ams_display(),
-            "align" | "align*" | "gather" | "gather*" if self.in_align() => self.align_end(),
+            "subequations" if self.ams() => self.subequations_end(),
+            "align" | "align*" | "alignat" | "alignat*" | "flalign" | "flalign*" | "gather" | "gather*" if self.in_align() => self.align_end(),
             "multline" | "multline*" if self.in_align() => self.multline_end(),
             "aligned" | "gathered" | "split" if self.in_aligned() => self.aligned_end(),
             "eqnarray" | "eqnarray*" if self.in_eqnarray() => self.eqnarray_end(),
@@ -10401,7 +15175,15 @@ impl Machine<'_, '_> {
             // `\endverbatim`: `\if@newlist \leavevmode\fi \endtrivlist`; its last line ended
             // in vertical mode, so `\leavevmode` is not needed.
             "center" | "flushleft" | "flushright" | "verbatim" => self.end_trivlist(),
-            "tabular" => self.tabular_end(),
+            "tabular" | "tabular*" => self.tabular_end(),
+            "threeparttable" if self.tpt_phase() != 0 => self.tpt_end(),
+            "@twocolumnfalse" => self.twocolumn_false_end(),
+            "tablenotes" if self.tpt_phase() != 0 => self.end_list(),
+            // `\endpicture` and `\end`'s `\endgroup`.
+            "picture" => {
+                let list = [self.doc_id(doc!("rt@endpicture")), self.named_cs(named!("endgroup"))];
+                self.back_list(&list);
+            }
             // `\endminipage` (`\par` first) and `\end`'s `\endgroup`.
             "minipage" => {
                 let list = [self.named_cs(named!("par")), self.doc_id(doc!("rt@mpclose")), self.named_cs(named!("endgroup"))];
@@ -10421,6 +15203,27 @@ impl Machine<'_, '_> {
                 list.push(self.named_cs(named!("endgroup")));
                 self.back_list(&list);
             }
+            // mathtools' `\MT_matrix_end:` (`\endarray\hskip-\arraycolsep`), `\right delim`
+            // (`Vmatrix*` closes with `\lVert`, as mathtools.sty has it), `\end`'s `\endgroup`.
+            n if MT_MATRICES.contains(&n) && self.in_tabular() => {
+                let crcr = Token::cs(self.doc.as_ref().map_or(0, |d| d.crcr_id));
+                let mut list = vec![crcr, self.doc_id(TAB_END), self.doc_id(doc!("rt@mskip"))];
+                match n {
+                    "matrix*" => {}
+                    "Vmatrix*" => list.extend([self.named_cs(named!("right")), self.named_cs(named!("lVert"))]),
+                    _ => list.extend([self.named_cs(named!("right")), self.matrix_fence(n.trim_end_matches('*'), false)]),
+                }
+                list.push(self.named_cs(named!("endgroup")));
+                self.back_list(&list);
+            }
+            // mathtools' `\MH_end_cases:` (`\crcr\egroup\restorecolumn@\egroup`, the column
+            // count untouched by these rows), `\right` and its delimiter, `\end`'s `\endgroup`.
+            n if MT_CASES.contains(&n) && self.mathtools() => {
+                let close = Token::char(Cat::EndGroup, '}');
+                let right = if name.starts_with('r') || name.starts_with("dr") { self.named_cs(named!("rbrace")) } else { Token::char(Cat::Other, '.') };
+                let list = [self.named_cs(named!("crcr")), close, close, self.named_cs(named!("right")), right, self.named_cs(named!("endgroup"))];
+                self.back_list(&list);
+            }
             // `\endsmallmatrix` (`\crcr\egroup\egroup\,`) and `\end`'s `\endgroup`.
             "smallmatrix" if self.ams() => {
                 let close = Token::char(Cat::EndGroup, '}');
@@ -10428,6 +15231,10 @@ impl Machine<'_, '_> {
                 self.back_list(&list);
             }
             "figure" | "table" | "figure*" | "table*" => self.float_close(),
+            "subfigure" | "subtable" if self.caption_in_sub() => {
+                let list = [self.named_cs(named!("par")), self.doc_id(doc!("rt@mpclose")), self.named_cs(named!("endgroup")), self.doc_id(doc!("rt@subfigend"))];
+                self.back_list(&list);
+            }
             "multicols" | "multicols*" if self.doc.as_ref().is_some_and(|d| d.multicol.is_some()) => self.multicols_end(name == "multicols*"),
             // `\csname endname\endcsname \endgroup`.
             _ => {
@@ -10443,6 +15250,10 @@ impl Machine<'_, '_> {
         if self.list_in_nested_minipage() {
             return self.not_native("a list in a minipage in a list");
         }
+        // french3.ldf's `\itemizeFB`, `\enumerateFB`, `\descriptionFB` and dash labels.
+        if matches!(name, "itemize" | "enumerate" | "description") && self.babel_french() {
+            return self.not_native("french's itemize, enumerate and description");
+        }
         let (em, _) = self.em_ex();
         let em = em as i32;
         let mut list = List { label: Label::Empty, make: Make::Mklab, numbered: false, counter: 0, centercr: false, auto_item: true, endpe_false: false };
@@ -10453,6 +15264,9 @@ impl Machine<'_, '_> {
                 let d = self.rw(r);
                 if d > 3 {
                     return self.error("Too deeply nested");
+                }
+                if !self.es_list_ok(name == "enumerate", d + 1) {
+                    return self.not_native("spanish's nested list labels");
                 }
                 self.set_rw(r, d + 1, false);
                 list.make = Make::Llap;
@@ -10515,16 +15329,15 @@ impl Machine<'_, '_> {
             }
             // `\labelwidth\z@ \itemindent-\leftmargin`; enumitem's `style=standard` makes
             // `\enit@calcleft` take the item indent: `\labelsep+\labelindent-\leftmargin`
-            // (`\labelindent` 0). Its `\setlist` keys for description are not read yet.
+            // (`\labelindent` 0).
             "description" => {
                 self.set_rw(R_LABELWIDTH, 0, false);
                 let l = self.rw(R_LEFTMARGIN);
                 let enumitem = self.doc.as_ref().is_some_and(|d| d.packages.contains(&"enumitem"));
-                if enumitem && self.doc.as_ref().is_some_and(|d| d.enit_set.iter().any(|s| s.0 == 0 || s.0 == 3)) {
-                    return self.not_native("enumitem: \\setlist keys for description");
+                if enumitem {
+                    return self.enit_description();
                 }
-                let i = if enumitem { self.rw(R_LABELSEP) - l } else { -l };
-                self.set_rw(R_ITEMINDENT, i, false);
+                self.set_rw(R_ITEMINDENT, -l, false);
             }
             _ => {}
         }
@@ -10647,10 +15460,6 @@ impl Machine<'_, '_> {
         if self.mode == Mode::Math {
             return self.not_native("\\verb in math");
         }
-        // An alignment's cells are read ahead of the file line (the `tabular` native's end).
-        if !self.aligns.is_empty() {
-            return self.not_native("\\verb in an alignment");
-        }
         if self.leave_vmode() {
             return;
         }
@@ -10691,7 +15500,10 @@ impl Machine<'_, '_> {
                 c => list.push(Token::char(Cat::Other, c)),
             }
         }
-        list.push(close);
+        // `\verb@egroup`'s `\egroup`: a control sequence, which leaves an alignment entry's
+        // brace count (`align_state`, §357) alone, where an explicit `}` would end the entry
+        // at the next `&` too late (`\verb` in a `tabular` cell).
+        list.push(self.doc_id(doc!("rt@verbend")));
         self.back_list(&list);
     }
 
@@ -10748,6 +15560,9 @@ impl Machine<'_, '_> {
             },
             _ => return self.not_native("an accent on more than a letter"),
         };
+        if code == 127 && self.babel_umlaut(base) {
+            return;
+        }
         // `\hbox{#2}` starts at space factor 1000 (§1034).
         let sf = match self.e.eqtb.code(Code::Sf, base) {
             0 => 1000,
@@ -10788,6 +15603,60 @@ impl Machine<'_, '_> {
         let f = self.cur_font();
         self.build_accent(slot as u8, f, Some(base as u8));
         self.aux = sf;
+    }
+
+    /// t1enc.def's `\k`: a composite (`\DeclareTextComposite{\k}{T1}{a}{161}`, `e`, `A`, `E`)
+    /// is the character as a letter token. The `\ooalign` with `\char12` over other letters
+    /// and `\textogonekcentered` (`o`, `O`) are not native; OT1 has no `\k` (the pre-scan
+    /// takes it only in T1, `t1_only`).
+    fn ogonek(&mut self) {
+        if self.mode == Mode::Math || !self.t1() {
+            return self.not_native("\\k in math or OT1");
+        }
+        if self.leave_vmode() {
+            return;
+        }
+        let mut arg = Vec::new();
+        self.read_arg(&mut arg);
+        if let [t] = arg[..] {
+            if t.cat() == Some(Cat::Letter) {
+                if let Ok(k) = T1_COMPOSITE_KEYS.binary_search(&((b'k' as u16) << 8 | t.chr() as u16)) {
+                    return self.back_list(&[Token::char(Cat::Letter, char::from(T1_COMPOSITE_SLOTS[k]))]);
+                }
+            }
+        }
+        self.not_native("\\k over a letter T1 has no composite for")
+    }
+
+    /// babel.sty's `\glqq`, `\grqq`, `\glq`, `\grq` in T1 text: the T1 character `c`
+    /// (`\grq`'s `\kern\z@` before its `\textquoteleft`). Without babel they are undefined,
+    /// in math `\mbox{...}`, in OT1 babel's own constructions: not native.
+    fn babel_quote(&mut self, c: u8) {
+        if self.mode == Mode::Math || !self.t1() || self.doc.as_ref().is_some_and(|d| d.babel.is_none()) {
+            return self.not_native("babel's German quotes in math, OT1 or without babel");
+        }
+        if c == 96 {
+            // A vertical `\kern` before the paragraph: not ported.
+            if self.mode == Mode::Vertical {
+                return self.not_native("babel's \\grq in vertical mode");
+            }
+            self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, 0) });
+        }
+        self.back_list(&[Token::char(Cat::Other, char::from(c))]);
+    }
+
+    /// ot1enc.def's `\DeclareTextCommand{\textexclamdown}{OT1}{!`}` (and `?``): the two
+    /// characters, which the font's ligature makes one. In T1 the `\chardef` of
+    /// [`T1_ONLY_SYMBOLS`] replaces this native.
+    fn inverted_mark(&mut self, c: char) {
+        if self.mode == Mode::Math {
+            return self.not_native("a text symbol in a formula");
+        }
+        if self.t1() {
+            let code = if c == '!' { 189 } else { 190 };
+            return self.back_list(&[Token::char(Cat::Other, char::from(code))]);
+        }
+        self.back_list(&[Token::char(Cat::Other, c), Token::char(Cat::Other, '`')]);
     }
 
     /// ot1enc.def's `\c`: `\leavevmode\setbox\z@\hbox{#1}`, then (`cedilla_end`) `\accent24
@@ -10908,6 +15777,10 @@ impl Machine<'_, '_> {
             },
         };
         let style = if ams { doc.thm_style } else { 0 };
+        if !star {
+            self.cref_theorem(&env, &title);
+        }
+        let Some(doc) = self.doc.as_mut() else { return };
         doc.theorems.push(Theorem { env, title, counter, within, style, star, parent });
         doc.thm_values.push(0);
     }
@@ -10934,6 +15807,7 @@ impl Machine<'_, '_> {
 
     /// amsthm's `\@thm`: `\ifhmode\unskip\unskip\par\fi`, then the list.
     fn ams_theorem_begin(&mut self, k: usize) {
+        self.cref_hyper_unskip();
         self.begin_group(SEMI_SIMPLE_GROUP);
         let Some(doc) = self.doc.as_mut() else { return };
         doc.endpe = false;
@@ -10994,7 +15868,8 @@ impl Machine<'_, '_> {
             self.normal_font();
         }
         if let Some(n) = &number {
-            self.theorem_label(owner, n);
+            self.theorem_label(owner, n, true);
+            self.cref_theorem_step(k);
         }
         let note = if self.next_is('[') { Some(self.bracket_arg()) } else { None };
         let (open, close) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'));
@@ -11128,6 +16003,8 @@ impl Machine<'_, '_> {
         t.extend([self.doc_id(doc!("rt@addpunct")), Token::char(Cat::Other, ']'), self.doc_id(doc!("rt@ignorespaces"))]);
         let Some(doc) = self.doc.as_mut() else { return };
         doc.thm_item = t;
+        // `\pushQED{\qed}`.
+        doc.qed.push(true);
         let par = self.cur_par();
         self.run_ops(vec![
             par,
@@ -11171,6 +16048,65 @@ impl Machine<'_, '_> {
         self.back_list(&t);
     }
 
+    /// amsthm's `\qedhere` after amsmath: `\begingroup \let\mathqed\math@qedhere
+    /// \let\qed@elt\setQED@elt \QED@stack\relax\relax \endgroup`. With no `proof` open the
+    /// stack is empty and nothing happens; otherwise the proof's entry becomes `\qed@elt{}`
+    /// and its `\qed` runs here. In a paragraph that is the text `\qed`; in `equation*` or
+    /// `\[ \]` `\mathqed` is `\math@qedhere`, `\aftergroup\csname equation*@qed\endcsname`:
+    /// `\displaymath@qed`, `\eqno \let\eqno\relax \let\leqno\relax \hbox{\qedsymbol}`. The
+    /// other places (`equation`'s `\alt@tag`, `align*`'s `\qed@tag`, an inline formula's
+    /// warning, an inner box) are not native.
+    fn qed_here(&mut self) {
+        let Some(doc) = self.doc.as_ref() else { return };
+        if !doc.packages.contains(&"amsmath") {
+            return self.not_native("\\qedhere without amsmath");
+        }
+        if doc.qed.last().is_none() {
+            return;
+        }
+        if self.mode == Mode::Math {
+            let plain = doc.align.is_none() && doc.aligned.is_none() && doc.eqnarray.is_none() && doc.tabs.is_empty() && doc.df_tag.is_none();
+            // `align*`'s `\align@qed`, directly in a field's formula: in the template's
+            // `$\m@th\displaystyle{##}$` braces (the `\aftergroup` there, `\math@cr@@@` let
+            // before they close).
+            let field = self.groups.len() >= 2 && self.groups[self.groups.len() - 2..] == [super::engine_noad::MATH_SHIFT_GROUP, super::engine_noad::MATH_GROUP];
+            if doc.align.is_some() && self.in_align() && doc.aligned.is_none() && field {
+                if !self.align_qed() {
+                    return;
+                }
+                if let Some(top) = self.doc.as_mut().and_then(|d| d.qed.last_mut()) {
+                    *top = false;
+                }
+                return;
+            }
+            // `equation`'s `\equation@qed` (tags right): `\gdef\alt@tag{...}`, the number
+            // and the symbol stacked at the display's end.
+            if !self.inner && doc.display_env == 1 && doc.ams_display == 1 && plain {
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.eq_qed = true;
+                    if let Some(top) = doc.qed.last_mut() {
+                        *top = false;
+                    }
+                }
+                return;
+            }
+            if self.inner || doc.display_env != 2 || doc.ams_display == 0 || !plain {
+                return self.not_native("\\qedhere outside a paragraph, equation* or \\[ \\]");
+            }
+            if let Some(top) = self.doc.as_mut().and_then(|d| d.qed.last_mut()) {
+                *top = false;
+            }
+            let mut t = vec![self.named_cs(named!("eqno"))];
+            t.extend(self.tex_tokens("\\hbox{"));
+            t.extend([self.named_cs(named!("qedsymbol")), Token::char(Cat::EndGroup, '}')]);
+            return self.back_list(&t);
+        }
+        if let Some(top) = self.doc.as_mut().and_then(|d| d.qed.last_mut()) {
+            *top = false;
+        }
+        self.input.back(self.named_cs(named!("qed")));
+    }
+
     /// amsthm's `\openbox`: `\leavevmode \hbox to.77778em{\hfil\vrule \vbox to.675em{\hrule
     /// width.6em\vfil\hrule}\vrule\hfil}`.
     fn open_box_symbol(&mut self) {
@@ -11199,6 +16135,14 @@ impl Machine<'_, '_> {
         self.build_glue(Glue { width: w, ..Glue::default() }, true);
     }
 
+    /// hyperref's `\AddToHook{cmd/@thm/before}{\ifhmode\unskip\fi}` under cleveref: one
+    /// more `\unskip` before a theorem begun in a paragraph.
+    fn cref_hyper_unskip(&mut self) {
+        if self.mode == Mode::Horizontal && self.hyper() && self.doc.as_ref().is_some_and(|d| d.pkg.cref.is_some()) {
+            self.unskip();
+        }
+    }
+
     fn theorem_index(&self, name: &str) -> Option<usize> {
         self.doc.as_ref()?.theorems.iter().position(|t| t.env == name)
     }
@@ -11208,13 +16152,15 @@ impl Machine<'_, '_> {
     /// {\bfseries Title\ n\ (note)}]\itshape`, and `\ignorespaces`. Without hyperref,
     /// `\MakeLinkTarget` in the label's box leaves `\smash{}`, an empty box.
     fn theorem_begin(&mut self, k: usize) {
+        self.cref_hyper_unskip();
         self.begin_group(SEMI_SIMPLE_GROUP);
         let Some(doc) = self.doc.as_mut() else { return };
         doc.endpe = false;
         let owner = doc.theorems[k].counter;
         let number = doc.step_theorem(owner);
         let title = doc.theorems[k].title.clone();
-        self.theorem_label(owner, &number);
+        self.theorem_label(owner, &number, false);
+        self.cref_theorem_step(k);
         let note = if self.next_is('[') { Some(self.bracket_arg()) } else { None };
         let space = self.doc_id(doc!("rt@space"));
         let mut t = vec![self.doc_id(doc!("item")), Token::char(Cat::Other, '[')];
@@ -11240,8 +16186,12 @@ impl Machine<'_, '_> {
     }
 
     /// A theorem's `\refstepcounter`: `\@currentlabel`, and with hyperref its anchor name
-    /// (`theorem_href`), placed by `theorem_anchor_tokens`.
-    fn theorem_label(&mut self, owner: usize, number: &str) {
+    /// (`theorem_href`), placed by `theorem_anchor_tokens`. Under cleveref hyperref leaves
+    /// amsthm's `\@thm` unpatched (`\@ifpackageloaded{cleveref}` at `\begin{document}`): its
+    /// `\refstepcounter` (`ams`) puts the anchor where it runs, after `\trivlist`'s skip in
+    /// vertical mode; the kernel's `\@thm` (`\@kernel@refstepcounter`, `\MakeLinkTarget` in
+    /// the head) is the same either way.
+    fn theorem_label(&mut self, owner: usize, number: &str, ams: bool) {
         if !self.hyper() {
             return self.set_current_label(number);
         }
@@ -11249,10 +16199,17 @@ impl Machine<'_, '_> {
         if doc.appendix {
             return self.not_native("hyperref: a theorem in the appendix");
         }
+        let cref = doc.pkg.cref.is_some();
         let counters: Vec<u32> = doc.counters.iter().map(|&c| c as u32).collect();
         let name = theorem_href(&doc.theorems[owner].env, &counters, doc.theorems[owner].within, doc.thm_values[owner] as u32);
         self.store_current_label(number);
         self.set_current_href(&name);
+        if ams && cref {
+            if self.mode != Mode::Vertical {
+                return self.not_native("cleveref and hyperref: a theorem's anchor not in vertical mode");
+            }
+            return self.vertical_anchor(name);
+        }
         if let Some(doc) = self.doc.as_mut() {
             doc.thm_anchor = Some(name);
         }
@@ -11387,6 +16344,10 @@ impl Machine<'_, '_> {
         if depth <= 3 && self.doc.as_ref().is_some_and(|d| d.koma) && self.e.eqtb.glue(param!("parskip")).width > 0 {
             self.parskip_list();
         }
+        if !self.fr_list_vsettings() {
+            self.not_native("french's lists with a positive \\parskip");
+            return false;
+        }
         if let Some(doc) = self.doc.as_mut() {
             doc.lists.push(list);
         }
@@ -11420,6 +16381,17 @@ impl Machine<'_, '_> {
     fn trivlist(&mut self, then: Native) {
         if let Some(doc) = self.doc.as_mut() {
             doc.trivlist_then = then;
+        }
+        // `\if@noskipsec \leavevmode \fi`: a run-in heading's paragraph starts, its title
+        // (the run-in `\everypar`) first, then the rest in horizontal mode.
+        if self.mode == Mode::Vertical && self.doc.as_ref().is_some_and(|d| d.noskipsec) {
+            if self.everypar() != RUN_IN {
+                return self.not_native("a list after a run-in heading whose paragraph is lost");
+            }
+            return self.run_ops(vec![Op::Call(|m| m.new_graf(true)), Op::Call(|m| {
+                let then = m.doc.as_ref().map_or((|_| {}) as Native, |d| d.trivlist_then);
+                m.trivlist(then);
+            })]);
         }
         let mut add = self.rg(R_TOPSEP);
         if self.mode == Mode::Vertical {
@@ -11625,6 +16597,11 @@ impl Machine<'_, '_> {
             }));
         }
         ops.push(Op::Call(|m| {
+            // natbib's `thebibliography` ends with `\bibcleanup`, `\vskip-\lastskip`.
+            if m.doc.as_ref().is_some_and(|d| d.pkg.natbib.is_some() && d.lists.last().is_some_and(|l| l.label == Label::Bib)) {
+                let g = m.last_skip();
+                m.vskip(neg(g));
+            }
             if let Some(doc) = m.doc.as_mut() {
                 if doc.lists.pop().is_some_and(|l| l.endpe_false) {
                     doc.endpe = false;
@@ -11754,9 +16731,9 @@ impl Machine<'_, '_> {
     /// `\@item`'s end: `\everypar`, the counter, `\sbox\@tempboxa{\makelabel{#1}}`, then
     /// `\@labels` (`\rt@itemlabels`).
     fn item_rest(&mut self) {
-        self.set_everypar(ITEM);
+        let Some(list) = self.doc.as_ref().and_then(|d| d.lists.last().copied()) else { return };
+        self.set_everypar(if matches!(list.make, Make::DescUnboxed(_)) { ENIT_DESC } else { ITEM });
         let Some(doc) = self.doc.as_mut() else { return };
-        let Some(list) = doc.lists.last().copied() else { return };
         let given = doc.item_label.take();
         if doc.noitemarg {
             doc.noitemarg = false;
@@ -11788,6 +16765,17 @@ impl Machine<'_, '_> {
                 }
                 // enumitem's `label`: `\theenum<d>` is `{label}` and `\p@enum<d>` empty.
                 let enit = !bib && self.doc.as_ref().is_some_and(|d| d.lists.iter().any(|l| matches!(l.label, Label::Enit(..))));
+                // A `\renewcommand{\theenumi}` of the document's (`own_enum_label`).
+                if !bib {
+                    match self.own_enum_label(k) {
+                        Some(None) => {}
+                        // enumitem's `label` and enumerate.sty's template define `\theenum<d>`
+                        // themselves, which the native job keeps as data.
+                        Some(Some(_)) if enit || self.doc.as_ref().is_some_and(|d| d.lists.iter().any(|l| matches!(l.label, Label::Tmpl(..)))) => return self.not_native("an enumerate label template or key with a \\theenum of the document's own"),
+                        Some(Some(t)) => text = t,
+                        None => return self.not_native("a \\theenum of the document's own the native job cannot read"),
+                    }
+                }
                 let toks = if enit { self.enit_current(k) } else { Vec::new() };
                 // hyperref's `\item`: `\stepcounter{Item}`, the anchor `Item.N` where the
                 // kernel's `\refstepcounter` runs (after the item's skip, in vertical mode).
@@ -11820,6 +16808,7 @@ impl Machine<'_, '_> {
                 } else {
                     self.set_current_label(&text);
                 }
+                self.cref_step(["enumi", "enumii", "enumiii", "enumiv"][k.min(3)]);
             }
         }
         let open = Token::char(Cat::BeginGroup, '{');
@@ -11849,7 +16838,12 @@ impl Machine<'_, '_> {
                 t.extend([open, self.named_cs(named!("hss"))]);
             }
             Make::Mklab => t.push(self.named_cs(named!("hfil"))),
+            Make::EnitLeft => {
+                t.push(self.named_cs(named!("penalty")));
+                t.extend("10000 ".chars().map(|c| Token::char(if c == ' ' { Cat::Space } else { Cat::Other }, c)));
+            }
             Make::Plain => {}
+            Make::Tnote => t.extend([open, self.doc_id(doc!("textsuperscript")), open]),
             // enumitem's `\makelabel`: `\labelsep\z@`, then `\descriptionlabel` of
             // `\enit@align@left`'s `\nobreak#1\hfil` (enumitem.sty:505, 1474).
             Make::Description => {
@@ -11861,6 +16855,15 @@ impl Machine<'_, '_> {
                     t.extend("10000 ".chars().map(|c| Token::char(if c == ' ' { Cat::Space } else { Cat::Other }, c)));
                 }
             }
+            // enumitem's unboxed `\makelabel`: `\labelsep\z@ \nobreak \descriptionlabel{#1}`
+            // (enumitem.sty:1474), no `\enit@align` (it comes in `\enit@postlabel`).
+            Make::DescUnboxed(_) => {
+                t.push(self.named_cs(named!("penalty")));
+                t.extend("10000 ".chars().map(|c| Token::char(if c == ' ' { Cat::Space } else { Cat::Other }, c)));
+                t.push(self.named_cs(named!("hskip")));
+                Self::sp_tokens(0, &mut t);
+                t.push(self.doc_id(DESC_FONT));
+            }
         }
         // hyperref's `\@bibitem`: `\Hy@raisedlink{\hyper@anchorstart{cite.key}…}` in
         // vertical mode after `\H@item` (`\@lbibitem`'s is in the given label).
@@ -11869,8 +16872,11 @@ impl Machine<'_, '_> {
             Some(l) => t.extend(l),
             None => self.item_label(list, &mut t),
         }
-        if list.make == Make::Description && enumitem {
+        if list.make == Make::Description && enumitem || list.make == Make::EnitLeft {
             t.push(self.named_cs(named!("hfil")));
+        }
+        if list.make == Make::Tnote {
+            t.extend([close, close, self.named_cs(named!("hfil"))]);
         }
         if list.make == Make::Llap {
             t.push(close);
@@ -11890,9 +16896,35 @@ impl Machine<'_, '_> {
     fn item_label(&mut self, list: List, t: &mut Vec<Token>) {
         let n = self.rw(list.counter);
         let o = |c| Token::char(Cat::Other, c);
+        if let Some(own) = self.own_list_label(list.label) {
+            // spanish's `\extrasspanish` sets the labels again at `\begin{document}`.
+            if self.es_layout() {
+                return self.not_native("a list label of the document's own under spanish");
+            }
+            return t.push(own);
+        }
+        // The kernel's `\labelenum<d>` (`\theenumi.`, `(\theenumii)`, `\theenumiii.`,
+        // `\theenumiv.`) around a `\theenum<d>` of the document's own.
+        if let Label::Enum(d) = list.label {
+            let id = self.e.cs.intern(["theenumi", "theenumii", "theenumiii", "theenumiv"][usize::from(d.clamp(1, 4)) - 1]);
+            if !matches!(self.e.eqtb.meaning(id), Meaning::Unset | Meaning::Undefined | Meaning::Doc(_)) {
+                if self.es_layout() || d == 2 && self.doc.as_ref().is_some_and(|d| d.koma) {
+                    return self.not_native("a \\theenum of the document's own under spanish or KOMA");
+                }
+                if d == 2 {
+                    t.push(o('('));
+                }
+                t.extend([Token::cs(id), o(if d == 2 { ')' } else { '.' })]);
+                return;
+            }
+        }
         match list.label {
             Label::Empty => {}
-            Label::Item(_) => t.push(self.doc_id(LABEL_MARK)),
+            Label::Item(d) => {
+                if !self.es_item_mark(d, t) {
+                    t.push(self.doc_id(LABEL_MARK));
+                }
+            }
             Label::Enum(1) => {
                 t.extend(n.to_string().chars().map(o));
                 t.push(o('.'));
@@ -11913,6 +16945,7 @@ impl Machine<'_, '_> {
                 t.extend(alph(n, b'A').map(|c| Token::char(Cat::Letter, c)));
                 t.push(o('.'));
             }
+            Label::Tmpl(_, i) | Label::Given(i) | Label::Enit(_, i) if self.doc.as_ref().and_then(|d| d.enum_templates.get(i as usize)).is_some_and(|e| self.es_counter_differs(e.1, n)) => self.not_native("spanish's \\@roman or \\@alph in a list label"),
             Label::Tmpl(_, i) | Label::Given(i) => self.enum_template_tokens(i as usize, n, t),
             // `\enit@normlabel` keeps `\@itemlabel` in braces.
             Label::Enit(_, i) => {
@@ -11921,11 +16954,44 @@ impl Machine<'_, '_> {
                 t.push(Token::char(Cat::EndGroup, '}'));
             }
             Label::Bib => {
-                t.push(o('['));
-                t.extend(n.to_string().chars().map(o));
-                t.push(o(']'));
+                let num: Vec<Token> = n.to_string().chars().map(o).collect();
+                self.bib_label_tokens(&num, t);
             }
+            Label::Alg => self.alg_step(t),
         }
+    }
+
+    /// `\@biblabel{text}`: the kernel's `[text]`, or a `\renewcommand\@biblabel[1]{#1.}` of
+    /// the document's (the native job gives `\@biblabel` no meaning, so any is the
+    /// document's): the control sequence and the argument in braces, which the engine
+    /// expands where latex.ltx's `thebibliography` and `\@bibitem`/`\@lbibitem` do.
+    fn bib_label_tokens(&mut self, text: &[Token], t: &mut Vec<Token>) {
+        let id = self.e.cs.intern("@biblabel");
+        if matches!(self.e.eqtb.meaning(id), Meaning::Unset | Meaning::Undefined) {
+            t.push(Token::char(Cat::Other, '['));
+            t.extend_from_slice(text);
+            t.push(Token::char(Cat::Other, ']'));
+        } else {
+            t.extend([Token::cs(id), Token::char(Cat::BeginGroup, '{')]);
+            t.extend_from_slice(text);
+            t.push(Token::char(Cat::EndGroup, '}'));
+        }
+    }
+
+    /// `\labelitem<d>` or `\labelenum<d>` the document defined (`\renewcommand`, or pandoc's
+    /// `\def\labelenumi{\arabic{enumi}.}` inside the list): `\@itemlabel` is the control
+    /// sequence (`\list{\csname label\@enumctr\endcsname}`, `\@itemize`'s
+    /// `\csname\@itemitem\endcsname`), which the engine expands in the label's box at
+    /// `\item` as LaTeX does. The native job gives the kernel's labels no meaning, so any
+    /// meaning (a macro, `\let` to `\textbullet`) is the document's. `None`: the job's own label.
+    fn own_list_label(&mut self, label: Label) -> Option<Token> {
+        let name = match label {
+            Label::Item(d) => ["labelitemi", "labelitemii", "labelitemiii", "labelitemiv"][usize::from(d.clamp(1, 4)) - 1],
+            Label::Enum(d) => ["labelenumi", "labelenumii", "labelenumiii", "labelenumiv"][usize::from(d.clamp(1, 4)) - 1],
+            _ => return None,
+        };
+        let id = self.e.cs.intern(name);
+        (!matches!(self.e.eqtb.meaning(id), Meaning::Unset | Meaning::Undefined)).then(|| Token::cs(id))
     }
 
     /// enumerate.sty's `\@@enum@[#1]` (enumerate.sty:61), after `\@enumdepth` is advanced:
@@ -12040,7 +17106,7 @@ impl Machine<'_, '_> {
         let mut keys: Vec<Vec<Token>> = Vec::new();
         if let Some(doc) = self.doc.as_ref() {
             for (n, l) in [(0, 0), (0, ld), (kind, 0), (kind, d)] {
-                if let Some(k) = doc.enit_set.iter().find(|s| s.0 == n && s.1 == l) {
+                if let Some(k) = doc.pkg.enit.set.iter().find(|s| s.0 == n && s.1 == l) {
                     keys.push(k.2.clone());
                 }
             }
@@ -12048,24 +17114,19 @@ impl Machine<'_, '_> {
         if self.next_is('[') {
             keys.push(self.bracket_arg());
         }
-        let (mut star, mut label) = (false, None);
-        let zero = Glue::default();
-        for (key, v) in keys.iter().flat_map(|k| enit_pairs(k)) {
-            let flag = v.is_empty() || v.iter().map(|t| t.chr()).eq("true".chars());
-            match key.as_str() {
-                "topsep" | "itemsep" | "parsep" | "partopsep" => {
-                    let r = [R_TOPSEP, R_ITEMSEP, R_PARSEP, R_PARTOPSEP][["topsep", "itemsep", "parsep", "partopsep"].iter().position(|k| *k == key).unwrap_or(0)];
-                    let Some(g) = self.enit_value(&v, true) else { return };
-                    self.set_rg(r, g);
+        if self.doc.as_ref().is_some_and(|d| d.pkg.enit.short) {
+            for k in keys.iter_mut() {
+                if let Some(t) = enumitem::short_label(self, k, enumerate) {
+                    *k = t;
                 }
-                "nosep" | "noitemsep" | "nolistsep" if flag => {
-                    for r in [R_ITEMSEP, R_PARSEP] {
-                        self.set_rg(r, zero);
-                    }
-                    if key != "noitemsep" {
-                        self.set_rg(R_PARTOPSEP, zero);
-                        let t = if key == "nosep" { zero } else { self.glue_of("0pt plus .1pt") };
-                        self.set_rg(R_TOPSEP, t);
+            }
+        }
+        let (mut star, mut label) = (false, None);
+        for (key, v) in keys.iter().flat_map(|k| enit_pairs(k)) {
+            match key.as_str() {
+                "topsep" | "itemsep" | "parsep" | "partopsep" | "nosep" | "noitemsep" | "nolistsep" => {
+                    if !self.enit_vertical(&key, &v) {
+                        return;
                     }
                 }
                 "leftmargin" if v == [Token::char(Cat::Other, '*')] => star = true,
@@ -12077,6 +17138,30 @@ impl Machine<'_, '_> {
                     star &= key != "leftmargin";
                 }
                 "label" => label = Some(v),
+                // `\enitkv@key{}{align}`: `\enit@align@left` or `\enit@align@right` (the
+                // default `\enit@dylist` sets), read when `\makelabel` runs: the last wins.
+                "align" => {
+                    let name: String = v.iter().map(|t| t.chr()).collect();
+                    let make = match name.as_str() {
+                        "left" => Make::EnitLeft,
+                        "right" => Make::Llap,
+                        _ => return self.not_native("an enumitem align the native job does not take"),
+                    };
+                    if let Some(list) = self.doc.as_mut().and_then(|doc| doc.lists.last_mut()) {
+                        list.make = make;
+                    }
+                }
+                // `\enitkv@key{}{start}[\@ne]`: `\setcounter{\@listctr}{#1}` and one less
+                // (global, as `\setcounter` is); itemize has no `\@listctr`.
+                "start" => {
+                    let text: String = v.iter().map(|t| t.chr()).collect();
+                    let n = if v.is_empty() { Some(1) } else { text.trim().parse::<i32>().ok() };
+                    let Some(n) = n.filter(|_| enumerate && v.iter().all(|t| t.cs_id().is_none())) else {
+                        return self.not_native("enumitem: a start that is not a number, or in itemize");
+                    };
+                    let Some(list) = self.doc.as_ref().and_then(|doc| doc.lists.last().copied()) else { return };
+                    self.set_rw(list.counter, n - 1, true);
+                }
                 _ => return self.not_native("an enumitem key the native job does not take"),
             }
         }
@@ -12109,6 +17194,11 @@ impl Machine<'_, '_> {
         let mut t = vec![self.named_cs(named!("setbox"))];
         t.extend(TEMP_BOX.to_string().chars().map(|c| Token::char(Cat::Other, c)));
         t.extend([Token::char(Cat::Other, '='), self.named_cs(named!("hbox")), open, open]);
+        // The label is measured with the counter set here and back before the tokens run:
+        // a macro of the document's would read the restored value.
+        if self.own_list_label(list.label).is_some() {
+            return self.not_native("enumitem's leftmargin=* with a list label of the document's own");
+        }
         if list.numbered {
             let saved = self.rw(list.counter);
             self.set_rw(list.counter, widest, true);
@@ -12119,6 +17209,37 @@ impl Machine<'_, '_> {
         }
         t.extend([close, close, self.doc_id(doc!("rt@enitleft"))]);
         self.back_list(&t);
+    }
+
+    /// enumitem's vertical keys (enumitem.sty:380-420): `topsep`, `itemsep`, `parsep`,
+    /// `partopsep` with a value (`\enit@setlength`, glue), and `nosep`, `noitemsep`,
+    /// `nolistsep`; false when the job declined (a value that is not a length, or a flag
+    /// with another value).
+    fn enit_vertical(&mut self, key: &str, v: &[Token]) -> bool {
+        let zero = Glue::default();
+        let flag = v.is_empty() || v.iter().map(|t| t.chr()).eq("true".chars());
+        match key {
+            "topsep" | "itemsep" | "parsep" | "partopsep" => {
+                let r = [R_TOPSEP, R_ITEMSEP, R_PARSEP, R_PARTOPSEP][["topsep", "itemsep", "parsep", "partopsep"].iter().position(|k| *k == key).unwrap_or(0)];
+                let Some(g) = self.enit_value(v, true) else { return false };
+                self.set_rg(r, g);
+            }
+            "nosep" | "noitemsep" | "nolistsep" if flag => {
+                for r in [R_ITEMSEP, R_PARSEP] {
+                    self.set_rg(r, zero);
+                }
+                if key != "noitemsep" {
+                    self.set_rg(R_PARTOPSEP, zero);
+                    let t = if key == "nosep" { zero } else { self.glue_of("0pt plus .1pt") };
+                    self.set_rg(R_TOPSEP, t);
+                }
+            }
+            _ => {
+                self.not_native("an enumitem key the native job does not take");
+                return false;
+            }
+        }
+        true
     }
 
     /// `\enit@calcleft` for `leftmargin=*` (enumitem.sty:874), after the label's width:
@@ -12265,8 +17386,8 @@ impl Machine<'_, '_> {
         let Some(doc) = self.doc.as_mut() else { return };
         for &n in &kinds {
             for &l in &levels {
-                doc.enit_set.retain(|s| s.0 != n || s.1 != l);
-                doc.enit_set.push((n, l, keys.clone()));
+                doc.pkg.enit.set.retain(|s| s.0 != n || s.1 != l);
+                doc.pkg.enit.set.push((n, l, keys.clone()));
             }
         }
     }
@@ -12275,6 +17396,11 @@ impl Machine<'_, '_> {
     /// \textendash`, `\textasteriskcentered`, `\textperiodcentered`.
     fn label_mark(&mut self) {
         let Some(Label::Item(d)) = self.doc.as_ref().and_then(|d| d.lists.last()).map(|l| l.label) else { return };
+        // extarticle's `\labelitemi` is `\textbullet` alone (no `\labelitemfont`): in the
+        // font in force, the same only when that is `\normalfont`'s.
+        if d != 2 && self.doc.as_ref().is_some_and(|d| d.pkg.ext) && self.font_key().0 != self.rm_key("m/n") {
+            return self.not_native("extarticle's \\labelitem in a font other than \\normalfont");
+        }
         let size = self.font_size_name();
         let key = self.rm_key("m/n");
         self.select_nfss(&key, size);
@@ -12286,7 +17412,7 @@ impl Machine<'_, '_> {
             3 => ("TS1", "m/n", 0x2a),
             _ => ("TS1", "m/n", 0xb7),
         };
-        let key = format!("{enc}/{}/{shape}", self.family(0));
+        let key = format!("{enc}/{}/{shape}", self.normal_family());
         self.select_nfss(&key, size);
         self.append_char(c);
     }
@@ -12294,6 +17420,9 @@ impl Machine<'_, '_> {
     /// `\@labels`'s new contents: `\unhbox\@labels \hskip\itemindent \hskip-\labelwidth
     /// \hskip-\labelsep`, the label (`\hbox to\labelwidth` when narrower), `\hskip\labelsep`.
     fn item_labels(&mut self) {
+        if self.doc.as_ref().and_then(|d| d.lists.last()).is_some_and(|l| matches!(l.make, Make::DescUnboxed(_))) {
+            return self.enit_desc_labels();
+        }
         let w = self.rw(R_LABELWIDTH);
         let sep = self.rw(R_LABELSEP);
         let indent = self.rw(R_ITEMINDENT);
@@ -12594,6 +17723,176 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// `\nopagebreak` (`\@nopgbk` at 4): `\penalty\@M` in vertical mode, else `\@bsphack
+    /// \vadjust{\penalty\@M}\@esphack`.
+    pub(super) fn no_page_break(&mut self) {
+        self.page_penalty(10000);
+    }
+
+    /// `\enlargethispage{len}` (`\@enlargepage\@empty`): `\@tempskipa#2\relax`, then
+    /// `\@bsphack \insert\@kludgeins{\vskip-\@tempskipa}\@esphack` (insert 200, `\count`
+    /// 1000, `\dimen` `\maxdimen`, as scrlttr2's `enlargefirstpage`); the page builder lets
+    /// the page grow by it and `output_column` builds `\@make@specialcolbox`. The starred form
+    /// (`\hbox{\kern\p@}` first, the page squeezed) and glue that stretches are not ported.
+    fn enlarge_this_page(&mut self) {
+        if self.next_is('*') {
+            return self.not_native("\\enlargethispage*");
+        }
+        let mut arg = Vec::new();
+        self.read_arg(&mut arg);
+        let Some(g) = self.glue_arg(&arg) else { return self.not_native("\\enlargethispage of more than a length") };
+        if g.stretch != 0 || g.shrink != 0 || g.width > 0x1fff_ffff || self.mode == Mode::Math || self.two_columns() {
+            return self.not_native("\\enlargethispage of glue, too large, in math or in two columns");
+        }
+        let horizontal = self.mode == Mode::Horizontal;
+        if horizontal {
+            let saved = (self.last_skip(), self.aux);
+            if let Some(doc) = self.doc.as_mut() {
+                doc.sphack.push(saved);
+            }
+        }
+        let mut t = self.tex_tokens(&format!("\\global\\count200=1000 \\global\\dimen200=1073741823sp \\global\\skip200=0pt\\insert200{{\\vskip{}sp}}", -g.width));
+        if horizontal {
+            t.push(self.doc_id(doc!("rt@esphack")));
+        }
+        self.back_list(&t);
+    }
+
+    /// `\@no@pgbk #1[#2]`'s `\penalty #1\@getpen{#2}`: in vertical mode the penalty, else
+    /// `\@bsphack \vadjust{\penalty ..}\@esphack`.
+    fn page_penalty(&mut self, p: i32) {
+        match self.mode {
+            Mode::Vertical => self.build_penalty(p),
+            Mode::Horizontal => {
+                let saved = (self.last_skip(), self.aux);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.sphack.push(saved);
+                }
+                self.build_adjust(|m| m.build_penalty(p));
+                self.esphack_end();
+            }
+            _ => self.not_native("\\pagebreak or \\nopagebreak in math"),
+        }
+    }
+
+    /// `\@getpen{#2}` of the optional argument of `\linebreak`, `\nolinebreak`, `\pagebreak`
+    /// and `\nopagebreak` (`\@testopt ..4`): `\ifcase #2 \z@ \or \@lowpenalty \or
+    /// \@medpenalty \or \@highpenalty \else \@M \fi`, the three set to 51, 151 and 301 by every
+    /// class the native job takes (article.cls, report.cls, book.cls, amsart.cls, scrartcl.cls,
+    /// memoir.cls). `None` when the argument is not a number.
+    fn break_level(&mut self) -> Option<i32> {
+        if !self.next_is('[') {
+            return Some(10000);
+        }
+        let mut arg = self.bracket_arg();
+        if arg.is_empty() || !arg.iter().all(|t| t.cs_id().is_none() && (t.chr().is_ascii_digit() || t.chr() == ' ')) {
+            return None;
+        }
+        let relax = self.named_cs(named!("relax"));
+        arg.push(relax);
+        self.back_list(&arg);
+        let n = self.scan_int();
+        if let Some(t) = self.get_token().filter(|&t| t != relax) {
+            self.input.back(t);
+        }
+        Some(match n {
+            0 => 0,
+            1 => 51,
+            2 => 151,
+            3 => 301,
+            _ => 10000,
+        })
+    }
+
+    /// `\pagebreak[n]` (`\@no@pgbk-`) and `\nopagebreak[n]` (`\@no@pgbk`), latex.ltx's
+    /// ltspace.dtx.
+    fn page_break(&mut self, allow: bool) {
+        let Some(p) = self.break_level() else { return self.not_native("\\pagebreak of something not a digit") };
+        self.page_penalty(if allow { -p } else { p });
+    }
+
+    /// `\linebreak[n]` (`\@no@lnbk-`) and `\nolinebreak[n]` (`\@no@lnbk`): in vertical mode
+    /// `\@nolnerr`; else `\@tempskipa\lastskip \unskip \penalty #1\@getpen{#2}`, and when the
+    /// skip was positive `\hskip\@tempskipa \ignorespaces`.
+    fn latex_line_break(&mut self, allow: bool) {
+        let Some(p) = self.break_level() else { return self.not_native("\\linebreak of something not a digit") };
+        match self.mode {
+            Mode::Vertical => self.error("There's no line here to end"),
+            Mode::Horizontal => {
+                let skip = self.last_skip();
+                self.unskip();
+                self.build_penalty(if allow { -p } else { p });
+                if skip.width > 0 {
+                    self.build_glue(skip, false);
+                    self.ignore_spaces();
+                }
+            }
+            _ => self.not_native("\\linebreak in math"),
+        }
+    }
+
+    /// `\newline`: `\@normalcr\relax`, so neither `*` nor `[` is seen: `\@gnewline\relax`, in
+    /// vertical mode `\@nolnerr`, else `\unskip \relax{\relax\relax} \nobreak \hfil \break`
+    /// (the group adds nothing).
+    fn new_line(&mut self) {
+        if self.mode == Mode::Vertical {
+            return self.error("There's no line here to end");
+        }
+        self.unskip();
+        self.build_penalty(10000);
+        self.build_glue(super::engine_box::fil_glue(super::engine_prim::Prim::Hfil), false);
+        self.build_penalty(-10000);
+    }
+
+    /// `\-` (latex.ltx under pdfTeX): `\discretionary{\char\hyphenchar\font}{}{}`, which is
+    /// the primitive's discretionary (§1117) while the font's `\hyphenchar` is a character
+    /// of it; with a negative one (cmtt's `\hyphenchar\font\m@ne`) LaTeX's has
+    /// `\defaulthyphenchar` where the primitive has nothing.
+    fn soft_hyphen(&mut self) {
+        if self.leave_vmode() {
+            return;
+        }
+        if self.mode != Mode::Horizontal {
+            return self.not_native("\\- in math");
+        }
+        let f = self.cur_font();
+        let font = &self.e.fonts.list[f as usize];
+        if !u8::try_from(font.hyphen_char).is_ok_and(|c| font.metrics.exists(c)) {
+            return self.not_native("\\- in a font without its hyphen character");
+        }
+        self.append_discretionary(true);
+    }
+
+    /// `\raggedbottom` (`\def\@textbottom{\vskip \z@ \@plus.0001fil}`) and `\flushbottom`
+    /// (`\let\@textbottom\relax`), read by the output routine at each column; local, so only
+    /// outside groups.
+    fn ragged_bottom(&mut self, ragged: bool) {
+        if !self.groups.is_empty() || self.memoir() {
+            return self.not_native("\\raggedbottom in a group or under memoir");
+        }
+        if let Some(d) = self.doc.as_mut() {
+            d.bottom = Some(ragged);
+        }
+    }
+
+    /// Whether `\@textbottom` is `\raggedbottom`'s: the class's, until the document says.
+    pub(super) fn bottom_ragged(&self) -> bool {
+        self.doc.as_ref().is_some_and(|d| d.bottom.unwrap_or_else(|| d.class.flag("raggedbottom")))
+    }
+
+    /// `\hyphenation{words}`: the primitive (§934), which LaTeX keeps, for the `\language` in
+    /// force. Under babel the preamble's is the main language's: babel.sty selects it as the
+    /// package ends, where the native job selects it at `\begin{document}`
+    /// (`babel_begin_document`).
+    fn hyphenation(&mut self) {
+        let main = self.doc.as_ref().filter(|d| !d.body).and_then(|d| d.babel.as_ref()).map(|b| b.main_number());
+        let Some(number) = main else { return self.hyph_data(super::engine_prim::Prim::Hyphenation) };
+        let saved = self.e.eqtb.word(param!("language"));
+        self.e.eqtb.set_word(param!("language"), number as i32, false);
+        self.hyph_data(super::engine_prim::Prim::Hyphenation);
+        self.e.eqtb.set_word(param!("language"), saved, false);
+    }
+
     /// `\@esphack`: `\spacefactor\@savsf`; when `\@savsk` was positive, `\nobreak
     /// \hskip\z@skip` if `\lastskip` is zero, then `\ignorespaces`.
     fn esphack_end(&mut self) {
@@ -12629,6 +17928,10 @@ impl Machine<'_, '_> {
         self.doc.as_ref().is_some_and(|d| d.packages.contains(&"amsmath"))
     }
 
+    pub(super) fn mathtools(&self) -> bool {
+        self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathtools"))
+    }
+
     /// amsmath's `\mathdisplay`: `\global\let\df@label\@empty`, the display's kind.
     fn ams_display(&mut self, kind: u8) {
         if let Some(doc) = self.doc.as_mut() {
@@ -12636,8 +17939,10 @@ impl Machine<'_, '_> {
                 return self.not_native("a display inside a display");
             }
             doc.ams_display = kind;
+            doc.display_env = kind;
             doc.df_label = None;
             doc.df_tag = None;
+            doc.eq_qed = false;
         }
     }
 
@@ -12650,15 +17955,28 @@ impl Machine<'_, '_> {
         let (kind, label, n) = (std::mem::take(&mut doc.ams_display), doc.df_label.take(), doc.equation);
         let _ = n;
         let tag = doc.df_tag.take();
+        let qed = std::mem::take(&mut doc.eq_qed);
         let mut t = Vec::new();
-        if kind == 1 {
+        // After `\qedhere`, `\veqno\alt@tag\df@tag` is `\eqno\vtop{\ialign{\hfil#\cr
+        // \tagform@\theequation\cr\qedsymbol\cr}}\setbox\z@\tagform@\theequation`, the last
+        // box into a register the display's group restores. Without a number the global
+        // `\alt@tag` would wait for the next tag: not native.
+        if qed && kind != 1 {
+            return self.not_native("\\qedhere in an equation without its number");
+        }
+        if qed {
+            let (open, close, cr) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'), self.named_cs(named!("cr")));
+            t.extend([self.named_cs(named!("eqno")), self.named_cs(named!("vtop")), open]);
+            self.ialign_tokens(&mut t);
+            t.extend([self.named_cs(named!("hfil")), Token::char(Cat::Param, '#'), cr, self.doc_id(doc!("rt@amstag")), cr, self.named_cs(named!("qedsymbol")), cr, close, close]);
+        } else if kind == 1 {
             t.extend([self.named_cs(named!("eqno")), self.doc_id(doc!("rt@amstag"))]);
         }
         // `\veqno\alt@tag\df@tag`: the tag's box, and `\@currentlabel` its text for the label.
-        if let Some((text, star)) = tag {
-            self.set_current_label(&text);
+        if let Some((text, star, toks)) = tag {
+            self.set_tag_label(&text, &toks);
             if let Some(doc) = self.doc.as_mut() {
-                doc.df_tag = Some((text, star));
+                doc.df_tag = Some((text, star, toks));
             }
             t.extend([self.named_cs(named!("eqno")), self.doc_id(doc!("rt@dftag"))]);
         }
@@ -12700,13 +18018,13 @@ impl Machine<'_, '_> {
 
     /// amsmath's `\tag{text}` and `\tag*{text}` in `equation`, `equation*` or `\[ \]`
     /// (`\tag@in@display`): `\nonumber`, then `\make@df@tag@@@` (`\tagform@{text}`) or
-    /// `\make@df@tag@@` (`\maketag@@@{text}`), each with `\@currentlabel` the text. The text
-    /// is characters only; a second `\tag`, or one in another display, is not native.
+    /// `\make@df@tag@@` (`\maketag@@@{text}`), each with `\@currentlabel` the text. A text
+    /// with commands, groups or math stays the document's tokens (`\tag{$\ast$}`); a second
+    /// `\tag`, or one in another display, is not native.
     fn tag(&mut self) {
-        // hyperref's `\Hy@make@anchor`: an `AMS.N` target from `\Hy@linkcounter`.
-        if self.hyper() {
-            return self.not_native("hyperref: \\tag");
-        }
+        // hyperref's `\Hy@make@anchor`: an `AMS.N` target from `\Hy@linkcounter` (`df_tag`),
+        // the text then typeset from tokens (microtype's protrusion at `rt@tagopen` and
+        // `rt@tagclose`, as at the characters).
         let star = self.next_is('*');
         let mut arg = Vec::new();
         self.read_arg(&mut arg);
@@ -12721,20 +18039,67 @@ impl Machine<'_, '_> {
         if doc.df_tag.is_some() {
             return self.not_native("a second \\tag");
         }
-        if arg.iter().any(|t| t.cs_id().is_some()) {
-            return self.not_native("a \\tag with commands");
-        }
-        let text: String = arg.iter().map(|t| t.chr()).collect();
+        // Letters, others and spaces are built as characters (with microtype's protrusion
+        // kerns at the parentheses); anything else is typeset from the tokens.
+        let plain = arg.iter().all(|t| t.cs_id().is_none() && matches!(t.cat(), Some(Cat::Letter | Cat::Other | Cat::Space)));
+        let (text, toks) = if plain { (arg.iter().map(|t| t.chr()).collect(), Vec::new()) } else { (String::new(), arg) };
         self.nonumber();
         if let Some(doc) = self.doc.as_mut() {
-            doc.df_tag = Some((text, star));
+            doc.df_tag = Some((text, star, toks));
         }
     }
 
+    /// `\@currentlabel` of a `\tag`: its text, or its tokens as the document wrote them
+    /// (`\tag@in@display`'s `\def\@currentlabel{#1}`).
+    pub(super) fn set_tag_label(&mut self, text: &str, toks: &[Token]) {
+        if toks.is_empty() {
+            return self.store_current_label(text);
+        }
+        let span = self.e.toks.store(toks);
+        self.e.eqtb.set_toks(CURRENT_LABEL, span, false);
+    }
+
     /// `\df@tag`'s box: `\tagform@{text}` is `\hbox{\m@th\normalfont(\ignorespaces text
-    /// \unskip\/)}`, `\maketag@@@{text}` `\hbox{\m@th\normalfont text}`.
+    /// \unskip\/)}`, `\maketag@@@{text}` `\hbox{\m@th\normalfont text}`. A text of tokens
+    /// goes back to the input in its `\hbox{...}`, the box's start (`rt@tagfont`, and
+    /// `rt@tagopen` for the `(`) and end (`rt@tagclose`) natives around it.
     fn df_tag(&mut self) {
-        let Some((text, star)) = self.doc.as_mut().and_then(|d| d.df_tag.take()) else { return };
+        let Some((mut text, star, mut toks)) = self.doc.as_mut().and_then(|d| d.df_tag.take()) else { return };
+        // hyperref's `\Hy@make@df@tag@@@` (and `@@`): `\Hy@make@anchor` first in the text,
+        // `\Hy@MakeCurrentHrefAuto{AMS}` (`AMS.N`) and `\Hy@raisedlink`'s anchor, after
+        // `\tagform@`'s `\ignorespaces`; the text then typeset from tokens.
+        if self.hyper() {
+            let Some(doc) = self.doc.as_mut() else { return };
+            doc.link_counter += 1;
+            if let Some(a) = doc.align.as_mut() {
+                a.tags[1] += 1;
+            }
+            let name = format!("AMS.{}", doc.link_counter);
+            self.set_current_href(&name);
+            let mut t = self.text_raised_link(name);
+            if toks.is_empty() {
+                t.extend(text.chars().map(|c| match c {
+                    ' ' => Token::char(Cat::Space, ' '),
+                    c if c.is_ascii_alphabetic() => Token::char(Cat::Letter, c),
+                    c => Token::char(Cat::Other, c),
+                }));
+            } else {
+                t.append(&mut toks);
+            }
+            (toks, text) = (t, String::new());
+        }
+        if !toks.is_empty() {
+            let mut t = vec![self.named_cs(named!("hbox")), Token::char(Cat::BeginGroup, '{'), self.doc_id(doc!("rt@tagfont"))];
+            if !star {
+                t.push(self.doc_id(doc!("rt@tagopen")));
+            }
+            t.extend(toks);
+            if !star {
+                t.push(self.doc_id(doc!("rt@tagclose")));
+            }
+            t.push(Token::char(Cat::EndGroup, '}'));
+            return self.back_list(&t);
+        }
         self.build_hbox(|m| {
             m.begin_group(SIMPLE_GROUP);
             m.normal_font();
@@ -12802,13 +18167,49 @@ impl Machine<'_, '_> {
         let Some(id) = self.doc.as_ref().map(|d| d.stretch_id) else { return };
         let text = self.e.toks.store(&[Token::END_MATCH, Token::char(Cat::Other, '1'), Token::char(Cat::Other, '.'), Token::char(Cat::Other, '2')]);
         self.e.eqtb.set_meaning(id, Meaning::Macro(super::engine_prim::Macro { text, flags: 0 }), false);
-        self.array_open_spec(None, &[b'@', b'{', b'}', b'l', b'@', b'{', tabular::QUAD, b'}', b'l', b'@', b'{', b'}']);
+        self.ams_array_open(&[b'@', b'{', b'}', b'l', b'@', b'{', tabular::QUAD, b'}', b'l', b'@', b'{', b'}']);
     }
 
     /// A matrix after its `\left` delimiter: `\hskip-\arraycolsep\array{*\c@MaxMatrixCols c}`.
     fn matrix_open(&mut self) {
         self.matrix_skip();
-        self.array_open_spec(None, b"*{10}{c}");
+        self.ams_array_open(b"*{10}{c}");
+    }
+
+    /// mathtools' `matrix*`, `pmatrix*`, ... (`[1][c]`): `\left delim\MT_matrix_begin:N #1`,
+    /// that is `\hskip-\arraycolsep\array{*\c@MaxMatrixCols #1}` with `#1` `l`, `c` or `r`;
+    /// the end is amsmath's matrix end (`\MT_matrix_end:`, then `\right delim`).
+    fn mt_matrix_begin(&mut self, name: &str) {
+        self.begin_group(SEMI_SIMPLE_GROUP);
+        if let Some(doc) = self.doc.as_mut() {
+            doc.endpe = false;
+        }
+        let col = if self.next_is('[') {
+            let s = self.bracket_arg();
+            match s.iter().filter(|t| t.cat() != Some(Cat::Space)).collect::<Vec<_>>()[..] {
+                [t] if t.cs_id().is_none() && matches!(t.chr(), 'l' | 'c' | 'r') => t.chr(),
+                _ => return self.not_native("a matrix* column not l, c or r"),
+            }
+        } else {
+            'c'
+        };
+        let base = name.trim_end_matches('*');
+        let mut t = Vec::new();
+        if base != "matrix" {
+            t.extend([self.named_cs(named!("left")), self.matrix_fence(base, true)]);
+        }
+        t.push(self.doc_id(match col {
+            'l' => doc!("rt@matrixl"),
+            'r' => doc!("rt@matrixr"),
+            _ => doc!("rt@matrixopen"),
+        }));
+        self.back_list(&t);
+    }
+
+    /// `matrix*`'s `\array{*\c@MaxMatrixCols l}` or `{... r}` after `\hskip-\arraycolsep`.
+    fn mt_matrix_open(&mut self, col: u8) {
+        self.matrix_skip();
+        self.ams_array_open(&[b'*', b'{', b'1', b'0', b'}', b'{', col, b'}']);
     }
 
     /// `\@arraycr`'s strut: `\vrule height\z@ depth\@tempdima width\z@`.
@@ -12842,10 +18243,24 @@ impl Machine<'_, '_> {
 
     /// `\refstepcounter{equation}`: `\c@equation` up one, `\@currentlabel` its `\arabic`.
     pub(super) fn equation_step(&mut self) {
+        if self.koma_front_numbers("an equation number") || self.equation_before_chapter() {
+            return;
+        }
         let Some(doc) = self.doc.as_mut() else { return };
         doc.equation += 1;
+        let n = doc.equation;
+        if self.doc.as_ref().is_some_and(|d| d.sub_eq.is_none()) && self.own_float_the(2, n).is_none() {
+            return self.not_native("a \\theequation the native job cannot read");
+        }
         let n = self.equation_text();
-        self.set_current_label(&n);
+        // An `eqnarray` row's `\stepcounter{equation}` under hyperref: no target of its own,
+        // the rows' labels keep the environment's (`eqnarray_begin`).
+        if self.hyper() && self.doc.as_ref().is_some_and(|d| d.eqnarray.is_some()) {
+            self.store_current_label(&n);
+        } else {
+            self.set_current_label(&n);
+        }
+        self.cref_step("equation");
     }
 
     /// article's `\appendix`: `\par\setcounter{section}{0}\setcounter{subsection}{0}
@@ -12854,6 +18269,11 @@ impl Machine<'_, '_> {
     fn appendix(&mut self) {
         // hyperref's `\appendix` adds no nodes: its `\theHchapter` (`\theHsection`) and anchor
         // prefixes are `hyperref::heading_anchor_name`'s.
+        // A float counter within a heading's: `\theHfigure` reads `\theHsection` (`\@addtoreset`'s
+        // patch, `\Hy@AlphNoErr` there) or, made before hyperref, `\thefigure` (`Alph1`): not followed.
+        if self.hyper() && self.doc.as_ref().is_some_and(|d| d.fig_within.iter().any(Option::is_some)) {
+            return self.not_native("hyperref: \\appendix with a float counter within a heading's");
+        }
         let Some(doc) = self.doc.as_mut() else { return };
         doc.counters[..2].fill(0);
         doc.appendix = true;
@@ -12861,10 +18281,60 @@ impl Machine<'_, '_> {
         self.input.back(par);
     }
 
+    /// An equation numbered before the first chapter under `\numberwithin{equation}{chapter}`
+    /// (`0.1`): not native.
+    pub(super) fn equation_before_chapter(&mut self) -> bool {
+        if self.doc.as_ref().is_some_and(|d| d.eq_chapter && d.counters[0] == 0) {
+            self.not_native("\\numberwithin{equation}{chapter}: an equation before the first chapter");
+            return true;
+        }
+        false
+    }
+
     /// `\theequation`: `\arabic{equation}`, after the heading numbers once amsmath's
-    /// `\numberwithin` has set a level.
+    /// `\numberwithin` has set a level; the document's own text (`own_float_the`, read by
+    /// `equation_step` first) outside `subequations`.
     pub(super) fn equation_text(&self) -> String {
-        self.doc.as_ref().map_or_else(String::new, |d| d.the_prefix[2].clone() + &within_text(&d.counters, d.appendix, d.eq_within, d.equation))
+        let Some(d) = self.doc.as_ref() else { return String::new() };
+        if d.sub_eq.is_none() {
+            if let Some(Some(t)) = self.own_float_the(2, d.equation) {
+                return t;
+            }
+        }
+        eq_text(d.sub_eq.as_ref().map(|s| &*s.0), &d.the_prefix[2], &d.counters, d.appendix, d.eq_within, d.equation)
+    }
+
+    /// amsmath's `subequations`: `\refstepcounter{equation}`, `\protected@edef
+    /// \theparentequation{\theequation}`, `\setcounter{parentequation}{\value{equation}}`,
+    /// `\setcounter{equation}{0}`, `\def\theequation{\theparentequation\alph{equation}}`,
+    /// `\ignorespaces`. Its end sets the counter back (`\ignorespacesafterend`). Not native
+    /// nested. With hyperref, `subequations_anchor`.
+    fn subequations_begin(&mut self) {
+        if self.doc.as_ref().is_some_and(|d| d.sub_eq.is_some()) {
+            return self.not_native("subequations inside subequations");
+        }
+        self.begin_group(SEMI_SIMPLE_GROUP);
+        if self.hyper() {
+            self.subequations_anchor();
+        } else {
+            self.equation_step();
+        }
+        let parent = self.equation_text();
+        if let Some(doc) = self.doc.as_mut() {
+            doc.sub_eq = Some((parent, doc.equation));
+            doc.equation = 0;
+        }
+        self.ignore_spaces();
+    }
+
+    fn subequations_end(&mut self) {
+        if let Some(doc) = self.doc.as_mut() {
+            if let Some((_, n)) = doc.sub_eq.take() {
+                doc.equation = n;
+            }
+            doc.sub_eq_h = None;
+        }
+        self.end_equation();
     }
 
     /// amsmath's `\numberwithin{equation}{level}` (`\counterwithin`): `\@addtoreset
@@ -12878,7 +18348,23 @@ impl Machine<'_, '_> {
         self.read_arg(&mut counter);
         self.read_arg(&mut level);
         let text = |a: &[Token]| a.iter().map(|t| t.chr()).collect::<String>();
+        // amsmath's `\numberwithin{figure}{section}`: `\@addtoreset` and `\thefigure` as
+        // `\counterwithin`'s (`float_within`).
+        if let Some(t) = ["figure", "table"].iter().position(|f| *f == text(&counter)) {
+            return self.float_within(t, &level, true);
+        }
         let (counter, level) = (text(&counter), text(&level));
+        // `\counterwithin` redefines `\the<counter>`: over the document's own, not native.
+        if PREFIXED.iter().position(|c| *c == counter.trim()).is_some_and(|k| !matches!(self.own_float_the(k, 0), Some(None))) {
+            return self.not_native("\\numberwithin after the document's \\the<counter>");
+        }
+        // report's and book's `\theequation` is `\ifnum \c@chapter>\z@ \thechapter.\fi
+        // \@arabic\c@equation`, reset by the chapter: the same, past the first chapter.
+        if counter.trim() == "equation" && level.trim() == "chapter" {
+            let Some(doc) = self.doc.as_mut().filter(|d| (d.report || d.book) && !d.memoir && !d.koma && !d.pkg.koma.book) else { return self.not_native("\\numberwithin within chapter outside report and book") };
+            doc.eq_chapter = true;
+            return;
+        }
         let Some(l) = ["section", "subsection", "subsubsection"].iter().position(|s| *s == level.trim()) else {
             return self.not_native("\\numberwithin within that level");
         };
@@ -12981,8 +18467,8 @@ impl Machine<'_, '_> {
     /// {plain}` (for `\pagestyle{empty}`, `special`); `\setcounter{footnote}{0}`.
     fn make_title(&mut self) {
         let Some(doc) = self.doc.as_mut() else { return };
-        if doc.report {
-            return self.make_title_page();
+        if doc.titlepage {
+            return if doc.koma { self.koma_make_title() } else { self.make_title_page() };
         }
         let [title, author, mut date] = std::mem::take(&mut doc.stored);
         doc.thanks = Some(Vec::new());
@@ -13010,9 +18496,14 @@ impl Machine<'_, '_> {
         }
         t.push(self.doc_id(NEW_PAGE));
         // One column: `\newpage \global\@topnum\z@` ("Prevents figures from going at top of
-        // page"), then `\@maketitle`'s `\newpage` (nothing more on the emptied page).
+        // page"), then `\@maketitle`'s `\newpage` (nothing more on the emptied page; in a
+        // box, as in `\twocolumn[\begin{@twocolumnfalse}\maketitle...]`, its `\vfil` and
+        // `\penalty-\@M` stay).
         if !twocol {
             t.push(self.doc_id(doc!("rt@notopfloats")));
+            if self.inner {
+                t.push(self.doc_id(NEW_PAGE));
+            }
         }
         t.extend([cs(self, named!("hbox")), open, close]);
         let skip = |m: &mut Self, t: &mut Vec<Token>, amount: &str| {
@@ -13036,13 +18527,20 @@ impl Machine<'_, '_> {
         skip(self, &mut t, "1.5em");
         t.extend([open, cs(self, named!("large")), cs(self, named!("lineskip")), Token::char(Cat::Other, '.'), Token::char(Cat::Other, '5')]);
         self.word_tokens("em", &mut t);
-        t.extend([Token::char(Cat::Space, ' '), cs(self, named!("begin")), open]);
-        self.word_tokens("tabular", &mut t);
-        t.extend([close, Token::char(Cat::Other, '['), Token::char(Cat::Letter, 't'), Token::char(Cat::Other, ']'), open, Token::char(Cat::Letter, 'c'), close]);
-        t.extend(author);
-        t.extend([cs(self, named!("end")), open]);
-        self.word_tokens("tabular", &mut t);
-        t.extend([close, cs(self, named!("par")), close]);
+        t.push(Token::char(Cat::Space, ' '));
+        if let Some(a) = self.authblk_title() {
+            // authblk's `tabular` as `center` (`engine_authblk`).
+            t.extend(a);
+        } else {
+            t.extend([cs(self, named!("begin")), open]);
+            self.word_tokens("tabular", &mut t);
+            t.extend([close, Token::char(Cat::Other, '['), Token::char(Cat::Letter, 't'), Token::char(Cat::Other, ']'), open, Token::char(Cat::Letter, 'c'), close]);
+            t.extend(author);
+            t.extend([cs(self, named!("end")), open]);
+            self.word_tokens("tabular", &mut t);
+            t.push(close);
+        }
+        t.extend([cs(self, named!("par")), close]);
         skip(self, &mut t, "1em");
         t.extend([open, cs(self, named!("large"))]);
         t.extend(date);
@@ -13061,6 +18559,9 @@ impl Machine<'_, '_> {
     /// article's title `\thefootnote` (`\@fnsymbol`) and `\@makefnmark`
     /// (`\rlap{\@textsuperscript{\normalfont\@thefnmark}}`), the text kept for `\@thanks`.
     fn thanks(&mut self) {
+        if self.doc.as_ref().is_some_and(|d| d.pkg.setspace_late) {
+            return self.not_native("a footnote with setspace after hyperref");
+        }
         if self.doc.as_ref().is_none_or(|d| d.thanks.is_none()) {
             return self.not_native("\\thanks outside \\maketitle");
         }
@@ -13073,6 +18574,19 @@ impl Machine<'_, '_> {
         }
         let mut text = Vec::new();
         self.read_arg(&mut text);
+        // french3.ldf's `\@footnotemarkFB`: `\leavevmode\unskip\unkern\FBfnmarkspace`
+        // (`\kern .5\fontdimen2\font`) before `\@footnotemark`; hyperref's `\maketitle` puts
+        // the kernel's `\H@@footnotemark` back for the title.
+        if self.babel_french() && !self.hyper() && self.mode == Mode::Horizontal {
+            self.unskip();
+            if self.tail().is_some_and(|t| t.kind == Kind::Kern) {
+                if let Some(n) = self.cur.pop() {
+                    self.e.nodes.flush_node(n);
+                }
+            }
+            let w = self.e.fonts.params(self.cur_font())[1];
+            self.hkern(crate::backend::scaled::xn_over_d(w, 0x8000, 0x10000));
+        }
         let sf = if self.mode == Mode::Horizontal { self.aux } else { -1 };
         if self.mode == Mode::Horizontal {
             self.cur.push(Node::new(Kind::Penalty, 10000));
@@ -13296,6 +18810,31 @@ impl Machine<'_, '_> {
         self.stretch_to(&a);
     }
 
+    /// `\linespread{#1}` (latex.ltx: `\set@fontsize{#1}\f@size\f@baselineskip`): `\f@linespread`
+    /// and `\baselinestretch` are `#1`, the `\size@update` waits for the next `\selectfont`. In
+    /// the preamble that is `\begin{document}`'s `\normalsize`; in the body, a `\selectfont`
+    /// right after it (another font change applying it later is not followed).
+    fn line_spread(&mut self) {
+        let mut a = Vec::new();
+        self.read_arg(&mut a);
+        if !self.doc.as_ref().is_some_and(|d| d.body) {
+            let id = self.named_id(named!("baselinestretch"));
+            let mut t = vec![Token::END_MATCH];
+            t.extend_from_slice(&a);
+            let text = self.e.toks.store(&t);
+            self.e.eqtb.set_meaning(id, Meaning::Macro(super::engine_prim::Macro { text, flags: 0 }), false);
+            if self.macro_factor(id, (false, 1, 0)).is_none() {
+                return self.not_native("a \\linespread that is not a number");
+            }
+            return;
+        }
+        let select = self.named_id(named!("selectfont"));
+        if self.next_unblank().and_then(|t| t.cs_id()) != Some(select) {
+            return self.not_native("\\linespread without \\selectfont after it");
+        }
+        self.stretch_to(&a);
+    }
+
     fn stretch_to(&mut self, body: &[Token]) {
         let id = self.named_id(named!("baselinestretch"));
         let mut t = vec![Token::END_MATCH];
@@ -13361,6 +18900,11 @@ impl Machine<'_, '_> {
     /// - the package's commands the native job runs as Rust natives ([`PACKAGE_NATIVES`]).
     fn install(&mut self, k: &'static crate::data::data_kernel::KernelTable<'static>, pkg: Option<&str>, fams: &mut Vec<[&'static str; 2]>, alphabets: &mut Vec<(&'static str, bool, Alphabet)>, relocate: Relocate) {
         use crate::data::data_kernel::{Def, MacroToken, MathFont};
+        // The table's `\let`s copy a primitive's meaning before its macros run: amsmath's
+        // `\@saveprimitive\overline\@@overline` lets `\@@overline` be the primitive, then
+        // defines `\overline` as `\@@overline{#1}`, so a let read after the macros would
+        // copy the macro and recurse.
+        let lets: Vec<(&str, Meaning)> = k.lets().map(|(name, p)| (name, self.e.eqtb.meaning(self.e.cs.intern(p)))).collect();
         for (name, d) in k.chars() {
             let cs = self.e.cs.intern(name);
             let m = match d {
@@ -13417,8 +18961,7 @@ impl Machine<'_, '_> {
             let id = self.e.cs.intern(name);
             self.e.eqtb.set_meaning(id, Meaning::Macro(super::engine_prim::Macro { text, flags: super::engine_prim::PROTECTED }), true);
         }
-        for (name, p) in k.lets() {
-            let m = self.e.eqtb.meaning(self.e.cs.intern(p));
+        for (name, m) in lets {
             let id = self.e.cs.intern(name);
             self.e.eqtb.set_meaning(id, m, true);
         }
@@ -13439,6 +18982,16 @@ impl Machine<'_, '_> {
             let text = self.e.toks.store(&t);
             let id = self.e.cs.intern(name);
             self.e.eqtb.set_meaning(id, Meaning::Macro(super::engine_prim::Macro { text, flags: 0 }), true);
+        }
+        // mathpazo's `\DeclareMathSymbol{+}{\mathbin}{upright}{"2B}` and kin (a character's
+        // `\mathcode`), its `\DeclareMathDelimiter{(}…` (`\delcode`) and `\medmuskip`.
+        for (kind, at, v) in k.codes() {
+            match (kind, &v[..]) {
+                ('m', &[v]) => self.e.eqtb.set_code(Code::Math, at, relocate.at(v as u32, 8) as i32, true),
+                ('d', &[v]) => self.e.eqtb.set_code(Code::Del, at, relocate.at(relocate.at(v as u32, 8), 20) as i32, true),
+                ('g', &[width, stretch, shrink, so, sho]) => self.e.eqtb.set_glue(Reg { region: Region::Glue, slot: at }, Glue { width, stretch, shrink, stretch_order: so as u8, shrink_order: sho as u8 }, true),
+                _ => {}
+            }
         }
         for f in k.math_fonts() {
             let (name, same, a) = match f {
@@ -13470,6 +19023,16 @@ impl Machine<'_, '_> {
                 self.e.eqtb.set_meaning(id, Meaning::Doc(i as u16), true);
             }
         }
+        // tikz.code.tex's `\usetikzlibrary`, for the libraries `use_tikz_library` takes.
+        if pkg == Some("tikz") {
+            self.pdf_doc.pgf_setup();
+            for (native, name) in [("rt@usetikzlibrary", "usetikzlibrary"), ("rt@tikzset", "tikzset"), ("rt@tikzstyle", "tikzstyle")] {
+                if let Some(i) = DOC.iter().position(|d| d.0 == native) {
+                    let id = self.e.cs.intern(name);
+                    self.e.eqtb.set_meaning(id, Meaning::Doc(i as u16), true);
+                }
+            }
+        }
     }
 
     /// `\usepackage{a,b}` in the preamble, for packages with a native table: each loads once,
@@ -13484,14 +19047,20 @@ impl Machine<'_, '_> {
         }
         let mut t = Vec::new();
         let mut opts = String::new();
+        let mut has_cs = false;
         if let Some(open) = self.next_unblank() {
             if open == Token::char(Cat::Other, '[') {
                 while let Some(x) = self.get_token() {
                     if x == Token::char(Cat::Other, ']') {
                         break;
                     }
-                    if x.cs_id().is_some() {
-                        return self.not_native("package options");
+                    // A command in the options: only caption's lengths take one (`\textwidth`).
+                    if let Some(id) = x.cs_id() {
+                        has_cs = true;
+                        opts.push('\\');
+                        opts.push_str(self.e.cs.name(id));
+                        opts.push(' ');
+                        continue;
                     }
                     opts.push(x.chr());
                 }
@@ -13501,9 +19070,16 @@ impl Machine<'_, '_> {
         }
         self.read_arg(&mut t);
         let names: String = t.iter().filter(|x| x.cs_id().is_none()).map(|x| x.chr()).collect();
+        if has_cs && names.trim() != "caption" {
+            return self.not_native("package options");
+        }
         for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
             if name == "geometry" {
                 self.geometry_load(&opts);
+                continue;
+            }
+            if name == "fullpage" {
+                self.fullpage_load(&opts);
                 continue;
             }
             if name == "hyperref" {
@@ -13513,8 +19089,45 @@ impl Machine<'_, '_> {
                 }
                 continue;
             }
+            if name == "caption" {
+                self.load_package(name);
+                if let Err(what) = self.caption_keys(&opts) {
+                    return self.not_native(what);
+                }
+                continue;
+            }
             if name == "fontenc" {
                 self.font_encoding(&opts);
+                continue;
+            }
+            // algorithm.sty, algorithmicx and algpseudocode (`engine_algorithm`).
+            if name == "algorithm" {
+                self.algorithm_load(&opts);
+                continue;
+            }
+            if name == "algorithmicx" || name == "algpseudocode" {
+                if name == "algorithmicx" && !opts.trim().is_empty() {
+                    return self.not_native("package options");
+                }
+                self.algorithmicx_load((name == "algpseudocode").then_some(opts.as_str()));
+                continue;
+            }
+            if name == "footmisc" {
+                if !footmisc_options_ok(&opts) {
+                    return self.not_native("package options");
+                }
+                self.load_package(name);
+                continue;
+            }
+            // enumitem's `shortlabels` (`\enit@shl`); it changes nothing else.
+            if name == "enumitem" && !opts.trim().is_empty() {
+                if opts.split(',').map(str::trim).any(|o| !o.is_empty() && o != "shortlabels") {
+                    return self.not_native("package options");
+                }
+                self.load_package(name);
+                if let Some(d) = self.doc.as_mut() {
+                    d.pkg.enit.short = true;
+                }
                 continue;
             }
             if name == "natbib" {
@@ -13529,6 +19142,11 @@ impl Machine<'_, '_> {
                 self.babel_load(&opts);
                 continue;
             }
+            if name == "cleveref" {
+                self.load_package(name);
+                self.cleveref_load(&opts);
+                continue;
+            }
             if name == "titlesec" {
                 self.load_package(name);
                 self.titlesec_load(&opts);
@@ -13540,10 +19158,78 @@ impl Machine<'_, '_> {
                 self.load_package("colortbl");
                 continue;
             }
+            if name == "tcolorbox" && tcolorbox::most(&opts) {
+                self.load_package(name);
+                self.load_package("amsmath");
+                self.load_package("listings");
+                continue;
+            }
+            // nth's `super` (`\nthscript` is `\textsuperscript`).
+            if name == "nth" && opts.trim() == "super" {
+                self.load_package(name);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.pkg.nth_super = true;
+                }
+                continue;
+            }
+            // mathpazo's `sc` (mathpazo.sty): `\rmdefault` pplx (Palatino with real small
+            // caps), and the operators family and `\mathit` in OT1/pplx.
+            if name == "mathpazo" && opts.trim() == "sc" {
+                self.load_package(name);
+                let t = self.tex_tokens("\\long\\def\\rmdefault{pplx}");
+                self.back_list(&t);
+                if let Some(doc) = self.doc.as_mut() {
+                    if let Some(f) = doc.fams.first_mut() {
+                        *f = ["OT1/pplx/m/n", "OT1/pplx/b/n"];
+                    }
+                    if let Some(a) = doc.alphabets.iter_mut().find(|a| a.0 == "mathit") {
+                        a.2 = Alphabet::Shape("OT1/pplx/m/it", None);
+                    }
+                }
+                continue;
+            }
+            if name == "cancel" {
+                let Some(v) = cancel::cancel_options(&opts) else { return self.not_native("package options") };
+                self.load_package(name);
+                self.cancel_set_options(v);
+                continue;
+            }
             if !same_options(name, &opts) {
                 return self.not_native("package options");
             }
+            // xcolor's `svgnames` (`\XC@declarenames`): svgnam.def's `\preparecolorset{rgb}`,
+            // each colour's values as xcolor keeps them. Given when xcolor is already loaded,
+            // it is an option clash.
+            let svg = name == "xcolor" && opts.split(',').any(|o| o.trim() == "svgnames");
+            if svg && self.doc.as_ref().is_some_and(|d| d.packages.contains(&"xcolor")) {
+                return self.not_native("xcolor's svgnames after xcolor");
+            }
+            // `dvipsnames`: dvipsnam.def's `\DefineNamedColor`s, xcolor's after it loads (its
+            // values normalised as `\definecolor`'s), color.sty's as written; color.sty's
+            // names are colours only with `usenames`.
+            let has = |o: &str| opts.split(',').any(|x| x.trim() == o);
+            let dvips = has("dvipsnames") && (name == "xcolor" || name == "color" && has("usenames"));
+            if dvips && self.doc.as_ref().is_some_and(|d| d.packages.contains(&name)) {
+                return self.not_native("dvipsnames after its package");
+            }
             self.load_package(name);
+            // Each set in the order of the options: a later set's name wins (xcolor's
+            // `package/xcolor/after` hooks run in that order).
+            for o in opts.split(',').map(str::trim) {
+                let (set, model, what) = match o {
+                    "svgnames" if svg => (&crate::data::data_color::SVG_NAMES[..], "rgb", "an svgnames colour"),
+                    "dvipsnames" if dvips => (&crate::data::data_color::DVIPS_NAMES[..], "cmyk", "a dvipsnames colour"),
+                    _ => continue,
+                };
+                let mut names = Vec::with_capacity(set.len());
+                for (n, vals) in set {
+                    let Some(lit) = self.color_literal(Some(model), vals, name == "xcolor") else { return self.not_native(what) };
+                    names.push((n.to_string(), lit));
+                }
+                if let Some(d) = self.doc.as_mut() {
+                    d.color_names.extend(names);
+                }
+            }
         }
     }
 
@@ -13578,7 +19264,7 @@ impl Machine<'_, '_> {
             d.t1 = true;
             d.font_switch.clear();
         }
-        for (name, code) in T1_TEXT_SYMBOLS {
+        for (name, code) in T1_TEXT_SYMBOLS.into_iter().chain(T1_ONLY_SYMBOLS) {
             let id = self.e.cs.intern(name);
             self.e.eqtb.set_meaning(id, Meaning::CharDef(code), true);
         }
@@ -13600,7 +19286,15 @@ impl Machine<'_, '_> {
             return;
         }
         let paper = PAPER_SIZES[(doc.options & 7) as usize];
-        let mut g = if doc.options & 8 != 0 { super::engine_geometry::Geometry::landscape_class(paper) } else { super::engine_geometry::Geometry::new(paper) };
+        // a0poster's `\paperwidth` and `\paperheight`, already turned for `portrait`.
+        let mut g = if doc.pkg.a0poster {
+            super::engine_geometry::Geometry::new(a0poster::a0poster_paper(doc.options))
+        } else if doc.options & 8 != 0 { super::engine_geometry::Geometry::landscape_class(paper) } else { super::engine_geometry::Geometry::new(paper) };
+        // `\Gm@save` at load: the head lengths `\newgeometry` restores (`\Gm@restore@org`).
+        let org = [5, 6, 7].map(|i| self.e.eqtb.word(Reg { region: Region::Dimen, slot: GEOMETRY + i }));
+        if let Some(doc) = self.doc.as_mut() {
+            doc.pkg.gm.org = org;
+        }
         self.load_package("geometry");
         self.geometry_keys(&mut g, opts);
     }
@@ -13626,8 +19320,19 @@ impl Machine<'_, '_> {
         let i = self.e.eqtb.word(CURRENT_COLOR);
         match self.doc.as_ref() {
             Some(d) if i > 0 => d.colors[i as usize - 1].clone(),
-            _ => DEFAULT_COLOR.to_string(),
+            _ => self.default_color(),
         }
+    }
+
+    /// `\default@color`'s literal: the colour at `\begin{document}`.
+    pub(super) fn default_color(&self) -> String {
+        self.doc.as_ref().and_then(|d| d.default_color.clone()).unwrap_or_else(|| DEFAULT_COLOR.to_string())
+    }
+
+    /// A push of `\default@color` (`\normalcolor`'s `\set@color`).
+    pub(super) fn push_default_color(&mut self) {
+        let c = self.default_color();
+        self.color_stack(Some(&c));
     }
 
     /// The literal of a colour: `name` (a `\definecolor` one or predefined), or with a model,
@@ -13661,11 +19366,13 @@ impl Machine<'_, '_> {
         if xcolor && (model == "HTML" || model == "RGB" && define) {
             return xcolor::from_255(model, spec).map(|c| c.literal());
         }
-        let parts: Vec<&str> = spec.split(',').collect();
+        let norm = define && xcolor;
+        // xcolor's `\definecolor` reads each value as a dimension (`\dimen@ #1\p@`), which
+        // skips the spaces around it; color.sty keeps them in the literal.
+        let parts: Vec<&str> = spec.split(',').map(|p| if norm { p.trim() } else { p }).collect();
         if parts.iter().any(|p| p.is_empty() || p.contains(char::is_whitespace)) {
             return None;
         }
-        let norm = define && xcolor;
         let mut vals = Vec::with_capacity(parts.len());
         for p in &parts {
             vals.push(match model {
@@ -13686,6 +19393,36 @@ impl Machine<'_, '_> {
     }
 
     /// The text of tokens that are all characters.
+    /// nth.sty's `\nth{n}`: `\number n`, then `\nthscript` of its suffix, `th` for the
+    /// teens and for the last digits 0 and 4 to 9, else `st`, `nd`, `rd`. A negative number
+    /// (`$-$` and nth's `\nthtest`) or text other than a number is not native.
+    fn nth(&mut self) {
+        let mut t = Vec::new();
+        self.read_arg(&mut t);
+        let Some(n) = Self::plain_text(&t).and_then(|s| s.trim().parse::<u32>().ok()) else {
+            return self.not_native("\\nth of anything but a number");
+        };
+        let suffix = match (n / 10 % 10, n % 10) {
+            (1, _) => "th",
+            (_, 1) => "st",
+            (_, 2) => "nd",
+            (_, 3) => "rd",
+            _ => "th",
+        };
+        let sup = self.doc.as_ref().is_some_and(|d| d.pkg.nth_super);
+        let mut out: Vec<Token> = n.to_string().chars().map(|c| Token::char(Cat::Other, c)).collect();
+        out.push(Token::cs(self.e.cs.intern("relax")));
+        if sup {
+            out.push(Token::cs(self.e.cs.intern("textsuperscript")));
+            out.push(Token::char(Cat::BeginGroup, '{'));
+        }
+        out.extend(suffix.chars().map(|c| Token::char(Cat::Letter, c)));
+        if sup {
+            out.push(Token::char(Cat::EndGroup, '}'));
+        }
+        self.back_list(&out);
+    }
+
     fn plain_text(t: &[Token]) -> Option<String> {
         t.iter().map(|x| x.cs_id().is_none().then(|| x.chr())).collect()
     }
@@ -13693,7 +19430,8 @@ impl Machine<'_, '_> {
     /// `\color[model]{spec}` or `\color{name}` in the body: `\current@color` set and
     /// `\set@color` (a push, the pop after the group), then `\ignorespaces`.
     fn color_command(&mut self) {
-        if self.doc.as_ref().is_none_or(|d| !d.body) {
+        let preamble = self.doc.as_ref().is_none_or(|d| !d.body);
+        if preamble && (!self.colored() || self.e.eqtb.level() > 1) {
             return self.not_native("\\color in the preamble");
         }
         let model = if self.next_is('[') { Some(self.bracket_arg()) } else { None };
@@ -13714,6 +19452,12 @@ impl Machine<'_, '_> {
             }
         };
         self.e.eqtb.set_word(CURRENT_COLOR, i as i32 + 1, false);
+        // In the preamble (group level 0, `\aftergroup` idle): the push waits for the main
+        // list `\document` makes.
+        if preamble {
+            doc.preamble_colors.push(lit);
+            return self.ignore_spaces();
+        }
         self.color_stack(Some(&lit));
         let after = [self.named_cs(named!("aftergroup")), self.doc_id(doc!("rt@resetcolor")), self.named_cs(named!("ignorespaces"))];
         self.back_list(&after);
@@ -13742,14 +19486,16 @@ impl Machine<'_, '_> {
         self.back_list(&t);
     }
 
-    /// `\definecolor{name}{model}{spec}` in the preamble.
+    /// `\definecolor{name}{model}{spec}` in the preamble, or in the body outside any group
+    /// (its local definition then lasts to the end, as a preamble one does; a later one
+    /// of the same name is found first).
     fn define_color(&mut self) {
         let mut a = [Vec::new(), Vec::new(), Vec::new()];
         for x in &mut a {
             self.read_arg(x);
         }
-        if self.doc.as_ref().is_none_or(|d| d.body) {
-            return self.not_native("\\definecolor in the body");
+        if self.doc.as_ref().is_none_or(|d| d.body) && !self.groups.is_empty() {
+            return self.not_native("\\definecolor in a group in the body");
         }
         let [Some(name), Some(model), Some(spec)] = a.map(|x| Self::plain_text(&x)) else {
             return self.not_native("a colour with commands");
@@ -13810,18 +19556,92 @@ impl Machine<'_, '_> {
     /// Package `name` from its native table, after the packages it loads; a second load does
     /// nothing. Its families must follow the ones in use when it was evaluated (`fam0`): the
     /// table's codes and macros name them as digits.
+    /// graphics.sty loaded without graphicx ([`Machine::load_package`]): no key-value forms.
+    pub(super) fn graphics_only(&self) -> bool {
+        self.doc.as_ref().is_some_and(|d| d.packages.contains(&"graphics"))
+    }
+
     fn load_package(&mut self, name: &str) {
-        if NO_EFFECT_PACKAGES.contains(&name) {
+        // graphics.sty: graphicx without its key-value forms, `graphics` in the list marking
+        // their absence until graphicx comes (by itself, pgf's or mathtools'), as `require`.
+        if matches!(name, "graphicx" | "tikz" | "pgf" | "mathtools") {
+            if let Some(d) = self.doc.as_mut() {
+                d.packages.retain(|p| *p != "graphics");
+            }
+        }
+        if name == "graphics" {
+            if !self.doc.as_ref().is_some_and(|d| d.packages.contains(&"graphicx")) {
+                self.load_package("graphicx");
+                if let Some(d) = self.doc.as_mut() {
+                    d.packages.push("graphics");
+                }
+            }
+            return;
+        }
+        // memoir.cls's `\EmulatedPackage{epigraph}`: `\usepackage` loads nothing.
+        if NO_EFFECT_PACKAGES.contains(&name) || name == "makeidx" || name == "epigraph" && self.memoir() || name == "ragged2e" && self.lttr_on() {
             return;
         }
         if let Some(&p) = DRIVER_PACKAGES.iter().find(|&&p| p == name) {
             // tabularx's `\RequirePackage{array}`, then `\TX@delta\hfuzz`.
             // colortbl's `\RequirePackage{array,color}`.
+            // makecell's `\RequirePackage{array}`.
+            if p == "makecell" {
+                self.load_package("array");
+            }
             if p == "colortbl" {
                 self.load_package("array");
                 if !self.doc.as_ref().is_some_and(|d| d.packages.contains(&"xcolor")) {
                     self.load_package("color");
                 }
+            }
+            // qrcode's `\RequirePackage{xcolor}`.
+            if p == "qrcode" {
+                self.load_package("xcolor");
+            }
+            // subcaption's `\RequirePackage{caption}`.
+            if (p == "subcaption" || p == "subfig") && !self.caption_pkg() {
+                self.load_package("caption");
+            }
+            // tcolorbox's `\RequirePackage{tikz}` (tcolorbox.sty:24).
+            if p == "tcolorbox" {
+                self.load_package("tikz");
+            }
+            // helvet.sty (psnfss 9.3) without options: `\RequirePackage{keyval}`, its `Hel`
+            // key (`\Hv@scale` stays undefined, so `ot1phv.fd` and kin scale nothing), then
+            // `\renewcommand{\sfdefault}{phv}` (`font_defaults` reads it at `\begin{document}`).
+            // pagecolor.sty (2025-01-28 v1.2d) without options: xcolor unless color is loaded,
+            // then `\pagecolor{white}` (its `pagecolor` key's default): every page from here on
+            // has a page colour.
+            if p == "pagecolor" {
+                if !self.doc.as_ref().is_some_and(|d| d.packages.contains(&"color")) {
+                    self.load_package("xcolor");
+                }
+                match self.color_literal(None, "white", false) {
+                    Some(lit) => {
+                        if let Some(doc) = self.doc.as_mut() {
+                            doc.pkg.page_color = Some(lit);
+                        }
+                    }
+                    None => self.not_native("pagecolor: white"),
+                }
+            }
+            if p == "helvet" {
+                self.load_package("keyval");
+                let t = self.tex_tokens("\\long\\def\\sfdefault{phv}");
+                self.back_list(&t);
+            }
+            // courier.sty (psnfss 9.3): `\renewcommand{\ttdefault}{pcr}` alone.
+            if p == "courier" {
+                let t = self.tex_tokens("\\long\\def\\ttdefault{pcr}");
+                self.back_list(&t);
+            }
+            // times.sty and palatino.sty (psnfss 9.3): `\renewcommand` of `\sfdefault` (phv),
+            // `\rmdefault` (ptm or ppl) and `\ttdefault` (pcr), nothing else.
+            if p == "times" || p == "palatino" {
+                let rm = if p == "times" { "ptm" } else { "ppl" };
+                let t = self.tex_tokens(&format!("\\long\\def\\sfdefault{{phv}}\\long\\def\\rmdefault{{{rm}}}\\long\\def\\ttdefault{{pcr}}"));
+                self.back_list(&t);
             }
             if p == "tabularx" {
                 self.load_package("array");
@@ -13845,9 +19665,31 @@ impl Machine<'_, '_> {
                 if p == "fancyhdr" {
                     self.fancy_load();
                 }
-                // hyperref's `\RequirePackage{url}`.
+                // multicol's `\columnbreak` (`column_break`).
+                if p == "multicol" {
+                    let id = self.e.cs.intern("columnbreak");
+                    self.e.eqtb.set_meaning(id, Meaning::Doc(doc!("rt@columnbreak") as u16), true);
+                }
+                // authblk's `\affil`; its `\author` is the native `author` (`engine_authblk`).
+                if p == "authblk" {
+                    self.authblk_load();
+                    let id = self.e.cs.intern("affil");
+                    self.e.eqtb.set_meaning(id, Meaning::Doc(doc!("rt@affil") as u16), true);
+                }
+                // hyperref's `\RequirePackage{url}`; xurl's, after which it redefines
+                // `\UrlBreaks` and sets `\Urlmuskip` (`engine_url`). Its biblatex counters are
+                // set only when biblatex came first: not native.
                 if p == "hyperref" {
                     self.load_package("url");
+                }
+                if p == "xurl" {
+                    if self.doc.as_ref().is_some_and(|d| d.biblatex.is_some()) {
+                        return self.not_native("xurl after biblatex");
+                    }
+                    self.load_package("url");
+                    if let Some(doc) = self.doc.as_mut() {
+                        doc.pkg.xurl = true;
+                    }
                 }
                 // siunitx's `\RequirePackage{amstext}` and `{array}` (siunitx.sty:4694, 9852);
                 // its color comes at `\begin{document}`. None of its commands is native.
@@ -13859,9 +19701,12 @@ impl Machine<'_, '_> {
                     self.parskip_load();
                 }
                 // setspace.sty replaces `\@footnotetext` whole, at load: after hyperref it
-                // would drop hyperref's footnote anchors (hyperref.sty's `\H@@footnotetext`).
+                // drops hyperref's footnote anchors (hyperref.sty's `\H@@footnotetext`), which
+                // only a footnote shows (`footnote`, `thanks`).
                 if p == "setspace" && self.hyper() {
-                    return self.not_native("setspace after hyperref");
+                    if let Some(doc) = self.doc.as_mut() {
+                        doc.pkg.setspace_late = true;
+                    }
                 }
                 if p == "url" {
                     let pens = [param!("relpenalty"), param!("binoppenalty")].map(|r| self.e.eqtb.word(r));
@@ -13898,7 +19743,12 @@ impl Machine<'_, '_> {
         let mut relocate = Relocate { from: fam0 as u32, by: 0 };
         if own && doc.fams.len() != fam0 as usize {
             let fams_after = doc.fams.len() + k.math_fonts().filter(|f| matches!(f, MathFont::Symbol { fam, .. } if *fam >= fam0)).count();
-            if doc.fams.len() < fam0 as usize || fams_after > 16 || k.macro_names().next().is_some() || k.ops().next().is_some() {
+            // A macro may stay when its body names families only through names the table
+            // relocates (esint's `\int` is `\intop\ilimits@`, stmaryrd's `\mapsfrom` is
+            // `\leftarrow\mapsfromchar`): no primitive that takes a family number.
+            let digits = |n: &str| matches!(n, "mathchar" | "mathchardef" | "delimiter" | "fam" | "mathaccent" | "radical" | "mathcode" | "delcode" | "textfont" | "scriptfont" | "scriptscriptfont");
+            let macros_ok = k.macros().all(|(_, _, toks)| toks.iter().all(|t| !matches!(*t, crate::data::data_kernel::MacroToken::Cs(n) if digits(n))));
+            if doc.fams.len() < fam0 as usize || fams_after > 16 || !macros_ok || k.ops().next().is_some() {
                 return self.not_native("a math package after other math fonts");
             }
             relocate.by = (doc.fams.len() - fam0 as usize) as u32;
@@ -13907,17 +19757,27 @@ impl Machine<'_, '_> {
         doc.packages.push(pkg);
         let (mut fams, mut alphabets) = (std::mem::take(&mut doc.fams), std::mem::take(&mut doc.alphabets));
         self.install(k, Some(pkg), &mut fams, &mut alphabets, relocate);
+        // mathpazo's `\AtBeginDocument` declares msa and msb at `s*[1.042]` and euf at its own
+        // sizes, which amsfonts' shapes in the tables are not.
+        if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathpazo") && d.packages.contains(&"amsfonts")) {
+            return self.not_native("amsfonts with mathpazo");
+        }
         // amsfonts' `\symAMSb`, the family of its wide accents.
-        let msb = fams.iter().position(|&[f, _]| f == "U/msb/m/n").unwrap_or(0) as u32;
+        let msb =fams.iter().position(|&[f, _]| f == "U/msb/m/n").unwrap_or(0) as u32;
         if let Some(doc) = self.doc.as_mut() {
             (doc.fams, doc.alphabets) = (fams, alphabets);
             doc.wide_fam = msb;
             doc.math_size = "";
         }
+        // ifoddpage.sty's `\write\@auxout{\noexpand\providecommand..}` at load: a write node
+        // on the main list in the preamble, so on the first page.
+        if name == "ifoddpage" {
+            self.aux_write(0);
+        }
     }
 
     /// `\strut` (`\relax\ifmmode\copy\strutbox\else\unhcopy\strutbox\fi`): in a paragraph
-    /// or a box, the strut box's rule, `\vrule\@height.7\baselineskip\@depth.3\baselineskip
+    /// or a box (in a formula the box itself), the strut box's rule, `\vrule\@height.7\baselineskip\@depth.3\baselineskip
     /// \@width\z@` as `strut_update` last measured it.
     fn strut(&mut self) {
         // In vertical mode `\unhcopy` starts a paragraph first (§1090 `new_graf(true)`):
@@ -13928,10 +19788,14 @@ impl Machine<'_, '_> {
             self.back_list(&t);
             return self.new_graf(true);
         }
+        let (h, d) = (self.e.eqtb.word(STRUT_HT), self.e.eqtb.word(STRUT_DP));
+        // In a formula `\copy\strutbox`: the box (`\hbox{\vrule...}`) as a noad (§1076).
+        if self.mode == Mode::Math {
+            return self.build_hbox(|m| m.build_rule([0, h, d]));
+        }
         if self.mode != Mode::Horizontal {
             return self.not_native("\\strut outside a paragraph or a box");
         }
-        let (h, d) = (self.e.eqtb.word(STRUT_HT), self.e.eqtb.word(STRUT_DP));
         self.build_rule([0, h, d]);
     }
 
@@ -13966,9 +19830,15 @@ impl Machine<'_, '_> {
         }
         let mut width = Vec::new();
         self.read_arg(&mut width);
-        if !matches!(width[..], [t] if t.cs_id().is_none() && t.chr() == '*') {
-            return self.not_native("a \\multirow width other than *");
-        }
+        // `*`: the natural width; a length: `\multirow@vbox{#1}{\setlength\hsize{#4}
+        // \@parboxrestore}{\strut#6\strut\par}` (`=`, the column's width, declines).
+        let width = if matches!(width[..], [t] if t.cs_id().is_none() && t.chr() == '*') {
+            None
+        } else if matches!(width[..], [t] if t.cs_id().is_none() && t.chr() == '=') {
+            return self.not_native("a \\multirow width of =");
+        } else {
+            Some(self.dimen_arg(width))
+        };
         let shift = if self.next_is('[') {
             let arg = self.bracket_arg();
             self.dimen_arg(arg)
@@ -14019,9 +19889,24 @@ impl Machine<'_, '_> {
         if pos != 't' {
             t.push(cs(self, named!("vfill")));
         }
-        t.extend([cs(self, named!("multirowsetup")), cs(self, named!("hbox")), open, self.doc_id(doc!("strut"))]);
-        t.extend(text);
-        t.extend([self.doc_id(doc!("strut")), close]);
+        match width {
+            None => {
+                t.extend([cs(self, named!("multirowsetup")), cs(self, named!("hbox")), open, self.doc_id(doc!("strut"))]);
+                t.extend(text);
+                t.extend([self.doc_id(doc!("strut")), close]);
+            }
+            Some(w) => {
+                // `#2` before the `\vfill`: `\hsize` and `\@parboxrestore` (`rt@mrwidth`).
+                let at = t.iter().rposition(|x| *x == open).map_or(t.len(), |k| k + 1);
+                let mut set = vec![self.doc_id(doc!("rt@mrwidth"))];
+                set.extend(sp(w));
+                set.push(Token::char(Cat::Space, ' '));
+                t.splice(at..at, set);
+                t.extend([cs(self, named!("multirowsetup")), self.doc_id(doc!("strut"))]);
+                t.extend(text);
+                t.extend([self.doc_id(doc!("strut")), cs(self, named!("par"))]);
+            }
+        }
         if pos != 'b' {
             t.push(cs(self, named!("vfill")));
         }
@@ -14061,17 +19946,24 @@ impl Machine<'_, '_> {
             self.utf8_char(x.t);
             return true;
         }
+        // ot1enc.def's `\textexclamdown` is `!``, characters of the word (a ligature); babel's
+        // `\glqq`, `\grqq` and `\glq` in T1 are a `\chardef`'s character.
+        let quote = [doc!("glqq"), doc!("grqq"), doc!("glq")].contains(&(i as usize));
+        if self.mode != Mode::Math && (!self.t1() && (i as usize == doc!("textexclamdown") || i as usize == doc!("textquestiondown")) || self.t1() && quote) {
+            DOC[i as usize].1(self);
+            return true;
+        }
         if !self.t1() || self.mode == Mode::Math {
             return false;
         }
-        // `\c` of a T1 composite (`\DeclareTextComposite{\c}{T1}{C}{199}`, as UTF-8 `Ç` writes
-        // it) is its character too, so a kern before it is the font's (`AÇ`).
-        if DOC.get(i as usize).is_some_and(|d| d.0 == "c") {
+        // `\c` (and `\k`) of a T1 composite (`\DeclareTextComposite{\c}{T1}{C}{199}`, as UTF-8
+        // `Ç` writes it) is its character too, so a kern before it is the font's (`AÇ`).
+        if let Some(acc) = DOC.get(i as usize).filter(|d| d.0 == "c" || d.0 == "k").map(|d| d.0.as_bytes()[0]) {
             let mut arg = Vec::new();
             self.read_arg(&mut arg);
             if let [t] = arg[..] {
-                if t.cat() == Some(Cat::Letter) && !"gGKkLlNnRr".contains(t.chr()) {
-                    if let Ok(j) = T1_COMPOSITE_KEYS.binary_search(&((b'c' as u16) << 8 | t.chr() as u16)) {
+                if t.cat() == Some(Cat::Letter) && !(acc == b'c' && "gGKkLlNnRr".contains(t.chr())) {
+                    if let Ok(j) = T1_COMPOSITE_KEYS.binary_search(&((acc as u16) << 8 | t.chr() as u16)) {
                         self.back_list(&[Token::char(Cat::Letter, char::from(T1_COMPOSITE_SLOTS[j]))]);
                         return true;
                     }
@@ -14117,9 +20009,34 @@ impl Machine<'_, '_> {
             let Some(t) = next else { return self.not_native("a UTF-8 character cut short") };
             c = c << 6 | (t.chr() as u32 & 0x3F);
         }
-        let Some(text) = crate::data::data_utf8::text(c) else { return self.not_native("a UTF-8 character the kernel does not declare") };
+        let Some(text) = crate::data::data_utf8::text(c) else {
+            // `RT_NATIVE_ALL=1`: which character.
+            if native_all() {
+                eprintln!("decline: the UTF-8 character U+{c:04X} {}", char::from_u32(c).unwrap_or('?'));
+            }
+            return self.not_native("a UTF-8 character the kernel does not declare");
+        };
         let toks = self.tex_tokens(text);
         self.back_list(&toks);
+    }
+
+    /// A `\tag` text of the source (`tag_text`'s U+FFFF value) as the document's tokens: a run
+    /// of spaces and line ends one space, `_` and `^` the script characters, `~` the active
+    /// tie (which [`Self::tex_tokens`] makes other).
+    pub(super) fn tag_source_tokens(&mut self, raw: &str) -> Vec<Token> {
+        let mut text = String::with_capacity(raw.len());
+        for c in raw.chars() {
+            let c = if c.is_whitespace() { ' ' } else { c };
+            if !(c == ' ' && text.ends_with(' ')) {
+                text.push(c);
+            }
+        }
+        self.tex_tokens(&text).into_iter().map(|t| match (t.cat(), t.chr()) {
+            (Some(Cat::Other), '_') => Token::char(Cat::Subscript, '_'),
+            (Some(Cat::Other), '^') => Token::char(Cat::Superscript, '^'),
+            (Some(Cat::Other), '~') => Token::char(Cat::Active, '~'),
+            _ => t,
+        }).collect()
     }
 
     /// The tokens of `text` as TeX reads it under the document's catcodes: control words
@@ -14222,16 +20139,39 @@ impl Machine<'_, '_> {
     }
 
     /// `\check@mathfonts`: when the size differs from the one the families were set for,
-    /// `\glb@settings`.
+    /// `\glb@settings`, and in a formula inside another's box `\init@restore@glb@settings`
+    /// (`\aftergroup\restglb@settings`, defined locally by the outer check); then
+    /// `\let\curr@math@size\f@size` and that local definition. Both are kept as local
+    /// `\chardef`s: `rt@currmathsize` (the size command's row) and `rt@initrestore`.
     fn check_math_fonts(&mut self) {
         if self.e.eqtb.word(SIZE_SUBST) > 0 {
             return self.not_native("math after a \\fontsize its shape did not have");
         }
         let size = self.font_size_name();
-        if self.doc.as_ref().is_some_and(|d| d.math_size == size) {
-            return;
+        if self.doc.as_ref().is_none_or(|d| d.math_size != size) {
+            self.glb_settings();
+            let armed = self.e.cs.intern("rt@initrestore");
+            if self.e.eqtb.meaning(armed) == Meaning::CharDef(1) {
+                let level = self.e.eqtb.level();
+                let t = self.doc_id(doc!("rt@restglb"));
+                self.after_group.push((level, t));
+            }
         }
-        self.glb_settings();
+        let Some(row) = (0..data_class::SIZE_COMMANDS.len()).find(|&i| self.size_row(i).fsize == size) else { return };
+        let (curr, armed) = (self.e.cs.intern("rt@currmathsize"), self.e.cs.intern("rt@initrestore"));
+        self.e.eqtb.set_meaning(curr, Meaning::CharDef(row as u32), false);
+        self.e.eqtb.set_meaning(armed, Meaning::CharDef(1), false);
+    }
+
+    /// `\restglb@settings`, after an inner formula's group: `\glb@settings` at the outer
+    /// formula's `\curr@math@size` when the families are at another size.
+    fn restore_glb_settings(&mut self) {
+        let curr = self.e.cs.intern("rt@currmathsize");
+        let Meaning::CharDef(row) = self.e.eqtb.meaning(curr) else { return };
+        let size = self.size_row(row as usize).fsize;
+        if self.doc.as_ref().is_none_or(|d| d.math_size != size) {
+            self.glb_settings_at(size);
+        }
     }
 
     /// `\glb@settings`: the math version's families set (globally) at the size and its
@@ -14239,9 +20179,16 @@ impl Machine<'_, '_> {
     /// families 0 to 3; then `\every@math@size`.
     fn glb_settings(&mut self) {
         let size = self.font_size_name();
-        // `\calculate@math@sizes` for a size of `\fontsize` is not ported.
-        if (0..data_class::SIZE_COMMANDS.len()).all(|i| self.size_row(i).fsize != size) {
-            return self.not_native("math at a font size no size command sets");
+        self.glb_settings_at(size);
+    }
+
+    /// [`Self::glb_settings`] at `\f@size` `size`.
+    fn glb_settings_at(&mut self, size: &'static str) {
+        // A size fontmath.ltx declares that no size command sets keeps its `\S@` (not in the
+        // class table); any other size of `\fontsize` is `\calculate@math@sizes`'s.
+        let pazo = self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathpazo"));
+        if if pazo { pazo_math_sizes(size).is_none() } else { (0..data_class::SIZE_COMMANDS.len()).all(|i| self.size_row(i).fsize != size) && calculated_math_sizes(size).is_none() } {
+            return self.not_native("math at a font size fontmath.ltx declares and no size command sets");
         }
         let bold = self.bold_version() as usize;
         let fams = self.doc.as_ref().map(|d| d.fams.clone()).unwrap_or_default();
@@ -14404,6 +20351,10 @@ impl Machine<'_, '_> {
                     f
                 }
             };
+            // `\getanddefine@fonts`'s `\pickup@font`: microtype's hook, as in `select_nfss`.
+            if self.doc.as_ref().is_some_and(|d| d.body) && self.microtype() {
+                self.microtype_setup(key, f);
+            }
             self.e.eqtb.set_meaning(super::FAM_BASE_ID + 16 * k as u32 + fam as u32, Meaning::Font(f), true);
         }
         self.select_font(saved, false);
@@ -14518,13 +20469,51 @@ impl Machine<'_, '_> {
         // `\ftntm@font` empty: `\selectfont` at the script size keeps the current shape.
         let font = if self.doc.as_ref().is_some_and(|d| d.koma) { doc!("rt@scriptfont") } else { FN_MARK_FONT };
         out.extend([math, Token::char(Cat::Superscript, '^'), open, self.named_cs(named!("mbox")), open, self.doc_id(font)]);
-        out.extend(n.to_string().chars().map(|c| Token::char(Cat::Other, c)));
+        match self.own_footnote_mark() {
+            Some(cs) => out.push(cs),
+            None => out.extend(n.to_string().chars().map(|c| Token::char(Cat::Other, c))),
+        }
         out.extend([close, close, math, close, close]);
+    }
+
+    /// A `\thefootnote` of the document's own (`\renewcommand{\thefootnote}{\fnsymbol
+    /// {footnote}}`, `\let\thefootnote\relax` for a note without a number): the native job
+    /// gives the kernel's none, so any meaning is the document's. `\stepcounter{footnote}
+    /// \protected@xdef\@thefnmark{\thefootnote}` expands it at the step; the mark here and the
+    /// note's own mark (`footnote_setup`, at once after) expand it with the counter unchanged,
+    /// which is the same text (`\fnsymbol` and `\arabic{footnote}` read `Doc::footnote`).
+    fn own_footnote_mark(&mut self) -> Option<Token> {
+        let id = self.e.cs.intern("thefootnote");
+        (!matches!(self.e.eqtb.meaning(id), Meaning::Unset | Meaning::Undefined)).then(|| Token::cs(id))
+    }
+
+    /// `\fnsymbol{counter}`: `\@fnsymbol` of the footnote counter or one of the document's,
+    /// in text `\TextOrMath`'s first branch (`fn_symbol_tokens`); 1 to 9, else `\@ctrerr`.
+    fn fn_symbol(&mut self) {
+        let mut name = Vec::new();
+        self.read_arg(&mut name);
+        let text: String = name.iter().map(|t| if t.cs_id().is_some() { '\\' } else { t.chr() }).collect();
+        let n = match self.doc.as_ref() {
+            Some(d) if text == "footnote" => d.footnote,
+            Some(d) => match d.own_counters.iter().find(|c| *c.name == *text) {
+                Some(c) => c.value,
+                None => return self.not_native("\\fnsymbol of a counter not the footnote's or the document's"),
+            },
+            None => return,
+        };
+        if self.mode == Mode::Math {
+            return self.not_native("\\fnsymbol in math");
+        }
+        let Some(sym) = self.fn_symbol_tokens(n) else { return self.not_native("\\fnsymbol past 9") };
+        self.back_list(&sym);
     }
 
     /// `\footnote{text}`: `\stepcounter{footnote}`, `\@footnotemark` (`\leavevmode`, the
     /// space factor kept, `\nobreak`, `\@makefnmark`), then `\@footnotetext{text}`.
     fn footnote(&mut self) {
+        if self.doc.as_ref().is_some_and(|d| d.pkg.setspace_late) {
+            return self.not_native("a footnote with setspace after hyperref");
+        }
         if self.doc.as_ref().is_some_and(|d| d.thanks.is_some()) {
             return self.thanks();
         }
@@ -14539,6 +20528,10 @@ impl Machine<'_, '_> {
         }
         let mut text = Vec::new();
         self.read_arg(&mut text);
+        // `\@currentlabel` is `\@thefnmark`, which `footnote_setup` keeps as the number.
+        if self.own_footnote_mark().is_some() && text.contains(&self.named_cs(named!("label"))) {
+            return self.not_native("a \\label in a footnote with a \\thefootnote of the document's own");
+        }
         // scrartcl's `\@makefntext` adds `\advance\leftmargin1.5em` to `\@trivlist` (lists and
         // displays in the note).
         if self.doc.as_ref().is_some_and(|d| d.koma) && text.contains(&self.named_cs(named!("begin"))) {
@@ -14638,6 +20631,7 @@ impl Machine<'_, '_> {
         // (`\H@@footnotetext`): no anchor.
         let anchor = self.doc.as_ref().filter(|d| d.packages.contains(&"hyperref") && !d.fn_symbol).map(|d| format!("Hfootnote.{}", d.hfootnote));
         self.store_current_label(&n.to_string());
+        self.cref_step("");
         // hyperref's `\@footnotemark` restores the outer `\@currentHref` (`\Hy@saved@currentHref`):
         // the note's own is local to the insertion.
         if let Some(name) = &anchor {
@@ -14786,7 +20780,7 @@ impl Machine<'_, '_> {
         let start = self.cur.len();
         let colored = self.colored();
         if colored {
-            self.color_stack(Some(DEFAULT_COLOR));
+            self.push_default_color();
         }
         self.cur.push(Node::new(Kind::Box, inner as i32));
         if colored {
@@ -14803,7 +20797,7 @@ impl Machine<'_, '_> {
 /// [`package_bit`] for each package's. A perfect hash generated from those tables
 /// (`assets/tables/names.rtdb`, `rushtex-gen names`): the pre-scan and `predict` ask it once
 /// per command, and loading it builds nothing.
-fn table_names(name: &str) -> u32 {
+fn table_names(name: &str) -> u64 {
     names_entry(name).0
 }
 
@@ -14838,37 +20832,40 @@ fn list_bits(name: &str) -> u8 {
 
 /// The bits of the packages that change `name` without the native job following them
 /// (`KernelTable::blocked`): after one of them, a document naming it goes to the engine.
-fn blocked_names(name: &str) -> u32 {
+fn blocked_names(name: &str) -> u64 {
     names_entry(name).1
 }
 
 /// `name`'s row of the generated names table: its [`table_names`] bits and its
 /// [`blocked_names`] bits.
-fn names_entry(name: &str) -> (u32, u32) {
+fn names_entry(name: &str) -> (u64, u64) {
     let (bits, blocked, _) = names_row(name);
     (bits, blocked)
 }
 
 /// [`names_entry`] and the [`scan_list`] bits of `name`, from one lookup.
-fn names_row(name: &str) -> (u32, u32, u8) {
+fn names_row(name: &str) -> (u64, u64, u8) {
     use crate::data::{data_blob::Blob, data_phf::Phf};
-    type Names = (Phf<'static>, crate::data::data_blob::U32s<'static>, crate::data::data_blob::U32s<'static>, &'static [u8]);
+    type U32s = crate::data::data_blob::U32s<'static>;
+    // The bits are 64 wide (`package_bit`), as two columns: low words, then high words.
+    type Names = (Phf<'static>, [U32s; 2], [U32s; 2], &'static [u8]);
     static NAMES: &[u8] = include_bytes!("../../assets/tables/names.rtdb");
     static TABLE: std::sync::OnceLock<Option<Names>> = std::sync::OnceLock::new();
     let t = TABLE.get_or_init(|| {
         let b = Blob::new(NAMES)?;
-        let (phf, bits, blocked, lists) = (Phf::from_blob(&b, "nmf")?, b.u32s("nm.b")?, b.u32s("nm.x")?, b.section("nm.l")?);
-        (bits.len() == phf.len() && blocked.len() == phf.len() && lists.len() == phf.len()).then_some((phf, bits, blocked, lists))
+        let (phf, bits, blocked, lists) = (Phf::from_blob(&b, "nmf")?, [b.u32s("nm.b")?, b.u32s("nm.bh")?], [b.u32s("nm.x")?, b.u32s("nm.xh")?], b.section("nm.l")?);
+        (bits.iter().chain(&blocked).all(|c| c.len() == phf.len()) && lists.len() == phf.len()).then_some((phf, bits, blocked, lists))
     });
-    t.as_ref().and_then(|(phf, bits, blocked, lists)| phf.get(name.as_bytes()).map(|i| (bits.get(i as usize), blocked.get(i as usize), lists[i as usize]))).unwrap_or((0, 0, 0))
+    let wide = |c: &[U32s; 2], i: usize| c[0].get(i) as u64 | (c[1].get(i) as u64) << 32;
+    t.as_ref().and_then(|(phf, bits, blocked, lists)| phf.get(name.as_bytes()).map(|i| (wide(bits, i as usize), wide(blocked, i as usize), lists[i as usize]))).unwrap_or((0, 0, 0))
 }
 
 /// [`table_names`]' contents, from the tables themselves: what `rushtex-gen names` writes.
 #[cfg(any(test, feature = "gen"))]
 pub fn names_table() -> Vec<u8> {
     use crate::data::data_kernel::{KernelTable, MathFont};
-    let mut m = std::collections::BTreeMap::<&'static str, u32>::new();
-    let mut add = |k: &'static KernelTable<'static>, bit: u32| {
+    let mut m = std::collections::BTreeMap::<&'static str, u64>::new();
+    let mut add = |k: &'static KernelTable<'static>, bit: u64| {
         let alphabets = k.math_fonts().filter_map(|f| match f {
             MathFont::SymbolAlphabet { name, .. } | MathFont::Alphabet { name, .. } => Some(name),
             MathFont::Symbol { .. } => None,
@@ -14894,7 +20891,7 @@ pub fn names_table() -> Vec<u8> {
         m.entry(n).or_default();
     }
     // The names each package blocks (`KernelTable::blocked`), by its bit.
-    let mut x = std::collections::BTreeMap::<&'static str, u32>::new();
+    let mut x = std::collections::BTreeMap::<&'static str, u64>::new();
     for (p, k) in crate::data::data_kernel::packages() {
         for n in k.blocked() {
             m.entry(n).or_default();
@@ -14908,7 +20905,7 @@ pub fn names_table() -> Vec<u8> {
     // The hash numbers the names its own way: the bits follow its IDs.
     let b = crate::data::data_blob::Blob::new(&probe).expect("a blob");
     let phf = crate::data::data_phf::Phf::from_blob(&b, "nmf").expect("the hash");
-    let (mut bits, mut blocked, mut lists) = (vec![0u32; m.len()], vec![0u32; m.len()], vec![0u8; m.len()]);
+    let (mut bits, mut blocked, mut lists) = (vec![0u64; m.len()], vec![0u64; m.len()], vec![0u8; m.len()]);
     for (n, v) in &m {
         let i = phf.get(n.as_bytes()).expect("a name") as usize;
         bits[i] = *v;
@@ -14917,17 +20914,21 @@ pub fn names_table() -> Vec<u8> {
     }
     let mut w = crate::data::data_blob::BlobWriter::default();
     crate::data::data_phf::write(&mut w, "nmf", &names).expect("a perfect hash");
-    w.u32s("nm.b", &bits);
-    w.u32s("nm.x", &blocked);
+    let (low, high) = (|v: &[u64]| v.iter().map(|&b| b as u32).collect::<Vec<u32>>(), |v: &[u64]| v.iter().map(|&b| (b >> 32) as u32).collect::<Vec<u32>>());
+    w.u32s("nm.b", &low(&bits));
+    w.u32s("nm.bh", &high(&bits));
+    w.u32s("nm.x", &low(&blocked));
+    w.u32s("nm.xh", &high(&blocked));
     w.bytes("nm.l", lists);
     w.finish()
 }
 
 /// [`table_names`]' bit for the kernel.
-const KERNEL_BIT: u32 = 1;
+const KERNEL_BIT: u64 = 1;
 
 /// [`table_names`]' bit for a package with a native table: 2 for the first.
-fn package_bit(name: &str) -> u32 {
+/// 63 packages at most: `data_kernel::PACKAGES` is checked against it at compile time.
+fn package_bit(name: &str) -> u64 {
     crate::data::data_kernel::packages().position(|p| p.0 == name).map_or(0, |k| 2 << k)
 }
 
@@ -14942,9 +20943,30 @@ fn require(name: &str, loaded: &mut Vec<&'static str>) -> bool {
     if NO_EFFECT_PACKAGES.contains(&name) {
         return true;
     }
+    // graphics.sty: graphicx's code without its key-value forms (graphicx loads graphics and
+    // redefines `\includegraphics`, `\rotatebox`): `graphics` stays in the list as the mark
+    // of their absence until graphicx comes, by itself or with pgf (pgfcore.sty:10) or
+    // mathtools (`Machine::load_package`).
+    if matches!(name, "graphicx" | "tikz" | "pgf" | "mathtools") {
+        loaded.retain(|p| *p != "graphics");
+    }
+    if name == "graphics" {
+        if !loaded.contains(&"graphicx") && require("graphicx", loaded) {
+            loaded.push("graphics");
+        }
+        return loaded.contains(&"graphicx");
+    }
+    // makeidx.sty: `\see`, `\seealso`, `\printindex` and two names, no register.
+    if name == "makeidx" {
+        if !loaded.contains(&"makeidx") {
+            loaded.push("makeidx");
+        }
+        return true;
+    }
     if let Some(&p) = DRIVER_PACKAGES.iter().find(|&&p| p == name) {
-        // tabularx's `\RequirePackage{array}`; siunitx's amstext, array and color.
-        if p == "tabularx" {
+        // tabularx's `\RequirePackage{array}`; siunitx's amstext, array and color; makecell's
+        // array.
+        if p == "tabularx" || p == "makecell" {
             require("array", loaded);
         }
         if p == "siunitx" {
@@ -14952,9 +20974,42 @@ fn require(name: &str, loaded: &mut Vec<&'static str>) -> bool {
             require("array", loaded);
             require("color", loaded);
         }
-        // biblatex's `\RequirePackage{url}` (biblatex.sty:44).
-        if p == "biblatex" {
+        // subcaption's `\RequirePackage{caption}` (subcaption.sty:42).
+        // subfig's `\RequirePackage{caption}` (without its `caption=false`).
+        if p == "subcaption" || p == "subfig" {
+            require("caption", loaded);
+        }
+        // algorithm.sty's `\RequirePackage{float}` and `{ifthen}`; algpseudocode's ifthen and
+        // algorithmicx, algorithmicx's ifthen.
+        if p == "algorithm" {
+            require("float", loaded);
+        }
+        if p == "algpseudocode" {
+            require("algorithmicx", loaded);
+        }
+        if matches!(p, "algorithm" | "algorithmicx" | "algpseudocode") {
+            require("ifthen", loaded);
+        }
+        // biblatex's `\RequirePackage{url}` (biblatex.sty:44); xurl's.
+        if p == "biblatex" || p == "xurl" {
             require("url", loaded);
+        }
+        // qrcode's `\RequirePackage{xcolor}` (its xkeyval holds nothing a native document uses).
+        if p == "qrcode" {
+            require("xcolor", loaded);
+        }
+        // tcolorbox's `\RequirePackage{tikz}` (its verbatim, environ and etoolbox hold
+        // nothing a native document uses; verbatim's `verbatim` stops the pre-scan).
+        if p == "tcolorbox" && !require("tikz", loaded) {
+            return false;
+        }
+        // pagecolor's `\RequirePackage{xcolor}` (or color, when that is loaded).
+        if p == "pagecolor" && !loaded.contains(&"color") {
+            require("xcolor", loaded);
+        }
+        // helvet's `\RequirePackage{keyval}`.
+        if p == "helvet" {
+            require("keyval", loaded);
         }
         // colortbl's `\RequirePackage{array,color}` (xcolor stands for color).
         if p == "colortbl" {
@@ -14979,8 +21034,47 @@ fn require(name: &str, loaded: &mut Vec<&'static str>) -> bool {
     true
 }
 
+/// latex.ltx's `\calculate@math@sizes` for a size with no `\S@<size>`: `\dimen@\f@size\p@`,
+/// `\sf@size` `\strip@pt` of `\defaultscriptratio` (.7) times it, `\ssf@size` of
+/// `\defaultscriptscriptratio` (.5); `None` for a size fontmath.ltx declares
+/// (`\DeclareMathSizes`) or one that is not a plain number.
+fn calculated_math_sizes(size: &'static str) -> Option<(&'static str, &'static str, &'static str)> {
+    const DECLARED: [&str; 12] = ["5", "6", "7", "8", "9", "10", "10.95", "12", "14.4", "17.28", "20.74", "24.88"];
+    if DECLARED.contains(&size) {
+        return None;
+    }
+    scaled_math_sizes(size, b"7", b"5")
+}
 
+/// mathpazo.sty's `\DeclareMathSizes` (psnfss 9.3: 10pt text has 7.6pt scripts and 6pt
+/// second-level scripts), and for any other size `\calculate@math@sizes` with its
+/// `\defaultscriptratio` .76 and `\defaultscriptscriptratio` .6.
+fn pazo_math_sizes(size: &'static str) -> Option<(&'static str, &'static str, &'static str)> {
+    const DECLARED: [(&str, &str, &str); 12] = [("5", "5", "5"), ("6", "5", "5"), ("7", "5", "5"), ("8", "6", "5"), ("9", "7", "5"), ("10", "7.6", "6"), ("10.95", "8", "6"), ("12", "9", "7"), ("14.4", "10", "8"), ("17.28", "12", "10"), ("20.74", "14.4", "12"), ("24.88", "20.74", "14.4")];
+    match DECLARED.iter().find(|d| d.0 == size) {
+        Some(&(_, sf, ssf)) => Some((size, size_name(sf), size_name(ssf))),
+        None => scaled_math_sizes(size, b"76", b"6"),
+    }
+}
 
+/// The sizes `\calculate@math@sizes` gives `size` with the script ratios' decimals `sf` and
+/// `ssf`.
+fn scaled_math_sizes(size: &'static str, sf: &[u8], ssf: &[u8]) -> Option<(&'static str, &'static str, &'static str)> {
+    let (int, frac) = size.split_once('.').unwrap_or((size, ""));
+    if int.is_empty() || !int.bytes().all(|c| c.is_ascii_digit()) || !frac.bytes().all(|c| c.is_ascii_digit()) || int.len() > 4 {
+        return None;
+    }
+    // `<number>\p@`: the integer part times 1pt plus the decimals rounded (§452, §455).
+    let v = int.parse::<i32>().ok()? * 65536 + crate::backend::scaled::round_decimals(frac.as_bytes());
+    // `<decimal>\dimen@` (§455): `xn_over_d(v, f, 2^16)`, `f` the factor's decimals.
+    let at = |f: i32| {
+        let mut s = String::new();
+        super::engine_value::print_scaled(crate::backend::scaled::xn_over_d(v, f, 65536), &mut s);
+        // `\strip@pt` (`\rem@pt`): no `.0`.
+        size_name(s.strip_suffix(".0").unwrap_or(&s))
+    };
+    Some((size, at(crate::backend::scaled::round_decimals(sf)), at(crate::backend::scaled::round_decimals(ssf))))
+}
 
 /// A size's text as the class tables' own string (a size they do not know is `10`).
 fn static_size(size: &str) -> &'static str {
@@ -14989,7 +21083,9 @@ fn static_size(size: &str) -> &'static str {
     // `\f@size` read (`font_key` runs at each inline formula and font change).
     static KNOWN: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
     let known = KNOWN.get_or_init(|| {
-        let rows = (0..data_class::CLASS_SIZES.len()).filter_map(data_class::article_size).flat_map(|t| (0..data_class::SIZE_COMMANDS.len()).map(move |i| t.size(i)));
+        // Every class's sizes (IEEEtran's `11`, `17`, `20` are none of article's).
+        let tables = (0..data_class::CLASSES.len()).flat_map(|c| (0..data_class::class_sizes(c).len()).filter_map(move |i| data_class::class_size(c, i)));
+        let rows = tables.flat_map(|t| (0..data_class::SIZE_COMMANDS.len()).map(move |i| t.size(i)));
         let mut v: Vec<&'static str> = Vec::new();
         for s in rows.flat_map(|r| [r.fsize, r.sf, r.ssf]) {
             if !v.contains(&s) {
@@ -15043,6 +21139,16 @@ fn size_arg(text: &str) -> Option<i32> {
     let t = text.trim();
     let t = t.strip_suffix("pt").unwrap_or(t).trim_end();
     (!t.is_empty() && t.bytes().all(|c| c.is_ascii_digit() || c == b'.')).then(|| data_nfss::decimal_sp(t)).flatten()
+}
+
+/// `\theequation`: in `subequations` the parent's number and `\alph{equation}` (past `z`
+/// LaTeX's error, here nothing); otherwise the prefix and the number after the
+/// `\numberwithin` level.
+fn eq_text<T: Copy + Into<i64>, N: Copy + Into<i64> + std::fmt::Display>(parent: Option<&str>, prefix: &str, levels: &[T], appendix: bool, within: Option<usize>, n: N) -> String {
+    match parent {
+        Some(p) => format!("{p}{}", alph(i32::try_from(n.into()).unwrap_or(0), b'a').collect::<String>()),
+        None => prefix.to_string() + &within_text(levels, appendix, within, n),
+    }
 }
 
 /// A table's glue words as glue.
@@ -15135,7 +21241,72 @@ fn enit_keys_ok(keys: &str) -> bool {
             "leftmargin" => v == "*" || !v.is_empty() && !v.contains(['*', '!']),
             "nosep" | "noitemsep" | "nolistsep" => v.is_empty() || v == "true",
             "label" => true,
+            "align" => matches!(v, "left" | "right"),
+            "start" => v.is_empty() || v.parse::<i32>().is_ok(),
             _ => false,
+        }
+    })
+}
+
+/// [`enit_keys_ok`] with enumitem's `shortlabels`: a first key without `=` whose letters are
+/// all in control words, with enumerate's one marker (`a A i I 1`), is a label
+/// (`enumitem::short_label`); the other keys as [`enit_keys_ok`] reads them.
+fn enit_short_ok(keys: &str, enumerate: bool) -> bool {
+    let mut depth = 0;
+    let end = keys.char_indices().find(|&(_, c)| {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ => {}
+        }
+        depth == 0 && c == ','
+    }).map_or(keys.len(), |(k, _)| k);
+    let (item, rest) = (keys[..end].trim(), &keys[end..]);
+    if item.is_empty() || item.contains('=') {
+        return false;
+    }
+    // Letters outside control words: enumerate's markers, at most one.
+    let (mut markers, mut cs, mut bare) = (0, false, false);
+    for c in item.chars() {
+        if c == '\\' {
+            cs = true;
+            continue;
+        }
+        if cs && c.is_ascii_alphabetic() {
+            continue;
+        }
+        cs = false;
+        if enumerate && ("aAiI".contains(c) || c == '1') {
+            markers += 1;
+        } else if c.is_ascii_alphabetic() {
+            bare = true;
+        }
+    }
+    !bare && markers <= 1 && enit_keys_ok(rest)
+}
+
+/// The enumitem keys the native job takes on `description` (`enit_description`): the
+/// vertical ones of [`enit_keys_ok`], `labelwidth`, `labelsep`, `leftmargin`, `itemindent`
+/// with a value, `!` or `*`, `rightmargin`, `listparindent`, and the styles `standard`,
+/// `normal`, `unboxed`, `sameline`, `nextline`.
+fn enit_desc_keys_ok(keys: &str) -> bool {
+    let mut depth = 0;
+    let parts = keys.split(|c| {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ => {}
+        }
+        depth == 0 && c == ','
+    });
+    parts.map(str::trim).filter(|p| !p.is_empty()).all(|p| {
+        let (k, v) = p.split_once('=').map_or((p, ""), |(k, v)| (k.trim(), v.trim()));
+        match k {
+            "labelwidth" | "labelsep" | "leftmargin" | "itemindent" => v == "!" || v == "*" || !v.is_empty() && !v.contains(['*', '!']),
+            "rightmargin" | "listparindent" => !v.is_empty() && !v.contains(['*', '!']),
+            "style" => matches!(v, "" | "standard" | "normal" | "unboxed" | "sameline" | "nextline"),
+            "label" => false,
+            _ => enit_keys_ok(p),
         }
     })
 }
@@ -15178,8 +21349,38 @@ fn glue_add(a: Glue, b: Glue) -> Glue {
 mod tests {
     use super::*;
 
+    #[test]
+    fn native_packages_doc_names_every_package() {
+        // docs/native-packages.md is the list of what the native job takes: a package or class
+        // added to the code without a line there fails here (`rushtex-gen natlist` prints them).
+        let doc = include_str!("../../docs/native-packages.md");
+        let missing: Vec<&str> = native_package_names().into_iter().chain(data_class::CLASSES).filter(|n| !doc.contains(&format!("`{n}`"))).collect();
+        assert!(missing.is_empty(), "docs/native-packages.md does not name {missing:?}");
+    }
+
+    #[test]
+    fn unused_definition_texts() {
+        // After the name: its `}`, `[n]`, the text; only texts LaTeX takes without an error.
+        assert_eq!(definition_len(r"}[2]{\draw (#1) -- (#2);} rest"), Some(25));
+        assert_eq!(definition_len(r"}{\def\x##1{##1}} rest"), Some(17));
+        assert_eq!(definition_len(r"}[1]{(#2)}"), None);
+        assert_eq!(definition_len(r"}{(#1)}"), None);
+        assert_eq!(definition_len(r"}{\draw {}"), None);
+        assert_eq!(uses_of(r"\newcommand{\cell}{x}\cellbox \cell", "cell"), 2);
+    }
+
     fn predict(src: &str) -> Predicted {
         super::predict(src, &backslashes(src))
+    }
+
+    /// `\refstepcounter` of the document's own counters, in a macro of the preamble too:
+    /// labels numbered ahead, a step zeroing the counters within.
+    #[test]
+    fn predict_numbers_own_counters() {
+        let src = "\\documentclass{article}\\newcounter{p}\\newcounter{q}[p]\\setcounter{p}{4}\\newcommand{\\prob}{\\refstepcounter{p}P \\thep.}\\begin{document}\\ref{a}\\prob\\label{a}\\refstepcounter{q}\\refstepcounter{q}\\label{b}\\prob\\refstepcounter{q}\\label{c}\\end{document}";
+        let src = predict_macros::expand_heading_macros(src).unwrap_or_else(|| src.to_string());
+        let p = predict(&src);
+        assert_eq!((p.labels.get("a").map(String::as_str), p.labels.get("b").map(String::as_str), p.labels.get("c").map(String::as_str)), (Some("5"), Some("2"), Some("1")));
     }
 
     #[test]
@@ -15247,6 +21448,9 @@ mod tests {
         assert_eq!(quiet_macros(pre, &backslashes(pre), &[]).0, ["gdl", "rt"]);
         let stars = "\\newcommand{\\q}[2]{\\subsection*{#1\\hfill[#2 points]}}\\newcommand{\\s}{\\section{x}}";
         assert_eq!(quiet_macros(stars, &backslashes(stars), &[]).2, [("q", 1)]);
+        // `\providecommand` is a command, not an environment; a length assignment numbers nothing.
+        let tight = "\\providecommand{\\tightlist}{%\n  \\setlength{\\itemsep}{0pt}\\setlength{\\parskip}{0pt}}";
+        assert_eq!(quiet_macros(tight, &backslashes(tight), &[]).0, ["tightlist"]);
         let p = predict(&format!("{pre}\\begin{{document}}\\gdl\\rt{{a}}\\section{{A}}\\label{{a}}"));
         assert!(p.complete && p.labels.get("a").map(String::as_str) == Some("1"));
         assert!(!predict(&format!("{pre}\\begin{{document}}\\sec\\label{{a}}")).complete);
@@ -15310,6 +21514,13 @@ mod tests {
         let ok = [
             doc("\\usepackage[utf8]{inputenc}\n\\setlength\\parindent{0pt plus 1fil}\n\\newcommand{\\x}[1]{a\n\nb}\n", "{\\bf a\n\nb} \\url{50%off} \\verb|}| \\{ \\} 100\\% $x^{2}$ \\begin{verbatim}\n}{\n\\end{verbatim}"),
             doc("\\makeatletter\\def\\@x#1{#1}\\makeatother\n\\tolerance=1000\n", "\\begin{itemize}\\item a\\end{itemize}"),
+            doc("", "$d\\colon X\\to[0,\\infty)$ and $x\\in[a,b)$"),
+            // An interval's `[` whose only `]` is past an `\end`: text.
+            doc("", "$$\\begin{aligned}a&=\\begin{cases}1&t\\in [0,1)\\end{cases}\\end{aligned}$$ $$\\begin{aligned}&\\xrightarrow[n]{}1\\end{aligned}$$"),
+            // `\left[`'s bracket is a delimiter: the `]` of a later `\\[6pt]` closes nothing.
+            doc("", "\\[\\left[\\begin{matrix}1\\\\[6pt]0\\end{matrix}\\right]\\]"),
+            // A long macro's argument may hold a blank line, its second argument too.
+            doc("", "\\parbox[t]{.4\\linewidth}{a\n\nb} \\footnote{a\n\nb}"),
         ];
         for d in &ok {
             assert_eq!(well_formed(d), Ok(()), "{d}");
@@ -15318,6 +21529,7 @@ mod tests {
             (doc("", "\\textbf{a"), "a { never closed"),
             (doc("", "a} b"), "a } with no {"),
             (doc("", "\\section{a\n\nb}"), "a blank line inside a command's argument"),
+            (doc("", "\\parbox{w}{\\textbf{a\n\nb}}"), "a blank line inside a command's argument"),
             (doc("", "\\begin{itemize}\\item a\\end{enumerate}"), "an \\end that does not match its \\begin"),
             (doc("", "\\begin{center}a"), "an environment never ended"),
             (doc("Hello.\n", "a"), "text before \\begin{document}"),
@@ -15349,11 +21561,31 @@ mod tests {
         let internal = Err("a definition of an internal macro");
         assert!(scan(&doc("\\def\\R#1{R#1}")).is_ok());
         assert_eq!(scan(&doc("\\renewcommand{\\thesection}{S}")), internal);
-        // A plain prefix of `\thefigure`, `\thetable`, `\theequation`; nothing else.
+        // `\thefigure`, `\thetable`, `\theequation` of a text the counter reader reads
+        // (`the_text_len`); nothing else.
         assert!(scan(&doc("\\renewcommand{\\thefigure}{S\\arabic{figure}}\\renewcommand\\theequation{A.\\arabic{equation}}")).is_ok());
-        assert_eq!(scan(&doc("\\renewcommand{\\thefigure}{\\Roman{figure}}")), internal);
-        assert_eq!(the_prefixes("\\renewcommand{\\thetable}{S-\\arabic{table}}\\begin{document}")[1], "S-");
-        assert_eq!(scan(&doc("\\def\\labelitemi{--}")), internal);
+        assert!(scan(&doc("\\renewcommand{\\thefigure}{\\Roman{figure}}\\renewcommand{\\thetable}{\\thesection-\\arabic{table}}")).is_ok());
+        assert_eq!(scan(&doc("\\renewcommand{\\thefigure}{\\ifnum\\value{section}>0 \\thesection-\\fi\\arabic{figure}}")), internal);
+        assert_eq!(scan(&doc("\\renewcommand{\\thefigure}{\\arabic{table}}")), internal);
+        assert_eq!(scan(&doc("\\def\\labelitemfont{\\bfseries}")), internal);
+        // A list's label is read as the document's macro (`own_list_label`).
+        assert!(scan(&doc("\\def\\labelitemi{--}\\renewcommand{\\labelenumi}{(\\roman{enumi})}\\renewcommand\\labelenumii{\\theenumi.\\arabic{enumii}}")).is_ok());
+        assert!(scan(&doc("\\renewcommand{\\theenumi}{\\alph{enumi}}\\renewcommand\\theenumii{.\\arabic{enumii}}")).is_ok());
+        // A chapter's or the bibliography's name through `\renewcommand` (`own_head_name`), not `\def`.
+        assert!(scan(&doc("\\renewcommand{\\chaptername}{Lecture}\\renewcommand\\appendixname{Annex}\\renewcommand{\\bibname}{Works}")).is_ok());
+        assert_eq!(scan(&doc("\\def\\chaptername{Lecture}")), internal);
+        // `\@biblabel` after `\makeatletter` (`bib_label_tokens`), no other `@` name.
+        assert!(scan(&doc("\\makeatletter\\renewcommand\\@biblabel[1]{\\textbf{#1.}}\\makeatother")).is_ok());
+        assert_eq!(scan(&doc("\\renewcommand\\@biblabel[1]{#1.}")), internal);
+        // A document's own `@` macro (`fresh_at`); a kernel name or family is the kernel's.
+        assert!(scan(&doc("\\makeatletter\\newcommand\\@strong[1]{\\textbf{#1}}\\def\\my@sep{-}\\newcommand\\x{\\@strong{a}\\my@sep}\\makeatother")).is_ok());
+        assert_eq!(scan(&doc("\\makeatletter\\def\\fst@algorithm{x}\\makeatother")), internal);
+        assert_eq!(scan(&doc("\\makeatletter\\renewcommand\\@strong{x}\\makeatother")), internal);
+        assert_eq!(scan(&doc("\\newcommand\\@strong{x}")), internal);
+        assert!(kernel_at("@seccntformat") && kernel_at("l@subsubsubsection") && !kernel_at("@strong"));
+        // `\begin{document}` named in a preamble comment is not the body's start.
+        assert_eq!(doc_start("% x \\begin{document}\n\\begin{document}"), Some(21));
+        assert!(commented("a % b", 4) && !commented("a \\% b", 5) && commented("a \\\\% b", 6));
         // The arrow fills call `\mathsm@sh` in place of amsmath's `\relbar`.
         assert_eq!(scan(&doc("\\usepackage{amsmath}\\renewcommand{\\relbar}{-}")), internal);
         assert_eq!(scan(&doc("\\makeatletter\\def\\@seccntformat#1{}\\makeatother")), internal);
@@ -15412,8 +21644,10 @@ mod tests {
         assert!(run(&doc("\\section{A}\\label{s}\\ref{s}\\section{B}\\label{s}"), now, None).is_err());
         // Never labelled: pdfLaTeX prints `??`.
         assert!(run(&doc("\\ref{nowhere}"), now, None).is_err());
-        // A macro hides a heading from the pre-scan: no prediction, so not native.
-        assert!(run("\\documentclass{article}\\newcommand{\\sec}{\\section{X}}\\begin{document}\\ref{x}\\sec\\label{x}\\end{document}", now, None).is_err());
+        // A plain macro's heading is expanded for the pre-scan (`engine_predict_macros`).
+        assert!(run("\\documentclass{article}\\newcommand{\\mysec}{\\section{X}}\\begin{document}\\ref{x}\\mysec\\label{x}\\end{document}", now, None).is_ok());
+        // One with an optional argument hides it: no prediction, so not native.
+        assert!(run("\\documentclass{article}\\newcommand{\\mysec}[1][X]{\\section{#1}}\\begin{document}\\ref{x}\\mysec\\label{x}\\end{document}", now, None).is_err());
     }
 
     #[test]
@@ -15424,10 +21658,65 @@ mod tests {
         let doc = |pre: &str, body: &str| format!("\\documentclass{{article}}{pre}\\begin{{document}}\\tableofcontents{body}\\end{{document}}");
         let now = 1792454400;
         assert!(run(&doc("", "\\section{A}\\subsection{B}"), now, None).is_ok());
-        // A macro in a title is expanded by the `.toc` file's `\write`: not native.
-        assert!(run(&doc("\\newcommand{\\x}{y}", "\\section{\\x}"), now, None).is_err());
+        // A macro in a title is expanded by the `.toc` file's `\write`: the same text when it
+        // is defined once in the preamble (`toc_own_macros`), else not native.
+        assert!(run(&doc("\\newcommand{\\x}{y}", "\\section{\\x}"), now, None).is_ok());
+        assert!(run(&doc("\\newcommand{\\x}{y}", "\\section{\\x}\\renewcommand{\\x}{z}"), now, None).is_err());
         // No entries: `\@starttoc`'s group would leave `\if@nobreak` as `\section*` set it.
         assert!(run(&doc("", "Text."), now, None).is_err());
+    }
+
+    /// `\input` and `\include` files spliced with TeX's line states at both ends; what cannot
+    /// be spliced exactly stays.
+    #[test]
+    fn splice_inputs_keeps_line_states() {
+        let files = |n: &str| match n {
+            "a.tex" => Some("A text.\n".to_string()),
+            "b.tex" => Some("\\section{B}\nB.\n".to_string()),
+            "e.tex" => Some("x\n\\endinput\n".to_string()),
+            _ => None,
+        };
+        let go = |src: &str| splice_inputs(src, &mut |n: &str| files(n)).into_owned();
+        assert_eq!(go("\\begin{document}\n\\input{a}\nZ\n"), "\\begin{document}\nA text.\n{}\nZ\n");
+        assert_eq!(go("\\begin{document}\nY\\input{a}Z\n"), "\\begin{document}\nY%\nA text.\nZ\n");
+        assert_eq!(go("\\begin{document}\n\\input a\nZ\n"), "\\begin{document}\nA text.\nZ\n");
+        assert_eq!(go("\\includeonly{b}\n\\begin{document}\n\\include{a}\n\\include{b}\n"), "\n\\begin{document}\n\\clearpage \n\\clearpage%\n\\section{B}\nB.\n\\clearpage\\clearpage \n");
+        // Left for the pre-scan: `\endinput`, a missing file, an argument, verbatim.
+        for src in ["\\input{e}", "\\input{zz}", "\\mbox{\\input{a}}", "\\begin{verbatim}\\input{a}\\end{verbatim}", "\\verb|\\input{a}|"] {
+            assert_eq!(go(src), src);
+        }
+    }
+
+    /// `\bibliography` with no `.bbl` leaves its line's end-of-line space, not an empty line.
+    #[test]
+    fn splice_without_a_bbl_keeps_the_line() {
+        let src = "\\begin{document}\nText\n\\bibliographystyle{plain}\n\\bibliography{refs}\n\\end{document}\n";
+        // comment.sty's environment goes with its lines; an `\end{comment}` after a space
+        // does not end it, and without the package nothing goes.
+        let c = "\\usepackage{comment}\\begin{document}\na\n  \\begin{comment}\nx\n\t\\end{comment}\nb\n\\begin{comment}\ny\n \\end{comment}\n";
+        assert_eq!(splice_comments(c), "\\usepackage{comment}\\begin{document}\na\nb\n\\begin{comment}\ny\n \\end{comment}\n");
+        assert!(matches!(splice_comments(&c[20..]), std::borrow::Cow::Borrowed(_)));
+        assert_eq!(splice_bibliography(src, None),"\\begin{document}\nText\n\\bibliographystyle{plain}\n{}\n\\end{document}\n");
+        assert_eq!(splice_bibliography(src, Some("\\begin{thebibliography}{1}\n\\end{thebibliography}\n")), "\\begin{document}\nText\n\\bibliographystyle{plain}\n\\begin{thebibliography}{1}\n\\end{thebibliography}\n\\end{document}\n");
+    }
+
+    /// A style file of the document's own read as its preamble: `@` a letter inside and
+    /// restored after, `\RequirePackage` as `\usepackage` without its date, the log-only
+    /// commands dropped, `\endinput` ending it after its line; loaded once.
+    #[test]
+    fn local_style_spliced_into_the_preamble() {
+        let read = |n: &str| match n {
+            "mine.sty" => Some("\\ProvidesPackage{mine}[2020/01/01 x]\n\\RequirePackage{amsmath}[2000/01/01]\n\\newcommand\\R{R}\n\\endinput %\nafter\n".to_string()),
+            "amsthm.sty" | "my.cls" | "o.sty" => Some(String::new()),
+            _ => None,
+        };
+        let doc = |pre: &str| format!("\\documentclass{{article}}{pre}\n\\begin{{document}}x\\end{{document}}");
+        assert_eq!(splice_local_styles(&doc("\\usepackage{amssymb,mine}\\usepackage{mine}"), &read).as_deref(), Ok(doc("\\usepackage{amssymb}\\makeatletter \n\\usepackage{amsmath}\n\\newcommand\\R{R}\n %\n\\makeatother ").as_str()));
+        assert_eq!(splice_local_styles(&doc("\\makeatletter\\usepackage{o}"), &read).as_deref(), Ok(doc("\\makeatletter\\makeatletter \n\\makeatletter ").as_str()));
+        assert!(matches!(splice_local_styles(&doc("\\usepackage{amssymb}"), &read), Ok(std::borrow::Cow::Borrowed(_))));
+        assert!(splice_local_styles(&doc("\\usepackage{amsthm}"), &read).is_err());
+        assert!(splice_local_styles(&doc("\\usepackage[x]{mine}"), &read).is_err());
+        assert!(splice_local_styles("\\documentclass{my}\\begin{document}x\\end{document}", &read).is_err());
     }
 
     #[test]
@@ -15439,6 +21728,8 @@ mod tests {
         assert_eq!(class_options("{book}"), Ok((0, option_key(0, false, true, false), 3)));
         assert_eq!(class_options("[oneside,openany]{book}"), Ok((0, 0, 3)));
         assert_eq!(class_options("[openright,openany]{book}"), Err("openany"));
+        assert_eq!(class_options("[12pt,titlepage]{article}"), Ok((2, 0, 0)));
+        assert_eq!(class_options("[titlepage,notitlepage]{article}"), Err("notitlepage"));
         assert_eq!(class_options("[openright]{report}"), Err("openright"));
         assert_eq!(class_options("{books}"), Err("documentclass"));
         assert_eq!(class_options("[11pt,landscape,draft,final]{article}"), Err("final"));
@@ -15452,6 +21743,16 @@ mod tests {
         assert_eq!(class_options("[twoside]{letter}"), Err("twoside"));
         assert_eq!(class_options("{letters}"), Err("documentclass"));
         assert_eq!(class_options("[12pt,leqno]{amsart}"), Ok((2, 0, data_class::AMSART)));
+        // IEEEtran: two columns always; `conference` takes the landscape bit.
+        assert_eq!(class_options("{IEEEtran}"), Ok((0, data_class::TWOCOLUMN, data_class::IEEETRAN)));
+        assert_eq!(class_options("[a0,portrait]{a0poster}"), Ok((0, option_key(1, true, false, false), data_class::A0POSTER)));
+        assert_eq!(class_options("{screenplay}"), Ok((0, 0, data_class::SCREENPLAY)));
+        assert_eq!(class_options("[12pt]{screenplay}"), Err("12pt"));
+        assert_eq!(class_options("[a4paper]{a0poster}"), Err("a4paper"));
+        assert_eq!(class_options("[conference,a4paper]{IEEEtran}"), Ok((0, option_key(3, true, false, false) | data_class::TWOCOLUMN, data_class::IEEETRAN)));
+        assert_eq!(class_options("[11pt,journal,twocolumn]{IEEEtran}"), Ok((1, data_class::TWOCOLUMN, data_class::IEEETRAN)));
+        assert_eq!(class_options("[legalpaper]{IEEEtran}"), Err("legalpaper"));
+        assert_eq!(class_options("[compsoc]{IEEEtran}"), Err("compsoc"));
         assert_eq!(class_options("[a5paper]{amsart}"), Err("a5paper"));
         assert_eq!(class_options("[reqno]{amsart}"), Err("reqno"));
         assert_eq!(class_options("[twocolumn]{amsart}"), Err("twocolumn"));
@@ -15464,6 +21765,15 @@ mod tests {
         assert_eq!(class_options("[twocolumn]{scrartcl}"), Err("twocolumn"));
         assert_eq!(class_options("[20pt]{scrartcl}"), Err("20pt"));
         assert_eq!(class_options("{scrartcls}"), Err("documentclass"));
+        assert_eq!(class_options("[11pt]{scrreprt}"), Ok((1, 0, data_class::SCRREPRT)));
+        // scrlttr2: 12pt and a4 by default, `parskip=half` the table's bit 32, the layout
+        // keys taken, `enlargefirstpage` read (it declines at `\opening`), others stop.
+        assert_eq!(class_options("{scrlttr2}"), Ok((2, 0, data_class::SCRLTTR2)));
+        assert_eq!(class_options("[\n\tfontsize=11pt,\n\tparskip=half,\n\tfromalign=left,\n\tfromphone=true,\n\tsubject=beforeopening,\n]{scrlttr2}"), Ok((1, 32, data_class::SCRLTTR2)));
+        assert_eq!(class_options("[paper=a4,fontsize=11pt,parskip=half,foldmarks=off]{scrlttr2}"), Ok((1, 32, data_class::SCRLTTR2)));
+        assert_eq!(class_options("[paper=letter]{scrlttr2}"), Err("paper=letter"));
+        assert_eq!(class_options("[DIN]{scrlttr2}"), Err("DIN"));
+        assert_eq!(class_options("[openany]{scrreprt}"), Err("openany"));
     }
 
     #[test]
@@ -15471,8 +21781,10 @@ mod tests {
         let doc = |pre: &str, body: &str| accepts(&format!("\\documentclass{{article}}\\usepackage{{enumitem}}{pre}\\begin{{document}}{body}\\end{{document}}")).is_some();
         assert!(doc("", "\\begin{enumerate}[label=(\\alph*), leftmargin=*, itemsep=0pt]\\item a\\end{enumerate}"));
         assert!(doc("\\setlist{nosep}\\setlist[itemize,2]{label={--}}", "\\begin{itemize}\\item a\\end{itemize}"));
-        assert!(!doc("", "\\begin{description}[leftmargin=*]\\item a\\end{description}"));
-        assert!(!doc("", "\\begin{itemize}[align=left]\\item a\\end{itemize}"));
+        assert!(doc("", "\\begin{description}[leftmargin=*]\\item a\\end{description}"));
+        assert!(!doc("", "\\begin{description}[labelindent=1em]\\item a\\end{description}"));
+        assert!(doc("", "\\begin{itemize}[align=left]\\item a\\end{itemize}"));
+        assert!(!doc("", "\\begin{itemize}[align=parleft]\\item a\\end{itemize}"));
         assert!(!doc("", "\\begin{itemize}[labelwidth=*]\\item a\\end{itemize}"));
         assert!(!doc("", "\\setlist{nosep}\\arabic*"));
         assert!(!doc("", "\\setlist{nosep}"));
@@ -15508,14 +21820,32 @@ mod tests {
         assert!(doc("\\usepackage[english]{babel}", "x \\today"));
         assert!(doc("\\usepackage[brazilian,english]{babel}", "\\selectlanguage{brazilian}x \\foreignlanguage{english}{y}"));
         assert!(!doc("\\usepackage[english]{babel}", "\\selectlanguage{french}x"));
-        assert!(!doc("\\usepackage[ngerman]{babel}", "x"));
+        assert!(doc("\\usepackage[ngerman]{babel}", "x \\today"));
+        assert!(!doc("\\usepackage[ngerman]{babel}", "a\"b"));
+        // French alone, in T1: its punctuation and guillemets; with another language, or with
+        // footnotes, it declines (its lists decline as they open).
+        assert!(doc("\\usepackage[T1]{fontenc}\\usepackage[french]{babel}", "x : y ; \\og z\\fg"));
+        assert!(!doc("\\usepackage[french,english]{babel}", "x"));
+        assert!(!doc("\\usepackage[T1]{fontenc}\\usepackage[french]{babel}", "a\\footnote{b}"));
+        assert!(!doc("\\usepackage[english]{babel}", "\\og x"));
+        assert!(doc("\\usepackage[italian,english]{babel}", "x"));
+        let report = |pre: &str| accepts(&format!("\\documentclass{{report}}{pre}\\begin{{document}}x\\end{{document}}")).is_some();
+        assert!(report("\\usepackage[british]{babel}") && report("\\usepackage[ngerman,english]{babel}"));
+        // German as the main language under report: its heading names (`head_name`); italian
+        // as the main language with its penalties (a switch away declines as it runs).
+        assert!(report("\\usepackage[ngerman]{babel}"));
+        assert!(doc("\\usepackage[english,italian]{babel}", "x"));
         assert!(!doc("\\usepackage[brazilian]{babel}", "a\"b"));
         assert!(!doc("\\usepackage[brazilian]{babel}", "a\\-b"));
         // Spanish: T1 only; `~` takes the next token, `.` before `{` in math is the decimal shorthand.
         assert!(doc("\\usepackage[T1]{fontenc}\\usepackage[spanish]{babel}", "a~b $1.5$"));
         assert!(!doc("\\usepackage[T1]{fontenc}\\usepackage[spanish]{babel}", "a~{b}"));
         assert!(!doc("\\usepackage[T1]{fontenc}\\usepackage[spanish]{babel}", "$1.{5}$"));
-        assert!(!doc("\\usepackage[T1]{fontenc}\\usepackage[spanish]{babel}", "\\begin{itemize}\\item a\\end{itemize}"));
+        // Spanish lists are checked as they open (`es_list_ok`); `<` `>` pass in an array preamble.
+        assert!(doc("\\usepackage[T1]{fontenc}\\usepackage[spanish]{babel}", "\\begin{itemize}\\item a\\end{itemize}"));
+        assert!(doc("\\usepackage[T1]{fontenc}\\usepackage[spanish]{babel}\\usepackage{array}", "\\begin{tabular}{>{\\bfseries}l}a\\end{tabular}"));
+        assert!(!doc("\\usepackage[T1]{fontenc}\\usepackage[spanish]{babel}\\usepackage{array}", "a > b"));
+        assert!(!doc("\\usepackage[T1]{fontenc}\\usepackage[spanish]{babel}", "\\thanks{a}"));
     }
 
     #[test]
@@ -15538,7 +21868,7 @@ mod tests {
         // `\height` and kin only in a `\raisebox`'s or `\framebox`'s lengths.
         assert!(doc("\\raisebox{-.5\\height}[0pt][\\depth]{x}\\framebox[1.5\\width][l]{y}\\hspace{\\fill}"));
         assert!(!doc("\\raisebox{1ex}{\\height}"));
-        assert!(!doc("\\framebox(2,3){x}"));
+        assert!(doc("\\framebox(2,3){x}\\makebox(2,3)[tl]{x}"));
     }
 
     #[test]
@@ -15556,9 +21886,12 @@ mod tests {
     fn accepts_plain_article_text_only() {
         let doc = "\\documentclass{article}\n\\begin{document}\nHello world.\n\\end{document}\n";
         assert_eq!(accepts(doc), Some("\\documentclass{article}\n\\begin{document}\nHello world.\n"));
-        // memoir: text and sections only (`MEMOIR_NATIVE`); its `\chapter` still stops.
+        // memoir: only `MEMOIR_NATIVE`; `\chapterstyle` passes the pre-scan (a style other than
+        // `default` or `section` stops when it runs), a command memoir defines otherwise stops.
         assert!(accepts("\\documentclass{memoir}\\begin{document}x\\end{document}").is_some());
-        assert_eq!(accepts("\\documentclass{memoir}\\begin{document}\\chapter{A}x\\end{document}"), None);
+        assert!(accepts("\\documentclass{memoir}\\begin{document}\\chapter{A}x\\end{document}").is_some());
+        assert!(accepts("\\documentclass{memoir}\\chapterstyle{section}\\begin{document}x\\end{document}").is_some());
+        assert_eq!(accepts("\\documentclass{memoir}\\setstocksize{9in}{6in}\\begin{document}x\\end{document}"), None);
         assert_eq!(accepts("\\documentclass[twocolumn]{memoir}\\begin{document}x\\end{document}"), None);
         assert!(accepts("\\documentclass{book}\\begin{document}\\frontmatter x\\end{document}").is_some());
         assert_eq!(accepts("\\documentclass{report}\\begin{document}\\frontmatter x\\end{document}"), None);
@@ -15571,7 +21904,9 @@ mod tests {
         assert!(tab("\\begin{tabular}{p{1cm}}a\\end{tabular}"));
         assert!(!tab("\\begin{tabular}{m{1cm}}a\\end{tabular}"));
         assert!(tab("\\begin{tabular}{@{:}c}a\\end{tabular}"));
-        assert!(!tab("\\begin{tabular}{@{\\extracolsep{\\fill}}c}a\\end{tabular}"));
+        assert!(tab("\\begin{tabular}{@{\\extracolsep{\\fill}}c}a\\end{tabular}"));
+        assert!(tab("\\begin{tabular*}{.9\\textwidth}[t]{l@{\\extracolsep{\\fill}}r}a&b\\end{tabular*}"));
+        assert!(!tab("\\begin{tabular}{@{:\\extracolsep{\\fill}}c}a\\end{tabular}"));
         assert!(!tab("a&b"));
         assert!(!tab("\\begin{tabular}{c}a\\end{tabular} b & c"));
         assert!(!tab("\\hline"));

@@ -24,6 +24,12 @@ pub struct ShippedPage {
     pub images: Vec<(u32, i32)>,
     /// The forms it shows as (`/Fm<n>`, object).
     pub forms: Vec<(u32, i32)>,
+    /// A session's hash of `content` (`backend_cache::stream_key`), when the page cache
+    /// already made it.
+    pub stream: Option<u128>,
+    /// `\pdfpageresources` when the page shipped (pdftex.web `pdf_page_resources`), written
+    /// first in its resources dictionary.
+    pub resources: Vec<u8>,
 }
 
 /// A shipped `\pdfxform` (pdftex.web `pdf_ship_out` of a form): its object, its box's width
@@ -694,6 +700,9 @@ struct FontWork<'f> {
     /// is one the cache knows unchanged (`font_work_cached`), and those files' names.
     key: Option<u128>,
     names: Vec<Box<str>>,
+    /// The glyphs the other fonts of the same Type 1 file use, by name: this font's subset
+    /// holds them too (pdfTeX's shared `fd_tree` entry, `share_font_files`).
+    shared: Vec<String>,
 }
 
 /// A Type 1 font's finished parts, as a session's cache keeps them (`backend_cache`): what
@@ -798,7 +807,7 @@ fn font_work<'f>(f: &'f DocFont, map: &std::collections::HashMap<&str, &str>, fi
     // The layout `rushtex-gen` stored with a carried font, else the program is indexed when
     // it is subset.
     let layout = if pfb.is_some() { entry.as_ref().and_then(|e| e.file).and_then(|file| files(&format!("{file}#layout"))) } else { None };
-    FontWork { f, program, base, enc, differences, stored_names, layout, italic, pfb, unicode, embedded: None, ready: false, key: None, names: Vec::new() }
+    FontWork { f, program, base, enc, differences, stored_names, layout, italic, pfb, unicode, embedded: None, ready: false, key: None, names: Vec::new(), shared: Vec::new() }
 }
 
 /// [`font_work`] through a session's cache: a font made before from the same name, glyphs,
@@ -819,7 +828,7 @@ fn font_work_cached<'f>(cache: &crate::backend::backend_cache::PdfCache, f: &'f 
     h.u64((unicode >> 64) as u64);
     let key = h.finish();
     if let Some(d) = cache.font(key).filter(|d| cache.files_unchanged(d.names.iter().map(|n| &**n))) {
-        return FontWork { f, program: d.program, base: d.base.clone(), enc: d.enc.clone(), differences: d.differences, stored_names: None, layout: None, italic: d.italic, pfb: None, unicode: d.unicode.clone(), embedded: d.embedded.clone(), ready: true, key: None, names: Vec::new() };
+        return FontWork { f, program: d.program, base: d.base.clone(), enc: d.enc.clone(), differences: d.differences, stored_names: None, layout: None, italic: d.italic, pfb: None, unicode: d.unicode.clone(), embedded: d.embedded.clone(), ready: true, key: None, names: Vec::new(), shared: Vec::new() };
     }
     let reads = std::cell::RefCell::new(Vec::new());
     let read = |name: &str| {
@@ -862,6 +871,8 @@ impl FontWork<'_> {
             lens.iter().for_each(|&n| h.u64(n as u64));
         }
         self.f.used.iter().for_each(|&u| h.u64(u));
+        h.u64(self.shared.len() as u64);
+        self.shared.iter().for_each(|n| h.bytes(n.as_bytes()));
         h.finish()
     }
 
@@ -884,7 +895,8 @@ impl FontWork<'_> {
             (None, Some(text)) => text.split(|&c| c == b'\n').map(|l| if l.is_empty() { std::borrow::Cow::Borrowed(".notdef") } else { String::from_utf8_lossy(l) }).collect(),
             (None, None) => builtin_encoding_names(&data[..lens[0]]).into_iter().map(std::borrow::Cow::Owned).collect(),
         };
-        let used: Vec<&str> = (0..256).filter(|&c| used(c)).filter_map(|c| names.get(c).map(|n| n.as_ref())).collect();
+        let mut used: Vec<&str> = (0..256).filter(|&c| used(c)).filter_map(|c| names.get(c).map(|n| n.as_ref())).collect();
+        used.extend(self.shared.iter().map(String::as_str));
         let tag = self.base.split('+').next().unwrap_or_default();
         let clear = crate::backend::backend_type1::subset_clear(&data[..lens[0]], &|c: usize| f.used[c / 64] >> (c % 64) & 1 != 0, tag);
         data.splice(..lens[0], clear.iter().copied());
@@ -945,7 +957,13 @@ fn prepare_all(fonts: &mut [&mut FontWork], streams: &[&[u8]]) -> Vec<Vec<u8>> {
     #[cfg(target_arch = "wasm32")]
     let workers = 1;
     #[cfg(not(target_arch = "wasm32"))]
-    let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min((total / PARALLEL_MIN_BYTES).min(streams.len()).max(fonts.len() / FONTS_PER_WORKER));
+    let workers = {
+        // Asked once a process (a system call; a watch session's save asks again each time),
+        // and not at all when the work is too small to share.
+        static CPUS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        let wanted = (total / PARALLEL_MIN_BYTES).min(streams.len()).max(fonts.len() / FONTS_PER_WORKER);
+        if wanted <= 1 { wanted } else { wanted.min(*CPUS.get_or_init(|| std::thread::available_parallelism().map_or(1, |n| n.get()))) }
+    };
     if workers <= 1 {
         return serial(fonts, streams);
     }
@@ -978,7 +996,50 @@ fn prepare_all(fonts: &mut [&mut FontWork], streams: &[&[u8]]) -> Vec<Vec<u8>> {
 /// [`prepare_all`] through a session's cache: fonts and streams made by an earlier write
 /// from the same bytes are taken from it, the others prepared (on threads as without a
 /// cache) and kept.
-fn prepare_cached(cache: &crate::backend::backend_cache::PdfCache, work: &mut [Option<FontWork>], streams: &[&[u8]]) -> Vec<Vec<u8>> {
+/// pdfTeX's `fd_tree` (writefont.c `lookup_fontdescriptor`): the fonts one Type 1 file
+/// serves under different encodings (same file, `SlantFont`, `ExtendFont`; `keys`) share
+/// one FontDescriptor and one subset holding every glyph they use, each font with its own
+/// `/Differences`, `/Widths` and ToUnicode. The first such font embeds the subset; the
+/// answer gives each later one the font whose descriptor it names.
+fn share_font_files(work: &mut [Option<FontWork>], keys: &[Option<(&str, i32, i32)>]) -> Vec<Option<usize>> {
+    let mut with = vec![None; work.len()];
+    let embeds = |w: &Option<FontWork>| w.as_ref().is_some_and(|w| w.differences && w.pfb.is_some());
+    for first in 0..work.len() {
+        if keys[first].is_none() || !embeds(&work[first]) || with[first].is_some() {
+            continue;
+        }
+        let others: Vec<usize> = (first + 1..work.len()).filter(|&i| keys[i] == keys[first] && embeds(&work[i])).collect();
+        if others.is_empty() {
+            continue;
+        }
+        let mut used = work[first].as_ref().map_or([0; 4], |w| w.f.used);
+        let mut names = Vec::new();
+        for &i in &others {
+            let Some(w) = work[i].as_mut() else { continue };
+            let f = w.f;
+            if let Some(enc) = &w.enc {
+                let all = enc.names();
+                names.extend((0..256).filter(|&c| f.used[c / 64] >> (c % 64) & 1 != 0).filter_map(|c| all.get(c).map(|n| n.to_string())));
+            }
+            (0..4).for_each(|k| used[k] |= f.used[k]);
+            (w.pfb, w.layout) = (None, None);
+            with[i] = Some(first);
+        }
+        let Some(lead) = work[first].as_mut() else { continue };
+        let name = lead.base.split_once('+').map_or(lead.base.as_str(), |(_, n)| n).to_string();
+        lead.base = format!("{}+{name}", subset_tag(&name, &used));
+        lead.shared = names;
+        let base = lead.base.clone();
+        for &i in &others {
+            if let Some(w) = work[i].as_mut() {
+                w.base.clone_from(&base);
+            }
+        }
+    }
+    with
+}
+
+fn prepare_cached(cache: &crate::backend::backend_cache::PdfCache, work: &mut [Option<FontWork>], streams: &[&[u8]], known: &[Option<u128>]) -> Vec<Vec<u8>> {
     use crate::backend::backend_cache::stream_key;
     // A font keyed whole (`font_work_cached`) is kept whole once prepared; another (a file
     // read from outside the binary) by a hash of what `prepare` reads.
@@ -999,7 +1060,7 @@ fn prepare_cached(cache: &crate::backend::backend_cache::PdfCache, work: &mut [O
             None => fonts.push((Some(key), w)),
         }
     }
-    let keys: Vec<u128> = streams.iter().map(|s| stream_key(s)).collect();
+    let keys: Vec<u128> = streams.iter().enumerate().map(|(i, s)| known.get(i).copied().flatten().unwrap_or_else(|| stream_key(s))).collect();
     let mut out: Vec<Option<Vec<u8>>> = keys.iter().map(|&k| cache.stream(k).map(|s| (*s).clone())).collect();
     let missing: Vec<&[u8]> = streams.iter().zip(&out).filter(|(_, o)| o.is_none()).map(|(s, _)| *s).collect();
     let mut made = prepare_all(&mut fonts.iter_mut().map(|(_, w)| &mut **w).collect::<Vec<_>>(), &missing).into_iter();
@@ -1068,19 +1129,26 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
         }
         h.finish()
     });
+    // Fonts one re-encoded Type 1 file serves share its subset; they are made without the
+    // whole-font cache, whose entry would not know the others' glyphs.
+    let file_key = |f: &DocFont| map.get(f.name.as_str()).map(|l| map_entry(l)).filter(|e| e.enc.is_some()).and_then(|e| Some((e.file?, e.slant, e.extend)));
+    let keys: Vec<_> = fonts.iter().map(|f| f.as_ref().filter(|f| f.pk.is_none()).and_then(file_key)).collect();
     let mut work: Vec<Option<FontWork>> = fonts
         .iter()
-        .map(|f| {
+        .zip(&keys)
+        .map(|(f, k)| {
+            let alone = k.is_none() || keys.iter().filter(|o| *o == k).count() < 2;
             f.as_ref().filter(|f| f.pk.is_none()).map(|f| match cache {
-                None => font_work(f, &map, files, to_unicode, &mut encodings),
-                Some(c) => font_work_cached(c, f, &map, files, to_unicode, unicode, &mut encodings),
+                Some(c) if alone => font_work_cached(c, f, &map, files, to_unicode, unicode, &mut encodings),
+                _ => font_work(f, &map, files, to_unicode, &mut encodings),
             })
         })
         .collect();
+    let share_with = share_font_files(&mut work, &keys);
     let streams: Vec<&[u8]> = pages.iter().map(|p| &p.content[..]).chain(meta.forms.iter().map(|f| &f.content[..])).collect();
     let mut packed = match cache {
         None => prepare_all(&mut work.iter_mut().flatten().collect::<Vec<_>>(), &streams),
-        Some(c) => prepare_cached(c, &mut work, &streams),
+        Some(c) => prepare_cached(c, &mut work, &streams, &pages.iter().map(|p| p.stream).collect::<Vec<_>>()),
     }
     .into_iter();
     for (i, f) in fonts.iter().enumerate() {
@@ -1092,7 +1160,7 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
             continue;
         }
         if let Some(w) = &work[i] {
-            d.write_font(next, w);
+            d.write_font(next, w, share_with[i].map(|l| font_obj[l] + 1));
         }
         next += 4;
     }
@@ -1110,8 +1178,20 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
         }
     }
     font_dict.extend_from_slice(b" >>");
+    // `\pdfpageresources` (pdftex.web `pdf_print_toks_ln(pdf_page_resources)`): the first
+    // page's in the shared dictionary; a page with other text has its own.
+    let shared_res: &[u8] = pages.first().map_or(&[], |p| &p.resources);
+    let res_dict = |text: &[u8]| {
+        let mut v = b"<< ".to_vec();
+        if !text.is_empty() {
+            v.extend_from_slice(text);
+            v.push(b' ');
+        }
+        v.extend_from_slice(&font_dict[3..]);
+        v
+    };
     d.begin(resources);
-    d.buf.extend_from_slice(&font_dict);
+    d.buf.extend_from_slice(&res_dict(shared_res));
     d.buf.extend_from_slice(b" >>\n");
     d.end();
     for (k, p) in pages.iter().enumerate() {
@@ -1120,7 +1200,7 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
         d.buf.extend_from_slice(b"<< /Type /Page /Contents ");
         d.reference(content);
         d.buf.extend_from_slice(b" /Resources ");
-        let own = if p.images.is_empty() && p.forms.is_empty() {
+        let own = if p.images.is_empty() && p.forms.is_empty() && p.resources == shared_res {
             resources
         } else {
             next += 1;
@@ -1149,8 +1229,10 @@ pub fn write(pages: &[ShippedPage], fonts: &[Option<DocFont>], files: &dyn Fn(&s
         d.end();
         if own != resources {
             d.begin(own);
-            d.buf.extend_from_slice(&font_dict);
-            xobjects(&mut d.buf, &p.forms, &p.images);
+            d.buf.extend_from_slice(&res_dict(&p.resources));
+            if !(p.images.is_empty() && p.forms.is_empty()) {
+                xobjects(&mut d.buf, &p.forms, &p.images);
+            }
             d.buf.extend_from_slice(b" >>\n");
             d.end();
         }
@@ -1360,7 +1442,9 @@ impl Doc {
         next
     }
 
-    fn write_font(&mut self, id: usize, w: &FontWork) {
+    /// Font `w` as objects `id` to `id + 3`; `descriptor`, the FontDescriptor of the font
+    /// whose subset holds this one's glyphs too (`share_font_files`).
+    fn write_font(&mut self, id: usize, w: &FontWork, descriptor: Option<usize>) {
         let f = w.f;
         let used = |c: usize| f.used[c / 64] >> (c % 64) & 1 != 0;
         let size = pdf_font_size(f.size);
@@ -1400,6 +1484,9 @@ impl Doc {
         if w.embedded.is_some() {
             self.buf.extend_from_slice(b" /FontDescriptor ");
             self.reference(id + 1);
+        } else if let Some(d) = descriptor {
+            self.buf.extend_from_slice(b" /FontDescriptor ");
+            self.reference(d);
         }
         if w.unicode.is_some() {
             self.buf.extend_from_slice(b" /ToUnicode ");

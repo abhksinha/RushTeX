@@ -66,6 +66,8 @@ struct PageIns {
     broken_ins: usize,
 }
 
+codec_struct!(PageIns { n, split_up, height, last_ins, best_ins, broken_ptr, broken_ins });
+
 /// §980–§982: the current page and the page builder's state.
 #[derive(PartialEq, Clone, Debug, Default)]
 pub(super) struct Page {
@@ -108,10 +110,15 @@ pub(super) struct Page {
     /// Whether a `\pdfliteral shipout` whatsit was ever made (or came with the format's
     /// nodes): until one is, `out_whats`' walk before the ship has nothing to do.
     pub late_literals: bool,
+    /// Whether a [`super::engine_whatsit::PGF_GLUE`] was ever made: a page's box holding one
+    /// is then dumped after the ship walk has placed it.
+    pub pgf_glue: bool,
     /// The fonts hashed so far for a session's shipped-page keys, and their running hash
     /// (`engine_ship::ship_key`): fonts are only added, so each is hashed once.
     pub ship_fonts: (usize, u128),
 }
+
+codec_struct!(Page { list, contents, so_far, max_depth, best_break, least_cost, best_size, last_glue, last_penalty, last_kern, last_type, insert_penalties, output_active, dead_cycles, ins, marks, pages, keep_shipped, shipped, pdf, font_base, font_used, font_pk, map_names, word_ship, late_literals, pgf_glue, ship_fonts });
 
 impl Page {
     /// The current page's nodes and the shipped boxes kept, for `engine_gc`.
@@ -323,6 +330,14 @@ impl Machine<'_, '_> {
             prev_kind = Some(n.kind);
             i += 1;
         }
+    }
+
+    /// Where §977 `vsplit` of the vbox `b` to `h` would break it (`vert_break` with
+    /// `\splitmaxdepth`; `None` for its end), the box left as it is: multicol's balancing
+    /// asks it to see that a trial height splits as the last one did.
+    pub(crate) fn split_break(&mut self, b: u32, h: i32) -> Option<usize> {
+        let list = self.e.nodes.get(self.e.nodes.boxes[b as usize].list).to_vec();
+        self.vert_break(&list, h, self.dimen_p(SPLIT_MAX_DEPTH)).0
     }
 
     /// §977 `vsplit`: the top of box `n`, `h` high, leaving the rest in the box.
@@ -675,6 +690,12 @@ impl Machine<'_, '_> {
     /// the contribution list from the node that triggered it; the new contribution list is
     /// returned, or (when the output routine starts) put back under it.
     fn fire_up(&mut self, mut rest: Vec<Node>) -> Vec<Node> {
+        // A page broken inside a listing's caption group (listings.sty:1660): pdfTeX's output
+        // routine runs with listings' `\vskip`, `\penalty10000` around each of its skips
+        // (probe lc/c45); the plain column and page take it (`out_vskip`), the rest decline.
+        if self.lst_caption_open() {
+            self.lst_set_out_nobreak();
+        }
         // §1013 `\outputpenalty`.
         let reg = Reg { region: Region::Int, slot: OUTPUT_PENALTY };
         let best = self.page.best_break.unwrap_or(usize::MAX);
@@ -855,17 +876,41 @@ impl Machine<'_, '_> {
         if self.kernel.is_some() {
             self.kernel_state(&format!("shipout {}", self.page.pages + 1));
         }
-        page_hash(self, b);
+        // A session's kept page the last run looked into says whether it holds pgf's glue.
+        let known = self.ship_memo.as_ref().and_then(|s| s.same()).and_then(|p| p.pgf_glue);
+        let placed_later = self.page.pgf_glue && known.filter(|_| !ship_check()).unwrap_or_else(|| pgf_glue_in(&self.e.nodes, b));
+        assert!(!self.page.pgf_glue || known.is_none_or(|k| k == placed_later), "RT_SHIP_CHECK: kept page whose pgf glue the last run found otherwise");
+        if !placed_later {
+            page_hash(self, b);
+        }
         // The walk before the ship only turns `\pdfliteral shipout`s into literals.
         if self.page.late_literals {
             self.out_whats(b, true, &mut [].iter());
         }
         let positions = self.ship_page(b);
-        self.out_whats(b, false, &mut positions.iter());
+        if placed_later {
+            page_hash(self, b);
+        }
+        // A session's kept page the last run shipped with no whatsit has none to write.
+        let none = self.ship_memo.as_ref().and_then(|s| s.same()).is_some_and(|p| !p.whats);
+        if !none || ship_check() {
+            let met = self.out_whats(b, false, &mut positions.iter());
+            assert!(!(none && met), "RT_SHIP_CHECK: kept page with a whatsit the last run did not ship");
+            if let Some(p) = self.ship_memo.as_mut().and_then(|s| s.noted()) {
+                p.whats = met;
+                if self.page.pgf_glue {
+                    p.pgf_glue = Some(placed_later);
+                }
+            }
+        }
         self.page.dead_cycles = 0;
         self.page.pages += 1;
         if self.page.keep_shipped {
             self.page.shipped.push(b);
+        } else if self.replaying() {
+            // The kept pages shipped at the end (`finish_contents`): nothing is typeset after
+            // them and the arena is dropped with the job, so §640's flush would free nodes no
+            // one allocates again (about 4M instructions on master.tex's 46 pages).
         } else {
             // §640: the shipped box is flushed.
             self.e.nodes.flush_box(b);
@@ -1047,9 +1092,25 @@ fn x_over_n(x: i32, n: i32) -> i32 {
     }
 }
 
+/// Whether box `b`'s tree holds a [`super::engine_whatsit::PGF_GLUE`].
+fn pgf_glue_in(nodes: &super::engine_node::Nodes, b: u32) -> bool {
+    nodes.get(nodes.boxes[b as usize].list).iter().any(|n| match n.kind {
+        Kind::Glue => n.sub == super::engine_whatsit::PGF_GLUE,
+        Kind::Box => pgf_glue_in(nodes, n.a as u32),
+        _ => false,
+    })
+}
+
 /// `RT_PAGEHASH=<file>`: one line per shipped page, `run page hash`, the hash of the page box
 /// as `\showbox` prints it. Comparing runs shows which pages a rerun changes, the measure for
 /// single-pass references (P2b): the first changed page is where a single pass must resume.
+/// `RT_SHIP_CHECK=1`: a session's kept pages taken from the last run are walked again
+/// (`ShipMemo`).
+pub(super) fn ship_check() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("RT_SHIP_CHECK").is_some())
+}
+
 fn page_hash(m: &Machine, b: u32) {
     static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     let Some(path) = PATH.get_or_init(|| std::env::var("RT_PAGEHASH").ok()) else { return };

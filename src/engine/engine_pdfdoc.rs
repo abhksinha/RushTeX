@@ -43,12 +43,16 @@ enum Target {
     Num(i32),
 }
 
+codec_data_enum!(Target { 0 Page(a, b), 1 Name(a), 2 Num(a) });
+
 /// `scan_action`'s result.
 #[derive(PartialEq, Debug, Clone)]
 enum Action {
     User(String),
     Go { thread: bool, file: Option<String>, new_window: u8, target: Target },
 }
+
+codec_data_enum!(Action { 0 User(a), 1 Go { thread, file, new_window, target } });
 
 /// A `\pdfstartlink`'s box dimensions (`None` running), attributes, action and object.
 #[derive(PartialEq, Clone, Debug)]
@@ -60,11 +64,15 @@ struct Link {
     shipped: bool,
 }
 
+codec_struct!(Link { dims, attr, action, obj, shipped });
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum DestId {
     Name(String),
     Num(i32),
 }
+
+codec_data_enum!(DestId { 0 Name(a), 1 Num(a) });
 
 #[derive(PartialEq, Clone, Debug)]
 struct Dest {
@@ -73,6 +81,8 @@ struct Dest {
     zoom: Option<i32>,
     dims: [Option<i32>; 3],
 }
+
+codec_struct!(Dest { id, view, zoom, dims });
 
 /// `\pdfobj`: its text, stream attributes when it is a stream, whether the text names a
 /// file, and whether it is to be written.
@@ -84,6 +94,8 @@ struct RawObj {
     file: bool,
     wanted: bool,
 }
+
+codec_struct!(RawObj { obj, data, stream, file, wanted });
 
 /// `\pdfoutline`, linked as pdfTeX links it (indices into `outlines`, `usize::MAX` none).
 #[derive(PartialEq, Clone, Debug)]
@@ -99,6 +111,8 @@ struct Outline {
     first: usize,
     last: usize,
 }
+
+codec_struct!(Outline { obj, title, action, attr, count, parent, prev, next, first, last });
 
 const NONE: usize = usize::MAX;
 
@@ -146,7 +160,12 @@ pub struct PdfDoc {
     pub group_obj: i32,
     /// `pdf_last_x_pos` and `pdf_last_y_pos`, from the last `\pdfsavepos` shipped.
     pub last_pos: (i32, i32),
+    /// A natively loaded pgf's resource objects (pgfsys-pdftex.def
+    /// `\pgf@sys@setuppdfresources@plain`): ExtGState, Pattern, ColorSpace.
+    pub pgf: Option<[i32; 3]>,
 }
+
+codec_struct!(PdfDoc { info, catalog, open_action, objects, last_obj, last_link, links, dests, raw, outlines, first_outline, last_outline, parent_outline, dest_obj, page_obj, placed, done, images, graphics, last_ximage, last_ximage_pages, forms, shipped_forms, last_xform, group_obj, last_pos, pgf });
 
 impl Default for PdfDoc {
     fn default() -> Self {
@@ -177,6 +196,7 @@ impl Default for PdfDoc {
             last_xform: 0,
             last_pos: (0, 0),
             group_obj: 0,
+            pgf: None,
         }
     }
 }
@@ -215,6 +235,54 @@ fn reference(out: &mut Vec<u8>, id: i32) {
 }
 
 impl PdfDoc {
+    /// How many `\pdfstartlink`s there have been (the next one's index).
+    pub(super) fn link_count(&self) -> usize {
+        self.links.len()
+    }
+
+    /// Link `i`, not yet shipped, made a `goto name{..}` to `name` (lastpage's stand-in
+    /// target rewritten, `engine_lastpage`).
+    pub(super) fn retarget_link(&mut self, i: usize, name: &str) -> bool {
+        match self.links.get_mut(i) {
+            Some(Link { action: Action::Go { target: t @ Target::Name(_), .. }, shipped: false, .. }) => {
+                *t = Target::Name(name.to_string());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// pgfsys-pdftex.def's resource setup for a natively loaded pgf: three objects reserved
+    /// (ExtGState, Pattern, ColorSpace), written at the end with their lists (`\pgfutil@everybye`'s
+    /// `\immediate\pdfobj useobjnum`); the ColorSpace list starts with
+    /// `/pgfprgb [/Pattern /DeviceRGB]`.
+    pub(super) fn pgf_setup(&mut self) {
+        if self.pgf.is_some() {
+            return;
+        }
+        let objs = [self.new_obj(), self.new_obj(), self.new_obj()];
+        for (k, list) in ["", "", " /pgfprgb [/Pattern /DeviceRGB] "].into_iter().enumerate() {
+            self.raw.push(RawObj { obj: objs[k], data: format!("<<{list}>>"), stream: None, file: false, wanted: true });
+        }
+        self.pgf = Some(objs);
+    }
+
+    /// `\pgf@sys@addpdfresource@extgs@plain{entry}`: the entry added to the ExtGState list once.
+    pub(super) fn pgf_extgs(&mut self, entry: &str) {
+        let Some([e, ..]) = self.pgf else { return };
+        if let Some(r) = self.raw.iter_mut().find(|r| r.obj == e) {
+            if !r.data.contains(entry) {
+                let list = &r.data[2..r.data.len() - 2];
+                r.data = format!("<<{list} {entry}>>");
+            }
+        }
+    }
+
+    /// The page resources pgf's setup gives `\pdfpageresources`, when pgf is natively loaded.
+    pub(super) fn pgf_page_resources(&self) -> Option<String> {
+        self.pgf.map(|[e, p, c]| format!("/ColorSpace {c} 0 R /Pattern {p} 0 R /ExtGState {e} 0 R"))
+    }
+
     pub(super) fn new_obj(&mut self) -> i32 {
         self.objects += 1;
         self.objects

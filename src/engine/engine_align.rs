@@ -52,6 +52,8 @@ struct Column {
     spans: Vec<(u16, i32)>,
 }
 
+codec_struct!(Column { u, v, width, omit, ended_by, spans });
+
 /// §159: the stretch and shrink of an unset entry, and how many columns it spans beyond
 /// its own.
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -62,6 +64,8 @@ struct Unset {
     shrink: i32,
     shrink_order: u8,
 }
+
+codec_struct!(Unset { span, stretch, stretch_order, shrink, shrink_order });
 
 /// §770: one alignment in progress.
 #[derive(PartialEq, Clone, Debug)]
@@ -82,6 +86,8 @@ pub(super) struct Align {
     /// §770 `cur_head..cur_tail`: what the current row's entries gave up to `hpack`.
     adjusts: Vec<Node>,
 }
+
+codec_struct!(Align { cols, tabskips, cur, span_start, cur_loop, unsets, exact, size, saved_state, adjusts });
 
 impl Align {
     /// The pending adjustment nodes, for `engine_gc`.
@@ -258,15 +264,6 @@ impl Machine<'_, '_> {
         if let Some(c) = self.aligns.last_mut().and_then(|a| a.cols.get_mut(col)) {
             c.width = width;
         }
-    }
-
-    /// `\ialign` (`\everycr{}\tabskip\z@skip\halign{`) with a preamble of `n` columns
-    /// built by a native instead of scanned: every column's templates are `u` and `v`
-    /// (which find their column by [`Self::align_column`]), all tabskip glue zero. In the
-    /// internal vertical list the native has opened; `\everycr` is empty there (the
-    /// pre-scan refuses it).
-    pub(super) fn init_align_with(&mut self, n: usize, u: Span, v: Span) {
-        self.init_align_cols(&vec![(u, v); n], vec![Glue::default(); n + 1], false, 0);
     }
 
     /// §774 `init_align` with a preamble built by a native: column `k`'s templates

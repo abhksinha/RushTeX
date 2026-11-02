@@ -3,12 +3,14 @@
 # documents use: Computer Modern and the AMS fonts (text, math, symbols, Fraktur), Latin
 # Modern (T1 text with lmodern), and the URW clones of the PostScript base fonts (Times,
 # Helvetica, Courier, Palatino, Symbol), with the encodings their map lines name; the
-# maths fonts the native packages use (rsfs for mathrsfs's \mathscr).
+# maths fonts the native packages use (rsfs for mathrsfs's \mathscr, lasy for latexsym; the
+# pinned pdftex.map has no line for dsrom, stmary, esint or bbold, so pdfTeX draws them from PK).
 cm*.pfb
 msam*.pfb
 msbm*.pfb
 eu*.pfb
 rsfs*.pfb
+lasy*.pfb
 lm*.pfb
 utm*.pfb
 uhv*.pfb

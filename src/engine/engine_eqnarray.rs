@@ -56,7 +56,21 @@ impl Machine<'_, '_> {
         }
         let tabs = doc.tabs.len();
         doc.eqnarray = Some(EqnArray { starred, eqcnt: 0, eqnsw: true, tabs, gap: (0, 0) });
-        self.equation_step();
+        // hyperref's `\eqnarray` (hyperref.sty:6944): `\def\@currentHref{}`, the kernel's, then
+        // (not `eqnarray*`, `\if@eqnstar`) `\hyper@makecurrent{equation}` and `\mathopen{
+        // \Hy@raisedlink{\hyper@anchorstart{\@currentHref}\hyper@anchorend}}` in the first cell.
+        let mut anchor = Vec::new();
+        if self.hyper() {
+            if starred {
+                self.equation_step();
+                self.store_current_href("", false);
+            } else {
+                let Some(name) = self.equation_anchor_step() else { return };
+                anchor = self.raised_link(Some(name));
+            }
+        } else {
+            self.equation_step();
+        }
         {
             let reg = param!("everycr");
             let span = self.e.toks.store(&[]);
@@ -64,7 +78,8 @@ impl Machine<'_, '_> {
         }
         self.math_surround_zero();
         let dollar = Token::char(Cat::MathShift, '$');
-        let t = [dollar, dollar, self.doc_id(doc!("rt@eqahalign"))];
+        let mut t = vec![dollar, dollar, self.doc_id(doc!("rt@eqahalign"))];
+        t.append(&mut anchor);
         self.back_list(&t);
     }
 
@@ -217,7 +232,7 @@ impl Machine<'_, '_> {
         self.begin_group(SIMPLE_GROUP);
         self.normal_font();
         if colored {
-            self.color_stack(Some(super::DEFAULT_COLOR));
+            self.push_default_color();
         }
         if self.ams() {
             self.build_hbox(|m| m.equation_tag(&n));

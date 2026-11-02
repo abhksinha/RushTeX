@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::engine_io::WriteStream;
-use super::engine_resume::{file_hash, hash_stamped, prior_hash, Kept, Snapshot};
+use super::engine_resume::{file_hash, hash_stamped, prior_hash, Body, Kept, Redate, Snapshot};
 use super::engine_run::Machine;
 use super::Engine;
 
@@ -70,10 +70,13 @@ fn runs(engine: &dyn Fn() -> Option<Engine>, src: &str, o: &Opts, read: &dyn Fn(
         Some((k, l)) => (Some(k), Some(l)),
         None => (None, None),
     };
-    let Kept { runs: mut old, mut aux, stamps } = store.as_deref_mut().map(std::mem::take).unwrap_or_default();
+    let Kept { runs: mut old, mut aux, stamps, stamps_read } = store.as_deref_mut().map(std::mem::take).unwrap_or_default();
     let mut new: Vec<Snapshot> = Vec::new();
     let minute = o.now.div_euclid(60);
     let mut prior: Vec<WriteStream> = Vec::new();
+    // Whether the format's `\everyjob` uses the date only as `Redate` puts it in, proved on
+    // the first run made whole that copies (`Redate::probe`).
+    let mut redate: Option<bool> = None;
     // Each file's hash once per compile: every run's preamble asks for nearly the same files.
     let hashed: RefCell<HashMap<String, u128>> = RefCell::new(HashMap::new());
     let hash_of = |name: &str| {
@@ -108,17 +111,19 @@ fn runs(engine: &dyn Fn() -> Option<Engine>, src: &str, o: &Opts, read: &dyn Fn(
         let ph = prior_hash(&prior);
         // Only when said: `Instant` is not there on every target the job runs on (wasm).
         let keyed = said.then(std::time::Instant::now);
-        let hit = if watch { old.iter().position(|k| k.fits(src, o.job_name, minute, &prior, ph, &hash_of)) } else { None };
-        let before_aux = if watch && hit.is_none() { aux.as_ref().filter(|a| a.fits(src, o.job_name, minute, &prior, ph, &hash_of)) } else { None };
+        // A copy that fits is opened (a copy from disk decoded); one that does not open is
+        // passed over, and the run made whole.
+        let hit = if watch { old.iter().position(|k| k.fits(src, o.job_name, minute, &prior, ph, &hash_of)).and_then(|i| Some((i, old[i].open(o.now, read)?))) } else { None };
+        let before_aux = if watch && hit.is_none() { aux.as_ref().filter(|a| a.fits(src, o.job_name, minute, &prior, ph, &hash_of)).and_then(|a| Some((a, a.open(o.now, read)?))) } else { None };
         if let Some(t) = keyed {
             eprintln!("[SNAP] run {runs}: copies' keys checked in {:.2} ms", t.elapsed().as_secs_f64() * 1e3);
         }
         let mut e;
         let mut m;
-        if let Some(i) = hit {
+        if let Some((i, (engine, state, opened))) = hit {
             let k = old.swap_remove(i);
-            e = k.engine.clone();
-            m = Machine::resume(&mut e, src, &k.m, Box::new(read));
+            e = engine;
+            m = Machine::resume(&mut e, src, state, opened, Box::new(read));
             m.run_index = runs;
             if said {
                 eprintln!("[SNAP] run {runs}: resumed after the preamble ({} bytes, {} files)", k.read_to.len(), k.files.len());
@@ -128,10 +133,19 @@ fn runs(engine: &dyn Fn() -> Option<Engine>, src: &str, o: &Opts, read: &dyn Fn(
         } else {
             // Copied before the `.aux` only from a run that starts with no files (`Snapshot::fits`).
             let mut aux_pending = false;
-            if let Some(a) = before_aux {
-                e = a.engine.clone();
-                m = Machine::resume(&mut e, src, &a.m, Box::new(recorded));
+            let resumed = before_aux.is_some();
+            // Whether the copies this run takes may serve any date: nothing after `\everyjob`
+            // used it (`Eqtb::watch`, watched from the document's first token or, resumed
+            // from a copy that serves any date, from its pause on).
+            let mut any_date = false;
+            if let Some((a, (engine, state, opened))) = before_aux {
+                e = engine;
+                m = Machine::resume(&mut e, src, state, opened, Box::new(recorded));
                 m.run_index = runs;
+                if a.minute.is_none() {
+                    any_date = true;
+                    m.e.eqtb.watch.start_now(Redate::ids(m.e));
+                }
                 // The copy started with no files, this run with `prior`, which none of its
                 // requests reached; they come first in `closed`, as for a run made whole.
                 let own = std::mem::take(&mut m.closed);
@@ -144,6 +158,19 @@ fn runs(engine: &dyn Fn() -> Option<Engine>, src: &str, o: &Opts, read: &dyn Fn(
                 }
             } else {
                 e = engine()?;
+                if watch {
+                    any_date = *redate.get_or_insert_with(|| {
+                        let t = said.then(std::time::Instant::now);
+                        let ok = Redate::probe(&e, o.job_name, o.now);
+                        if let Some(t) = t {
+                            eprintln!("[SNAP] the format's date {} given another (proved in {:.2} ms)", if ok { "can be" } else { "cannot be" }, t.elapsed().as_secs_f64() * 1e3);
+                        }
+                        ok
+                    });
+                    if any_date {
+                        e.eqtb.watch.start(Redate::ids(&e));
+                    }
+                }
                 m = Machine::new(&mut e, src);
                 m.run_index = runs;
                 m.job_name = o.job_name.to_string();
@@ -162,7 +189,6 @@ fn runs(engine: &dyn Fn() -> Option<Engine>, src: &str, o: &Opts, read: &dyn Fn(
                 setup(&mut m);
                 m.start_job();
             }
-            let resumed = before_aux.is_some();
             let mut copied = false;
             m.run();
             while m.paused {
@@ -174,19 +200,29 @@ fn runs(engine: &dyn Fn() -> Option<Engine>, src: &str, o: &Opts, read: &dyn Fn(
                 if !at_aux {
                     m.stop_at_aux = false;
                 }
+                // The body is not watched: no copy is taken in it.
+                let watched = at_aux;
+                // The token lists nothing refers to any more (the preamble's expansions) are
+                // dropped first, as a collection between two commands does (`engine_gc`): the
+                // copy is smaller to keep, encode and clone.
+                m.collect_tokens();
                 if let Some(saved) = m.save() {
                     let files = once(files.unwrap_or_default());
                     if said {
                         eprintln!("[SNAP] run {runs}: {}, copied {} ({} files)", if resumed { "resumed before the .aux" } else { "ran whole" }, if at_aux { "before the .aux" } else { "after the preamble" }, files.len());
                     }
                     let read_to = src[..m.input.base_read_to()].to_string();
-                    let snap = Snapshot { engine: (*m.e).clone(), m: saved, read_to, files, prior: (!at_aux).then_some(ph), minute, job_name: o.job_name.to_string() };
+                    let dated = !any_date || m.e.eqtb.watch.touched.get() || !Redate::ready(m.e);
+                    let snap = Snapshot { body: Body::Live(Box::new(((*m.e).clone(), saved))), read_to, files, prior: (!at_aux).then_some(ph), minute: dated.then_some(minute), job_name: o.job_name.to_string() };
                     if at_aux {
                         aux = Some(snap);
                     } else {
                         new.push(snap);
                         copied = true;
                     }
+                }
+                if !watched {
+                    m.e.eqtb.watch.stop();
                 }
                 m.run();
             }
@@ -212,7 +248,7 @@ fn runs(engine: &dyn Fn() -> Option<Engine>, src: &str, o: &Opts, read: &dyn Fn(
             let job = Job { pdf: m.pdf(), pages: m.page.pages, runs, errors: std::mem::take(&mut m.errors) };
             drop(m);
             if let Some(k) = store {
-                *k = Kept { runs: new, aux, stamps };
+                *k = Kept { runs: new, aux, stamps, stamps_read };
             }
             return Some(job);
         }

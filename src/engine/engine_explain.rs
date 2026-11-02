@@ -456,6 +456,10 @@ const PACKAGES: &[(&str, &str)] = &[
     ("num", "siunitx"),
     ("qty", "siunitx"),
     ("unit", "siunitx"),
+    ("ang", "siunitx"),
+    ("SIrange", "siunitx"),
+    ("qtyrange", "siunitx"),
+    ("numrange", "siunitx"),
     ("citep", "natbib"),
     ("citet", "natbib"),
     ("citeauthor", "natbib"),
@@ -692,9 +696,111 @@ fn first_word(line: &str) -> Option<String> {
     line.split_whitespace().next().map(String::from)
 }
 
+/// Packages that need XeTeX or LuaTeX (OpenType fonts, Unicode input), with the engines
+/// that run them; fontspec stops under pdfTeX with "requires either XeTeX or LuaTeX".
+const OTHER_ENGINE_PACKAGES: &[(&str, &str)] = &[
+    ("fontspec", "XeLaTeX or LuaLaTeX"),
+    ("unicode-math", "XeLaTeX or LuaLaTeX"),
+    ("polyglossia", "XeLaTeX or LuaLaTeX"),
+    ("xltxtra", "XeLaTeX"),
+    ("xunicode", "XeLaTeX"),
+    ("mathspec", "XeLaTeX"),
+    ("xeCJK", "XeLaTeX"),
+    ("xepersian", "XeLaTeX"),
+    ("bidi", "XeLaTeX"),
+    ("luacode", "LuaLaTeX"),
+    ("luatexja", "LuaLaTeX"),
+    ("luatexja-fontspec", "LuaLaTeX"),
+    ("luaotfload", "LuaLaTeX"),
+    ("luatextra", "LuaLaTeX"),
+    ("luamplib", "LuaLaTeX"),
+];
+
+/// Packages that run other programs while the document compiles (pdfLaTeX's
+/// `--shell-escape`) and stop with an error without it. Not pythontex, sagetex or
+/// gnuplottex, nor a bare `\write18`: without it they only warn, and the line would hide the
+/// document's own error.
+const SHELL_PACKAGES: &[&str] = &["minted", "svg"];
+
+/// When the document is not one pdfLaTeX compiles alone, one sentence saying so for a
+/// beginner: it needs XeLaTeX or LuaLaTeX (a package of [`OTHER_ENGINE_PACKAGES`],
+/// `\directlua`, or a `% !TEX program = xelatex` line, the editors' magic comment), or it
+/// runs other programs ([`SHELL_PACKAGES`], `\tikzexternalize`). Read from the
+/// text in one pass, comments skipped but the magic one. The command line says it in place
+/// of TeX's errors, only for a run that failed, so nothing that compiles changes.
+pub fn other_engine(source: &str) -> Option<String> {
+    const PDFLATEX: &str = "RushTeX compiles pdfLaTeX documents";
+    let mut magic = None;
+    let mut shell = None;
+    for line in source.lines() {
+        let t = line.trim_start();
+        if let Some(c) = t.strip_prefix('%') {
+            // `% !TEX program = xelatex` (TeXShop's `% !TEX TS-program`, TeXstudio, LaTeX Workshop).
+            let c = c.trim_start();
+            if magic.is_none() && c.starts_with("!TEX") && c.to_ascii_lowercase().contains("program") {
+                let prog = c.split_once('=').map_or("", |p| p.1).trim().to_ascii_lowercase();
+                if prog.starts_with("xe") || prog.starts_with("lua") {
+                    magic = Some((if prog.starts_with("xe") { "XeLaTeX" } else { "LuaLaTeX" }, c.trim_end().to_string()));
+                }
+            }
+            continue;
+        }
+        // The line up to its comment (`\%` is a percent sign).
+        let b = line.as_bytes();
+        let mut end = b.len();
+        let mut k = 0;
+        while k < b.len() {
+            match b[k] {
+                b'\\' => k += 2,
+                b'%' => {
+                    end = k;
+                    break;
+                }
+                _ => k += 1,
+            }
+        }
+        let code = &line[..end.min(line.len())];
+        if code.contains("\\directlua") {
+            return Some(format!("This document needs LuaLaTeX (it uses \\directlua); {PDFLATEX}."));
+        }
+        for cmd in ["\\usepackage", "\\RequirePackage"] {
+            for (at, _) in code.match_indices(cmd) {
+                let r = &code[at + cmd.len()..];
+                let r = r.trim_start();
+                let r = r.strip_prefix('[').map_or(r, |o| o.find(']').map_or("", |e| &o[e + 1..])).trim_start();
+                let Some(names) = r.strip_prefix('{').and_then(|n| n.find('}').map(|e| &n[..e])) else { continue };
+                for n in names.split(',').map(str::trim) {
+                    if let Some((p, engine)) = OTHER_ENGINE_PACKAGES.iter().find(|p| p.0 == n) {
+                        return Some(format!("This document needs {engine} (it loads {p}); {PDFLATEX}."));
+                    }
+                    if shell.is_none() && SHELL_PACKAGES.contains(&n) {
+                        shell = Some(format!("it loads {n}"));
+                    }
+                }
+            }
+        }
+        if shell.is_none() && code.contains("\\tikzexternalize") {
+            shell = Some("it uses \\tikzexternalize".to_string());
+        }
+    }
+    if let Some((engine, line)) = magic {
+        return Some(format!("This document asks for {engine} (its line '% {line}'); {PDFLATEX}."));
+    }
+    shell.map(|why| format!("This document runs other programs while it compiles ({why}), which pdfLaTeX does only with --shell-escape; RushTeX does not run other programs."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn other_engines_named_in_one_line() {
+        assert_eq!(other_engine("\\documentclass{article}\n\\usepackage{fontspec}\n").as_deref(), Some("This document needs XeLaTeX or LuaLaTeX (it loads fontspec); RushTeX compiles pdfLaTeX documents."));
+        assert_eq!(other_engine("% !TEX program = xelatex\n\\documentclass{article}\n").as_deref(), Some("This document asks for XeLaTeX (its line '% !TEX program = xelatex'); RushTeX compiles pdfLaTeX documents."));
+        assert_eq!(other_engine("\\usepackage[cache=false]{minted}\n").as_deref(), Some("This document runs other programs while it compiles (it loads minted), which pdfLaTeX does only with --shell-escape; RushTeX does not run other programs."));
+        assert!(other_engine("\\directlua{tex.print(1)}").is_some_and(|s| s.contains("LuaLaTeX")));
+        assert_eq!(other_engine("% \\usepackage{fontspec}\n\\usepackage{amsmath} % fontspec\n100\\% \\usepackage{graphicx}\n"), None);
+    }
 
     fn run<'a>(source: &'a str, log: &'a str, defined: &'a [String]) -> Run<'a> {
         Run { file: "doc.tex", dir: "/home/me", source, log, defined }

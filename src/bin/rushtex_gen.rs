@@ -1230,8 +1230,9 @@ fn natpkg(args: &[String]) -> Result<String, String> {
             out = Some(kernel_values(e).map(|v| (v, words, meanings, refs, lets, accents)));
         })
         .ok_or("the format is not one of this build")?;
-        if !job.errors.is_empty() {
-            return Err(format!("loading {pkgs:?}: {}", job.errors[0].lines().next().unwrap_or("")));
+        // The probe has no `\end`: §360's fatal error at the input's end is expected (as in `class`).
+        if let Some(x) = job.errors.iter().find(|x| !x.ends_with("no legal \\end found)")) {
+            return Err(format!("loading {pkgs:?}: {}", x.lines().next().unwrap_or("")));
         }
         out.ok_or("no state")?
     };
@@ -1299,9 +1300,30 @@ fn natpkg(args: &[String]) -> Result<String, String> {
         // The PDF page size, set at `\begin{document}` by packages the native job knows.
         let page = rushtex::engine::engine_tables::INT_PARAMS + rushtex::engine::engine_doc::PDF_PAGE_WIDTH;
         let page_set = |k: usize| rushtex::engine::engine_doc::PAGE_SIZE_PACKAGES.contains(&name.as_str()) && (k as u32 == page || k as u32 == page + 1);
-        if before_words.iter().zip(&after_words).enumerate().any(|(k, (a, b))| a != b && !page_set(k)) {
-            let n = before_words.iter().zip(&after_words).filter(|(a, b)| a != b).count();
-            let at: Vec<String> = before_words.iter().zip(&after_words).enumerate().filter(|(_, (a, b))| a != b).map(|(k, (a, b))| format!("{k}: {a:?} to {b:?}")).collect();
+        // A math code (`\DeclareMathSymbol` of a character), a delimiter code
+        // (`\DeclareMathDelimiter` of one) and a math glue (mathpazo's `\medmuskip`) are held
+        // in the table's `codes`; any other parameter, code or catcode is refused.
+        let glue0 = (INT_PARAMS + DIMEN_PARAMS) as usize;
+        let math0 = glue0 + 5 * GLUE_PARAMS as usize + 3 * 256;
+        let muglue = |k: usize| k >= glue0 && k < glue0 + 5 * GLUE_PARAMS as usize && (15..=17).contains(&((k - glue0) / 5));
+        let held_code = |k: usize| (math0..math0 + 512).contains(&k) || muglue(k);
+        let mut codes: Vec<(char, u32, Vec<i32>)> = Vec::new();
+        for (k, (a, b)) in before_words.iter().zip(&after_words).enumerate() {
+            if a == b || !held_code(k) {
+                continue;
+            }
+            if muglue(k) {
+                let slot = (k - glue0) / 5;
+                if !codes.iter().any(|c| c.0 == 'g' && c.1 == slot as u32) {
+                    codes.push(('g', slot as u32, after_words[glue0 + 5 * slot..glue0 + 5 * slot + 5].to_vec()));
+                }
+            } else {
+                codes.push((if k < math0 + 256 { 'm' } else { 'd' }, ((k - math0) % 256) as u32, vec![*b]));
+            }
+        }
+        if before_words.iter().zip(&after_words).enumerate().any(|(k, (a, b))| a != b && !page_set(k) && !held_code(k)) {
+            let n = before_words.iter().zip(&after_words).enumerate().filter(|(k, (a, b))| a != b && !held_code(*k)).count();
+            let at: Vec<String> = before_words.iter().zip(&after_words).enumerate().filter(|(k, (a, b))| a != b && !held_code(*k)).map(|(k, (a, b))| format!("{k}: {a:?} to {b:?}")).collect();
             return Err(format!("{name} changes {n} parameters, codes or catcodes (word {})", at.join(", ")));
         }
         let new = |a: &[(String, Def)], b: &[(String, Def)]| a.iter().filter(|x| !b.contains(x)).cloned().collect::<Vec<_>>();
@@ -1374,6 +1396,9 @@ fn natpkg(args: &[String]) -> Result<String, String> {
         rushtex::data::data_kernel::write_blocked(&mut w, &blocked);
         rushtex::data::data_kernel::write_lets(&mut w, &lets);
         rushtex::data::data_kernel::write_accents(&mut w, &accents);
+        if !codes.is_empty() {
+            rushtex::data::data_kernel::write_codes(&mut w, &codes);
+        }
         let bytes = w.finish();
         let t = Blob::new(&bytes).and_then(|b| rushtex::data::data_kernel::KernelTable::from_blob(&b)).ok_or("the table does not read back")?;
         if !(t.chars().map(|(n, d)| (n.to_string(), d)).eq(chars.iter().cloned()) && t.math_fonts().map(|f| owned_math_font(&f)).eq(fonts.iter().cloned()) && t.macros().count() == macros.len() && t.package().is_some_and(|(f, d)| f == fam0 && d.eq(direct.iter().map(String::as_str)))) {
@@ -1451,26 +1476,40 @@ fn class(args: &[String]) -> Result<String, String> {
         rushtex::engine::engine_job::run(&|| Some(engine.fmt.clone()), src, &rushtex::engine::engine_job::Opts { job_name: "rtgen", now: 0, max_runs: 1 }, &read, &mut |_| {}, inspect).map(|_| ()).ok_or_else(|| "the format is not one of this build".to_string())
     };
     let mut notes = Vec::new();
-    for (si, size) in data_class::CLASS_SIZES.iter().enumerate() {
-        let doc = |opts: &str, body: &str| format!("\\documentclass[{size}{opts}]{{{cls}}}\\begin{{document}}{body}");
+    let sizes = data_class::CLASSES.iter().position(|c| *c == cls).map_or(&data_class::CLASS_SIZES[..], data_class::class_sizes);
+    for (si, size) in sizes.iter().enumerate() {
+        // screenplay.cls takes no option (`\DeclareOption*` is an error): every combination
+        // is the class alone.
+        let doc = |opts: &str, body: &str| if cls == "screenplay" { format!("\\documentclass{{screenplay}}\\begin{{document}}{body}") } else { format!("\\documentclass[{size}{opts}]{{{cls}}}\\begin{{document}}{body}") };
         // The base and each combination: the table's words and the oracle's state.
         let mut combos: Vec<(u32, GenClass, State)> = Vec::new();
         let mut dropped = Vec::new();
         let mut hyph_note = String::new();
         for key in data_class::option_keys() {
             let mut opts = String::new();
+            let papers = if cls == "a0poster" { data_class::A0_PAPERS } else { data_class::PAPERS };
             if key & 7 != 0 {
-                opts = format!(",{}", data_class::PAPERS[(key & 7) as usize]);
+                opts = format!(",{}", papers[(key & 7) as usize]);
             }
-            for (bit, name) in [(8, "landscape"), (16, "twoside"), (32, "draft"), (data_class::TWOCOLUMN, "twocolumn")] {
+            // IEEEtran declares no `landscape`: its bit is the `conference` option there
+            // (`journal` is the class's default); a0poster's default is landscape, its bit
+            // `portrait`.
+            let landscape = match cls.as_str() {
+                "IEEEtran" => "conference",
+                "a0poster" => "portrait",
+                _ => "landscape",
+            };
+            // scrlttr2's bit 32 is `parskip=half` (every corpus letter sets it), not `draft`.
+            let draft = if cls == "scrlttr2" { "parskip=half" } else { "draft" };
+            for (bit, name) in [(8, landscape), (16, "twoside"), (32, draft), (data_class::TWOCOLUMN, "twocolumn")] {
                 if key & bit != 0 {
                     opts.push(',');
                     opts.push_str(name);
                 }
             }
-            // book.cls's and memoir.cls's `\ExecuteOptions{...,twoside,...}`: bit 4 off is
-            // `oneside` there.
-            if matches!(cls.as_str(), "book" | "memoir") && key & 16 == 0 {
+            // book.cls's and memoir.cls's `\ExecuteOptions{...,twoside,...}` (scrbook.cls's
+            // `\KOMAExecuteOptions{twoside=true}`): bit 4 off is `oneside` there.
+            if matches!(cls.as_str(), "book" | "memoir" | "scrbook") && key & 16 == 0 {
                 opts.push_str(",oneside");
             }
             let mut g = GenClass::default();
@@ -1478,7 +1517,9 @@ fn class(args: &[String]) -> Result<String, String> {
             let mut want = None;
             run(&doc(&opts, ""), &mut |m| {
                 let e = &*m.e;
-                if e.eqtb.level() != 1 || !m.errors.is_empty() {
+                // The probe has no `\end`: the job records §360's fatal error at the input's
+                // end, which is expected here.
+                if e.eqtb.level() != 1 || m.errors.iter().any(|x| !x.ends_with("no legal \\end found)")) {
                     err = Some(format!("the probe ended in a group or with errors: {:?}", m.errors));
                     return;
                 }
@@ -1533,7 +1574,7 @@ fn class(args: &[String]) -> Result<String, String> {
                     let Some(r) = r else {
                         // letter.cls allocates no float counters, skips or caption skips
                         // (`\c@figure`, `\floatsep`, `\abovecaptionskip`): region 3, absent.
-                        if cls == "letter" && e.cs.get(name).is_none_or(|id| matches!(e.eqtb.meaning(id), Meaning::Undefined)) {
+                        if matches!(cls.as_str(), "letter" | "scrlttr2") && e.cs.get(name).is_none_or(|id| matches!(e.eqtb.meaning(id), Meaning::Undefined)) {
                             g.regs.push([3, 0, 0, 0, 0, 0, 0]);
                             continue;
                         }
@@ -1614,6 +1655,24 @@ fn class(args: &[String]) -> Result<String, String> {
             combos.push((key, g, want.ok_or("no state")?));
         }
         let mut g = std::mem::take(&mut combos[0].1);
+        // The font parameters the class changed (IEEEtran's `\@IEEEtunefonts`): the oracle's
+        // against the TFM's, read by a fresh machine.
+        {
+            let mut fresh = rushtex::engine::Engine::default();
+            let mut n = rushtex::engine::engine_run::Machine::new(&mut fresh, "");
+            for (i, f) in g.fonts.iter().enumerate() {
+                let tfm = n.tfm_params(&f.0, f.2);
+                let Some(o) = combos[0].2 .3.iter().find(|x| x.0 == f.1) else { continue };
+                for (k, (a, b)) in o.5.iter().zip(&tfm).enumerate() {
+                    if a != b {
+                        g.font_dims.push([i as i32, k as i32 + 1, *a]);
+                    }
+                }
+                if o.5.len() != tfm.len() {
+                    return Err(format!("{size}: {} has {} parameters, its TFM {}", f.1, o.5.len(), tfm.len()));
+                }
+            }
+        }
         // Each combination as its differences from the base (the base has none).
         g.options.push((0, Vec::new()));
         for (key, c, _) in &combos[1..] {
@@ -1767,6 +1826,10 @@ fn microtype(args: &[String]) -> Result<String, String> {
     let engine = Engine::new(arg("--format"))?;
     let read = |name: &str| engine.kpse.read(name);
     const SIZES: [&str; 10] = ["tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge"];
+    // The text sizes, then their math sizes as `\calculate@math@sizes` prints them (`\strip@pt`
+    // of .7 and .5 of each: 29.39987, not 29.4): the operators font is set up at them too
+    // (`\getanddefine@fonts`'s `\pickup@font`).
+    const FONTSIZES: [&str; 24] = ["fontsize{16}{19}\\selectfont", "fontsize{25}{30}\\selectfont", "fontsize{30}{36}\\selectfont", "fontsize{36}{42}\\selectfont", "fontsize{38}{42}\\selectfont", "fontsize{40}{46}\\selectfont", "fontsize{41}{46}\\selectfont", "fontsize{42}{46}\\selectfont", "fontsize{11.19995}{11.19995}\\selectfont", "fontsize{8}{8}\\selectfont", "fontsize{17.49992}{17.49992}\\selectfont", "fontsize{12.5}{12.5}\\selectfont", "fontsize{20.99991}{20.99991}\\selectfont", "fontsize{15}{15}\\selectfont", "fontsize{25.19989}{25.19989}\\selectfont", "fontsize{18}{18}\\selectfont", "fontsize{26.59988}{26.59988}\\selectfont", "fontsize{19}{19}\\selectfont", "fontsize{27.99988}{27.99988}\\selectfont", "fontsize{20}{20}\\selectfont", "fontsize{28.69987}{28.69987}\\selectfont", "fontsize{20.5}{20.5}\\selectfont", "fontsize{29.39987}{29.39987}\\selectfont", "fontsize{21}{21}\\selectfont"];
     // (font, size) to its codes from the selection naming it; the substituted selections.
     let mut fonts: BTreeMap<(String, i32), String> = BTreeMap::new();
     let mut subs: Vec<(String, i32, String, String)> = Vec::new();
@@ -1777,7 +1840,11 @@ fn microtype(args: &[String]) -> Result<String, String> {
             for lm in [false, true] {
                 let pre = format!("\\documentclass[{opt}]{{article}}{}{}\\usepackage{{microtype}}", if enc == "T1" { "\\usepackage[T1]{fontenc}" } else { "" }, if lm { "\\usepackage{lmodern}" } else { "" });
                 let fams = if lm { ["lmr", "lmss", "lmtt"] } else { ["cmr", "cmss", "cmtt"] };
-                for size in SIZES {
+                // `\fontsize{S}{B}\selectfont` at the sizes documents with microtype name
+                // (posters: 25, 38, 42, ..), once (a font's codes do not depend on the class
+                // size, which the check below confirms for the size commands).
+                let extra = if opt == "10pt" { FONTSIZES.as_slice() } else { &[] };
+                for size in SIZES.iter().copied().chain(extra.iter().copied()) {
                     for (fam, family) in ["rmfamily", "sffamily", "ttfamily"].iter().zip(fams) {
                         for (ser, series) in [("mdseries", "m"), ("bfseries", "bx")] {
                             for (shape, sh) in [("upshape", "n"), ("itshape", "it"), ("slshape", "sl"), ("scshape", "sc")] {
@@ -1949,6 +2016,15 @@ fn glyphs(args: &[String]) -> Result<String, String> {
     Ok(format!("{out}: {} glyph names, {} bytes", pairs.len(), bytes.len()))
 }
 
+/// `rushtex-gen natlist`: the classes and packages the native job can take, from the code
+/// (`data_class::CLASSES`, `engine_doc::native_package_names`); `docs/native-packages.md`
+/// says what each takes and declines.
+fn natlist() -> String {
+    let classes = rushtex::data::data_class::CLASSES.join(" ");
+    let packages = rushtex::engine::engine_doc::native_package_names().join(" ");
+    format!("classes: {classes}\npackages: {packages}")
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
@@ -1958,6 +2034,7 @@ fn main() -> ExitCode {
         Some("embed") => embed(&args[1..]),
         Some("packs") => packs(&args[1..]),
         Some("names") => names(&args[1..]),
+        Some("natlist") => Ok(natlist()),
         #[cfg(feature = "oracle")]
         Some("class") => class(&args[1..]),
         #[cfg(feature = "oracle")]
@@ -1972,7 +2049,7 @@ fn main() -> ExitCode {
         Some("hyph") => hyph(&args[1..]),
         #[cfg(feature = "oracle")]
         Some("microtype") => microtype(&args[1..]),
-        _ => Err("usage: rushtex-gen fonts --list FILE --use USE [--out PATH] [--check] | nfss --list FILE [--format FMT] [--out PATH] [--dump] | pkgs --list FILE [--format FMT] [--out PATH] | embed --list FILE [--set PATH] [--out PATH] | class [--format FMT] [--out-dir DIR] [--hyph-out PATH] [--kernel-out PATH] | measure --pkgs FILE --corpus DIR [--format FMT] [--top N] | natpkg NAME.. [--format FMT] [--out-dir DIR] | names [--out PATH] | glyphs [--format FMT] [--out PATH] | hyph [--format FMT] [--out-dir DIR] | microtype [--format FMT] [--out PATH]".into()),
+        _ => Err("usage: rushtex-gen fonts --list FILE --use USE [--out PATH] [--check] | nfss --list FILE [--format FMT] [--out PATH] [--dump] | pkgs --list FILE [--format FMT] [--out PATH] | embed --list FILE [--set PATH] [--out PATH] | class [--format FMT] [--out-dir DIR] [--hyph-out PATH] [--kernel-out PATH] | measure --pkgs FILE --corpus DIR [--format FMT] [--top N] | natpkg NAME.. [--format FMT] [--out-dir DIR] | names [--out PATH] | natlist | glyphs [--format FMT] [--out PATH] | hyph [--format FMT] [--out-dir DIR] | microtype [--format FMT] [--out PATH]".into()),
     };
     match result {
         Ok(msg) => {

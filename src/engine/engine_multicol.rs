@@ -18,12 +18,16 @@ use super::super::engine_node::{BoxRec, Kind, Node, IGNORE_DEPTH, RUNNING};
 use super::super::engine_pack::BOX_MAX_DEPTH;
 use super::super::engine_run::{Machine, Mode, SEMI_SIMPLE_GROUP, SIMPLE_GROUP};
 use super::super::engine_value::MAX_DIMEN;
-use super::{Op, DEFAULT_COLOR, FOOTINS, R_LINEWIDTH, R_TOTALLEFTMARGIN};
+use super::{Op, FOOTINS, R_LINEWIDTH, R_TOTALLEFTMARGIN};
 
 /// `\partial@page`, global in multicol: the page above the environment.
 const PARTIAL_BOX: u32 = 32710;
 /// A hidden register `\vsplit` works on (always void between uses).
 const SPLIT_BOX: u32 = 32711;
+/// `\colbreak@box`, global: the columns ended by `\columnbreak` so far on this page.
+const COLBREAK_BOX: u32 = 32712;
+/// `\mult@box` of boxed mode: the environment's text, set in a `\vbox`.
+const MULT_BOX: u32 = 32713;
 
 /// `\premulticols` (50pt), `\postmulticols` (20pt), `\maxbalancingoverflow` (12pt),
 /// `\multicolundershoot` (2pt); `\multicolovershoot` is 0pt.
@@ -62,6 +66,11 @@ pub(super) struct Multicol {
     leftmargin: i32,
     /// `multicols*`'s `\penalty-\@Mvi` waits for the end of `\multi@column@out`.
     star_penalty: bool,
+    /// `\if@boxedmulticols` (`\ifinner`): the text in `\mult@box`, balanced at the end.
+    boxed: bool,
+    /// `\if@minipage` when the boxed text began: its `\vbox` group keeps the
+    /// `\@minipagefalse` of the first paragraph inside.
+    minipage: bool,
 }
 
 impl Machine<'_, '_> {
@@ -84,7 +93,7 @@ impl Machine<'_, '_> {
             return self.not_native("multicols in multicols");
         }
         if let Some(doc) = self.doc.as_mut() {
-            doc.multicol = Some(Box::new(Multicol { n, star, phase: Phase::Before, colroom: 0, full_width: 0, leftmargin: 0, star_penalty: false }));
+            doc.multicol = Some(Box::new(Multicol { n, star, phase: Phase::Before, colroom: 0, full_width: 0, leftmargin: 0, star_penalty: false, boxed: false, minipage: false }));
         }
         let par = self.cur_par();
         self.run_ops(vec![par, Op::Call(|m| m.multicols_room())]);
@@ -101,12 +110,81 @@ impl Machine<'_, '_> {
     /// `\mult@@cols` after its `\par`: `\ifinner` (boxed mode, not native), then
     /// `\enough@room\premulticols`.
     fn multicols_room(&mut self) {
+        if self.inner && self.mode == Mode::Vertical && self.rw(R_TOTALLEFTMARGIN) == 0 && !self.mc().star {
+            return self.multicols_boxed();
+        }
         if !self.nest.is_empty() || self.mode != Mode::Vertical || self.rw(R_TOTALLEFTMARGIN) != 0 {
             return self.not_native("multicols in a box or a list");
         }
         let mut ops = self.enough_room();
         ops.push(Op::Call(|m| m.room_check(PREMULTICOLS, |m| m.multicols_start())));
         self.run_ops(ops);
+    }
+
+    /// Boxed mode (`\ifinner`, a box's internal vertical list): no `\enough@room`;
+    /// `\addvspace\multicolsep`, the depth correction, `\begingroup \prepare@multicols`
+    /// without its output routines (`\@colroom` stays the page's), then `\setbox\mult@box
+    /// \vbox\bgroup \color@setgroup \ignorespaces`.
+    fn multicols_boxed(&mut self) {
+        self.add_vspace(MULTICOLSEP);
+        if self.aux != IGNORE_DEPTH {
+            return self.not_native("multicols (boxed) after a line");
+        }
+        self.begin_group(SEMI_SIMPLE_GROUP);
+        let left = self.rw(R_TOTALLEFTMARGIN);
+        let colroom = self.doc.as_ref().map_or(0, |d| d.floats.colroom());
+        let minipage = self.doc.as_ref().is_some_and(|d| d.floats.minipage);
+        let mc = self.mc_mut();
+        (mc.leftmargin, mc.colroom, mc.boxed, mc.minipage, mc.phase) = (left, colroom, true, minipage, Phase::Columns);
+        self.set_rw(R_TOTALLEFTMARGIN, 0, false);
+        if !self.e.eqtb.par_shape().is_empty() {
+            self.e.eqtb.set_par_shape(Vec::new(), false);
+        }
+        self.multicols_params();
+        let mut t = vec![self.named_cs(named!("setbox"))];
+        t.extend(MULT_BOX.to_string().chars().map(|c| super::Token::char(super::Cat::Other, c)));
+        t.push(self.named_cs(named!("vbox")));
+        t.push(super::Token::char(super::Cat::BeginGroup, '{'));
+        t.push(self.named_cs(named!("begingroup")));
+        if self.colored() {
+            t.push(self.doc_id(doc!("rt@setcolor")));
+        }
+        t.push(self.named_cs(named!("ignorespaces")));
+        self.back_list(&t);
+    }
+
+    /// `\endmulticols` in boxed mode after its `\par`: `\remove@discardable@items
+    /// \color@endgroup\egroup`, then [`Self::multicols_boxed_out`].
+    fn multicols_boxed_end(&mut self) {
+        let start = self.start as usize;
+        self.remove_discardable(start);
+        if let Some(doc) = self.doc.as_mut() {
+            doc.steps.push(vec![Op::Call(|m| m.multicols_boxed_out())]);
+        }
+        let t = [self.named_cs(named!("endgroup")), super::Token::char(super::Cat::EndGroup, '}'), self.doc_id(super::STEP)];
+        self.back_list(&t);
+    }
+
+    /// `\balance@columns`, `\global\setbox\mc@boxedresult\vbox{\page@sofar}`, `\endgroup`,
+    /// `\unvbox\mc@boxedresult` (no interline glue), `\addvspace\multicolsep \prevdepth\z@`.
+    fn multicols_boxed_out(&mut self) {
+        let minipage = self.mc().minipage;
+        if let Some(doc) = self.doc.as_mut() {
+            doc.floats.minipage = minipage;
+        }
+        let Some(mult) = self.e.eqtb.box_reg(MULT_BOX) else { return self.not_native("multicols (boxed): no text") };
+        self.e.eqtb.replace_box(MULT_BOX, None);
+        // A balance that fails leaves `\balance@columns`'s own columns: not native yet.
+        let Ok(cols) = self.balance_columns(mult) else { return self.not_native("multicols (boxed): a balance that fails") };
+        if cols.iter().any(|&c| self.has_mark(c)) {
+            return self.not_native("marks or insertions inside multicols");
+        }
+        let aux = self.aux;
+        self.page_sofar(&cols, true);
+        self.aux = aux;
+        self.end_group(SEMI_SIMPLE_GROUP);
+        self.mc_mut().phase = Phase::Done;
+        self.multicols_close();
     }
 
     /// `\enough@room`'s start (after its `\par`): `\bgroup\@nobreakfalse\addpenalty\z@
@@ -184,7 +262,6 @@ impl Machine<'_, '_> {
     /// The rest of `\prepare@multicols` after its `\eject`, and `\mult@@cols`'s
     /// `\ignorespaces`.
     fn multicols_setup(&mut self) {
-        let n = self.mc().n;
         // `\advance\@colroom-\ht\partial@page`, local to the group.
         let partial = self.e.eqtb.box_reg(PARTIAL_BOX).map_or(0, |b| self.e.nodes.boxes[b as usize].height);
         let colroom = self.doc.as_ref().map_or(0, |d| d.floats.colroom()) - partial;
@@ -194,8 +271,15 @@ impl Machine<'_, '_> {
         self.mult_vsize(false);
         // `\output{\multi@column@out}` (`Phase::Columns`), `\init@mult@footins` (no
         // footnotes reach here: `multicols_collect` refused them), `\reinsert@footnotes`.
-        // `\vbadness\@Mi \hbadness5000 \tolerance\multicoltolerance \pretolerance
-        // \multicolpretolerance \setemergencystretch\col@number\hsize`.
+        self.multicols_params();
+        self.ignore_spaces();
+    }
+
+    /// The end of `\prepare@multicols`, both modes: `\vbadness\@Mi \hbadness5000
+    /// \tolerance\multicoltolerance \pretolerance \multicolpretolerance
+    /// \setemergencystretch\col@number\hsize`, the column width.
+    fn multicols_params(&mut self) {
+        let n = self.mc().n;
         self.e.eqtb.set_word(param!("vbadness"), 10001, false);
         self.e.eqtb.set_word(param!("hbadness"), 5000, false);
         self.e.eqtb.set_word(param!("tolerance"), 9999, false);
@@ -211,7 +295,6 @@ impl Machine<'_, '_> {
         self.mc_mut().full_width = line;
         self.set_rw(R_LINEWIDTH, hsize, false);
         self.e.eqtb.set_word(super::COLUMN_WIDTH, hsize, false);
-        self.ignore_spaces();
     }
 
     /// `\set@mult@vsize` with the environment's `\@colroom`; `global` for `\set@mult@vsize
@@ -248,11 +331,68 @@ impl Machine<'_, '_> {
                 }
                 self.balance_out();
             }
-            -10005 => self.not_native("\\columnbreak"),
+            -10005 => self.colbreak_out(),
             _ if p < -20000 => self.not_native("the document's end inside multicols"),
             -10001 => self.not_native("\\clearpage inside multicols"),
             _ => self.not_native("a float inside multicols"),
         }
+    }
+
+    /// multicol's `\columnbreak` (no optional argument: `\mc@break@pen` is `-\@Mv`):
+    /// `\ifvmode \penalty-10005 \else \@bsphack \vadjust{\penalty-10005}\@esphack \fi`.
+    pub(super) fn column_break(&mut self) {
+        if self.doc.as_ref().and_then(|d| d.multicol.as_ref()).is_none_or(|m| m.phase != Phase::Columns) {
+            return self.not_native("\\columnbreak outside multicols");
+        }
+        if self.next_is('[') {
+            return self.not_native("\\columnbreak[n]");
+        }
+        match self.mode {
+            Mode::Vertical => self.run_ops(vec![Op::Penalty(-10005)]),
+            Mode::Horizontal => {
+                let saved = (self.last_skip(), self.aux);
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.sphack.push(saved);
+                }
+                self.build_adjust(|m| m.build_penalty(-10005));
+                self.esphack_end();
+            }
+            _ => self.not_native("\\columnbreak in math"),
+        }
+    }
+
+    /// `\speci@ls` at `\outputpenalty` `-\@Mv`: `\global\advance\vsize-\pagetotal`, then
+    /// `\global\setbox\colbreak@box\vbox{\ifvoid\colbreak@box\else \unvbox\colbreak@box
+    /// \penalty-\@Mv\fi \boxmaxdepth\@maxdepth \setbox\@cclv\vbox{\unvbox\@cclv
+    /// \remove@discardable@items}\dimen@\dp\@cclv \unvbox\@cclv \kern-\dimen@}`,
+    /// `\reinsert@footnotes`.
+    fn colbreak_out(&mut self) {
+        if self.e.eqtb.box_reg(FOOTINS).is_some() {
+            return self.not_native("footnotes inside multicols");
+        }
+        let v = self.e.eqtb.word(param!("vsize")) - self.page_dimen(1);
+        self.e.eqtb.set_word(param!("vsize"), v, true);
+        let max = self.doc.as_ref().map_or(0, |d| d.class.dimen("@maxdepth"));
+        let start = self.cur.len();
+        if let Some(old) = self.e.eqtb.box_reg(COLBREAK_BOX) {
+            self.e.eqtb.replace_box(COLBREAK_BOX, None);
+            self.mc_unvbox(old);
+            self.cur.push(Node::new(Kind::Penalty, -10005));
+        }
+        let inner = self.cur.len();
+        if let Some(b) = self.e.eqtb.box_reg(255) {
+            self.e.eqtb.replace_box(255, None);
+            self.mc_unvbox(b);
+        }
+        self.remove_discardable(inner);
+        let packed = self.vpack(inner, 0, false, max);
+        let depth = packed.depth;
+        let packed = self.e.nodes.add_box(BoxRec { vertical: true, ..packed });
+        self.mc_unvbox(packed);
+        self.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, -depth) });
+        let b = self.vpack(start, 0, false, max);
+        let b = self.e.nodes.add_box(BoxRec { vertical: true, ..b });
+        self.e.eqtb.set_box(COLBREAK_BOX, Some(b), true);
     }
 
     /// `\global\setbox\partial@page\vbox{\unvbox\@cclv \global\setbox\last@line\lastbox}`.
@@ -333,6 +473,22 @@ impl Machine<'_, '_> {
         if self.e.eqtb.box_reg(FOOTINS).is_some() {
             return self.not_native("footnotes inside multicols");
         }
+        // `\ifvoid\colbreak@box\else \setbox\@cclv\vbox{\unvbox\colbreak@box \penalty-\@Mv
+        // \unvbox\@cclv}\fi`: the forced breaks re-added for splitting.
+        if let Some(c) = self.e.eqtb.box_reg(COLBREAK_BOX) {
+            self.e.eqtb.replace_box(COLBREAK_BOX, None);
+            let start = self.cur.len();
+            self.mc_unvbox(c);
+            self.cur.push(Node::new(Kind::Penalty, -10005));
+            if let Some(b) = self.e.eqtb.box_reg(255) {
+                self.e.eqtb.replace_box(255, None);
+                self.mc_unvbox(b);
+            }
+            let d = self.dimen_param(BOX_MAX_DEPTH);
+            let b = self.vpack(start, 0, false, d);
+            let b = self.e.nodes.add_box(BoxRec { vertical: true, ..b });
+            self.e.eqtb.replace_box(255, Some(b));
+        }
         let (n, dimen) = (self.mc().n, self.mc().colroom);
         let max = self.doc.as_ref().map_or(0, |d| d.class.dimen("@maxdepth"));
         // `\splittopskip\topskip \splitmaxdepth\@maxdepth \boxmaxdepth\@maxdepth`.
@@ -370,7 +526,7 @@ impl Machine<'_, '_> {
             self.e.eqtb.replace_box(PARTIAL_BOX, None);
             self.mc_unvbox(p);
         }
-        self.page_sofar(&cols);
+        self.page_sofar(&cols, false);
         let b = self.vpack(start, 0, false, MAX_DIMEN);
         self.aux = saved;
         let b = self.e.nodes.add_box(BoxRec { vertical: true, ..b });
@@ -397,8 +553,14 @@ impl Machine<'_, '_> {
         if self.e.eqtb.box_reg(FOOTINS).is_some() {
             return self.not_native("footnotes inside multicols");
         }
-        // `\setbox\mult@box\vbox{\unvbox\@cclv \remove@discardable@items}`.
+        // `\setbox\mult@box\vbox{\ifvoid\colbreak@box\else \unvbox\colbreak@box
+        // \penalty-\@Mv\fi \unvbox\@cclv \remove@discardable@items}`.
         let start = self.cur.len();
+        if let Some(c) = self.e.eqtb.box_reg(COLBREAK_BOX) {
+            self.e.eqtb.replace_box(COLBREAK_BOX, None);
+            self.mc_unvbox(c);
+            self.cur.push(Node::new(Kind::Penalty, -10005));
+        }
         if let Some(b) = self.e.eqtb.box_reg(255) {
             self.e.eqtb.replace_box(255, None);
             self.mc_unvbox(b);
@@ -407,8 +569,9 @@ impl Machine<'_, '_> {
         let d = self.dimen_param(BOX_MAX_DEPTH);
         let b = self.vpack(start, 0, false, d);
         let mult = self.e.nodes.add_box(BoxRec { vertical: true, ..b });
-        let Some(cols) = self.balance_columns(mult) else {
-            return self.not_native("multicols: balancing failed (a normal page cut)");
+        let cols = match self.balance_columns(mult) {
+            Ok(cols) => cols,
+            Err(mult) => return self.balance_failed(mult),
         };
         if cols.iter().any(|&c| self.has_mark(c)) {
             return self.not_native("marks or insertions inside multicols");
@@ -422,7 +585,7 @@ impl Machine<'_, '_> {
             self.e.eqtb.replace_box(PARTIAL_BOX, None);
             self.mc_unvbox(p);
         }
-        self.page_sofar(&cols);
+        self.page_sofar(&cols, false);
         self.cur.push(Node::new(Kind::Penalty, 0));
     }
 
@@ -467,9 +630,32 @@ impl Machine<'_, '_> {
         }
     }
 
-    /// `\balance@columns` (not boxed): the columns, or `None` when `\iftoo@bad` (or a forced
-    /// break is left over).
-    fn balance_columns(&mut self, mult: u32) -> Option<Vec<u32>> {
+    /// `\balance@columns@out`'s `\iftoo@bad` branch ("Balancing failed ... cut a normal
+    /// page"): `\setbox\@cclv\vbox{\vskip\topskip \vskip-\splittopskip \unvbox\mult@box
+    /// \penalty-\@Mvi}\multi@column@out`, with `\splittopskip` and `\boxmaxdepth` as
+    /// `\balance@columns` left them.
+    fn balance_failed(&mut self, mult: Option<u32>) {
+        let start = self.cur.len();
+        let top = self.e.eqtb.glue(param!("topskip"));
+        let split = self.e.eqtb.glue(param!("splittopskip"));
+        for g in [top, super::neg(split)] {
+            let n = self.e.nodes.glue_node(g, 0);
+            self.cur.push(n);
+        }
+        if let Some(m) = mult {
+            self.mc_unvbox(m);
+        }
+        self.cur.push(Node::new(Kind::Penalty, -10006));
+        let d = self.dimen_param(BOX_MAX_DEPTH);
+        let b = self.vpack(start, 0, false, d);
+        let b = self.e.nodes.add_box(BoxRec { vertical: true, ..b });
+        self.e.eqtb.replace_box(255, Some(b));
+        self.multi_column_out();
+    }
+
+    /// `\balance@columns` (not boxed): the columns, or, when `\iftoo@bad` (or a forced
+    /// break is left over), `\mult@box` as the balancing left it.
+    fn balance_columns(&mut self, mult: u32) -> Result<Vec<u32>, Option<u32>> {
         let (n, colroom) = (self.mc().n, self.mc().colroom);
         let max = self.doc.as_ref().map_or(0, |d| d.class.dimen("@maxdepth"));
         // `\setbox\mult@box\vbox{\penalty-\@M \unvbox\mult@box}`.
@@ -505,12 +691,58 @@ impl Machine<'_, '_> {
         let mut last_try = -65536;
         let (mut gfirst, mut gright): (Vec<u32>, Option<u32>);
         let mut leftover;
+        // The last full trial: where each of its splits broke (each read from the box it
+        // split, `None` for no box), the boxes its second and later splits split (kept as
+        // copies), its first column's natural height, its right column's natural height, and
+        // whether that column kept a forced break (`None`: not looked at, the column too
+        // high). A trial whose splits break at the same places has the same columns, so when
+        // the right one is higher than `\dimen@`, or keeps a forced break (a `\columnbreak`)
+        // below `\@colroom` plus `\maxbalancingoverflow`, it is too bad again: it only moves
+        // `\dimen@` (the `\last@try` step), and the copies and splits pdfTeX makes for it
+        // change nothing the loop reads after it (the last trial, made in full, sets the split
+        // marks).
+        struct Trial {
+            breaks: Vec<Option<Option<usize>>>,
+            kept: Vec<Option<u32>>,
+            nat_ht: i32,
+            right_ht: i32,
+            forced: Option<bool>,
+        }
+        let mut seen: Option<Trial> = None;
         loop {
+            if let Some(t) = &seen {
+                let (nat_ht, right_ht, forced) = (t.nat_ht, t.right_ht, t.forced);
+                let same = (right_ht > dimen || forced == Some(true) && dimen < colroom + MAX_BALANCING_OVERFLOW) && {
+                    let boxes: Vec<Option<u32>> = std::iter::once(mult).chain(t.kept.iter().copied()).collect();
+                    let breaks = t.breaks.clone();
+                    boxes.into_iter().zip(breaks).all(|(b, q)| b.map(|b| self.split_break(b, dimen)) == q)
+                };
+                if same {
+                    if nat_ht < dimen && nat_ht > last_try {
+                        dimen = nat_ht;
+                        last_try = dimen;
+                        dimen -= 65536;
+                    }
+                    dimen += 65536;
+                    continue;
+                }
+            }
+            if let Some(t) = seen.take() {
+                for b in t.kept.into_iter().flatten() {
+                    self.e.nodes.flush_box(b);
+                }
+            }
+            let (mut breaks, mut kept) = (Vec::with_capacity(n as usize - 1), Vec::with_capacity(n as usize - 2));
+            let mut forced = None;
             gright = mult.map(|m| self.e.nodes.copy_box(m));
             let mut too_bad = false;
             leftover = false;
             gfirst = Vec::with_capacity(n as usize - 1);
-            for _ in 1..n {
+            for k in 1..n {
+                breaks.push(gright.map(|b| self.split_break(b, dimen)));
+                if k > 1 {
+                    kept.push(gright.map(|b| self.e.nodes.copy_box(b)));
+                }
                 let t = self.mc_split(&mut gright, dimen);
                 gfirst.push(self.mc_repack(t, dimen, true, None, None));
                 if self.last_badness > COLUMN_BADNESS {
@@ -524,7 +756,8 @@ impl Machine<'_, '_> {
             let nat = self.mc_repack(Some(copy), 0, false, None, None);
             let nat_ht = self.mc_ht(Some(nat));
             self.e.nodes.flush_box(nat);
-            if self.mc_ht(Some(right)) > dimen {
+            let right_ht = self.mc_ht(Some(right));
+            if right_ht > dimen {
                 too_bad = true;
             } else {
                 // `\setbox\@tempboxa\copy\mult@grightbox \setbox\z@\vsplit\@tempboxa
@@ -535,6 +768,7 @@ impl Machine<'_, '_> {
                 }
                 match tmp {
                     None => {
+                        forced = Some(false);
                         right = self.mc_repack(Some(right), dimen, true, None, None);
                         if self.last_badness > FINAL_COLUMN_BADNESS {
                             let fil = Glue { stretch: 65536, stretch_order: 1, ..Glue::default() };
@@ -543,6 +777,7 @@ impl Machine<'_, '_> {
                     }
                     Some(t) => {
                         self.e.nodes.flush_box(t);
+                        forced = Some(true);
                         if dimen < colroom + MAX_BALANCING_OVERFLOW {
                             too_bad = true;
                         } else {
@@ -552,6 +787,7 @@ impl Machine<'_, '_> {
                 }
             }
             gright = Some(right);
+            seen = Some(Trial { breaks, kept, nat_ht, right_ht, forced });
             if nat_ht < dimen && nat_ht > last_try {
                 too_bad = true;
                 dimen = nat_ht;
@@ -566,16 +802,19 @@ impl Machine<'_, '_> {
                 self.e.nodes.flush_box(c);
             }
         }
-        if let Some(m) = mult {
-            self.e.nodes.flush_box(m);
+        for b in seen.into_iter().flat_map(|t| t.kept).flatten() {
+            self.e.nodes.flush_box(b);
         }
         if leftover {
             for c in gfirst.drain(..).chain(gright.take()) {
                 self.e.nodes.flush_box(c);
             }
-            return None;
+            return Err(mult);
         }
-        dimen = dimen.min(colroom);
+        // `\if@boxedmulticols\else \ifdim\dimen@>\@colroom \dimen@\@colroom\fi\fi`.
+        if !self.mc().boxed {
+            dimen = dimen.min(colroom);
+        }
         // `\process@cols\mult@rightbox{… \vfuzz\z@ \setbox\count@\vbox to\dimen@{\vskip\z@
         // \@plus-\multicolundershoot \@minus-\multicolovershoot \unvbox\@tempcnta}…}`.
         let head = Glue { stretch: -UNDERSHOOT, ..Glue::default() };
@@ -601,13 +840,16 @@ impl Machine<'_, '_> {
             for c in cols {
                 self.e.nodes.flush_box(c);
             }
-            return None;
+            return Err(mult);
         }
-        Some(cols)
+        if let Some(m) = mult {
+            self.e.nodes.flush_box(m);
+        }
+        Ok(cols)
     }
 
     /// `\page@sofar` with `\LR@column@boxes`, on the current vertical list.
-    fn page_sofar(&mut self, cols: &[u32]) {
+    fn page_sofar(&mut self, cols: &[u32], boxed: bool) {
         let hsize = self.dimen_param(super::super::engine_pack::HSIZE);
         let (full, left) = (self.mc().full_width, self.mc().leftmargin);
         // `\wd\count@\hsize`.
@@ -634,7 +876,7 @@ impl Machine<'_, '_> {
                 let g = self.e.nodes.glue_node(hss, 0);
                 self.cur.push(g);
                 if colored {
-                    self.color_stack(Some(DEFAULT_COLOR));
+                    self.push_default_color();
                 }
                 let r = self.e.nodes.rule_node([rule, RUNNING, RUNNING]);
                 self.cur.push(r);
@@ -656,7 +898,12 @@ impl Machine<'_, '_> {
         self.cur.push(Node::new(Kind::Box, rlap as i32));
         let row = self.hpack(start, full, true);
         let row = self.e.nodes.add_box(BoxRec { shift: left, ..row });
-        self.append_to_vlist(row);
+        // Boxed, the row starts `\mc@boxedresult`'s list, which `\unvbox` hands on as it is.
+        if boxed {
+            self.cur.push(Node::new(Kind::Box, row as i32));
+        } else {
+            self.append_to_vlist(row);
+        }
         self.e.eqtb.set_word(Reg::register(Region::Dimen, 2), dimen2, true);
         // `\prevdepth\z@ \kern-\dimen\tw@`.
         self.aux = 0;
@@ -669,6 +916,9 @@ impl Machine<'_, '_> {
             return self.not_native("\\end{multicols} without its \\begin");
         }
         let par = self.cur_par();
+        if self.mc().boxed {
+            return self.run_ops(vec![par, Op::Call(|m| m.multicols_boxed_end())]);
+        }
         if star {
             return self.run_ops(vec![par, Op::Call(|m| m.multicols_end_star())]);
         }
@@ -697,6 +947,13 @@ impl Machine<'_, '_> {
     /// `\endmulticols` after its `\par`: `\penalty\z@ \penalty-\@Mvi` (the balancing
     /// output), `\ifvbox\partial@page \unvbox\partial@page\fi`, `\endgroup`, and what follows.
     fn multicols_end_balance(&mut self) {
+        // `\ifdim\pagegoal=\maxdimen \ifvoid\colbreak@box\else \unvbox\colbreak@box\fi\fi`.
+        if self.page_dimen(0) == MAX_DIMEN {
+            if let Some(c) = self.e.eqtb.box_reg(COLBREAK_BOX) {
+                self.e.eqtb.replace_box(COLBREAK_BOX, None);
+                self.mc_unvbox(c);
+            }
+        }
         self.run_ops(vec![
             Op::Penalty(0),
             Op::Penalty(-10006),

@@ -18,7 +18,7 @@
 
 use super::super::engine_catcode::Cat;
 use super::super::engine_eqtb::Code;
-use super::super::engine_node::Kind;
+use super::super::engine_node::{Kind, Node};
 use super::super::engine_prim::{Macro, Meaning};
 use super::super::engine_run::{Machine, Mode};
 use super::super::engine_token::Token;
@@ -29,6 +29,10 @@ use super::{Reg, Region};
 pub(super) const BABEL_LANG: Reg = Reg::register(Region::Int, 32712);
 /// The language of `\today` (`\date<name>` redefines it, `\foreignlanguage` does not).
 pub(super) const BABEL_DATE: Reg = Reg::register(Region::Int, 32713);
+/// french3.ldf's `\ifFB@spacing` turned off (1): `\ttfamily` is `\ttfamilyFB`
+/// (`\FB@spacingfalse`), `\rmfamily` and `\sffamily` turn it back on; local, as `\newif`'s
+/// switches are.
+pub(super) const FB_NOSPACING: Reg = Reg::register(Region::Int, 32716);
 
 /// How a language's `\today` reads (`\date<name>`).
 #[derive(Clone, Copy, PartialEq)]
@@ -41,6 +45,14 @@ enum Date {
     Pt,
     /// spanish.ldf's `\es@date`: `31\relax~de octubre\ de\relax~2026\relax`.
     Es,
+    /// babel-german.def's `\date@german@de`: `\number\day.~\month@german\space\number\year`.
+    De,
+    /// french3.ldf's `\FB@date`: `{{\number\day}\FBdatespace<month>\FBdatespace\number\year}`
+    /// (the first day's `\ier`, a raised `\up{er}`, is not ported).
+    Fr,
+    /// italian.ldf's `\dateitalian`: `\number\day~<month>\space\number\year` (`1` on the first
+    /// day: `\OrdinalDayNumberfalse`).
+    It,
 }
 
 /// One of babel's languages as the native job selects it.
@@ -59,6 +71,11 @@ pub(super) struct Lang {
     french: bool,
     /// Its extras make `"` a shorthand (`\initiate@active@char{"}`).
     quote: bool,
+    /// Its `babel-<tag>.ini` has `decimal = ,`, which siunitx's `\AtBeginDocument`
+    /// (`\__siunitx_locale_setup:`, siunitx.sty:4644) makes its output decimal marker when the
+    /// language is main: `\BCPdata{language}` with no region for an `.ldf` language, so
+    /// `babel-es.ini`, `babel-pt.ini`, `babel-de.ini`, `babel-en.ini`.
+    comma: bool,
 }
 
 /// The caption macros [`Lang::captions`] sets, by name.
@@ -67,14 +84,63 @@ const CAPTIONS: [&str; 5] = ["figurename", "tablename", "abstractname", "refname
 pub(super) const ENGLISH: usize = 0;
 pub(super) const BRITISH: usize = 1;
 pub(super) const SPANISH: usize = 4;
+pub(super) const NGERMAN: usize = 5;
+pub(super) const ITALIAN: usize = 6;
+pub(super) const FRENCH: usize = 7;
+pub(super) const GERMAN: usize = 8;
 
-pub(super) static LANGS: [Lang; 5] = [
-    Lang { names: &["english", "american", "USenglish"], hyph: None, right_min: 3, captions: ["Figure", "Table", "Abstract", "References", "Proof"], date: Date::Us, french: false, quote: false },
-    Lang { names: &["british", "UKenglish"], hyph: Some(0), right_min: 3, captions: ["Figure", "Table", "Abstract", "References", "Proof"], date: Date::Uk, french: false, quote: false },
-    Lang { names: &["brazilian", "brazil"], hyph: Some(1), right_min: 3, captions: ["Figura", "Tabela", "Resumo", "Refer\\^encias", "Demonstra\\c {c}\\~ao"], date: Date::Pt, french: false, quote: true },
-    Lang { names: &["portuguese", "portuges"], hyph: Some(1), right_min: 3, captions: ["Figura", "Tabela", "Resumo", "Refer\\^encias", "Demonstra\\c {c}\\~ao"], date: Date::Pt, french: false, quote: true },
-    Lang { names: &["spanish"], hyph: Some(2), right_min: 2, captions: ["Figura", "Cuadro", "Resumen", "Referencias", "Demostraci\\'{o}n"], date: Date::Es, french: true, quote: true },
+/// german.ldf and ngerman.ldf share babel-german.def (captions, `\date@german@de`, the
+/// extras: `\umlautlow`, `\lccode25`); they differ in their patterns (`\l@german`, the old
+/// orthography's) and in shorthands the pre-scan refuses.
+fn german(k: usize) -> bool {
+    k == NGERMAN || k == GERMAN
+}
+
+pub(super) static LANGS: [Lang; 9] = [
+    Lang { names: &["english", "american", "USenglish"], hyph: None, right_min: 3, captions: ["Figure", "Table", "Abstract", "References", "Proof"], date: Date::Us, french: false, quote: false, comma: false },
+    Lang { names: &["british", "UKenglish"], hyph: Some(0), right_min: 3, captions: ["Figure", "Table", "Abstract", "References", "Proof"], date: Date::Uk, french: false, quote: false, comma: false },
+    Lang { names: &["brazilian", "brazil"], hyph: Some(1), right_min: 3, captions: ["Figura", "Tabela", "Resumo", "Refer\\^encias", "Demonstra\\c {c}\\~ao"], date: Date::Pt, french: false, quote: true, comma: true },
+    Lang { names: &["portuguese", "portuges"], hyph: Some(1), right_min: 3, captions: ["Figura", "Tabela", "Resumo", "Refer\\^encias", "Demonstra\\c {c}\\~ao"], date: Date::Pt, french: false, quote: true, comma: true },
+    Lang { names: &["spanish"], hyph: Some(2), right_min: 2, captions: ["Figura", "Cuadro", "Resumen", "Referencias", "Demostraci\\'{o}n"], date: Date::Es, french: true, quote: true, comma: true },
+    // ngerman.ldf (babel-german.def): `\providehyphenmins{ngerman}{\tw@\tw@}`; the
+    // `\l@ngerman` patterns (hyphenrules `legacy`, no `-x-` dialect).
+    Lang { names: &["ngerman"], hyph: Some(3), right_min: 2, captions: ["Abbildung", "Tabelle", "Zusammenfassung", "Literatur", "Beweis"], date: Date::De, french: true, quote: true, comma: true },
+    // italian.ldf: `\providehyphenmins{\CurrentOption}{\tw@\tw@}`; no `\bbl@frenchspacing`;
+    // `"` is a shorthand only after `\setactivedoublequote`. Its extras are
+    // [`Machine::babel_switch`]'s.
+    Lang { names: &["italian"], hyph: Some(4), right_min: 2, captions: ["Figura", "Tabella", "Sommario", "Riferimenti bibliografici", "Dimostrazione"], date: Date::It, french: false, quote: false, comma: true },
+    // french.ldf under pdfTeX is french3.ldf: `\providehyphenmins{french}{\tw@\thr@@}`,
+    // `\bbl@frenchspacing`, the active `: ; ! ?` ([`Machine::fr_punct`]). Native as the only
+    // language ([`ScanBabel::new`]), so its extras run once and are never undone.
+    Lang { names: &["french"], hyph: Some(5), right_min: 3, captions: ["Figure", "Table", "R\\'esum\\'e", "R\\'ef\\'erences", "D\\'emonstration"], date: Date::Fr, french: true, quote: false, comma: true },
+    // german.ldf (`germanb` its old name): babel-german.def as ngerman, `\providehyphenmins
+    // {\CurrentOption}{\tw@\tw@}`, the `\l@german` patterns.
+    Lang { names: &["german", "germanb"], hyph: Some(6), right_min: 2, captions: ["Abbildung", "Tabelle", "Zusammenfassung", "Literatur", "Beweis"], date: Date::De, french: true, quote: true, comma: true },
 ];
+
+/// The heading names the classes set that `\captions<name>` changes, by [`LANGS`] index
+/// (`\contentsname`, `\listfigurename`, `\listtablename`, `\bibname`, `\chaptername`,
+/// `\appendixname`), as `\meaning` prints them under pdfLaTeX (spanish's and french's
+/// `\spanishcontentsname` and kin read through). A column of its own beside [`LANGS`]: only
+/// a heading reads it ([`Machine::head_name`]).
+static HEADS: [[&str; 6]; 9] = [
+    ["Contents", "List of Figures", "List of Tables", "Bibliography", "Chapter", "Appendix"],
+    ["Contents", "List of Figures", "List of Tables", "Bibliography", "Chapter", "Appendix"],
+    ["Sum\\'ario", "Lista de Figuras", "Lista de Tabelas", "Refer\\^encias Bibliogr\\'aficas", "Cap\\'{\\i }tulo", "Ap\\^endice"],
+    ["\\'Indice", "Lista de Figuras", "Lista de Tabelas", "Bibliografia", "Cap\\'{\\i }tulo", "Ap\\^endice"],
+    ["\\'{I}ndice general", "\\'{I}ndice de figuras", "\\'{I}ndice de cuadros", "Bibliograf\\'{\\i }a", "Cap\\'{\\i }tulo", "Ap\\'{e}ndice"],
+    ["Inhaltsverzeichnis", "Abbildungsverzeichnis", "Tabellenverzeichnis", "Literaturverzeichnis", "Kapitel", "Anhang"],
+    ["Indice", "Elenco delle figure", "Elenco delle tabelle", "Bibliografia", "Capitolo", "Appendice"],
+    ["Table des mati\\`eres", "Table des figures", "Liste des tableaux", "Bibliographie", "Chapitre", "Annexe"],
+    ["Inhaltsverzeichnis", "Abbildungsverzeichnis", "Tabellenverzeichnis", "Literaturverzeichnis", "Kapitel", "Anhang"],
+];
+/// [`HEADS`]' columns.
+pub(super) const HEAD_CONTENTS: usize = 0;
+pub(super) const HEAD_LOF: usize = 1;
+pub(super) const HEAD_LOT: usize = 2;
+pub(super) const HEAD_BIB: usize = 3;
+pub(super) const HEAD_CHAPTER: usize = 4;
+pub(super) const HEAD_APPENDIX: usize = 5;
 
 /// spanish.ldf's options the native job takes, each a [`Babel`] flag.
 const ES_NODECIMALDOT: u8 = 1;
@@ -117,6 +183,10 @@ pub(super) struct ScanBabel {
 impl ScanBabel {
     pub(super) fn new(opts: &str) -> Option<ScanBabel> {
         let (langs, flags) = babel_options(opts)?;
+        // french is taken alone, its switch made once at `\begin{document}`.
+        if langs.contains(&FRENCH) && langs.len() > 1 {
+            return None;
+        }
         Some(ScanBabel { langs: langs.iter().fold(0, |m, &k| m | 1 << k), main: *langs.last()?, flags })
     }
 
@@ -145,6 +215,25 @@ impl ScanBabel {
         self.main == SPANISH
     }
 
+    /// Whether french is the (only) language.
+    pub(super) fn french(&self) -> bool {
+        self.main == FRENCH
+    }
+
+    /// Whether the main language is english.ldf's (`english`, `british`): its captions
+    /// (`\chaptername`, `\bibname`, `\contentsname`, `\appendixname`, `\partname`, ...) are
+    /// the classes' own, so it is native under report and book too.
+    pub(super) fn english_main(&self) -> bool {
+        matches!(self.main, ENGLISH | BRITISH)
+    }
+
+    /// Whether babel is native under the standard report and book: english.ldf's languages,
+    /// and ngerman, whose heading names are [`HEADS`] (its `\partname` `Teil` is refused
+    /// where `\part` is read).
+    pub(super) fn report_ok(&self) -> bool {
+        self.english_main() || german(self.main)
+    }
+
     /// Whether `name` is one of the loaded languages' names.
     pub(super) fn has(&self, name: &str) -> bool {
         (0..LANGS.len()).any(|k| self.langs & 1 << k != 0 && LANGS[k].names.contains(&name))
@@ -161,9 +250,11 @@ pub(super) struct Babel {
     pub flags: u8,
     /// Each [`LANGS`] entry's `\language` number in the format (0 when not loaded).
     numbers: [u8; LANGS.len()],
-    /// The meanings the switch restores: `\%` and `\mathcode`\.`.
+    /// The meanings the switch restores: `\%` and `\mathcode`\.`, and `\lccode25`
+    /// (`\babel@savevariable` in german's extras).
     percent: Meaning,
     period: i32,
+    lc25: i32,
     /// `\frenchspacing`'s codes for `.?!:;,` when the switch runs: LaTeX's 1000s, or
     /// amsgen.sty's 1006 to 1001 once it is loaded (amsgen.sty:127).
     french: [i32; 6],
@@ -173,6 +264,11 @@ pub(super) struct Babel {
 pub(super) const NONFRENCH: [(u8, i32); 6] = [(b'.', 3000), (b'?', 3000), (b'!', 3000), (b':', 2000), (b';', 1500), (b',', 1250)];
 
 impl Babel {
+    /// The main language's `\language` (`\l@<name>`).
+    pub(super) fn main_number(&self) -> u8 {
+        self.numbers[self.main]
+    }
+
     /// `\ifbbl@single`: one language, so `\selectlanguage` is `\@gobble` after
     /// `\begin{document}` and writes nothing.
     fn single(&self) -> bool {
@@ -181,6 +277,12 @@ impl Babel {
 
     pub(super) fn layout(&self) -> bool {
         self.main == SPANISH
+    }
+
+    /// `\let\@afterindentfalse\@afterindenttrue`: spanish's layout, french's `IndentFirst`
+    /// (french3.ldf `\bbl@frenchindent`, on when french is the main language).
+    pub(super) fn indent_first(&self) -> bool {
+        self.layout() || self.main == FRENCH
     }
 
     /// spanish.ldf's `\es@optlayout{nosectiondot}`: `\@seccntformat` with a dot.
@@ -214,6 +316,7 @@ impl Machine<'_, '_> {
         let percent_id = self.e.cs.intern("%");
         let percent = self.e.eqtb.meaning(percent_id);
         let period = self.e.eqtb.code(Code::Math, '.' as u32);
+        let lc25 = self.e.eqtb.code(Code::Lc, 25);
         let main = *langs.last().unwrap_or(&ENGLISH);
         for (name, native) in [("selectlanguage", "rt@selectlanguage"), ("foreignlanguage", "rt@foreignlanguage")] {
             if let Some(i) = super::DOC.iter().position(|d| d.0 == native) {
@@ -222,7 +325,7 @@ impl Machine<'_, '_> {
             }
         }
         if let Some(doc) = self.doc.as_mut() {
-            doc.babel = Some(Box::new(Babel { langs, names, main, flags, numbers, percent, period, french: [1000; 6] }));
+            doc.babel = Some(Box::new(Babel { langs, names, main, flags, numbers, percent, period, lc25, french: [1000; 6] }));
         }
     }
 
@@ -235,12 +338,24 @@ impl Machine<'_, '_> {
         if b.langs.contains(&SPANISH) && !self.t1() {
             return self.not_native("babel's spanish without T1");
         }
+        // french3.ldf's captions (`\FB@makecaption` when `\@makecaption` is article's) and
+        // footnotes are those of the standard classes; KOMA, memoir, the AMS and IEEE classes,
+        // letters and the caption package have their own.
+        if main == FRENCH && self.doc.as_ref().is_some_and(|d| d.koma || d.memoir || d.ams.is_some() || d.ieee.is_some() || d.letter.is_some() || d.packages.iter().any(|p| matches!(*p, "caption" | "subcaption" | "floatrow"))) {
+            return self.not_native("babel's french under this class or with caption");
+        }
         let amsgen = self.doc.as_ref().is_some_and(|d| d.packages.contains(&"amsgen"));
         if let Some(b) = self.doc.as_mut().and_then(|d| d.babel.as_mut()) {
             b.french = if amsgen { [1006, 1005, 1004, 1003, 1002, 1001] } else { [1000; 6] };
         }
         self.babel_switch(main, true);
         self.aux_write(0);
+        // italian.ldf's own `\AtBeginDocument`: `\ifdefstring{\languagename}{italian}
+        // {\selectlanguage{italian}}`, a second `\babel@aux` write (made with one language
+        // too: the `.aux` holds `\babel@aux{italian}{}` twice).
+        if main == ITALIAN {
+            self.aux_write(0);
+        }
     }
 
     /// The language named by `name` among those loaded.
@@ -300,8 +415,20 @@ impl Machine<'_, '_> {
     /// local. Its `\bbl@bsphack`/`\bbl@esphack` add and take off a `\hskip\z@skip`: nothing.
     fn babel_switch(&mut self, k: usize, select: bool) {
         let Some(b) = self.doc.as_ref().and_then(|d| d.babel.as_ref()) else { return };
-        let (number, flags, percent, period, french) = (b.numbers[k], b.flags, b.percent, b.period, b.french);
+        let (number, flags, percent, period, french, lc25) = (b.numbers[k], b.flags, b.percent, b.period, b.french, b.lc25);
         let lang = &LANGS[k];
+        // italian.ldf's `\noextrasitalian` gives back what `\babel@savevariable` kept when
+        // the switch to italian was made (the club and widow penalties, `\@clubpenalty`,
+        // `\finalhyphendemerits`): a switch away from it at the document's level is not
+        // ported (a `\foreignlanguage` group restores them itself).
+        if self.e.eqtb.word(BABEL_LANG) as usize == ITALIAN && k != ITALIAN {
+            return self.not_native("babel: a switch away from italian");
+        }
+        // Under report and book a language's captions reach `\chaptername` and the like,
+        // which only english.ldf's leave as the class has them.
+        if select && !matches!(k, ENGLISH | BRITISH) && self.doc.as_ref().is_some_and(|d| d.report && (!german(k) || d.koma || d.memoir)) {
+            return self.not_native("babel's captions of a language under report or book");
+        }
         self.e.eqtb.set_word(BABEL_LANG, k as i32, false);
         if select {
             for (i, name) in CAPTIONS.iter().enumerate() {
@@ -335,6 +462,29 @@ impl Machine<'_, '_> {
                 self.e.eqtb.set_meaning(id, Meaning::MathCharDef(period as u32), false);
             }
         }
+        // italian.ldf's extras: `\clubpenalty3000\widowpenalty3000\@clubpenalty\clubpenalty`,
+        // `\finalhyphendemerits50000000`, `\lccode`'=`'` (`\noextrasitalian` sets it to 0, the
+        // format's value); its `\@alph`/`\@Alph` (`\it@alph` with `\it@lettering` 1) are the
+        // kernel's letters for 1 to 26, and `\ap`, `\ped` are not native names.
+        if k == ITALIAN {
+            self.set_int_named(param!("clubpenalty"), 3000);
+            self.set_int_named(param!("widowpenalty"), 3000);
+            self.set_rw(super::R_CLUBPENALTY, 3000, false);
+            self.set_int_named(param!("finalhyphendemerits"), 50000000);
+            self.e.eqtb.set_code(Code::Lc, 0x27, 0x27, false);
+        }
+        // german's `\lccode25=25` (`\babel@savevariable{\lccode25}` restores it).
+        self.e.eqtb.set_code(Code::Lc, 25, if german(k) { 25 } else { lc25 }, false);
+        // french's extras: `\lccode"27="27`, and `\bbl@activate` of `: ; ! ?`, active
+        // (`\initiate@active@char`'s `\AtBeginDocument{\catcode`#2\active}`) with their
+        // shorthands ([`Machine::fr_punct`]).
+        if k == FRENCH {
+            self.e.eqtb.set_code(Code::Lc, 0x27, 0x27, false);
+            for (c, native) in [(':', doc!("rt@frcolon")), (';', doc!("rt@frsemicolon")), ('!', doc!("rt@frexclam")), ('?', doc!("rt@frquestion"))] {
+                self.e.eqtb.set_catcode(c as u8, Cat::Active, false);
+                self.e.eqtb.set_meaning(c as u32, Meaning::Doc(native as u16), false);
+            }
+        }
         // `\bbl@patterns{name}` and `\set@hyphenmins`.
         self.e.eqtb.set_word(param!("language"), number as i32, false);
         self.e.eqtb.set_word(param!("lefthyphenmin"), 2, false);
@@ -352,7 +502,23 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// Whether siunitx's output decimal marker is babel's `,` (the main language's ini).
+    pub(super) fn babel_decimal_comma(&self) -> bool {
+        self.doc.as_ref().and_then(|d| d.babel.as_ref()).is_some_and(|b| LANGS[b.main].comma)
+    }
+
     /// The language whose `\today` is in force, if babel is loaded.
+    /// The class's heading name `i` ([`HEADS`]' column) in the captions' language
+    /// (`\captions<name>` goes with `\date<name>`), the class's own (english) without babel.
+    pub(super) fn head_name(&self, i: usize) -> &'static str {
+        let k = self.babel_date().unwrap_or(ENGLISH);
+        // spanish.ldf's `es-tabla`: `\spanishlisttablename` `\'{I}ndice de tablas`.
+        if k == SPANISH && i == HEAD_LOT && self.doc.as_ref().and_then(|d| d.babel.as_ref()).is_some_and(|b| b.flags & ES_TABLA != 0) {
+            return "\\'{I}ndice de tablas";
+        }
+        HEADS[k][i]
+    }
+
     pub(super) fn babel_date(&self) -> Option<usize> {
         self.doc.as_ref()?.babel.as_ref()?;
         Some(self.e.eqtb.word(BABEL_DATE) as usize)
@@ -409,8 +575,112 @@ impl Machine<'_, '_> {
                 letters(&format!("~{year}"), &mut t);
                 t.push(relax);
             }
+            // `M\"arz` is the only month with a command.
+            Date::De => {
+                const DE: [&str; 12] = ["Januar", "Februar", "M\\\"arz", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+                letters(&format!("{day}.~"), &mut t);
+                if m == 2 {
+                    t.extend(self.tex_tokens(DE[2]));
+                } else {
+                    letters(DE[m], &mut t);
+                }
+                letters(&format!(" {year}"), &mut t);
+            }
+            Date::Fr => {
+                if day == 1 {
+                    self.not_native("french \\today on the first of the month (\\ier)");
+                    return Some(Vec::new());
+                }
+                const FR: [&str; 12] = ["janvier", "f\\'evrier", "mars", "avril", "mai", "juin", "juillet", "ao\\^ut", "septembre", "octobre", "novembre", "d\\'ecembre"];
+                letters(&format!("{day} "), &mut t);
+                t.extend(self.tex_tokens(FR[m]));
+                letters(&format!(" {year}"), &mut t);
+            }
+            Date::It => {
+                const IT: [&str; 12] = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+                letters(&format!("{day}~{} {year}", IT[m]), &mut t);
+            }
         }
         Some(t)
+    }
+
+    /// babel's OT1 `\"` composites (babel.sty:2166, at `\begin{document}`) over `base`:
+    /// `\bbl@umlauta` for `a o u A O U`, `\bbl@umlaute` for `e i \i E I`; `false` for
+    /// another letter (the kernel's `\add@accent`). german's extras make `\bbl@umlauta`
+    /// `\lower@umlaut` (`\umlautlow`): `\leavevmode\bgroup`, the x-height lowered to
+    /// `\ht` of the dieresis less `.45ex` when that is more than 1ex (`\fontdimen5\font` is
+    /// global), `\accent127`, `\fontdimen5\font\U@D` back between the accent and its letter
+    /// (`make_accent` read `x_height` before, §1123, so the font is as it was), the letter,
+    /// `\egroup`: the space factor
+    /// is `\accent`'s 1000. `\umlauthigh` (other languages, and `\bbl@umlaute` in every
+    /// language: `\umlautlow` redefines only `\bbl@umlauta`) is `\leavevmode\bgroup\accent127
+    /// #1\bbl@allowhyphens\egroup`: the kernel's accent, then `\nobreak\hskip\z@skip`
+    /// (babel.sty:1720; horizontal mode after the accent), read again.
+    pub(super) fn babel_umlaut(&mut self, base: u32) -> bool {
+        if self.doc.as_ref().and_then(|d| d.babel.as_ref()).is_none() {
+            return false;
+        }
+        match u8::try_from(base).unwrap_or(0) {
+            b'a' | b'o' | b'u' | b'A' | b'O' | b'U' if german(self.e.eqtb.word(BABEL_LANG) as usize) => {
+                let f = self.cur_font();
+                let ex = self.e.fonts.params(f)[4];
+                let Some([_, ht, _, _]) = self.e.fonts.list[f as usize].dims(127, &self.e.fonts.info) else {
+                    self.not_native("babel's OT1 \\\" in a font without a dieresis");
+                    return true;
+                };
+                // `\dimen@ -.45ex \advance\dimen@\ht\z@` (`.45` is 29491/65536, §102).
+                let d = ht - crate::backend::backend_scaled::xn_over_d(ex, 29491, 65536);
+                self.build_accent_at(127, f, Some(base as u8), if ex < d { d } else { ex });
+                self.aux = 1000;
+                true
+            }
+            b'a' | b'o' | b'u' | b'A' | b'O' | b'U' | b'e' | b'i' | b'E' | b'I' | 16 => {
+                let f = self.cur_font();
+                self.build_accent(127, f, Some(base as u8));
+                self.aux = 1000;
+                // `\penalty\@M`, then `\z@skip`'s spec, the shared `zero_glue` (font 0).
+                self.cur.push(Node::new(Kind::Penalty, 10000));
+                let g = self.e.nodes.glue_node(Default::default(), 0);
+                self.cur.push(g);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `\layoutspanish` is in force (spanish the main language).
+    pub(super) fn es_layout(&self) -> bool {
+        self.doc.as_ref().and_then(|d| d.babel.as_ref()).is_some_and(|b| b.layout())
+    }
+
+    /// `\layoutspanish`'s lists (spanish.ldf `\es@enumerate`, `\es@itemize`): a list at
+    /// `\@enumdepth`/`\@itemdepth` `d` (the new depth) the native job takes. Level 1 of
+    /// enumerate is the kernel's `\theenumi.` behind `\es@listquot` (`\rquot` undefined
+    /// outside `quoting`: `\relax`, and a `\global` flag); itemize's first two marks are
+    /// [`Machine::es_item_mark`]. Deeper levels (`\emph{\alph{enumii}})`, `\theenumiii)`,
+    /// `$\m@th\circ$`) are not ported.
+    pub(super) fn es_list_ok(&self, enumerate: bool, d: i32) -> bool {
+        !self.es_layout() || d <= if enumerate { 1 } else { 2 }
+    }
+
+    /// spanish's `\labelitemi`/`\labelitemii` (`\spanishsymbitems`): `\es@listquot` then a
+    /// square, `\leavevmode\hbox to 1.2ex{\hss\vrule height .9ex width .7ex depth -.2ex\hss}`,
+    /// or `\textbullet`; in the font in force (no `\labelitemfont`). The label is set in
+    /// `\@tempboxa` (`\@item`), so `\leavevmode` does nothing there. `false` when spanish's
+    /// layout is not in force.
+    pub(super) fn es_item_mark(&mut self, d: u8, t: &mut Vec<Token>) -> bool {
+        if !self.es_layout() {
+            return false;
+        }
+        t.extend(self.tex_tokens(if d == 1 { "\\hbox to 1.2ex{\\hss\\vrule height .9ex width .7ex depth -.2ex\\hss}" } else { "\\textbullet" }));
+        true
+    }
+
+    /// spanish's `\@roman` (small capitals in an `\hbox` unless `es-lcroman`) and `\@alph`
+    /// (`\~n` at 14): a label of counter style `style` at `n` the native job cannot set.
+    pub(super) fn es_counter_differs(&self, style: u8, n: i32) -> bool {
+        let Some(b) = self.doc.as_ref().and_then(|d| d.babel.as_ref()).filter(|b| b.layout()) else { return false };
+        style == b'i' && b.flags & ES_LCROMAN == 0 || matches!(style, b'a' | b'A') && n >= 14
     }
 
     /// spanish's `\%` (`\es@sppercent\percentsign{}`): `\leavevmode`, the space before it
@@ -456,3 +726,112 @@ impl Machine<'_, '_> {
         self.back_list(&[code, next]);
     }
 }
+
+impl Machine<'_, '_> {
+    /// Whether french is babel's language.
+    pub(super) fn babel_french(&self) -> bool {
+        self.doc.as_ref().and_then(|d| d.babel.as_ref()).is_some_and(|b| b.main == FRENCH)
+    }
+
+    /// french3.ldf's `\ttfamilyFB`, `\rmfamilyFB`, `\sffamilyFB` (`\FBprocess@options`):
+    /// the family change `k` (0 roman, 1 sans, 2 typewriter) sets `\ifFB@spacing`.
+    pub(super) fn babel_family(&mut self, k: u8) {
+        if self.babel_french() {
+            self.e.eqtb.set_word(FB_NOSPACING, (k == 2) as i32, false);
+        }
+    }
+
+    /// french's shorthands `;` `!` `?` (`\FBthinspace`, `\hskip .5\fontdimen2\font`) and `:`
+    /// (`\FBcolonspace`, `\space`), french3.ldf's `\declare@shorthand{french}`: with
+    /// `\ifFB@spacing` in horizontal mode, `\unskip` a space before (`\ifdim\lastskip>1sp`),
+    /// `\penalty\@M` and the space (`\FDP@thinspace`, `\FDP@colonspace`: the same under
+    /// `AutoSpaceBeforeFDP`); then `\string<c>`, the character of category 12.
+    fn fr_punct(&mut self, c: char) {
+        if self.mode == Mode::Horizontal && self.e.eqtb.word(FB_NOSPACING) == 0 {
+            if self.last_skip().width > 1 && self.tail().is_some_and(|t| t.kind == Kind::Glue) {
+                self.unskip();
+            }
+            self.cur.push(super::super::engine_node::Node::new(Kind::Penalty, 10000));
+            if c == ':' {
+                self.append_space();
+            } else {
+                let w = self.e.fonts.params(self.cur_font())[1];
+                let g = super::super::engine_eqtb::Glue { width: crate::backend::scaled::xn_over_d(w, 0x8000, 0x10000), ..Default::default() };
+                let n = self.e.nodes.glue_node(g, 0);
+                self.cur.push(n);
+            }
+        }
+        self.input.back(Token::char(Cat::Other, c));
+    }
+
+    /// `\FBguillspace` (`\hskip .8\fontdimen2\font plus .3\fontdimen3\font minus
+    /// .8\fontdimen4\font\relax`) after `\penalty\@M` (`\FB@guillspace`), as tokens.
+    fn fr_guill_space(&self, t: &mut String) {
+        let p = self.e.fonts.params(self.cur_font());
+        let x = |v: i32, f: i32| crate::backend::scaled::xn_over_d(v, f, 0x10000);
+        t.push_str(&format!("\\penalty10000\\hskip{}sp plus{}sp minus{}sp\\relax", x(p[1], 52429), x(p[2], 19661), x(p[3], 52429)));
+    }
+
+    /// french's `\og` (`\FB@og`, `\@FB@og`): `\leavevmode\guillemotleft\FB@guillspace`; the
+    /// T1 `\guillemotleft` is `\char19`.
+    fn fr_og(&mut self) {
+        if !self.babel_french() || !self.t1() {
+            return self.not_native("\\og without babel's french in T1");
+        }
+        let mut t = String::from("\\char19\\relax");
+        self.fr_guill_space(&mut t);
+        let mut list = vec![self.doc_id(super::LEAVE)];
+        list.extend(self.tex_tokens(&t));
+        self.back_list(&list);
+    }
+
+    /// french's `\fg` (`\FB@fg\xspace`, `\xspace` `\relax`): `\ifdim\lastskip>\z@\unskip\fi
+    /// \FB@guillspace\guillemotright` (`\char20`).
+    fn fr_fg(&mut self) {
+        if !self.babel_french() || !self.t1() {
+            return self.not_native("\\fg without babel's french in T1");
+        }
+        if self.mode == Mode::Horizontal && self.last_skip().width > 0 && self.tail().is_some_and(|t| t.kind == Kind::Glue) {
+            self.unskip();
+        }
+        let mut t = String::new();
+        self.fr_guill_space(&mut t);
+        t.push_str("\\char20\\relax\\relax");
+        let list = self.tex_tokens(&t);
+        self.back_list(&list);
+    }
+
+    /// french's `\FB@listVsettings` (`\listFB`, `\let\list\listFB`): after `\@list<depth>`,
+    /// `\topsep 0.8ex plus 0.4ex minus 0.4ex`, `\partopsep 0.4ex plus 0.2ex minus 0.2ex`,
+    /// `\itemsep` and `\parsep` `0.4ex plus 0.2ex minus 0.2ex`, in the current font; with a
+    /// positive `\parskip` they change again (not ported: `false`).
+    pub(super) fn fr_list_vsettings(&mut self) -> bool {
+        if !self.babel_french() {
+            return true;
+        }
+        if self.e.eqtb.glue(param!("parskip")).width > 0 {
+            return false;
+        }
+        let top = self.glue_of("0.8ex plus 0.4ex minus 0.4ex");
+        let small = self.glue_of("0.4ex plus 0.2ex minus 0.2ex");
+        for (r, g) in [(super::R_TOPSEP, top), (super::R_PARTOPSEP, small), (super::R_ITEMSEP, small), (super::R_PARSEP, small)] {
+            self.set_rg(r, g);
+        }
+        true
+    }
+}
+
+/// babel's, installed when it loads natives, in `Meaning::Doc` order after the kernel's (`engine_doc::DOC_PARTS`).
+pub(super) const NATIVES: &[(&str, super::Native)] = &[
+    ("rt@selectlanguage", |m| m.select_language()),
+    ("rt@foreignlanguage", |m| m.foreign_language()),
+    ("rt@foreignend", |m| m.foreign_end()),
+    ("rt@espercent", |m| m.es_percent()),
+    ("rt@esperiod", |m| m.es_period()),
+    ("rt@frcolon", |m| m.fr_punct(':')),
+    ("rt@frsemicolon", |m| m.fr_punct(';')),
+    ("rt@frexclam", |m| m.fr_punct('!')),
+    ("rt@frquestion", |m| m.fr_punct('?')),
+    ("og", |m| m.fr_og()),
+    ("fg", |m| m.fr_fg()),
+];

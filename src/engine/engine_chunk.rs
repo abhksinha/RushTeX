@@ -259,6 +259,40 @@ impl<T: Clone> Chunked<T> {
         Chunked { v, dirty: vec![0; n / 64 + 1], shared: self.shared.clone(), low }
     }
 
+    /// [`Chunked::thaw`] into the live array `live`, whose buffer is kept: a chunk it holds
+    /// unwritten since it was frozen as the same one (by address) is not copied again.
+    pub fn thaw_into(&self, live: &mut Chunked<T>) {
+        if !self.v.is_empty() || self.shared.is_empty() {
+            *live = self.thaw();
+            return;
+        }
+        let size = 1usize << Self::SHIFT;
+        let n = self.shared.len();
+        for (c, s) in self.shared.iter().enumerate() {
+            let start = c * size;
+            let clean = start + s.len() <= live.low && live.dirty.get(c >> 6).is_some_and(|w| w & (1 << (c & 63)) == 0) && live.shared.get(c).is_some_and(|l| Arc::ptr_eq(l, s));
+            if clean {
+                continue;
+            }
+            if start + s.len() <= live.v.len() {
+                live.v[start..start + s.len()].clone_from_slice(s);
+            } else {
+                live.v.truncate(start);
+                live.v.extend_from_slice(s);
+            }
+        }
+        live.v.truncate(n.saturating_sub(1) * size + self.shared.last().map_or(0, |s| s.len()));
+        live.dirty.clear();
+        live.dirty.resize(n / 64 + 1, 0);
+        live.shared = self.shared.clone();
+        live.low = live.v.len();
+    }
+
+    /// A frozen copy's identity: the address of its chunk list (`None` for a live array).
+    pub fn frozen_id(&self) -> Option<usize> {
+        self.v.is_empty().then_some(Arc::as_ptr(&self.shared) as usize)
+    }
+
     /// The number of elements, live or frozen.
     pub fn count(&self) -> usize {
         if self.v.is_empty() {
@@ -334,6 +368,10 @@ impl<T: PartialEq> PartialEq for Chunked<T> {
         let frozen = |c: &Self| c.v.is_empty() && !c.shared.is_empty();
         if frozen(self) && frozen(other) {
             return self.shared.len() == other.shared.len() && self.shared.iter().zip(other.shared.iter()).all(|(a, b)| Arc::ptr_eq(a, b) || a[..] == b[..]);
+        }
+        // Two live arrays hold their items in `v` (a disk copy read back, `engine_resume`).
+        if !frozen(self) && !frozen(other) {
+            return self.v == other.v;
         }
         fn items<T>(c: &Chunked<T>) -> Vec<&T> {
             if c.v.is_empty() {

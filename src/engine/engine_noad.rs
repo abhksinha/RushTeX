@@ -145,6 +145,18 @@ impl Machine<'_, '_> {
     /// is not one of them here.
     pub(super) fn math_command(&mut self, x: X, p: Prim) -> bool {
         if self.mode != Mode::Math {
+            // The native LaTeX job's `\underline` outside math: latex.ltx's
+            // `$\@@underline{\hbox{#1}}\m@th$\relax`.
+            if p == Prim::Underline && self.doc.is_some() {
+                let mut arg = Vec::new();
+                self.read_arg(&mut arg);
+                let (shift, open, close) = (Token::char(Cat::MathShift, '$'), Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'));
+                let mut list = vec![shift, x.t, open, Token::cs(self.e.cs.intern("hbox")), open];
+                list.extend_from_slice(&arg);
+                list.extend([close, close, Token::cs(self.e.cs.intern("mathsurround")), Token::char(Cat::Other, '0'), Token::char(Cat::Letter, 'p'), Token::char(Cat::Letter, 't'), shift, Token::cs(self.e.cs.intern("relax"))]);
+                self.back_list(&list);
+                return true;
+            }
             if math_only(p) {
                 self.insert_dollar_sign(x.t);
                 return true;
@@ -642,6 +654,12 @@ impl Machine<'_, '_> {
         };
         self.math_saved.push(slot);
         self.push_math(MATH_GROUP, false);
+    }
+
+    /// Whether `^` here would be TeX's "Double superscript" (§1176): the list ends with a
+    /// noad that takes scripts and has a superscript.
+    pub(super) fn sup_taken(&self) -> bool {
+        self.tail_noad().is_some_and(|q| self.noads[q].kind < LEFT && self.noads[q].supscr != Field::Empty)
     }
 
     /// `\fam`.

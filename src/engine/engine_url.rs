@@ -13,9 +13,11 @@ pub(super) const URL_STYLE: Reg = Reg::register(Region::Int, 32711);
 
 /// What `\Url@MathSetup` makes of an ASCII character in a typewriter font
 /// (`\Url@OTnonTT` is `\relax` there): its math class (0 ord, 2 bin, 3 rel, 4 open), and
-/// whether `\verbatim@nolig@list` adds `\sb{\/}`.
-fn class(c: char) -> (u32, bool) {
+/// whether `\verbatim@nolig@list` adds `\sb{\/}`. xurl.sty adds the letters and digits to
+/// `\UrlBreaks` (`xurl`; its `:` stays `\UrlBigBreaks`, set after).
+fn class(c: char, xurl: bool) -> (u32, bool) {
     let class = match c {
+        _ if xurl && c.is_ascii_alphanumeric() => 2,
         // `\UrlBreaks` (after `\UrlOrds`, so `'` is a break).
         '.' | '@' | '\\' | '/' | '!' | '_' | '|' | ';' | '>' | ']' | ')' | ',' | '?' | '&' | '\'' | '+' | '=' | '#' => 2,
         // `\UrlBigBreaks` (`\do@url@hyp` is empty without the `hyphens` option).
@@ -29,7 +31,7 @@ fn class(c: char) -> (u32, bool) {
 
 /// A URI `\Hy@pstringdef` keeps as it is: no character it escapes or changes.
 fn uri_ok(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "./:-_~?=&+@,;!*#".contains(c))
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "./:-_~?=&+@,;!*#%".contains(c))
 }
 
 impl Machine<'_, '_> {
@@ -62,14 +64,35 @@ impl Machine<'_, '_> {
                 }
             }
         };
+        // hyperref's `\url` and `\nolinkurl` read the text under `\hyper@normalise`
+        // (hyperref.sty:4610): `\#`, `\%`, `\&`, `\_` are their characters, shown and linked.
+        let text = if !path && self.hyper() && text.contains('\\') {
+            // Any other command there (`\\`, `\~`, `\textunderscore`) is expanded by its
+            // `\edef`: not followed.
+            let t = text.replace("\\#", "#").replace("\\%", "%").replace("\\&", "&").replace("\\_", "_");
+            if text.contains("\\\\") || t.contains('\\') {
+                return self.not_native("hyperref: a \\url with a command other than \\#, \\%, \\&, \\_");
+            }
+            t
+        } else {
+            text
+        };
         if text.chars().any(|c| !(' '..='~').contains(&c)) {
             return self.not_native("\\url with a non-ASCII character or a line end");
         }
         let style = if path { 0 } else { self.e.eqtb.word(URL_STYLE) };
+        // Outside a typewriter font url.sty's `\Url@OTnonTT` remakes `<`, `>`, `_` (`\_\penalty
+        // \@m`), `|`, `{`, `}`, `\` and `~` (`\UrlTildeSpecial`): not followed here.
+        if style != 0 && text.contains(['<', '>', '_', '|', '{', '}', '\\', '~']) {
+            return self.not_native("\\url in a text font with a character url.sty remakes there");
+        }
         let [rel, bin] = self.doc.as_ref().map_or([500, 700], |d| d.url_penalties);
+        let xurl = self.doc.as_ref().is_some_and(|d| d.pkg.xurl);
+        // `\medmuskip\Urlmuskip \thickmuskip\medmuskip`: url.sty's 0mu, xurl's 0mu plus 1mu.
+        let mu = if xurl { "0mu plus 1mu" } else { "0mu" };
         let mut tex = String::with_capacity(64 + text.len() * 12);
         tex.push_str(["\\ttfamily", "\\rmfamily", "\\sffamily", ""][style as usize & 3]);
-        tex.push_str(&format!("\\medmuskip0mu\\thickmuskip0mu\\thinmuskip0mu\\relpenalty{rel}\\binoppenalty{bin}$\\fam0\\textfont0=\\font "));
+        tex.push_str(&format!("\\medmuskip{mu}\\thickmuskip{mu}\\thinmuskip0mu\\relpenalty{rel}\\binoppenalty{bin}$\\fam0\\textfont0=\\font "));
         for c in text.chars() {
             match c {
                 // `\meaning` prints a space as a space token, which math mode skips: the
@@ -81,7 +104,7 @@ impl Machine<'_, '_> {
                 // (`\Url@OT1encSpecials`; T1's specials leave `~` an ordinary character).
                 '~' if !self.t1() => tex.push_str("\\lower.45ex\\hbox{\\mathsurround0pt$\\mathchar126$}"),
                 c => {
-                    let (class, nolig) = class(c);
+                    let (class, nolig) = class(c, xurl);
                     tex.push_str(&format!("\\mathchar{} ", class << 12 | c as u32));
                     if nolig {
                         tex.push_str("_{\\/}");
@@ -130,8 +153,15 @@ impl Machine<'_, '_> {
             return self.not_native("hyperref: \\href with options");
         }
         let Some(uri) = self.url_raw().or_else(|| self.url_tokens()) else { return self.not_native("hyperref: an \\href not read from the file") };
+        // `\hyper@normalise` (hyperref.sty:4608): `\#` and `#` are `\hyper@hash`, `\%` and `%`
+        // `\@percentchar`, `\&` `&`, `\_` `_`, `\~` and `~` `\hyper@tilde`, each its character.
+        let uri = uri.replace("\\#", "#").replace("\\%", "%").replace("\\&", "&").replace("\\_", "_").replace("\\~", "~");
+        // `\href@split#1##2##3\\`: the part after a `#` is the anchor, and `\hyper@readexternallink`
+        // writes `URL\hyper@hash anchor` for a scheme's URL; a second `#` or an empty anchor
+        // is dropped there, not followed.
+        let anchor_ok = uri.split_once('#').is_none_or(|(_, a)| !a.is_empty() && !a.contains('#'));
         let scheme = uri.split_once(':').map(|(s, _)| s);
-        if !uri_ok(&uri) || uri.contains('#') || !scheme.is_some_and(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphabetic()) && s != "file" && s != "run") {
+        if !uri_ok(&uri) || !anchor_ok || !scheme.is_some_and(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphabetic()) && s != "file" && s != "run") {
             return self.not_native("hyperref: an \\href that is not a plain scheme: URL");
         }
         // The text's line, up to its closing brace, holds none of `\hyper@normalise`'s

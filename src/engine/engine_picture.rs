@@ -21,6 +21,7 @@
 //! font) declines.
 
 use super::super::engine_box::{fil_glue, Ctx};
+use super::super::engine_pack::EVERY_HBOX;
 use super::super::engine_catcode::Cat;
 use super::super::engine_eqtb::{Glue, Reg, Region};
 use super::super::engine_node::{Kind, Node};
@@ -716,10 +717,39 @@ impl Machine<'_, '_> {
         let ddx = ((x3 - x1) - dx) / m;
         let dy = (y2 - y1) * 2;
         let ddy = ((y3 - y1) - dy) / m;
-        let mut s = format!("\\put({x1}sp,{y1}sp){{");
+        let mut dots = Vec::with_capacity(m as usize + 1);
         for c in 0..=m {
             let (Some(xd), Some(yd)) = (c.checked_mul(ddx), c.checked_mul(ddy)) else { return self.not_native("a \\qbezier too large") };
             let (Some(xd), Some(yd)) = (((xd + dx) / m).checked_mul(c), ((yd + dy) / m).checked_mul(c)) else { return self.not_native("a \\qbezier too large") };
+            dots.push((xd, yd));
+        }
+        // `\put(x1,y1){..}` of the dots, each `\raise yd\hbox to0sp{\kern xd\hskip-\@halfwidth
+        // \vrule height\@halfwidth depth\@halfwidth width\@wholewidth\hss}`, built as the
+        // primitives build them (`\@killglue`, `\raise` of an `\hbox to`, an explicit kern, a
+        // written-out glue, a rule, `\hss`), as `picture_line` builds `\@vline`; then `\put`'s
+        // `\ignorespaces`. The boxes' groups hold no assignment. An `\everyhbox` would be
+        // inserted at each `\hbox`'s `{`: then the tokens go to TeX as written.
+        if self.e.eqtb.toks(Reg { region: Region::Toks, slot: EVERY_HBOX }).is_empty() {
+            let hss = fil_glue(Prim::Hss);
+            self.kill_glue();
+            self.picture_box(Some(0), -y1, |mc| {
+                mc.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, x1) });
+                for &(xd, yd) in &dots {
+                    mc.picture_box(Some(0), -yd, |mc| {
+                        mc.cur.push(Node { sub: 1, ..Node::new(Kind::Kern, xd) });
+                        mc.build_glue(Glue { width: -half, ..Glue::default() }, true);
+                        mc.build_rule([whole, half, half]);
+                        mc.build_glue(hss, false);
+                    });
+                }
+                mc.build_glue(hss, false);
+            });
+            let t = self.named_cs(named!("ignorespaces"));
+            self.input.back(t);
+            return;
+        }
+        let mut s = format!("\\put({x1}sp,{y1}sp){{");
+        for (xd, yd) in dots {
             s += &format!("\\raise{yd}sp\\hbox to0sp{{\\kern{xd}sp\\hskip{}sp\\vrule height{half}sp depth{half}sp width{whole}sp\\hss}}", -half);
         }
         s.push('}');

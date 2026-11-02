@@ -128,6 +128,8 @@ pub struct ClassTable<'a> {
     class: U32s<'a>,
     regs: U32s<'a>,
     size_names: &'a str,
+    /// `size_names`' rows split once: each size command's `\f@size`, `\sf@size`, `\ssf@size`.
+    size_triples: [(&'a str, &'a str, &'a str); SIZE_COMMANDS.len()],
     sizes: U32s<'a>,
     lists: U32s<'a>,
     opt_keys: U32s<'a>,
@@ -149,6 +151,7 @@ impl<'a> ClassTable<'a> {
             class: b.u32s("class")?,
             regs: b.u32s("regs")?,
             size_names: std::str::from_utf8(b.section("sizename")?).ok()?,
+            size_triples: [("", "", ""); SIZE_COMMANDS.len()],
             sizes: b.u32s("sizes")?,
             lists: b.u32s("lists")?,
             opt_keys: b.u32s("optkeys")?,
@@ -157,6 +160,12 @@ impl<'a> ClassTable<'a> {
             font_dims: b.u32s("fontdims").unwrap_or_default(),
         };
         let sound = t.size_names.lines().count() == SIZE_COMMANDS.len() && t.size_names.lines().all(|l| l.split('\t').count() == 3) && t.sizes.len() == SIZE_ROW * SIZE_COMMANDS.len() && t.lists.len() == 5 * 21 && t.opt_rows.len() == t.opt_keys.len() + 1 && t.opt_diffs.len().is_multiple_of(3) && t.glues.len().is_multiple_of(5) && t.codes.len() == 5 * 256 && t.cats.len() == 256 && t.class.len() == CLASS_DIMENS.len() + CLASS_FLAGS.len() && t.font_nums.len() == 4 * t.fonts.lines().count() && t.fonts.lines().all(|l| l.contains('\t')) && t.regs.len() == 7 * CLASS_REGS.len() && t.font_dims.len().is_multiple_of(3);
+        let mut t = t;
+        for (i, l) in t.size_names.lines().take(SIZE_COMMANDS.len()).enumerate() {
+            let mut names = l.split('\t');
+            let mut next = || names.next().unwrap_or("");
+            t.size_triples[i] = (next(), next(), next());
+        }
         sound.then_some(t)
     }
 
@@ -196,13 +205,21 @@ impl<'a> ClassTable<'a> {
 
     /// Size command `i` of [`SIZE_COMMANDS`].
     pub fn size(&self, i: usize) -> SizeRow<'a> {
-        let mut names = self.size_names.lines().nth(i).unwrap_or("").split('\t');
-        let mut next = || names.next().unwrap_or("");
-        let (fsize, sf, ssf) = (next(), next(), next());
+        let (fsize, sf, ssf) = self.size_triples.get(i).copied().unwrap_or(("", "", ""));
         let w = |k: usize| self.sizes.get(SIZE_ROW * i + k) as i32;
         let glue = |k: usize| std::array::from_fn(|j| w(k + j));
         let four = |k: usize| [glue(k), glue(k + 5), glue(k + 10), glue(k + 15)];
         SizeRow { fsize, sf, ssf, baselineskip: glue(0), display: (w(5) as u32, four(6)), listi: (w(26) as u32, four(27)) }
+    }
+
+    /// Size command `i`'s `\f@size` alone (`self.size(i).fsize`).
+    pub fn fsize(&self, i: usize) -> &'a str {
+        self.size_triples.get(i).map_or("", |t| t.0)
+    }
+
+    /// The first size command whose `\f@size` is `size`.
+    pub fn size_index(&self, size: &str) -> Option<usize> {
+        self.size_triples.iter().position(|t| t.0 == size)
     }
 
     /// `\@listii` (depth 2) to `\@listvi` (6): the mask of the glues set, and `\topsep`,
@@ -283,6 +300,11 @@ pub const EXT_SIZES: [&str; 8] = ["10pt", "11pt", "12pt", "8pt", "9pt", "14pt", 
 pub fn class_sizes(cls: usize) -> &'static [&'static str] {
     if cls == EXTARTICLE { &EXT_SIZES } else { &CLASS_SIZES }
 }
+
+/// Every size name the class tables' size commands give (`\f@size`, `\sf@size`,
+/// `\ssf@size`), in the order of [`CLASSES`], their size options and [`SIZE_COMMANDS`];
+/// a test checks it against the tables, so a font size is matched without loading them.
+pub const CLASS_SIZE_NAMES: [&str; 41] = ["5", "7", "8", "6", "9", "10", "12", "14.4", "17.28", "20.74", "24.88", "10.95", "14", "9.79996", "17", "11.89995", "8.5", "20", "13.99994", "24", "16.79993", "11", "7.69997", "5.5", "22", "15.39993", "29.86", "35.83", "43", "51.6", "61.92", "20.9019", "14.93", "25.08089", "17.915", "42.99", "30.09286", "21.495", "51.59", "36.11284", "25.795"];
 
 /// a0poster's paper options by [`option_key`]'s paper index (the sixth repeats the default).
 pub const A0_PAPERS: [&str; 6] = ["a0b", "a0", "a1", "a2", "a3", "a0b"];
@@ -423,5 +445,27 @@ mod tests {
         assert_eq!(t.dimen("headheight"), 8 * pt);
         assert_eq!(t.dimen("headsep"), 14 * pt);
         assert!(t.flag("twoside"));
+    }
+}
+#[cfg(test)]
+mod size_names_test {
+    /// [`super::CLASS_SIZE_NAMES`] is every class table's `\f@size`, `\sf@size` and `\ssf@size`.
+    #[test]
+    fn class_size_names_are_the_tables() {
+        let mut v: Vec<&str> = Vec::new();
+        for c in 0..super::CLASSES.len() {
+            for i in 0..super::class_sizes(c).len() {
+                let t = super::class_size(c, i).expect("a class table");
+                for k in 0..super::SIZE_COMMANDS.len() {
+                    let r = t.size(k);
+                    for s in [r.fsize, r.sf, r.ssf] {
+                        if !v.contains(&s) {
+                            v.push(s);
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(v, super::CLASS_SIZE_NAMES);
     }
 }

@@ -102,6 +102,15 @@ impl Machine<'_, '_> {
     pub(super) fn scan_keyword(&mut self, kw: &str) -> bool {
         // The longest keyword is pdfTeX's `nonewwindow`; the matched tokens stay on the stack.
         debug_assert!(kw.len() <= 16);
+        // The common miss: a letter or other character not the keyword's first, waiting in a
+        // token list; reading it (no expansion, not a space) and putting it back leaves the
+        // same input, so it is only looked at (`mprof` counts every token read).
+        if let (false, false, Some(t), Some(&k)) = (cfg!(feature = "mprof"), self.halted, self.input.peek_char(&self.e.toks), kw.as_bytes().first()) {
+            if t.chr() != k as char && t.chr() != k.to_ascii_uppercase() as char {
+                self.dont_expand = false;
+                return false;
+            }
+        }
         let mut matched = [SPACE; 16];
         let mut n = 0;
         for k in kw.chars() {

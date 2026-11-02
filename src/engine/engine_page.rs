@@ -72,6 +72,9 @@ codec_struct!(PageIns { n, split_up, height, last_ins, best_ins, broken_ptr, bro
 #[derive(PartialEq, Clone, Debug, Default)]
 pub(super) struct Page {
     pub(super) list: Vec<Node>,
+    /// An empty buffer for the next contribution list ([`Machine::build_page`] takes the
+    /// main vertical list into it and hands it back emptied).
+    spare: Vec<Node>,
     contents: u8,
     /// §982 `page_so_far`: goal, total, stretch by order (2–5), shrink, depth.
     pub so_far: [i32; 8],
@@ -118,7 +121,7 @@ pub(super) struct Page {
     pub ship_fonts: (usize, u128),
 }
 
-codec_struct!(Page { list, contents, so_far, max_depth, best_break, least_cost, best_size, last_glue, last_penalty, last_kern, last_type, insert_penalties, output_active, dead_cycles, ins, marks, pages, keep_shipped, shipped, pdf, font_base, font_used, font_pk, map_names, word_ship, late_literals, pgf_glue, ship_fonts });
+codec_struct!(Page { list, contents, so_far, max_depth, best_break, least_cost, best_size, last_glue, last_penalty, last_kern, last_type, insert_penalties, output_active, dead_cycles, ins, marks, pages, keep_shipped, shipped, pdf, font_base, font_used, font_pk, map_names, word_ship, late_literals, pgf_glue, ship_fonts; spare });
 
 impl Page {
     /// The current page's nodes and the shipped boxes kept, for `engine_gc`.
@@ -405,7 +408,10 @@ impl Machine<'_, '_> {
                 l.start -= len;
             }
         }
-        self.cur.drain(..len as usize).collect()
+        // Into the buffer `build_page` hands back ([`Page::spare`]): no allocation a call.
+        let mut list = std::mem::take(&mut self.page.spare);
+        list.extend(self.cur.drain(..len as usize));
+        list
     }
 
     /// Puts `list` back as the contribution list, under the lists being built.
@@ -428,6 +434,7 @@ impl Machine<'_, '_> {
         }
         let mut contrib = self.take_contrib();
         if contrib.is_empty() {
+            self.page.spare = contrib;
             return;
         }
         let mut i = 0;
@@ -585,6 +592,8 @@ impl Machine<'_, '_> {
             self.page.list.push(p);
             i += 1;
         }
+        contrib.clear();
+        self.page.spare = contrib;
     }
 
     /// §1008: an insertion reaches the current page.
@@ -890,14 +899,25 @@ impl Machine<'_, '_> {
         if self.page.late_literals {
             self.out_whats(b, true, &mut [].iter());
         }
-        let positions = self.ship_page(b);
+        let (positions, entries) = self.ship_page(b);
         if placed_later {
             page_hash(self, b);
         }
         // A session's kept page the last run shipped with no whatsit has none to write.
         let none = self.ship_memo.as_ref().and_then(|s| s.same()).is_some_and(|p| !p.whats);
         if !none || ship_check() {
-            let met = self.out_whats(b, false, &mut positions.iter());
+            // A page whose walk met only `.aux` entries among the whatsits `out_whats` acts
+            // on: those, in its order (`out_whats`' own), without walking the page again.
+            let met = match &entries {
+                Some(e) if !ship_check() => {
+                    for &a in e.iter().filter(|&&a| a != 0) {
+                        self.shipped_entry(a);
+                    }
+                    !e.is_empty() && !self.replaying()
+                }
+                _ => self.out_whats(b, false, &mut positions.iter()),
+            };
+            assert!(entries.is_none_or(|e| met == (!e.is_empty() && !self.replaying())), "RT_SHIP_CHECK: out_whats met other whatsits than the walk's entries");
             assert!(!(none && met), "RT_SHIP_CHECK: kept page with a whatsit the last run did not ship");
             if let Some(p) = self.ship_memo.as_mut().and_then(|s| s.noted()) {
                 p.whats = met;

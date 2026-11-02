@@ -1,8 +1,35 @@
 # rushtex
 
-**rushtex** is an ultra-fast, zero-dependency TeX and LaTeX subset compiler written from scratch in 100% pure safe Rust (`#![forbid(unsafe_code)]`).
+A LaTeX-to-PDF compiler written from scratch in pure safe Rust (`#![forbid(unsafe_code)]`, no dependencies). Its PDF is pixel-identical to pdfLaTeX's.
 
-It compiles LaTeX documents directly into compact, standards-compliant PDF 1.4 documents at sub-millisecond speeds using exclusively the Rust standard library.
+## How it works
+
+- **Native path:** a document whose every command is ported compiles in Rust, in one pass, with no `.aux` files or reruns.
+- **Engine path:** any other document runs whole on a Rust port of TeX and pdfTeX, on the LaTeX format, as `pdflatex` does (needs TeX Live).
+
+## Speed
+
+[`docs/master.tex`](docs/master.tex) is the reference document: 87 pages covering everything ported so far. Its output is [`docs/master.pdf`](docs/master.pdf), compiled natively and identical to pdfLaTeX's on every page.
+
+| Compiler | Instructions retired |
+|---|---|
+| rushtex, one pass | 0.50 billion |
+| pdfLaTeX, one run | 40.5 billion (80x more) |
+| pdfLaTeX, the usual 3 runs | 128.3 billion (255x more) |
+
+## Build and use
+
+Needs Rust stable; on macOS, version 13 or later.
+
+```sh
+cargo build --release
+target/release/rushtex paper.tex            # writes paper.pdf
+target/release/rushtex --watch paper.tex    # recompiles on every save
+target/release/rushtex --native-gaps paper.tex   # what the native path does not take yet
+```
+
+Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
-MIT / Apache-2.0
+
+MIT or Apache-2.0, at your option.

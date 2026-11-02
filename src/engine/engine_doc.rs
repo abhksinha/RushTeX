@@ -783,13 +783,23 @@ fn pass_options_args(s: &str) -> Option<(&str, &str, usize)> {
 /// Asked for every macro of the kernel table each job, so the names are sorted once a
 /// process and searched by halving (a scan of [`DOC`] compared each name with every native's).
 pub fn native_name(name: &str) -> bool {
-    static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
-    let names = NAMES.get_or_init(|| {
-        let mut v: Vec<&'static str> = DOC.iter().map(|d| d.0).chain(TEXT_SYMBOLS.iter().map(|s| s.0)).collect();
-        v.sort_unstable();
-        v
-    });
-    names.binary_search(&name).is_ok()
+    // A name's first byte and length (up to 63) seen among the natives', made when built:
+    // most macro names fail it, the rest are compared with each native's.
+    const SEEN: [u64; 256] = {
+        let mut seen = [0u64; 256];
+        let mut i = 0;
+        while i < DOC_TABLE.len() + TEXT_SYMBOLS.len() {
+            let n = if i < DOC_TABLE.len() { DOC_TABLE[i].0 } else { TEXT_SYMBOLS[i - DOC_TABLE.len()].0 };
+            let len = if n.len() < 63 { n.len() } else { 63 };
+            let first = if n.is_empty() { 0 } else { n.as_bytes()[0] as usize };
+            seen[first] |= 1 << len;
+            i += 1;
+        }
+        seen
+    };
+    let len = name.len().min(63);
+    let first = name.as_bytes().first().map_or(0, |&b| b as usize);
+    SEEN[first] >> len & 1 != 0 && (DOC.iter().any(|d| d.0 == name) || TEXT_SYMBOLS.iter().any(|s| s.0 == name))
 }
 
 /// amsmath's dots: `\cdots` (`\extrap@\@cdots`), `\dotsb@`, `\dotsc`, `\dotsi`, `\dotso@`, or `\dots`
@@ -2055,6 +2065,15 @@ fn newtheorem_args(s: &str, report: bool) -> Option<NewTheorem<'_>> {
 }
 
 impl Doc {
+    /// Adds package `p` to [`Doc::packages`], and its shape table, if it has one, to
+    /// [`Doc::shape_tables`].
+    fn push_package(&mut self, p: &'static str) {
+        self.packages.push(p);
+        if let Some(i) = crate::data::data_kernel::package_shapes_index(p) {
+            self.shape_tables.push(i);
+        }
+    }
+
     /// The `k`-th contents entry shown (level below 3).
     fn toc_entry(&self, k: usize) -> Option<&TocEntry> {
         self.contents.as_ref()?.get(*self.toc_shown.get(k)? as usize)
@@ -2884,6 +2903,9 @@ pub struct Doc {
     alphabets: Vec<(&'static str, bool, Alphabet)>,
     /// The packages loaded from native tables (`data_kernel::package`).
     packages: Vec<&'static str>,
+    /// The `PACKAGES` indices of `packages` that have a shape table, in the same order, kept
+    /// by [`Doc::push_package`]: each new font's shape lookups ask them, not every package.
+    shape_tables: Vec<u8>,
     /// booktabs' registers ([`BT_REGS`]), once it is loaded.
     pub(super) booktabs: Option<[Reg; 17]>,
     /// amsmath's display in progress: 1 for `equation` (`\@eqnswtrue`), 2 for `equation*`
@@ -9129,7 +9151,7 @@ impl Machine<'_, '_> {
                 self.e.eqtb.set_meaning(id, Meaning::Reg(r), true);
             }
         }
-        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, multicol: None, ids, named, big_pending: 0, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, titlepage: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, tx: None, tab_to: None, tab_ecs: Vec::new(), tx_delta: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), booktabs: None, ams_display: 0, df_label: None, df_tag: None, big_size: 0, align: None, eqnarray: None, wrong_shapes: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, eq_within: None, appendix: false, the_prefix: Default::default(), sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), thanks: None, fn_symbol: false, footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, theorems: Vec::new(), thm_values: Vec::new(), thm_item: Vec::new(), thm_style: PLAIN, thm_current: 0, trivlist_then: |_| {}, dated: false, authored: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_next: 0, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), fam_fonts: std::collections::HashMap::new(), eqpen: 0, aligned: None, replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special: None, empty_foot: false, geometry: None, colors: Vec::new(), default_color: None, preamble_colors: Vec::new(), color_names: Vec::new(), url_penalties: [500, 700], shipped: false, label_hrefs: Default::default(), predicted_hrefs: Default::default(), link: None, uri: None, anchor: None, hfootnote: 0, items: 0, enum_templates: Vec::new(), pbox: Vec::new(), colorboxes: Vec::new(), raises: Vec::new(), fancy: None, titlesec: None, babel: None, bibstyles: Vec::new(), coltypes: Vec::new(), lt: None, report: false, koma: false, book: false, openright: false, mainmatter: true, headings: false, my_headings: false, std_heads: false, marks: 0, page_style: 0, head_page: false, mark_title: Vec::new(), abs_page: 0, page_label_last: None, page_labels: String::new(), display_pen: 10000, t1: false, thm_anchor: None, link_counter: 0, star_anchor: None, mt_fonts: Vec::new(), regs, letter: None, ams: None, ieee: None, toc_shown: Vec::new(), toc_list: 0, toc_name: "Contents", biblatex: None, memoir: false, memoir_style: 0, memoir_secnum: 1, memoir_tocdepth: 1, secnum: None, fig_within: [None, None], class_em_ex: (0, 0), size_asked: Vec::new(), authblk: None, hooks: &KERNEL_HOOKS, pkg: Default::default(), normal_fam: 0, bottom: None, own_counters: Vec::new(), own_lengths: 0, set_to: Vec::new(), qed: Vec::new(), eq_chapter: false, sub_eq: None, sub_eq_h: None, display_env: 0, eq_qed: false }));
+        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, multicol: None, ids, named, big_pending: 0, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, titlepage: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, tx: None, tab_to: None, tab_ecs: Vec::new(), tx_delta: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), shape_tables: Vec::new(), booktabs: None, ams_display: 0, df_label: None, df_tag: None, big_size: 0, align: None, eqnarray: None, wrong_shapes: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, eq_within: None, appendix: false, the_prefix: Default::default(), sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), thanks: None, fn_symbol: false, footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, theorems: Vec::new(), thm_values: Vec::new(), thm_item: Vec::new(), thm_style: PLAIN, thm_current: 0, trivlist_then: |_| {}, dated: false, authored: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_next: 0, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), fam_fonts: std::collections::HashMap::new(), eqpen: 0, aligned: None, replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special: None, empty_foot: false, geometry: None, colors: Vec::new(), default_color: None, preamble_colors: Vec::new(), color_names: Vec::new(), url_penalties: [500, 700], shipped: false, label_hrefs: Default::default(), predicted_hrefs: Default::default(), link: None, uri: None, anchor: None, hfootnote: 0, items: 0, enum_templates: Vec::new(), pbox: Vec::new(), colorboxes: Vec::new(), raises: Vec::new(), fancy: None, titlesec: None, babel: None, bibstyles: Vec::new(), coltypes: Vec::new(), lt: None, report: false, koma: false, book: false, openright: false, mainmatter: true, headings: false, my_headings: false, std_heads: false, marks: 0, page_style: 0, head_page: false, mark_title: Vec::new(), abs_page: 0, page_label_last: None, page_labels: String::new(), display_pen: 10000, t1: false, thm_anchor: None, link_counter: 0, star_anchor: None, mt_fonts: Vec::new(), regs, letter: None, ams: None, ieee: None, toc_shown: Vec::new(), toc_list: 0, toc_name: "Contents", biblatex: None, memoir: false, memoir_style: 0, memoir_secnum: 1, memoir_tocdepth: 1, secnum: None, fig_within: [None, None], class_em_ex: (0, 0), size_asked: Vec::new(), authblk: None, hooks: &KERNEL_HOOKS, pkg: Default::default(), normal_fam: 0, bottom: None, own_counters: Vec::new(), own_lengths: 0, set_to: Vec::new(), qed: Vec::new(), eq_chapter: false, sub_eq: None, sub_eq_h: None, display_env: 0, eq_qed: false }));
         self.strut_update();
         let fixed = FONT_FIXED.iter().map(|name| {
             let id = self.e.cs.intern(name);
@@ -10437,7 +10459,7 @@ impl Machine<'_, '_> {
         }
         self.set_size(size);
         let key = self.heading_key();
-        self.select_nfss(&key, self.size_row(size).fsize);
+        self.select_nfss(&key, self.size_fsize(size));
         if koma {
             // `#6`'s `\nobreak`, then `\sectioncatchphraseformat`'s caller's `{\nobreak`: two
             // penalties on the paragraph's list before `\hskip\z@`.
@@ -10531,7 +10553,7 @@ impl Machine<'_, '_> {
             // amsart: `\normalfont\scshape\centering`.
             self.set_size(NORMALSIZE);
             let key = self.rm_key("m/sc");
-            self.select_nfss(&key, self.size_row(NORMALSIZE).fsize);
+            self.select_nfss(&key, self.size_fsize(NORMALSIZE));
             self.ragged_skips(0);
         } else {
             if koma {
@@ -10542,7 +10564,7 @@ impl Machine<'_, '_> {
             }
             self.set_size(sec.size);
             let key = self.heading_key();
-            self.select_nfss(&key, self.size_row(sec.size).fsize);
+            self.select_nfss(&key, self.size_fsize(sec.size));
             // memoir's `\secheadstyle` and kin end with `\memRTLraggedright` (`\raggedright`).
             if self.memoir() {
                 self.ragged_declaration(1);
@@ -10786,16 +10808,20 @@ impl Machine<'_, '_> {
 
     /// Whether the `.fd` entries of shape `key` hold `size` without a substitution: a
     /// single size equal to it or a range containing it.
+    /// The table that declares shape `key`: the latest loaded package's that does, else the
+    /// `.fd` files' (`data_nfss`).
+    fn shape_table(&self, key: &str) -> Option<&'static data_nfss::NfssTable<'static>> {
+        shape_table_in(self.doc.as_ref().map_or(&[][..], |d| &d.shape_tables[..]), key)
+    }
+
     /// [`Self::size_held`]'s table's `\try@size@substitution` size for `size`.
     fn size_nearest(&self, key: &str, size: &str) -> Option<&'static str> {
-        let packages = self.doc.as_ref().map(|d| d.packages.clone()).unwrap_or_default();
-        let t = packages.iter().rev().filter_map(|p| crate::data::data_kernel::package_shapes(p)).find(|t| t.shape(key).is_some()).or_else(data_nfss::nfss).filter(|t| t.shape(key).is_some())?;
+        let t = self.shape_table(key)?;
         t.nearest(t.shape(key)?, size)
     }
 
     fn size_held(&self, key: &str, size: &str) -> bool {
-        let packages = self.doc.as_ref().map(|d| d.packages.clone()).unwrap_or_default();
-        let t = packages.iter().rev().filter_map(|p| crate::data::data_kernel::package_shapes(p)).find(|t| t.shape(key).is_some()).or_else(data_nfss::nfss).filter(|t| t.shape(key).is_some());
+        let t = self.shape_table(key);
         t.and_then(|t| t.shape(key).map(|s| t.holds(s, size))).unwrap_or(false)
     }
 
@@ -10807,13 +10833,29 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// Size command `i`'s `\f@size` (`self.size_row(i).fsize`, without the row).
+    fn size_fsize(&self, i: usize) -> &'static str {
+        match &self.doc {
+            Some(d) => d.class.table.fsize(i),
+            None => data_class::article().map(|t| t.fsize(i)).expect("the article table"),
+        }
+    }
+
+    /// The first size command whose `\f@size` is `size`.
+    fn size_index(&self, size: &str) -> Option<usize> {
+        match &self.doc {
+            Some(d) => d.class.table.size_index(size),
+            None => data_class::article().and_then(|t| t.size_index(size)),
+        }
+    }
+
     /// `\DeclareMathSizes` for text size `size`: the text, script and scriptscript sizes
     /// (`\tf@size`, `\sf@size`, `\ssf@size`); a size no command sets keeps itself.
     fn math_sizes(&self, size: &'static str) -> (&'static str, &'static str, &'static str) {
         if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathpazo")) {
             return pazo_math_sizes(size).unwrap_or((size, size, size));
         }
-        match (0..data_class::SIZE_COMMANDS.len()).map(|i| self.size_row(i)).find(|r| r.fsize == size) {
+        match self.size_index(size).map(|i| self.size_row(i)) {
             Some(r) => (r.fsize, r.sf, r.ssf),
             None => calculated_math_sizes(size).unwrap_or((size, size, size)),
         }
@@ -10825,7 +10867,7 @@ impl Machine<'_, '_> {
         let name = self.e.cs.name(self.e.fonts.list[f as usize].ident);
         match name.rsplit_once('/') {
             Some((key, size)) if key.matches('/').count() == 3 => static_size(size),
-            _ => self.size_row(NORMALSIZE).fsize,
+            _ => self.size_fsize(NORMALSIZE),
         }
     }
 
@@ -10836,7 +10878,7 @@ impl Machine<'_, '_> {
         let name = self.e.cs.name(self.e.fonts.list[f as usize].ident);
         match name.rsplit_once('/') {
             Some((key, size)) if key.matches('/').count() == 3 => (key.to_string(), static_size(size)),
-            _ => (self.rm_key("m/n"), self.size_row(NORMALSIZE).fsize),
+            _ => (self.rm_key("m/n"), self.size_fsize(NORMALSIZE)),
         }
     }
 
@@ -10898,8 +10940,8 @@ impl Machine<'_, '_> {
             return Some(cs);
         }
         // A shape a loaded package declares, else the `.fd` files' (`data_nfss`).
-        let packages = self.doc.as_ref().map(|d| d.packages.clone()).unwrap_or_default();
-        let table = |k: &str| packages.iter().rev().filter_map(|p| crate::data::data_kernel::package_shapes(p)).find(|t| t.shape(k).is_some()).or_else(data_nfss::nfss).filter(|t| t.shape(k).is_some());
+        let shaped = self.doc.as_ref().map(|d| d.shape_tables.clone()).unwrap_or_default();
+        let table = |k: &str| shape_table_in(&shaped, k);
         // `\wrong@fontshape`: an undefined shape takes the encoding's default shape, then
         // its default series, then its default family (`\DeclareFontSubstitution`). The
         // first time, the font is the substitute's (`\font@name` is its name) and the shape
@@ -10916,7 +10958,7 @@ impl Machine<'_, '_> {
             // `U/cmr` for it would be silently wrong.
             (None, None) if matches!(key.split('/').next(), Some("OT1" | "T1" | "U")) &&key.split('/').nth(1).is_some_and(|fam| {
                 let family = format!("{}+{fam}", key.split('/').next().unwrap_or(""));
-                packages.iter().filter_map(|p| crate::data::data_kernel::package_shapes(p)).chain(data_nfss::nfss()).all(|t| t.family(&family).is_none())
+                shaped.iter().filter_map(|&i| crate::data::data_kernel::package_shapes_at(i as usize)).chain(data_nfss::nfss()).all(|t| t.family(&family).is_none())
             }) =>
             {
                 self.not_native("a font family whose .fd file the native tables do not hold");
@@ -19082,7 +19124,7 @@ impl Machine<'_, '_> {
     /// setspace.sty's `\onehalfspacing` and `\doublespacing`: `\setstretch` by `\@ptsize`
     /// (10pt 1.25 and 1.667, 11pt 1.213 and 1.618, 12pt 1.241 and 1.655).
     fn spacing_command(&mut self, double: bool) {
-        let v = match (double, self.size_row(NORMALSIZE).fsize) {
+        let v = match (double, self.size_fsize(NORMALSIZE)) {
             (false, "10") => "1.25",
             (false, "10.95") => "1.213",
             (false, "12") => "1.241",
@@ -19167,12 +19209,12 @@ impl Machine<'_, '_> {
             let id = self.e.cs.intern(op.name);
             self.e.eqtb.set_meaning(id, Meaning::Macro(super::engine_prim::Macro { text, flags: super::engine_prim::PROTECTED }), true);
         }
-        for (name, flags, toks) in k.macros() {
+        for (name, flags, toks) in k.macros_lazy() {
             if native_name(name) {
                 continue;
             }
             t.clear();
-            t.extend(toks.iter().map(|tok| match *tok {
+            t.extend(toks.map(|tok| match tok {
                 MacroToken::Cs(n) => Token::cs(self.e.cs.intern(n)),
                 MacroToken::Raw(v) => Token(v),
             }));
@@ -19609,7 +19651,11 @@ impl Machine<'_, '_> {
             vals.push(match model {
                 // `\c@lor@RGB@rgb`: `\dimen@ #1\p@ \divide\dimen@ \@cclv \strip@pt`.
                 "RGB" if !norm => strip_pt(self.length_of(&format!("{p}pt"))? / 255),
-                "rgb" | "gray" | "cmyk" if norm => strip_pt(self.length_of(&format!("{p}pt"))?),
+                // A plain decimal is read as §448 and §452 read it (`decimal_sp`): no tokens.
+                "rgb" | "gray" | "cmyk" if norm => strip_pt(match data_nfss::decimal_sp(p) {
+                    Some(v) => v,
+                    None => self.length_of(&format!("{p}pt"))?,
+                }),
                 "rgb" | "gray" | "cmyk" => p.to_string(),
                 _ => return None,
             });
@@ -19797,6 +19843,7 @@ impl Machine<'_, '_> {
         // their absence until graphicx comes (by itself, pgf's or mathtools'), as `require`.
         if matches!(name, "graphicx" | "tikz" | "pgf" | "mathtools") {
             if let Some(d) = self.doc.as_mut() {
+                // `graphics` has no shape table: `shape_tables` stays as it is.
                 d.packages.retain(|p| *p != "graphics");
             }
         }
@@ -19804,7 +19851,7 @@ impl Machine<'_, '_> {
             if !self.doc.as_ref().is_some_and(|d| d.packages.contains(&"graphicx")) {
                 self.load_package("graphicx");
                 if let Some(d) = self.doc.as_mut() {
-                    d.packages.push("graphics");
+                    d.push_package("graphics");
                 }
             }
             return;
@@ -19883,7 +19930,7 @@ impl Machine<'_, '_> {
             }
             let Some(doc) = self.doc.as_mut() else { return };
             if !doc.packages.contains(&p) {
-                doc.packages.push(p);
+                doc.push_package(p);
                 for &(_, cmd, native) in PACKAGE_NATIVES.iter().filter(|q| q.0 == p) {
                     if let Some(i) = DOC.iter().position(|d| d.0 == native) {
                         let id = self.e.cs.intern(cmd);
@@ -19985,7 +20032,7 @@ impl Machine<'_, '_> {
             relocate.by = (doc.fams.len() - fam0 as usize) as u32;
         }
         let pkg = crate::data::data_kernel::packages().find(|p| p.0 == name).map_or("", |p| p.0);
-        doc.packages.push(pkg);
+        doc.push_package(pkg);
         let (mut fams, mut alphabets) = (std::mem::take(&mut doc.fams), std::mem::take(&mut doc.alphabets));
         self.install(k, Some(pkg), &mut fams, &mut alphabets, relocate);
         // mathpazo's `\AtBeginDocument` declares msa and msb at `s*[1.042]` and euf at its own
@@ -20388,7 +20435,7 @@ impl Machine<'_, '_> {
                 self.after_group.push((level, t));
             }
         }
-        let Some(row) = (0..data_class::SIZE_COMMANDS.len()).find(|&i| self.size_row(i).fsize == size) else { return };
+        let Some(row) = self.size_index(size) else { return };
         let (curr, armed) = (self.e.cs.intern("rt@currmathsize"), self.e.cs.intern("rt@initrestore"));
         self.e.eqtb.set_meaning(curr, Meaning::CharDef(row as u32), false);
         self.e.eqtb.set_meaning(armed, Meaning::CharDef(1), false);
@@ -20399,7 +20446,7 @@ impl Machine<'_, '_> {
     fn restore_glb_settings(&mut self) {
         let curr = self.e.cs.intern("rt@currmathsize");
         let Meaning::CharDef(row) = self.e.eqtb.meaning(curr) else { return };
-        let size = self.size_row(row as usize).fsize;
+        let size = self.size_fsize(row as usize);
         if self.doc.as_ref().is_none_or(|d| d.math_size != size) {
             self.glb_settings_at(size);
         }
@@ -20418,7 +20465,7 @@ impl Machine<'_, '_> {
         // A size fontmath.ltx declares that no size command sets keeps its `\S@` (not in the
         // class table); any other size of `\fontsize` is `\calculate@math@sizes`'s.
         let pazo = self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathpazo"));
-        if if pazo { pazo_math_sizes(size).is_none() } else { (0..data_class::SIZE_COMMANDS.len()).all(|i| self.size_row(i).fsize != size) && calculated_math_sizes(size).is_none() } {
+        if if pazo { pazo_math_sizes(size).is_none() } else { self.size_index(size).is_none() && calculated_math_sizes(size).is_none() } {
             return self.not_native("math at a font size fontmath.ltx declares and no size command sets");
         }
         let bold = self.bold_version() as usize;
@@ -21308,24 +21355,16 @@ fn scaled_math_sizes(size: &'static str, sf: &[u8], ssf: &[u8]) -> Option<(&'sta
 }
 
 /// A size's text as the class tables' own string (a size they do not know is `10`).
+/// [`Machine::shape_table`] over `shaped`, the loaded packages' shape tables in load order.
+fn shape_table_in(shaped: &[u8], key: &str) -> Option<&'static data_nfss::NfssTable<'static>> {
+    shaped.iter().rev().filter_map(|&i| crate::data::data_kernel::package_shapes_at(i as usize)).find(|t| t.shape(key).is_some()).or_else(data_nfss::nfss).filter(|t| t.shape(key).is_some())
+}
+
 fn static_size(size: &str) -> &'static str {
-    // The class sizes' names, each once, gathered at the first call: a `SizeRow` is
-    // decoded whole (its line found by a scan, its glue read), too slow for every
-    // `\f@size` read (`font_key` runs at each inline formula and font change).
-    static KNOWN: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
-    let known = KNOWN.get_or_init(|| {
-        // Every class's sizes (IEEEtran's `11`, `17`, `20` are none of article's).
-        let tables = (0..data_class::CLASSES.len()).flat_map(|c| (0..data_class::class_sizes(c).len()).filter_map(move |i| data_class::class_size(c, i)));
-        let rows = tables.flat_map(|t| (0..data_class::SIZE_COMMANDS.len()).map(move |i| t.size(i)));
-        let mut v: Vec<&'static str> = Vec::new();
-        for s in rows.flat_map(|r| [r.fsize, r.sf, r.ssf]) {
-            if !v.contains(&s) {
-                v.push(s);
-            }
-        }
-        v
-    });
-    known.iter().find(|&&s| s == size).copied().or_else(|| EXTRA_SIZES.lock().ok()?.iter().find(|&&s| s == size).copied()).unwrap_or("10")
+    // Every class's sizes (IEEEtran's `11`, `17`, `20` are none of article's), listed once
+    // in `CLASS_SIZE_NAMES` (checked against the tables): gathering them at the first call
+    // loaded every class table.
+    data_class::CLASS_SIZE_NAMES.iter().find(|&&s| s == size).copied().or_else(|| EXTRA_SIZES.lock().ok()?.iter().find(|&&s| s == size).copied()).unwrap_or("10")
 }
 
 /// Font sizes no class size command sets, as `\fontsize` names them (`\f@size`), kept for

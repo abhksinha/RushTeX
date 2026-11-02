@@ -107,6 +107,38 @@ struct Passive {
     prev: Option<u32>,
 }
 
+/// What every active node's line has in common while all of them are too loose for the
+/// pass (§851–§855 with a positive shortfall and `b > threshold`): with `R` the least
+/// ratio `badness` makes too bad, a line from node `a` with width `w` is too loose exactly
+/// when `w[0] < x_a`, `297·w[0] + R·w[1] <= k_a` and no infinite stretch, for
+/// `x_a = line width + origin[0]` and `k_a = 297·x_a + R·origin[1]` (on the running totals).
+/// Taken over the list: the least `x`, the least `k`, the infinite stretch origin they share.
+#[derive(Clone, Copy)]
+struct Reach {
+    x: i64,
+    k: i64,
+    inf: [i32; 3],
+}
+
+/// The least ratio `r` (§108, before the cube) whose badness exceeds `threshold`, or 0 when
+/// no badness does (`threshold >= INF_BAD`); 0 also for a negative threshold (no shortcut).
+fn loose_ratio(threshold: i32) -> i64 {
+    if !(0..INF_BAD).contains(&threshold) {
+        return 0;
+    }
+    // §108's cube is nondecreasing in `r`, and every `r > 1290` gives 10000.
+    let (mut lo, mut hi) = (0i32, 1291i32);
+    while lo < hi {
+        let r = (lo + hi) / 2;
+        if (r * r * r + 0o400000) / 0o1000000 > threshold {
+            hi = r;
+        } else {
+            lo = r + 1;
+        }
+    }
+    lo as i64
+}
+
 /// The paragraph's line widths and indents (§847–§849).
 #[derive(Clone)]
 struct Shape {
@@ -148,6 +180,11 @@ struct Breaker<'p> {
     /// The discretionary of a word's break row being tried, which is not a node of `par`.
     inner: Option<Inner>,
     actives: Vec<Active>,
+    /// [`loose_ratio`] of the pass's threshold, 0 without the shortcut (protrusion, font
+    /// expansion, a threshold no badness exceeds).
+    loose_r: i64,
+    /// [`Reach`] over `actives`, `None` after the list changed.
+    reach: Option<Reach>,
     passives: Vec<Passive>,
     /// §823 `background` and the running total of widths before the current node.
     background: Widths,
@@ -177,6 +214,12 @@ impl Breaker<'_> {
             }
             pi = EJECT_PENALTY;
         }
+        // Every active node's line too loose: no break is feasible and none deactivates
+        // (§851–§855 give each `INF_BAD >= b > threshold`), and §835 inserts nothing, the
+        // minimum being `awful_bad` between calls. Not at a forced break.
+        if pi != EJECT_PENALTY && self.all_too_loose(0) {
+            return;
+        }
         let mut break_width: Option<Widths> = None;
         let mut old_l = 0;
         let mut line_width = 0;
@@ -205,6 +248,7 @@ impl Breaker<'_> {
                             }
                             let a = Active { passive: Some(self.passives.len() as u32 - 1), line: self.best_line[fit] + 1, fitness: fit as u8, hyphenated, total: self.minimal[fit], origin };
                             self.actives.insert(i, a);
+                            self.reach = None;
                             i += 1;
                         }
                         self.minimal[fit] = AWFUL_BAD;
@@ -260,6 +304,7 @@ impl Breaker<'_> {
                     artificial = true;
                 } else if b > self.threshold {
                     self.actives.remove(i);
+                    self.reach = None;
                     continue;
                 }
                 false
@@ -318,34 +363,62 @@ impl Breaker<'_> {
                 i += 1;
             } else {
                 self.actives.remove(i);
+                self.reach = None;
             }
         }
+    }
+
+    /// No break of a word's `rows` can matter: from every active node, even the widest of
+    /// them leaves a line too loose for the pass ([`Self::all_too_loose`]). Such a break is
+    /// underfull, so §851–§855 give `b <= INF_BAD`, neither feasible nor deactivating (the
+    /// `continue` above), and a narrower one only looser (`badness` does not fall as the
+    /// shortfall grows, and a word adds no stretch). Not with a forced break
+    /// (`pi <= EJECT_PENALTY`).
+    fn out_of_reach(&mut self, rows: &[BreakRow], least_pi: i32) -> bool {
+        if least_pi <= EJECT_PENALTY {
+            return false;
+        }
+        let widest = rows.iter().map(|r| r.before + if r.flags & BreakRow::PRE_EMPTY != 0 { 0 } else { r.pre }).max().unwrap_or(0);
+        self.all_too_loose(widest)
+    }
+
+    /// Whether the line from every active node to the running total plus `extra` natural
+    /// width is too loose for the pass ([`Reach`]): exactly §851–§853's positive shortfall
+    /// with `b > threshold`, for each node, without protrusion or font expansion.
+    fn all_too_loose(&mut self, extra: i32) -> bool {
+        let r = self.loose_r;
+        if r == 0 {
+            return false;
+        }
+        let reach = match self.reach {
+            Some(reach) => reach,
+            None => {
+                let mut reach = Reach { x: i64::MAX, k: i64::MAX, inf: [0; 3] };
+                for (j, a) in self.actives.iter().enumerate() {
+                    let line_width = if a.line > self.shape.easy_line { self.shape.second_width } else { self.shape.line(a.line).1 };
+                    let x = line_width as i64 + a.origin[0] as i64;
+                    let inf = [a.origin[2], a.origin[3], a.origin[4]];
+                    if j == 0 {
+                        reach.inf = inf;
+                    } else if inf != reach.inf {
+                        // Lines of different infinite stretch: no shortcut.
+                        reach.x = i64::MIN;
+                        break;
+                    }
+                    reach.x = reach.x.min(x);
+                    reach.k = reach.k.min(297 * x + r * a.origin[1] as i64);
+                }
+                self.reach = Some(reach);
+                reach
+            }
+        };
+        let t = &self.total;
+        let w = t[0] as i64 + extra as i64;
+        w < reach.x && 297 * w + r * t[1] as i64 <= reach.k && [t[2], t[3], t[4]] == reach.inf
     }
 
     /// pdftex.web `total_pw`: the protrusion at both ends of the line from active node
     /// `passive`'s break to a break at `at`.
-    /// No break of a word's `rows` can matter: from every active node, even the widest of
-    /// them leaves a line too loose for the pass. Such a break is underfull, so §851–§855
-    /// give `b <= INF_BAD`, neither feasible nor deactivating (the `continue` above), and a
-    /// narrower one only looser (`badness` does not fall as the shortfall grows, and a word
-    /// adds no stretch). Not with a forced break (`pi <= EJECT_PENALTY`), infinite stretch,
-    /// protrusion or font expansion.
-    fn out_of_reach(&self, rows: &[BreakRow], least_pi: i32) -> bool {
-        if least_pi <= EJECT_PENALTY || self.protrude || self.expand.is_some() {
-            return false;
-        }
-        let widest = rows.iter().map(|r| r.before + if r.flags & BreakRow::PRE_EMPTY != 0 { 0 } else { r.pre }).max().unwrap_or(0);
-        self.actives.iter().all(|a| {
-            let w = diff(self.total, a.origin);
-            if w[2] != 0 || w[3] != 0 || w[4] != 0 {
-                return false;
-            }
-            let line_width = if a.line > self.shape.easy_line { self.shape.second_width } else { self.shape.line(a.line).1 };
-            let shortfall = line_width - (w[0] + widest);
-            shortfall > 0 && (if shortfall > 7_230_584 && w[1] < 1_663_497 { INF_BAD } else { badness(shortfall, w[1]) }) > self.threshold
-        })
-    }
-
     fn total_pw(&self, passive: Option<u32>, at: Option<usize>) -> i32 {
         let (par, nodes) = (self.par, self.nodes);
         let l = passive.map_or(0, |p| self.passives[p as usize].at.map_or(par.len(), |a| a as usize));
@@ -624,6 +697,8 @@ impl Machine<'_, '_> {
             final_hyphen: self.ip(FINAL_HYPHEN_DEMERITS),
             trace: self.ip(TRACING_PARAGRAPHS) > 0,
             inner: None,
+            loose_r: 0,
+            reach: None,
         };
         // §863: the passes.
         let (hyphen_penalty, ex_hyphen_penalty) = (self.ip(HYPHEN_PENALTY), self.ip(EX_HYPHEN_PENALTY));
@@ -639,6 +714,7 @@ impl Machine<'_, '_> {
         }
         let best = loop {
             br.threshold = br.threshold.min(INF_BAD);
+            br.loose_r = if br.protrude || br.expand.is_some() { 0 } else { loose_ratio(br.threshold) };
             if br.trace {
                 eprintln!("{}", if br.threshold == pretolerance && !second { "@firstpass" } else { "@secondpass" });
             }
@@ -646,6 +722,7 @@ impl Machine<'_, '_> {
             br.passives.clear();
             br.actives.clear();
             br.actives.push(Active { passive: None, line: prev_graf + 1, fitness: 2, hyphenated: false, total: 0, origin: br.background.map(|v| -v) });
+            br.reach = None;
             br.total = [0; 8];
             br.minimal = [AWFUL_BAD; 4];
             br.minimum = AWFUL_BAD;

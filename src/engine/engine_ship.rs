@@ -17,7 +17,7 @@ use super::engine_node::Node;
 use super::engine_pdfdoc::{self as doc, PdfDoc};
 use super::engine_vf::{PacketOut, Vf, VfTable};
 use super::engine_whatsit as what;
-use crate::backend::backend_pdftex::TextState;
+use crate::backend::backend_pdftex::{Fused, TextState};
 pub use crate::backend::backend_ship::{ShippedForm, ShippedPage};
 
 const H_OFFSET: u32 = 18;
@@ -103,8 +103,17 @@ struct Walk<'a> {
     /// Resource names (`/F<base>`), made when a font is first used on the page.
     names: Vec<String>,
     colors: &'a mut ColorStacks,
-    /// A whatsit's token text `a..b` as pdfTeX's `show_token_list` prints it.
-    text_of: &'a dyn Fn(i32, i32) -> String,
+    /// A whatsit's token text `a..b` as pdfTeX's `show_token_list` prints it, added to the
+    /// string given.
+    text_of: &'a dyn Fn(i32, i32, &mut String),
+    /// The page's literal text, one buffer reused by every `\pdfliteral`.
+    lit: String,
+    /// Whether the walk met a whatsit `out_whats` acts on after the ship (`\openout`,
+    /// `\closeout`, `\pdfsavepos`, a `shipout` literal, a `\write` to a stream or inside
+    /// leaders, which it skips); if not, `entries` is all it would act on: the `.aux`
+    /// entries (`\write`s to no stream) in the order it meets them.
+    whats: bool,
+    entries: Vec<i32>,
     doc: &'a mut PdfDoc,
     /// This page's object, the box nesting level (`cur_s`), whether leaders are being
     /// output, and the margins of links and destinations.
@@ -136,6 +145,10 @@ struct Walk<'a> {
     /// and such a glue's, until the box after it.
     pgf: Vec<(u32, i32, u32, i32)>,
     pgf_y: Option<(u32, i32)>,
+    /// The font [`Walk::real_font`] last made current (`NOT_USED` before any) and its
+    /// automatic expansion: while the text object it set the font in is open, the same
+    /// font again changes nothing.
+    cur_font: (u16, i64),
 }
 
 /// Each word entry the ship has written, as its runs of characters: a run is the shift
@@ -270,6 +283,8 @@ struct Walked {
     forms: Vec<(u32, i32)>,
     positions: Vec<(i32, i32)>,
     pgf: Vec<(u32, i32, u32, i32)>,
+    /// The `.aux` entries `out_whats` would act on, or none when it has more to do.
+    entries: Option<Vec<i32>>,
 }
 
 /// `set_rect_dimens`: the rectangle of an annotation or destination with dimensions `dims`
@@ -324,6 +339,10 @@ impl Walk<'_> {
     }
 
     fn literal(&mut self, mode: u8, s: &str, h: i32, v: i32) {
+        // Each character as its byte: an ASCII text is its own bytes.
+        if s.is_ascii() {
+            return self.text.literal(&mut self.out, mode, s.as_bytes(), h as i64, v as i64, self.page_height);
+        }
         let bytes: Vec<u8> = s.chars().map(|c| c as u32 as u8).collect();
         self.text.literal(&mut self.out, mode, &bytes, h as i64, v as i64, self.page_height);
     }
@@ -331,11 +350,28 @@ impl Walk<'_> {
     /// pdfTeX's whatsits in `pdf_hlist_out`/`pdf_vlist_out` that write to the page, at TeX's
     /// (h, v): literals, `\special`, colour stacks, `\pdfsetmatrix`, `\pdfsave`, `\pdfrestore`.
     fn whatsit(&mut self, n: &Node, h: i32, v: i32) {
-        let text = |w: &Self| (w.text_of)(n.a, n.b);
+        match n.sub {
+            what::WRITE if n.font == what::NULL_STREAM && !self.leaders => self.entries.push(n.a),
+            what::OPEN | what::WRITE | what::CLOSE | what::LATE_LITERAL => self.whats = true,
+            _ => {}
+        }
+        let text = |w: &Self| {
+            let mut s = String::new();
+            (w.text_of)(n.a, n.b, &mut s);
+            s
+        };
         let stack = n.font as usize;
         let lit = match n.sub {
-            // `pdf_out_literal`; a `shipout` literal's text is written as stored.
-            what::LITERAL | what::LATE_LITERAL => Some((n.font as u8, text(self))),
+            // `pdf_out_literal`; a `shipout` literal's text is written as stored, shown into
+            // the page's one buffer (most whatsits of a picture are literals).
+            what::LITERAL | what::LATE_LITERAL => {
+                let mut s = std::mem::take(&mut self.lit);
+                s.clear();
+                (self.text_of)(n.a, n.b, &mut s);
+                self.literal(n.font as u8, &s, h, v);
+                self.lit = s;
+                return;
+            }
             what::PGF_POINT => Some((SET_ORIGIN, what::pgf_point_text(n, h, (self.page_height - v as i64) as i32))),
             // `literal(s, scan_special)`: only `PDF:` (or `pdf:`) specials, `direct:` and
             // `page:` choosing the mode.
@@ -426,12 +462,21 @@ impl Walk<'_> {
                     if run.first_w == i32::MIN {
                         continue;
                     }
-                    self.text.char_ex(&mut self.out, run.first, run.first_w as i64, x as i64, y, 0);
-                    x += run.first_w;
                     let bytes = &ws.bytes[run.bytes.0 as usize..run.bytes.1 as usize];
-                    if bytes.is_empty() || self.text.run(&mut self.out, bytes, x as i64, y, run.drift, run.adv) {
-                        x += run.width;
-                        continue;
+                    match self.text.first_and_run(&mut self.out, run.first, run.first_w as i64, x as i64, y, bytes, run.drift, run.adv) {
+                        Fused::All => {
+                            x += run.first_w + run.width;
+                            continue;
+                        }
+                        Fused::First => x += run.first_w,
+                        Fused::None => {
+                            self.text.char_ex(&mut self.out, run.first, run.first_w as i64, x as i64, y, 0);
+                            x += run.first_w;
+                            if bytes.is_empty() || self.text.run(&mut self.out, bytes, x as i64, y, run.drift, run.adv) {
+                                x += run.width;
+                                continue;
+                            }
+                        }
                     }
                     for &c in &ws.chars[run.chars.0 as usize..run.chars.1 as usize] {
                         let w = font.dims(c, self.info).map_or(0, |d| d[0]);
@@ -488,6 +533,11 @@ impl Walk<'_> {
     /// pdfTeX's `pdf_set_font` for real font `f`, and its automatic expansion (thousandths)
     /// for the text matrix.
     fn real_font(&mut self, f: u16) -> i64 {
+        // The font made current last, its `Tf` still in force: `set_font` would write
+        // nothing, and the tables below already hold `f` (they only grow).
+        if f == self.cur_font.0 && self.text.font_in_force() {
+            return self.cur_font.1;
+        }
         let font = &self.fonts[f as usize];
         if self.names.len() <= f as usize {
             self.names.resize(f as usize + 1, String::new());
@@ -504,7 +554,9 @@ impl Walk<'_> {
         // An expanded copy is scalable as its base is (the copy's own name has no map entry).
         self.text.pk_scale = self.pk.get(base as usize).copied().unwrap_or(0);
         // An automatically expanded copy is its base drawn through a scaled text matrix.
-        if font.expand != 0 && self.micro.expand(f).auto { font.expand as i64 } else { 0 }
+        let ea = if font.expand != 0 && self.micro.expand(f).auto { font.expand as i64 } else { 0 };
+        self.cur_font = (f, ea);
+        ea
     }
 
     /// A rule with its lower left corner at (h, v).
@@ -653,7 +705,10 @@ impl Walk<'_> {
                     doc::END_LINK => self.end_link(cur_h),
                     doc::DEST => self.do_dest(n.a as usize, b, left_edge, base_line, cur_h, base_line),
                     doc::REF_OBJ => self.doc.want_obj(n.a),
-                    what::SAVE_POS => self.save_pos(cur_h, base_line),
+                    what::SAVE_POS => {
+                        self.whats = true;
+                        self.save_pos(cur_h, base_line);
+                    }
                     _ => self.whatsit(n, cur_h, base_line),
                 },
                 _ => {}
@@ -815,7 +870,10 @@ impl Walk<'_> {
                     doc::DEST => self.do_dest(n.a as usize, b, left_edge, top_edge + b.height, left_edge, cur_v),
                     doc::START_LINK | doc::END_LINK => {}
                     doc::REF_OBJ => self.doc.want_obj(n.a),
-                    what::SAVE_POS => self.save_pos(left_edge, cur_v),
+                    what::SAVE_POS => {
+                        self.whats = true;
+                        self.save_pos(left_edge, cur_v);
+                    }
                     _ => self.whatsit(n, left_edge, cur_v),
                 },
                 _ => {}
@@ -911,8 +969,9 @@ const PDF_PAGE_RESOURCES: u32 = 11;
 
 impl Machine<'_, '_> {
     /// pdfTeX's `pdf_ship_out` of box `b` as a page: its size, origin and content stream.
-    /// Returns where its `\pdfsavepos`s are.
-    pub(super) fn ship_page(&mut self, b: u32) -> Vec<(i32, i32)> {
+    /// Returns where its `\pdfsavepos`s are, and, when they are all `out_whats` would act
+    /// on, the page's `.aux` entries.
+    pub(super) fn ship_page(&mut self, b: u32) -> (Vec<(i32, i32)>, Option<Vec<i32>>) {
         let dimen = |m: &Self, slot| m.dimen_param(slot);
         let h_offset = dimen(self, PDF_H_ORIGIN) + dimen(self, H_OFFSET);
         let v_offset = dimen(self, PDF_V_ORIGIN) + dimen(self, V_OFFSET);
@@ -977,7 +1036,7 @@ impl Machine<'_, '_> {
                 self.colors = d.colors.clone();
                 let resources = self.page_resources();
                 self.page.pdf.push(ShippedPage { id: page_obj, width, height, content: d.content.clone(), stream: Some(d.stream), resources, ..Default::default() });
-                return Vec::new();
+                return (Vec::new(), None);
             }
         }
         // With a key, the walk marks the characters it uses in an empty table, kept as the
@@ -1008,7 +1067,7 @@ impl Machine<'_, '_> {
         let annots = w.annots.iter().map(|a| a.0).collect();
         let resources = self.page_resources();
         self.page.pdf.push(ShippedPage { id: page_obj, width, height, content: w.content, annots, group: w.group, images: w.images, forms: w.forms, stream, resources });
-        w.positions
+        (w.positions, w.entries)
     }
 
     /// A session's key of shipping box `bx` as a page `dims` (width, height, and the two
@@ -1224,12 +1283,8 @@ impl Machine<'_, '_> {
         // The content buffer starts at the last page's size, not empty and doubling.
         let out = Vec::with_capacity(self.page.pdf.last().map_or(4096, |p| p.content.len() + p.content.len() / 4));
         let me = &*self;
-        let text_of = move |a: i32, b: i32| {
-            let mut s = String::new();
-            me.show(me.e.toks.get(super::engine_token::Span { start: a as u32, end: b as u32 }), &mut s);
-            s
-        };
-        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, info: &self.e.fonts.info, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out, page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, word_ship: &mut word_ship, names: Vec::new(), colors: &mut colors, text_of: &text_of, doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new(), positions: Vec::new(), matrices: Vec::new(), saves: Vec::new(), last_rect: [0; 4], pgf: Vec::new(), pgf_y: None };
+        let text_of = move |a: i32, b: i32, s: &mut String| me.show(me.e.toks.get(super::engine_token::Span { start: a as u32, end: b as u32 }), s);
+        let mut walk = Walk { nodes: &self.e.nodes, fonts: &self.e.fonts.list, info: &self.e.fonts.info, micro: &self.e.fonts.micro, vf: &self.vf, text: TextState::default(), out, page_height: height as i64, base: &mut base, used: &mut used, pk: &pk, word_ship: &mut word_ship, names: Vec::new(), colors: &mut colors, text_of: &text_of, lit: String::new(), whats: false, entries: Vec::new(), doc: &mut pdf_doc, page_obj: page.unwrap_or(0), cur_s: -1, leaders: false, link_margin, dest_margin, link_stack: Vec::new(), annots: Vec::new(), group: 0, images: Vec::new(), forms: Vec::new(), positions: Vec::new(), matrices: Vec::new(), saves: Vec::new(), last_rect: [0; 4], pgf: Vec::new(), pgf_y: None, cur_font: (NOT_USED, 0) };
         // `pdf_out_colorstack_startpage`, at the page's origin.
         if page.is_some() {
             for (mode, s) in walk.colors.page_start() {
@@ -1238,7 +1293,7 @@ impl Machine<'_, '_> {
         }
         walk.box_out(&bx, h, v);
         walk.text.end_text(&mut walk.out);
-        let walked = Walked { content: walk.out, annots: walk.annots, group: walk.group, images: walk.images, forms: walk.forms, positions: walk.positions, pgf: walk.pgf };
+        let walked = Walked { content: walk.out, annots: walk.annots, group: walk.group, images: walk.images, forms: walk.forms, positions: walk.positions, pgf: walk.pgf, entries: (!walk.whats).then_some(walk.entries) };
         // The placed node texts' glue and shifts, written back (`what::PGF_GLUE`).
         for &(glue, width, bx, shift) in &walked.pgf {
             self.e.nodes.glues[glue as usize].width = width;

@@ -196,9 +196,21 @@ impl<'a> Lexer<'a> {
                     break;
                 }
                 if k > start + 1 {
-                    let name: String = self.buf[start..k].iter().collect();
+                    // The name in UTF-8 on the stack when it fits (every name LaTeX uses).
+                    let mut stack = [0u8; 128];
+                    let mut n = 0;
+                    for &c in &self.buf[start..k] {
+                        if n + 4 > stack.len() {
+                            n = usize::MAX;
+                            break;
+                        }
+                        n += c.encode_utf8(&mut stack[n..]).len();
+                    }
                     self.loc = k;
-                    return Token::cs(names.intern(&name));
+                    return Token::cs(match std::str::from_utf8(stack.get(..n).unwrap_or(&[])) {
+                        Ok(name) if n != usize::MAX => names.intern(name),
+                        _ => names.intern(&self.buf[start..k].iter().collect::<String>()),
+                    });
                 }
             } else if self.reduce_in_buffer(start, cats) {
                 // §355: an expanded code where the name starts; scan again.

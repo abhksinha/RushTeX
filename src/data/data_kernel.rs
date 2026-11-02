@@ -120,7 +120,7 @@ impl<'a> KernelTable<'a> {
             Some(p) => std::str::from_utf8(p).ok()?,
             None => "",
         } };
-        (t.chars.lines().all(|l| parse(l).is_some()) && t.ops.lines().all(|l| parse_op(l).is_some()) && t.delims.lines().all(|l| parse_delim(l).is_some()) && t.macros.lines().all(|l| parse_macro(l).is_some()) && t.mathfonts.lines().all(|l| parse_math_font(l).is_some())).then_some(t)
+        (t.chars.lines().all(|l| parse(l).is_some()) && t.ops.lines().all(|l| parse_op(l).is_some()) && t.delims.lines().all(|l| parse_delim(l).is_some()) && t.macros.lines().all(|l| macro_fields(l).is_some_and(|(_, _, mut toks)| toks.all(|t| t.is_some()))) && t.mathfonts.lines().all(|l| parse_math_font(l).is_some())).then_some(t)
     }
 
     /// A package's first own family and the packages it loads (section `pkg`).
@@ -174,6 +174,12 @@ impl<'a> KernelTable<'a> {
         self.macros.lines().filter_map(parse_macro)
     }
 
+    /// [`Self::macros`] with each macro's tokens read as they are asked for, nothing
+    /// gathered: the table was checked whole by `from_blob`, so every token reads.
+    pub fn macros_lazy(&self) -> impl Iterator<Item = (&'a str, u8, impl Iterator<Item = MacroToken<'a>> + 'a)> + '_ {
+        self.macros.lines().filter_map(macro_fields).map(|(name, flags, toks)| (name, flags, toks.map_while(|t| t)))
+    }
+
     /// Every math delimiter macro and its `\delimiter` value.
     pub fn delims(&self) -> impl Iterator<Item = (&'a str, u32)> + '_ {
         self.delims.lines().filter_map(parse_delim)
@@ -197,6 +203,12 @@ fn parse(line: &str) -> Option<(&str, Def)> {
 }
 
 fn parse_macro(line: &str) -> Option<(&str, u8, Vec<MacroToken<'_>>)> {
+    let (name, flags, toks) = macro_fields(line)?;
+    Some((name, flags, toks.collect::<Option<Vec<_>>>()?))
+}
+
+/// A macro line's name, flags and its tokens, each `None` when it does not read.
+fn macro_fields(line: &str) -> Option<(&str, u8, impl Iterator<Item = Option<MacroToken<'_>>>)> {
     let mut f = line.split('\u{1f}');
     let (name, flags) = (f.next()?, f.next()?.parse().ok()?);
     let toks = f.map(|t| match t.split_at_checked(1)? {
@@ -204,7 +216,7 @@ fn parse_macro(line: &str) -> Option<(&str, u8, Vec<MacroToken<'_>>)> {
         ("T", v) => u32::from_str_radix(v, 16).ok().map(MacroToken::Raw),
         _ => None,
     });
-    Some((name, flags, toks.collect::<Option<Vec<_>>>()?))
+    Some((name, flags, toks))
 }
 
 fn parse_math_font(line: &str) -> Option<MathFont<&str>> {
@@ -246,7 +258,20 @@ const _: () = assert!(PACKAGES.len() <= 63);
 
 /// The native table of package `name`, checked on first use; `None` when it has none.
 pub fn package(name: &str) -> Option<&'static KernelTable<'static>> {
-    package_at(PACKAGES.iter().position(|p| p.0 == name)?)
+    package_at(package_index(name)?)
+}
+
+/// `name`'s index in `PACKAGES` (the first, as `position` finds it), by a binary search of
+/// the names sorted once: the NFSS lookups ask it for every loaded package at each new font.
+fn package_index(name: &str) -> Option<usize> {
+    static SORTED: std::sync::OnceLock<Vec<(&'static str, usize)>> = std::sync::OnceLock::new();
+    let sorted = SORTED.get_or_init(|| {
+        let mut v: Vec<(&'static str, usize)> = PACKAGES.iter().enumerate().map(|(i, p)| (p.0, i)).collect();
+        v.sort_unstable();
+        v
+    });
+    let k = sorted.partition_point(|e| e.0 < name);
+    sorted.get(k).filter(|e| e.0 == name).map(|e| e.1)
 }
 
 /// The table of `PACKAGES[i]`, loaded on first use.
@@ -257,9 +282,19 @@ fn package_at(i: usize) -> Option<&'static KernelTable<'static>> {
 
 /// The font shapes package `name` declares (an NFSS table in the same blob), if any.
 pub fn package_shapes(name: &str) -> Option<&'static super::data_nfss::NfssTable<'static>> {
+    package_shapes_at(package_index(name)?)
+}
+
+/// The index of package `name` when it has a shape table, for [`package_shapes_at`].
+pub fn package_shapes_index(name: &str) -> Option<u8> {
+    let i = package_index(name)?;
+    package_shapes_at(i).map(|_| i as u8)
+}
+
+/// The shape table of `PACKAGES[i]`, loaded on first use.
+pub fn package_shapes_at(i: usize) -> Option<&'static super::data_nfss::NfssTable<'static>> {
     static TABLES: [std::sync::OnceLock<Option<super::data_nfss::NfssTable<'static>>>; PACKAGES.len()] = [const { std::sync::OnceLock::new() }; PACKAGES.len()];
-    let i = PACKAGES.iter().position(|p| p.0 == name)?;
-    TABLES[i].get_or_init(|| Blob::new(PACKAGES[i].1).and_then(|b| super::data_nfss::NfssTable::from_blob(&b))).as_ref()
+    TABLES.get(i)?.get_or_init(|| Blob::new(PACKAGES[i].1).and_then(|b| super::data_nfss::NfssTable::from_blob(&b))).as_ref()
 }
 
 /// Every package with a native table.

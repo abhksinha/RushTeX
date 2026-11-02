@@ -430,6 +430,24 @@ impl<'a> Input<'a> {
         self.files[i].raw_until(end, end_line_char)
     }
 
+    /// The next token without reading it, when it is a letter or other character in the top
+    /// token list (not a file): reading it and putting it back (§325) would leave the same
+    /// input to read. Such a token moves no `align_state` and is never an alignment entry's
+    /// end (§342); `None` as well when it is the last of an alignment entry's ⟨u_j⟩, whose
+    /// end (§324) sets `align_state` when the token is put back.
+    #[inline(always)]
+    pub fn peek_char(&self, defs: &Tokens) -> Option<Token> {
+        let f = self.frames.last()?;
+        if f.arena == Arena::File || f.pos >= f.end || (f.u_template && f.pos + 1 == f.end) {
+            return None;
+        }
+        let t = match f.arena {
+            Arena::Defs => defs.at(f.pos),
+            _ => self.scratch[f.pos as usize],
+        };
+        (t.0 & super::engine_token::DONT_EXPAND == 0 && matches!(t.cat(), Some(Cat::Letter | Cat::Other))).then_some(t)
+    }
+
     /// §325 `back_input`: `t` is read again next; a brace is uncounted until then.
     pub fn back(&mut self, t: Token) {
         self.trim();

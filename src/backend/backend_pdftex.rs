@@ -67,26 +67,46 @@ pub fn ext_xn_over_d(x: i64, n: i64, d: i64) -> i64 {
     (if r > f64::EPSILON { r + 0.5 } else { r - 0.5 }) as i64
 }
 
-/// `pdf_print_real`: `m / 10^d`, without trailing zeros.
+/// `pdf_print_real`: `m / 10^d`, without trailing zeros (the fraction's `d` digits, zeros
+/// in front kept, zeros behind dropped), formatted in one buffer and written at once.
+#[inline]
 pub fn print_real(out: &mut Vec<u8>, m: i64, d: u32) {
-    if m < 0 {
-        out.push(b'-');
+    let mut b = [0u8; 32];
+    let mut n = (m < 0) as usize;
+    b[0] = b'-';
+    let a = m.unsigned_abs();
+    let p = TEN_POW[d as usize] as u64;
+    let (mut ip, mut fp) = (a / p, a % p);
+    let mut k = 1;
+    let mut t = ip;
+    while t >= 10 {
+        t /= 10;
+        k += 1;
     }
-    let m = m.abs();
-    print_int(out, m / TEN_POW[d as usize]);
-    let mut m = m % TEN_POW[d as usize];
-    if m > 0 {
-        out.push(b'.');
-        let mut d = d - 1;
-        while m < TEN_POW[d as usize] {
-            out.push(b'0');
-            d -= 1;
-        }
-        while m % 10 == 0 {
-            m /= 10;
-        }
-        print_int(out, m);
+    let mut j = n + k;
+    while j > n {
+        j -= 1;
+        b[j] = b'0' + (ip % 10) as u8;
+        ip /= 10;
     }
+    n += k;
+    if fp > 0 {
+        b[n] = b'.';
+        let mut digits = d as usize;
+        while fp % 10 == 0 {
+            fp /= 10;
+            digits -= 1;
+        }
+        let end = n + 1 + digits;
+        let mut j = end;
+        while j > n + 1 {
+            j -= 1;
+            b[j] = b'0' + (fp % 10) as u8;
+            fp /= 10;
+        }
+        n = end;
+    }
+    out.extend_from_slice(&b[..n]);
 }
 
 /// `pdf_print_bp`: `s` in big points; returns `scaled_out`.
@@ -103,14 +123,63 @@ pub fn pdf_font_size(size_sp: i64) -> i64 {
     divide_scaled(size_sp, ONE_HUNDRED_BP, 6).1
 }
 
+/// The codes `pdf_print_char` writes in octal: 0-32, `(`, `)`, `\` and 128-255, one bit each.
+const ESCAPED: [u64; 4] = {
+    let mut m = [0u64; 4];
+    let mut c = 0;
+    while c < 256 {
+        if c <= 32 || c == b'\\' as usize || c == b'(' as usize || c == b')' as usize || c > 127 {
+            m[c >> 6] |= 1 << (c & 63);
+        }
+        c += 1;
+    }
+    m
+};
+
 /// `pdf_print_char`: octal for controls, space, `\`, parentheses and the upper half.
 #[inline(always)]
 pub fn print_char(out: &mut Vec<u8>, c: u8) {
-    if c <= 32 || c == b'\\' || c == b'(' || c == b')' || c > 127 {
+    if ESCAPED[c as usize >> 6] >> (c & 63) & 1 != 0 {
         out.extend_from_slice(&[b'\\', b'0' + (c >> 6), b'0' + ((c >> 3) & 7), b'0' + (c & 7)]);
     } else {
         out.push(c);
     }
+}
+
+/// `)` when `close`, then `pdf_print_int(m)` for |m| < 100000, then `(`, as one 8-byte
+/// write cut back to its length (no loop over a digit buffer, no call to copy it).
+#[inline(always)]
+fn tj_move(out: &mut Vec<u8>, close: bool, m: i64) {
+    let mut b = [0u8; 8];
+    b[0] = b')';
+    let mut i = close as usize;
+    if m < 0 {
+        b[i] = b'-';
+        i += 1;
+    }
+    let mut u = m.unsigned_abs();
+    debug_assert!(u < 100000);
+    let k = 1 + (u >= 10) as usize + (u >= 100) as usize + (u >= 1000) as usize + (u >= 10000) as usize;
+    let end = (i + k).min(7);
+    let mut j = end;
+    while j > i {
+        j -= 1;
+        b[j] = b'0' + (u % 10) as u8;
+        u /= 10;
+    }
+    b[end] = b'(';
+    let len = out.len();
+    out.extend_from_slice(&b);
+    out.truncate(len + end + 1);
+}
+
+/// What [`TextState::first_and_run`] wrote: nothing (the caller writes the run), the first
+/// character only (the rest would not all take `char_ex`'s fast path), or the whole run.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Fused {
+    None,
+    First,
+    All,
 }
 
 /// The state pdfTeX keeps while writing a page's text: `pdf_h`, `pdf_v`, `pdf_tj_start_h`,
@@ -217,6 +286,13 @@ impl TextState {
         self.font_size = so;
     }
 
+    /// Whether a font set by [`Self::set_font`] is in force: inside a text object, after a
+    /// `Tf` (`begin_text` forgets the font, `end_text` closes the object).
+    #[inline(always)]
+    pub fn font_in_force(&self) -> bool {
+        self.doing_text && self.font.is_some()
+    }
+
     /// `pdf_set_text_pos`: `Td` from the line start to (h, v), or, for an expanded font (or
     /// back from one), a text matrix `Tm` scaled by `1000 + ea` thousandths at absolute
     /// (`h`, `y`).
@@ -282,11 +358,9 @@ impl TextState {
             }
         }
         if s != 0 {
-            if self.doing_string {
-                out.push(b')');
-            }
-            print_int(out, -s);
-            out.push(b'(');
+            // `)` inside a string, `print_int(-s)`, `(`: at most 8 bytes, since a move kept
+            // in the string has |s| < 0o100000 (a larger one set a new position above).
+            tj_move(out, self.doing_string, -s);
             self.delta_h += s_out;
         }
         self.doing_string = true;
@@ -294,7 +368,7 @@ impl TextState {
 
     /// `output_one_char`: character `c` of TeX width `w` at (h, v), in a font automatically
     /// expanded by `ea` thousandths (0: not expanded).
-    #[inline]
+    #[inline(always)]
     pub fn char_ex(&mut self, out: &mut Vec<u8>, c: u8, w: i64, h: i64, v: i64, ea: i64) {
         // The next character of an open string, on its baseline, in an unexpanded scalable
         // font, where the viewer already is: `begin_string_ex` would write nothing, since
@@ -305,6 +379,13 @@ impl TextState {
             self.delta_h += divide_scaled(w, self.font_size, 4).1;
             return;
         }
+        self.char_moved(out, c, w, h, v, ea);
+    }
+
+    /// [`Self::char_ex`] for a character that may move the viewer, kept out of line so the
+    /// common case is inlined into the walk without this path's registers.
+    #[inline(never)]
+    fn char_moved(&mut self, out: &mut Vec<u8>, c: u8, w: i64, h: i64, v: i64, ea: i64) {
         self.begin_string_ex(out, h, v, ea);
         print_char(out, c);
         self.advance(w);
@@ -314,6 +395,41 @@ impl TextState {
     #[inline]
     pub fn font_size(&self) -> i64 {
         self.font_size
+    }
+
+    /// [`Self::char_ex`] of a run's first character `c` (TeX width `w`) at `h` on baseline
+    /// `v`, then [`Self::run`] of the rest (`bytes`, `drift`, `adv`), in an unexpanded
+    /// scalable font inside an open string: the common case after an interword space or a
+    /// kern, done with one test of the state. There `begin_string_ex` sets no new position
+    /// (no vertical move, no lost position, the expansion unchanged) and writes only the
+    /// `TJ` move `s`, which is 0 exactly when `char_ex` takes its fast path; a larger `s`
+    /// would set a new position, so that case is left to the caller ([`Fused::None`]).
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub fn first_and_run(&mut self, out: &mut Vec<u8>, c: u8, w: i64, h: i64, v: i64, bytes: &[u8], drift: [i64; 2], adv: i64) -> Fused {
+        if !self.doing_string || self.tm_a != 0 || self.pk_scale != 0 || self.lost || (v - self.v).abs() >= MIN_BP_VAL {
+            return Fused::None;
+        }
+        let (s, s_out) = divide_scaled(h - (self.tj_start_h + self.delta_h), self.font_size, 3);
+        if s.abs() >= 0o100000 {
+            return Fused::None;
+        }
+        if s != 0 {
+            tj_move(out, true, -s);
+            self.delta_h += s_out;
+        }
+        print_char(out, c);
+        self.delta_h += divide_scaled(w, self.font_size, 4).1;
+        if bytes.is_empty() {
+            return Fused::All;
+        }
+        let dh = h + w - (self.tj_start_h + self.delta_h);
+        if 2000 * (dh + drift[0]).abs() >= self.font_size || 2000 * (dh + drift[1]).abs() >= self.font_size {
+            return Fused::First;
+        }
+        out.extend_from_slice(bytes);
+        self.delta_h += adv;
+        Fused::All
     }
 
     /// Characters that [`Self::char_ex`] would each write by its fast path, written at
@@ -518,6 +634,71 @@ mod tests {
             let m = [ONE_HUNDRED_BP, 655360, 653386, 786432, 717619, 1 + (x >> 40) as i64 % 2_000_000][(x % 6) as usize];
             for dd in [0, 3, 4, 5, 6] {
                 assert_eq!(divide_scaled(s, m, dd), reference(s, m, dd), "{s} {m} {dd}");
+            }
+        }
+    }
+
+    /// `tj_move` writes what `)`, `print_int` and `(` write, and `print_char`'s table
+    /// escapes the codes its tests named.
+    #[test]
+    fn tj_move_and_escape_table_equal_their_definitions() {
+        for m in -99999..100000i64 {
+            for close in [false, true] {
+                let (mut a, mut b) = (vec![b'x'], vec![b'x']);
+                tj_move(&mut a, close, m);
+                if close {
+                    b.push(b')');
+                }
+                print_int(&mut b, m);
+                b.push(b'(');
+                assert_eq!(a, b, "{m} {close}");
+            }
+        }
+        for c in 0..=255u8 {
+            let esc = c <= 32 || c == b'\\' || c == b'(' || c == b')' || c > 127;
+            assert_eq!(ESCAPED[c as usize >> 6] >> (c & 63) & 1 != 0, esc, "{c}");
+        }
+    }
+
+    /// `print_real` writes what pdftex.web's digit loops (the former two `print_int`s) write.
+    #[test]
+    fn print_real_equals_two_print_ints() {
+        fn reference(out: &mut Vec<u8>, m: i64, d: u32) {
+            if m < 0 {
+                out.push(b'-');
+            }
+            let m = m.abs();
+            print_int(out, m / TEN_POW[d as usize]);
+            let mut m = m % TEN_POW[d as usize];
+            if m > 0 {
+                out.push(b'.');
+                let mut d = d - 1;
+                while m < TEN_POW[d as usize] {
+                    out.push(b'0');
+                    d -= 1;
+                }
+                while m % 10 == 0 {
+                    m /= 10;
+                }
+                print_int(out, m);
+            }
+        }
+        let mut x: u64 = 0x2545_F491_4F6C_DD1D;
+        for i in 0..400_000i64 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let m = match i % 4 {
+                0 => i - 200_000,
+                1 => (x as i64) >> 20,
+                2 => (x as i64) >> 40,
+                _ => ((x as i64) >> 50) * 1000,
+            };
+            for d in [0, 1, 2, 3, 4, 5, 6] {
+                let (mut a, mut b) = (Vec::new(), Vec::new());
+                print_real(&mut a, m, d);
+                reference(&mut b, m, d);
+                assert_eq!(a, b, "{m} {d}");
             }
         }
     }

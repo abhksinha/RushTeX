@@ -1,8 +1,10 @@
 //! # Command-Line Interface Driver (`main`)
 //!
-//! Two paths compile a document: the native job (`engine_doc`, guarded direct lowering),
-//! and, when its pre-scan declines the document, the TeX engine on the LaTeX format, as
-//! `pdflatex` runs it (needs TeX Live).
+//! The native job (`engine_doc`, guarded direct lowering) compiles a document; one it
+//! declines is an error naming what it does not take (`--native-gaps` lists it all). A
+//! development build with the `oracle` feature runs a declined document on the TeX engine
+//! on the LaTeX format instead, as `pdflatex` runs it (needs TeX Live): the reference the
+//! native job is checked against, never the product's path.
 //!
 //! ```bash
 //! rushtex input.tex [-o output.pdf]
@@ -27,6 +29,8 @@ fn main() -> ExitCode {
     let mut native_gaps = false;
     let mut watch = false;
     let mut replay = false;
+    // `--fmt` is an option of the oracle build only.
+    #[cfg_attr(not(all(feature = "oracle", not(target_arch = "wasm32"))), allow(unused_mut))]
     let mut format_path: Option<PathBuf> = None;
 
     while let Some(argument) = cli_arguments.next() {
@@ -38,6 +42,7 @@ fn main() -> ExitCode {
             "--watch" => watch = true,
             // Not in the help: the edit-fuzz test's session (`watch_replay`).
             "--watch-replay" => replay = true,
+            #[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
             "--fmt" => match cli_arguments.next() {
                 Some(path_str) => format_path = Some(PathBuf::from(path_str)),
                 None => return usage("--fmt needs the path of a LaTeX format file, as in: rushtex paper.tex --fmt pdflatex.rfmt"),
@@ -492,8 +497,27 @@ fn build(input: &Path, format_path: Option<&Path>, warm: Option<&mut Warm>, star
     };
     #[cfg(not(all(feature = "oracle", not(target_arch = "wasm32"))))]
     {
-        let _ = (format_path, why);
-        let line = rushtex::engine::engine_explain::other_engine(&source).unwrap_or_else(|| format!("This document uses something RushTeX cannot compile on its own yet, and this build of RushTeX has no TeX engine to fall back on. rushtex --native-gaps {} lists what.", input.display()));
+        let _ = format_path;
+        // A font file the job needs and this build does not carry: named, and no PDF written
+        // (one without it would lack glyphs).
+        if let Some(name) = why.strip_prefix(rushtex::engine::engine_doc::MISSING_FILE) {
+            use rushtex::data::data_pack;
+            let pack = data_pack::catalog().and_then(|c| c.pack_of(name).map(|k| (c.name(k), data_pack::stale(k))));
+            let how = match pack {
+                // An installed pack this build cannot read: an older RushTeX's (another pack format).
+                Some((p, true)) => format!("the installed font pack {p} is from another version of RushTeX; reinstall with: rushtex fonts install {p}"),
+                Some((p, false)) => format!("install the font pack {p} with: rushtex fonts install {p} (or put {name} beside the document)"),
+                None => format!("put {name} beside the document"),
+            };
+            eprintln!("{}", explain(&format!("This document needs the font file {name}, which this build of RushTeX does not carry, so no PDF was written: {how}.")));
+            return Err(ExitCode::from(1));
+        }
+        // A TeX error stops the native job: the document's own, or one a native construct made.
+        if let Some(error) = why.strip_prefix("not native yet: an error in the native job: ") {
+            eprintln!("{}", explain(&format!("Compiling stopped at an error: {error}. If the document compiles with pdfLaTeX, rushtex --native-gaps {} lists what RushTeX does not take yet.", input.display())));
+            return Err(ExitCode::from(1));
+        }
+        let line = rushtex::engine::engine_explain::other_engine(&source).unwrap_or_else(|| format!("This document uses something RushTeX cannot compile yet. rushtex --native-gaps {} lists what.", input.display()));
         eprintln!("{}", explain(&line));
         Err(ExitCode::from(1))
     }
@@ -757,7 +781,10 @@ fn cache_dir() -> Option<PathBuf> {
     env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache").join("rushtex"))
 }
 
+/// The help: a build without the engine (the product) is native only; a development build
+/// with the `oracle` feature names the engine's options too.
 fn print_help() {
+    #[cfg(not(all(feature = "oracle", not(target_arch = "wasm32"))))]
     eprintln!(
         "\
 rushtex — LaTeX to PDF, identical to pdfLaTeX, in pure safe Rust
@@ -765,10 +792,32 @@ rushtex — LaTeX to PDF, identical to pdfLaTeX, in pure safe Rust
 USAGE:
   rushtex <file.tex> [-o out.pdf]
   rushtex --watch <file.tex> [-o out.pdf]
-  rushtex fonts list | install --from <dir>
+  rushtex fonts list | install <pack>... | install --from <dir>
+
+RushTeX compiles a document on its own, with no TeX installation, when it takes
+everything the document uses; otherwise it says what it does not take, and
+rushtex --native-gaps <file.tex> lists it all.
+
+OPTIONS:
+  -o, --output <path>    Output PDF file path (default: <file>.pdf)
+  --watch                Recompile whenever the file changes
+  --native-gaps          List everything RushTeX does not take yet in the document
+  -h, --help             Display this help message"
+    );
+    #[cfg(all(feature = "oracle", not(target_arch = "wasm32")))]
+    eprintln!(
+        "\
+rushtex — LaTeX to PDF, identical to pdfLaTeX, in pure safe Rust (development build
+with the TeX engine)
+
+USAGE:
+  rushtex <file.tex> [-o out.pdf]
+  rushtex --watch <file.tex> [-o out.pdf]
+  rushtex fonts list | install <pack>... | install --from <dir>
 
 A document compiles natively where RushTeX takes everything it uses; otherwise it runs
 whole on the TeX engine on the LaTeX format, as pdflatex does (needs TeX Live).
+rushtex --native-gaps <file.tex> lists what the native job does not take.
 
 OPTIONS:
   -o, --output <path>    Output PDF file path (default: <file>.pdf)
@@ -855,7 +904,9 @@ fn pages_in(pages: usize, secs: f64) -> String {
 }
 
 /// `rushtex fonts list`: this build's font packs and where each is installed.
-/// `rushtex fonts install --from DIR`: copies the packs found in DIR into the cache.
+/// `rushtex fonts install <pack>...`: downloads each pack (the system's `curl`) and installs it
+/// once its SHA-256 is the pinned one. `rushtex fonts install --from DIR`: copies the packs
+/// found in DIR into the cache, checked the same way.
 fn fonts_command(args: &[String]) -> ExitCode {
     use rushtex::data::data_pack;
     match args.first().map(String::as_str) {
@@ -875,8 +926,20 @@ fn fonts_command(args: &[String]) -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("install") if args.len() > 1 && !args[1].starts_with('-') => {
+            for name in &args[1..] {
+                match data_pack::install(name) {
+                    Ok(path) => println!("installed {name}: {}", path.display()),
+                    Err(e) => {
+                        eprintln!("[ERROR] {e}");
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            ExitCode::SUCCESS
+        }
         _ => {
-            eprintln!("usage: rushtex fonts list | rushtex fonts install --from <dir>");
+            eprintln!("usage: rushtex fonts list | rushtex fonts install <pack>... | rushtex fonts install --from <dir>");
             ExitCode::from(2)
         }
     }

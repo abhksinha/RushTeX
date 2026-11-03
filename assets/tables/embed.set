@@ -1,45 +1,165 @@
-# D2b tier 1: the font files carried in the binary, as basename patterns (one `*` each)
-# matched against the pinned file list (scripts/texlive/files.tsv). The set is what most
-# documents use: Computer Modern and the AMS fonts (text, math, symbols, Fraktur), Latin
-# Modern (T1 text with lmodern), and the URW clones of the PostScript base fonts (Times,
-# Helvetica, Courier, Palatino, Symbol), with the encodings their map lines name; the
-# maths fonts the native packages use (rsfs for mathrsfs's \mathscr, lasy for latexsym; the
-# pinned pdftex.map has no line for dsrom, stmary, esint or bbold, so pdfTeX draws them from PK).
+# D2b tier 1: the font files carried in the binary (the core), as basename patterns (one `*`
+# each) matched against the pinned file list (scripts/texlive/files.tsv). Every other pinned
+# font file is in a font pack (scripts/texlive/packs.tsv, `rushtex fonts install <pack>`).
+# The core is chosen by measured use (2026-11-02): over docs/master.tex, the five
+# scripts/bench documents and the 302 native templates of the regression kit, every file
+# master.tex and the bench documents read, and every file at least 3 of the 309 documents
+# (1%) read; with Computer Modern and the AMS fonts whole. It covers 282 of the 309 fully
+# (all fonts carried); the rest need a pack.
+#
+# Computer Modern and the AMS fonts (text, math, symbols, Fraktur), the maths fonts the
+# native packages use (rsfs for mathrsfs's \mathscr, lasy for latexsym), and the encodings
+# the carried fonts' map lines name.
 cm*.pfb
 msam*.pfb
 msbm*.pfb
 eu*.pfb
 rsfs*.pfb
 lasy*.pfb
-lm*.pfb
-utm*.pfb
-uhv*.pfb
-ucr*.pfb
-upl*.pfb
-usy*.pfb
-uzd*.pfb
 lm-*.enc
 8r.enc
-# article's TS1 text font (tcrm1000 is cm-super's sfrm1000 through its TS1 encoding).
-sfrm1000.pfb
-cm-super-ts1.enc
-# T1 text (`[T1]{fontenc}`, the EC fonts drawn by cm-super): its encoding and the programs
-# most templates use (10, 10.95 and 12pt text, headings, footnotes), by measured use.
 cm-super-t1.enc
-sfrm1200.pfb
-sfrm1095.pfb
-sfbx1440.pfb
-sfrm1728.pfb
+cm-super-ts1.enc
+# LaTeX's picture fonts (`picture` lines and circles, amsfonts' latxfont Type 1 programs, as
+# pdftex.map names them): line10, linew10 (\thicklines), lcircle1 and lcirclew.
+line*.pfb
+lcircle*.pfb
+# The maths fonts pdfTeX draws as PK bitmaps (Type 3), the pinned pdftex.map having no line
+# for them: dsfont's dsrom, bbm, bbold, esint, stmaryrd and wasysym's wasy, at the
+# resolutions pdfTeX has used on the pinning machine (mktexpk, mode ljfour, 600 dpi base;
+# the files are that machine's METAFONT output, pinned in files.tsv). A size not carried
+# makes the native job decline, naming the file (`engine_doc::run`). 180 KB in all.
+dsrom*pk
+bbm*pk
+bbold*pk
+esint*pk
+stmary*pk
+wasy*pk
+# Latin Modern (lmodern, T1 text), by measured use.
+lmbx10.pfb
+lmbx12.pfb
+lmbx9.pfb
+lmcsc10.pfb
+lmex10.pfb
+lmmi10.pfb
+lmmi12.pfb
+lmmi8.pfb
+lmr10.pfb
+lmr12.pfb
+lmr17.pfb
+lmr8.pfb
+lmr9.pfb
+lmri10.pfb
+lmri12.pfb
+lmri9.pfb
+lmro10.pfb
+lmss10.pfb
+lmss17.pfb
+lmss8.pfb
+lmss9.pfb
+lmssbx10.pfb
+lmsy10.pfb
+lmsy8.pfb
+lmtt10.pfb
+# cm-super (the EC fonts of `[T1]{fontenc}`, and article's TS1 text font: tcrm1000 is
+# sfrm1000 through its TS1 encoding), by measured use.
+sfbx0900.pfb
 sfbx1000.pfb
 sfbx1095.pfb
+sfbx1200.pfb
+sfbx1440.pfb
+sfbx1728.pfb
+sfbx2074.pfb
+sfbx2488.pfb
+sfrm0600.pfb
 sfrm0800.pfb
 sfrm0900.pfb
-sfbx1728.pfb
+sfrm1000.pfb
+sfrm1095.pfb
+sfrm1200.pfb
+sfrm1440.pfb
+sfrm1728.pfb
+sfss0900.pfb
 sfti1000.pfb
-sfbx1200.pfb
-sfrm0600.pfb
 sfti1095.pfb
 sftt1000.pfb
-sfss1000.pfb
-sfrm1440.pfb
-sfbx0900.pfb
+sftt1095.pfb
+# URW Times (master.tex's `\fontfamily{ptm}`).
+utmb8a.pfb
+utmbi8a.pfb
+utmr8a.pfb
+utmri8a.pfb
+# The programs stored plain, ready to subset (`plain` lines): every font file master.tex and
+# the five benchmark documents read, and those at least 10% of the 309 documents read.
+# Inflating a compressed program costs about 45 instructions a byte, so these are copied
+# instead; every other program is stored compressed (about half its size) and inflated only
+# when a document uses it.
+plain cmbsy10.pfb
+plain cmbsy7.pfb
+plain cmbx10.pfb
+plain cmbx12.pfb
+plain cmbx7.pfb
+plain cmbx9.pfb
+plain cmbxti10.pfb
+plain cmcsc10.pfb
+plain cmex10.pfb
+plain cmex9.pfb
+plain cmitt10.pfb
+plain cmmi10.pfb
+plain cmmi5.pfb
+plain cmmi6.pfb
+plain cmmi7.pfb
+plain cmmi9.pfb
+plain cmmib10.pfb
+plain cmmib7.pfb
+plain cmr10.pfb
+plain cmr12.pfb
+plain cmr17.pfb
+plain cmr5.pfb
+plain cmr6.pfb
+plain cmr7.pfb
+plain cmr8.pfb
+plain cmr9.pfb
+plain cmss10.pfb
+plain cmss8.pfb
+plain cmssbx10.pfb
+plain cmssi10.pfb
+plain cmsy10.pfb
+plain cmsy5.pfb
+plain cmsy6.pfb
+plain cmsy7.pfb
+plain cmsy9.pfb
+plain cmti10.pfb
+plain cmti7.pfb
+plain cmti9.pfb
+plain cmtt10.pfb
+plain cmtt8.pfb
+plain cmtt9.pfb
+plain eufm10.pfb
+plain eurm10.pfb
+plain lasy10.pfb
+plain lcircle1.pfb
+plain line10.pfb
+plain linew10.pfb
+plain lmbx10.pfb
+plain lmbx12.pfb
+plain lmr10.pfb
+plain lmr12.pfb
+plain lmr17.pfb
+plain lmri10.pfb
+plain msam10.pfb
+plain msbm10.pfb
+plain msbm7.pfb
+plain rsfs10.pfb
+plain sfbx1000.pfb
+plain sfbx1095.pfb
+plain sfbx1440.pfb
+plain sfrm1000.pfb
+plain sfrm1095.pfb
+plain sfrm1200.pfb
+plain sfrm1728.pfb
+plain sftt1000.pfb
+plain utmb8a.pfb
+plain utmbi8a.pfb
+plain utmr8a.pfb
+plain utmri8a.pfb

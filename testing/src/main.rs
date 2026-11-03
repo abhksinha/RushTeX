@@ -2093,9 +2093,18 @@ fn corpus() -> PathBuf {
 fn out_dir() -> PathBuf {
     root().join("target/parity")
 }
+/// The product: the default build, the native job alone (`cargo build --release`); what the
+/// benchmark measures.
 fn rushtex() -> PathBuf {
     root().join("target/release/rushtex")
 }
+/// The development build with the TeX engine (`--features oracle`), in its own target folder
+/// so the two builds do not rebuild each other ([`ORACLE_BUILD`]): what the checks against
+/// pdfLaTeX and the engine run, since a document the native job declines runs on the engine.
+fn oracle() -> PathBuf {
+    root().join("target/oracle/release/rushtex")
+}
+const ORACLE_BUILD: [&str; 6] = ["build", "--release", "--features", "oracle", "--target-dir", "target/oracle"];
 const DEFAULT_DOCS: [&str; 4] = ["sample2e", "small2e", "lppl", "testmath"];
 /// Both sides typeset the same date: 2026-10-20 00:00 UTC.
 const FIXED_DATE: [(&str, &str); 2] = [("SOURCE_DATE_EPOCH", "1792454400"), ("FORCE_SOURCE_DATE", "1")];
@@ -2133,7 +2142,7 @@ static BUILD: std::sync::Once = std::sync::Once::new();
 fn build() -> Result<(), String> {
     let mut err = Ok(());
     BUILD.call_once(|| {
-        let r = Command::new("cargo").args(["build", "--release", "--quiet"]).current_dir(root()).output();
+        let r = Command::new("cargo").args(ORACLE_BUILD).arg("--quiet").current_dir(root()).output();
         if !r.as_ref().is_ok_and(|o| o.status.success()) {
             err = Err(format!("cargo build failed\n{}", r.map(|o| String::from_utf8_lossy(&o.stderr).into_owned()).unwrap_or_default()));
         }
@@ -2248,14 +2257,15 @@ fn reference_errors(tex: &Path) -> Result<HashMap<String, u32>, String> {
     Ok(out)
 }
 
-/// The document through the `rushtex` command as users run it: the native (GDL) job where
-/// its pre-scan accepts the document, else the TeX engine on the format in `target/parity`.
-/// The engine's errors pass only when they are exactly pdfTeX's.
+/// The document through the oracle build of `rushtex` ([`oracle`]): the native (GDL) job
+/// where its pre-scan accepts the document (the bytes the product writes), else the TeX
+/// engine on the format in `target/parity`. The engine's errors pass only when they are
+/// exactly pdfTeX's.
 fn run_rushtex(tex: &Path, pdf: &Path) -> Result<(), String> {
     build()?;
     let _ = std::fs::create_dir_all(pdf.parent().unwrap());
     let _ = std::fs::remove_file(pdf);
-    let r = Command::new(rushtex())
+    let r = Command::new(oracle())
         .arg("--fmt")
         .arg(out_dir().join("pdflatex.rfmt"))
         .arg(tex)
@@ -2344,10 +2354,10 @@ fn bbl_doc(doc: &str) -> Result<PathBuf, String> {
     Ok(tex)
 }
 
-/// Whether the release binary's native job accepts `tex` (`RT_NATIVE_WHY=1` says so).
+/// Whether the native job accepts `tex` (`RT_NATIVE_WHY=1` says so).
 fn native_accepted(tex: &Path) -> bool {
     let log = tex.with_extension("why.log");
-    let mut c = Command::new(rushtex());
+    let mut c = Command::new(oracle());
     c.arg(tex.file_name().unwrap()).args(["-o", "/dev/null"]).current_dir(tex.parent().unwrap()).env("RT_NATIVE_WHY", "1");
     run_until(&mut c, &log, std::time::Duration::from_secs(120));
     std::fs::read(&log).is_ok_and(|b| b.windows(19).any(|w| w == b"native job accepted"))
@@ -3315,7 +3325,9 @@ const BENCH_USAGE: &str = "usage: cargo benchmark [FILE.tex [N] | docs [N] | tem
   compare OLD_BIN   the same templates, OLD_BIN against the current binary (target/bench/compare.tsv)
   all [N]           docs, then templates
   check [BASE]      for contributors: is the output still identical? (BASE: a git ref, e.g. origin/master)
-  env: TIME_RUNS (timed runs, default 11), RUSHTEX_BIN (the rushtex binary)";
+  env: TIME_RUNS (timed runs, default 11), RUSHTEX_BIN (the rushtex binary measured; default
+  target/release/rushtex, the product's native-only build; the box checks run the oracle
+  build, target/oracle/release/rushtex)";
 
 /// `bench …`: the benchmark of rushtex against pdfLaTeX (instructions retired, CPU and wall
 /// time, peak RAM), and the contributor's check.
@@ -3337,10 +3349,14 @@ fn cmd_bench(o: &Opts) {
         die("pdflatex not found on PATH (install TeX Live)");
     }
     if arg(0) == Some("check") {
-        return bench_check(o, &rush, arg(1));
+        return bench_check(o, arg(1));
     }
     if !rush.exists() && Command::new("cargo").args(["build", "--release"]).current_dir(root()).status().map_or(true, |s| !s.success()) {
         die("cargo build --release failed");
+    }
+    // The box checks against the engine need the oracle build.
+    if !oracle().exists() && Command::new("cargo").args(ORACLE_BUILD).current_dir(root()).status().map_or(true, |s| !s.success()) {
+        die("cargo build --release --features oracle --target-dir target/oracle failed");
     }
     match arg(0) {
         Some("docs") => bench_docs(&rush, runs(1)),
@@ -3864,7 +3880,7 @@ fn bench_report_in(tex: &Path, runs: usize, rush: &Path, work: &Path) -> Result<
         let cmd: Vec<std::ffi::OsString> = vec![os(rush), os(&f), "-o".into(), os(&out)];
         let on = accepted(&cmd);
         all_native &= on;
-        let probe = Command::new("zsh").arg(root().join("scripts/native_probes.sh")).arg(&f).args(["-n", "0"]).current_dir(root()).env("RT_BIN", rush).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        let probe = Command::new("zsh").arg(root().join("scripts/native_probes.sh")).arg(&f).args(["-n", "0"]).current_dir(root()).env("RT_BIN", oracle()).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
         boxes.push(format!("x{n} {}", if probe.lines().last().is_some_and(|l| l.ends_with("identical")) { "identical" } else { "DIFFERS" }));
         let (ri, _) = median_of(&refs(&cmd), work, runs);
         let latex: Vec<std::ffi::OsString> = vec!["pdflatex".into(), "-interaction=batchmode".into(), os(&f)];
@@ -3960,7 +3976,7 @@ fn replace_command(text: &str, cmd: &str, with: Option<&str>) -> String {
 /// run: build, unit tests, the native job against the engine page box by page box, master
 /// and `scripts/bench` against pdfLaTeX, and with BASE every PDF byte-identical to BASE's.
 /// `PASS`/`FAIL` per step; exits 1 on a failure.
-fn bench_check(o: &Opts, rush: &Path, base: Option<&str>) {
+fn bench_check(o: &Opts, base: Option<&str>) {
     let root = root();
     let mut fails = 0;
     let mut verdict = |ok: bool, what: String| {
@@ -3972,21 +3988,25 @@ fn bench_check(o: &Opts, rush: &Path, base: Option<&str>) {
             die(&format!("{t} not found on PATH (needed: Rust, TeX Live, MuPDF's mutool, zsh, git)"));
         }
     }
-    println!("1/6 Building rushtex");
-    if !Command::new("cargo").args(["build", "--release", "--quiet"]).current_dir(&root).status().is_ok_and(|s| s.success()) {
+    println!("1/6 Building rushtex (the product, native only, and the oracle build with the TeX engine)");
+    if !Command::new("cargo").args(["build", "--release", "--quiet"]).current_dir(&root).status().is_ok_and(|s| s.success()) || !Command::new("cargo").args(ORACLE_BUILD).arg("--quiet").current_dir(&root).status().is_ok_and(|s| s.success()) {
         println!("  FAIL  build");
         std::process::exit(1);
     }
+    let oracle = oracle();
     // The engine's LaTeX format, made once (about 10 s): the probes run the engine on it.
     if !root.join("target/parity/pdflatex.rfmt").exists() {
-        let _ = Command::new(rush).arg("scripts/native_probes/title.tex").args(["-o", "target/parity/format-check.pdf"]).current_dir(&root).env("RT_ENGINE", "1").env("RUSHTEX_CACHE", root.join("target/parity")).output();
+        let _ = Command::new(&oracle).arg("scripts/native_probes/title.tex").args(["-o", "target/parity/format-check.pdf"]).current_dir(&root).env("RT_ENGINE", "1").env("RUSHTEX_CACHE", root.join("target/parity")).output();
     }
     println!("2/6 Unit tests");
-    let out = Command::new("cargo").args(["test", "--release", "--lib", "--quiet"]).current_dir(&root).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)).unwrap_or_default();
-    let result = out.lines().find(|l| l.starts_with("test result")).unwrap_or("did not run").to_string();
-    verdict(result.contains(" 0 failed"), format!("unit tests ({})", result.trim_start_matches("test result: ")));
+    // Both builds: the oracle's tests check the native job against the engine.
+    for (what, extra) in [("unit tests", &[][..]), ("unit tests, oracle build", &["--features", "oracle", "--target-dir", "target/oracle"][..])] {
+        let out = Command::new("cargo").args(["test", "--release", "--lib", "--quiet"]).args(extra).current_dir(&root).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr)).unwrap_or_default();
+        let result = out.lines().find(|l| l.starts_with("test result")).unwrap_or("did not run").to_string();
+        verdict(result.contains(" 0 failed"), format!("{what} ({})", result.trim_start_matches("test result: ")));
+    }
     println!("3/6 Native job against the engine, page box by page box (scripts/native_probes.sh)");
-    let probes = Command::new("zsh").arg("scripts/native_probes.sh").args(["-n", "6"]).current_dir(&root).env("RT_BIN", rush).output();
+    let probes = Command::new("zsh").arg("scripts/native_probes.sh").args(["-n", "6"]).current_dir(&root).env("RT_BIN", &oracle).output();
     let text = probes.as_ref().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
     let ok = probes.is_ok_and(|o| o.status.success());
     if !ok {
@@ -4011,7 +4031,7 @@ fn bench_check(o: &Opts, rush: &Path, base: Option<&str>) {
     println!("5/6 The watch session after random edits, byte for byte against fresh compiles (parity-testing incr)");
     // master.tex on the native job, bare_jrnl (IEEEtran) on the engine: a few seconds each.
     for (doc, edits) in [(root.join("docs/master.tex"), 20), (corpus().join("bare_jrnl.tex"), 6)] {
-        match incr_doc(rush, &doc, edits, 1, false) {
+        match incr_doc(&oracle, &doc, edits, 1, false) {
             Ok(line) => verdict(true, line.trim_start_matches("PASS ").to_string()),
             Err(report) => {
                 for l in report.lines().skip(1) {
@@ -4030,7 +4050,9 @@ fn bench_check(o: &Opts, rush: &Path, base: Option<&str>) {
     let base_target = root.join("target/check-base-target");
     let git = |args: &[&std::ffi::OsStr]| Command::new("git").args(args).current_dir(&root).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
     git(&["worktree".as_ref(), "remove".as_ref(), "--force".as_ref(), wt.as_os_str()]);
-    let built = git(&["worktree".as_ref(), "add".as_ref(), "--detach".as_ref(), "--quiet".as_ref(), wt.as_os_str(), base.as_ref()]) && Command::new("cargo").args(["build", "--release", "--quiet"]).current_dir(&wt).env("CARGO_TARGET_DIR", &base_target).status().is_ok_and(|s| s.success());
+    // Both sides with the engine (every BASE has the `oracle` feature): a probe the native job
+    // declines is then compared too.
+    let built = git(&["worktree".as_ref(), "add".as_ref(), "--detach".as_ref(), "--quiet".as_ref(), wt.as_os_str(), base.as_ref()]) && Command::new("cargo").args(["build", "--release", "--quiet", "--features", "oracle"]).current_dir(&wt).env("CARGO_TARGET_DIR", &base_target).status().is_ok_and(|s| s.success());
     if built {
         let (old, now) = (root.join("target/check-pdfs/base"), root.join("target/check-pdfs/now"));
         let _ = std::fs::remove_dir_all(root.join("target/check-pdfs"));
@@ -4044,7 +4066,7 @@ fn bench_check(o: &Opts, rush: &Path, base: Option<&str>) {
         for f in &files {
             let pdf = format!("{}.pdf", stem(f));
             let _ = compile(&base_target.join("release/rushtex"), f, &old.join(&pdf));
-            let _ = compile(rush, f, &now.join(&pdf));
+            let _ = compile(&oracle, f, &now.join(&pdf));
             let (a, b) = (std::fs::read(old.join(&pdf)).unwrap_or_default(), std::fs::read(now.join(&pdf)).unwrap_or_default());
             if a.is_empty() || a != b {
                 differ.push(stem(f));
@@ -5401,7 +5423,7 @@ fn incr_fresh(rush: &Path, work: &Path, main: &str) -> Option<Vec<u8>> {
 }
 
 fn cmd_incr(o: &Opts) {
-    let rush = std::env::var_os("RUSHTEX_BIN").map_or_else(rushtex, PathBuf::from);
+    let rush = std::env::var_os("RUSHTEX_BIN").map_or_else(oracle, PathBuf::from);
     if o.build {
         build().unwrap_or_else(|e| die(&e));
     }

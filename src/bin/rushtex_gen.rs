@@ -1,11 +1,13 @@
-//! `rushtex-gen`: the build-time table generator (pillar 2). Dev only (`--features gen`).
+//! `rushtex-gen`: the build-time table generator (pillar 2). Dev only: `--features gen,oracle`
+//! (the engine's format and file search are what most generators read; build it in the oracle
+//! build's folder, `--target-dir target/oracle`).
 //!
 //!     rushtex-gen fonts --list FILE --use USE [--out assets/tables/fonts.rtdb]   # write, self-check
 //!     rushtex-gen fonts --list FILE --use USE --check                           # self-check only
 //!     rushtex-gen nfss --list FILE [--format FMT] [--out assets/tables/nfss.rtdb] [--dump]
 //!     rushtex-gen pkgs --list FILE [--format FMT] [--out assets/tables/pkgs.rtdb]
 //!     rushtex-gen embed --list FILE [--set assets/tables/embed.set] [--out assets/tables/embed.rtdb]
-//!     rushtex-gen packs --list FILE [--def scripts/texlive/packs.tsv] [--out-dir target/packs] [--catalog assets/tables/packs.rtdb]
+//!     rushtex-gen packs --list FILE [--def scripts/texlive/packs.tsv] [--out-dir assets/packs] [--catalog assets/tables/packs.rtdb]
 //!     rushtex-gen class [--format FMT] [--out assets/tables/class-article.rtdb]
 //!
 //! `FILE` lists TFM paths, one per line, or `scripts/texlive/files.tsv` rows (path first).
@@ -278,7 +280,10 @@ fn embed(args: &[String]) -> Result<String, String> {
     let list = arg("--list").ok_or("--list FILE is required")?;
     let set_path = arg("--set").unwrap_or_else(|| "assets/tables/embed.set".into());
     let set = std::fs::read_to_string(&set_path).map_err(|e| format!("{set_path}: {e}"))?;
-    let patterns: Vec<&str> = set.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
+    // A `plain` line's programs are stored plain, ready to subset; the others compressed.
+    let lines: Vec<&str> = set.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
+    let patterns: Vec<&str> = lines.iter().map(|l| l.strip_prefix("plain ").unwrap_or(l)).collect();
+    let plain: Vec<&str> = lines.iter().filter_map(|l| l.strip_prefix("plain ")).collect();
     let text = std::fs::read_to_string(&list).map_err(|e| format!("{list}: {e}"))?;
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     for path in text.lines().filter_map(|l| l.split('\t').next()) {
@@ -320,7 +325,7 @@ fn embed(args: &[String]) -> Result<String, String> {
     let raw: usize = files.iter().map(|f| f.1.len()).sum();
     let out = arg("--out").unwrap_or_else(|| "assets/tables/embed.rtdb".into());
     let mut w = BlobWriter::default();
-    let packed = data_embed::write(&mut w, &files)?;
+    let packed = data_embed::write(&mut w, &files, &|name| plain.iter().any(|p| glob(p, name)))?;
     std::fs::write(&out, w.finish()).map_err(|e| format!("{out}: {e}"))?;
     let bytes = std::fs::read(&out).map_err(|e| format!("{out}: {e}"))?;
     let table = Blob::new(&bytes).and_then(|b| data_embed::EmbedTable::from_blob(&b)).ok_or("not an embed table")?;
@@ -334,17 +339,19 @@ fn embed(args: &[String]) -> Result<String, String> {
 /// pack that matches it), each pack with the `pdftex.map` lines of its programs as
 /// `<pack>.map`; then the catalog the binary reads them through.
 fn packs(args: &[String]) -> Result<String, String> {
-    use rushtex::data::{data_embed, data_pack};
+    use rushtex::data::data_pack;
     let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let list = arg("--list").ok_or("--list FILE is required")?;
     let def_path = arg("--def").unwrap_or_else(|| "scripts/texlive/packs.tsv".into());
     let set_path = arg("--set").unwrap_or_else(|| "assets/tables/embed.set".into());
-    let out_dir = arg("--out-dir").unwrap_or_else(|| "target/packs".into());
+    // The packs are not committed: `assets/packs` is where the `fonts-full` build reads them,
+    // and the release `fonts-v<N>` publishes these files (release.yml fetches them from it).
+    let out_dir = arg("--out-dir").unwrap_or_else(|| "assets/packs".into());
     let catalog_path = arg("--catalog").unwrap_or_else(|| "assets/tables/packs.rtdb".into());
     let lines = |path: &str| -> Result<Vec<String>, String> {
         Ok(std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect())
     };
-    let embedded = lines(&set_path)?;
+    let embedded: Vec<String> = lines(&set_path)?.into_iter().map(|l| l.strip_prefix("plain ").map_or(l.clone(), String::from)).collect();
     let defs: Vec<(String, Vec<String>)> = lines(&def_path)?.iter().filter_map(|l| l.split_once('\t')).map(|(n, p)| (n.to_string(), p.split_whitespace().map(String::from).collect())).collect();
     let text = std::fs::read_to_string(&list).map_err(|e| format!("{list}: {e}"))?;
     let tfm = data_tfm::fonts().ok_or("no TFM table in this build")?;
@@ -399,14 +406,11 @@ fn packs(args: &[String]) -> Result<String, String> {
             files.push((f.0.clone(), index));
         }
         group.push((format!("{pack}.map"), map.into_bytes()));
-        let mut w = BlobWriter::default();
-        data_embed::write(&mut w, group)?;
-        let bytes = w.finish();
-        let table = Blob::new(&bytes).and_then(|b| data_embed::EmbedTable::from_blob(&b)).ok_or("not an embed table")?;
-        data_embed::check(&table, group)?;
-        let id = table.content_id();
-        std::fs::write(format!("{out_dir}/{pack}-{id:016x}.rtpk"), &bytes).map_err(|e| format!("{pack}: {e}"))?;
-        packs.push((pack.clone(), id, bytes.len() as u32));
+        // A run reads only the index and the entries it needs (`data_pack::Pack`), each
+        // program plain and ready to subset, as the binary's hot fonts are.
+        let (bytes, id) = data_pack::write_pack(group, &|_| true)?;
+        std::fs::write(format!("{out_dir}/{pack}.rtpack"), &bytes).map_err(|e| format!("{pack}: {e}"))?;
+        packs.push((pack.clone(), id, bytes.len() as u32, rushtex::backend::backend_hash::sha256(&bytes)));
     }
     let mut w = BlobWriter::default();
     data_pack::write_catalog(&mut w, &packs, &files)?;

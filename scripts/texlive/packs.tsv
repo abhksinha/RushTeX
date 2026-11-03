@@ -1,0 +1,10 @@
+# Font packs (native-architecture.md §4b, `rushtex-gen packs`): a pack's name, a tab, then
+# its basename patterns (one `*` each). A pinned font file that the binary (embed.set) and the
+# TFM table do not carry goes to the first pack that matches it; packs stay under 3 MB.
+cm-super-tt	sftt*.pfb
+cm-super	sf*.pfb cm-super-*.enc ec*.tfm tc*.tfm
+latin-modern	lm*.pfb lm*.tfm ec-lm*.tfm ts1-lm*.tfm texnansi-lm*.tfm rm-lm*.tfm lm-*.enc
+tex-gyre	q*.pfb q*.tfm *-q*.tfm q-*.enc
+libertine	Lin*.pfb Lin*.tfm Lin*.vf lib*.enc
+urw-base	u*.pfb *8a.tfm *8r.tfm *8c.tfm *8t.tfm *7t.tfm *.vf 8r.enc
+fonts	*.pfb *.pfa *.otf *.ttf *.enc *.tfm *.vf

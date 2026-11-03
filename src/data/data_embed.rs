@@ -8,7 +8,16 @@
 //! the content fingerprint; `em.gn` two words a file (offset and length in `em.gb`) and
 //! `em.gb` each `.pfb`'s built-in encoding as stored text, one line a code, an empty line
 //! `.notdef` (`X.pfb#names`): a font whose program the binary carries in another form needs
-//! only these names, read with no decompression.
+//! only these names, read with no decompression; `em.xr` two words a file (offset and length
+//! in `em.x`) and `em.x` each `.pfb`'s Type 1 layout (`backend_type1::Index`, `X.pfb#layout`):
+//! its words as they are for a program stored plain, a zlib stream of them for one stored
+//! compressed.
+//!
+//! Two tiers, chosen by measured use (`embed.set`'s `plain` lines): the programs most
+//! documents use are stored plain and ready to subset (`PFB_READY`), so a run copies them;
+//! the rest are stored decrypted and compressed with the strong deflate (`PFB`, about half
+//! the size), inflated only when a document uses the font. Inflating costs about 45
+//! instructions a byte, so a font every benchmark document uses stays plain.
 //!
 //! A Type 1 program (`.pfb`) is stored decrypted. Its eexec section (key 55665) and each
 //! charstring in it (key 4330) are encryptions of text that compresses well; encrypted, it
@@ -24,7 +33,8 @@ const RAW: u32 = 0;
 /// Stored as is, not compressed: a small text file a document reads whole on every run
 /// (`rushtex.map`, an `.enc`), so reading it is a copy.
 const PLAIN: u32 = 3;
-/// A `.pfb` stored decrypted.
+/// A `.pfb` stored decrypted (eexec and charstrings) and compressed. With a layout, its
+/// `#clear` is given in `PFB_READY`'s form: inflated, then its charstrings encrypted again.
 const PFB: u32 = 1;
 /// A `.pfb` stored decrypted and not compressed: a font is subset from it on every use, so
 /// reading it is a copy, not an inflate.
@@ -141,6 +151,21 @@ fn transform_pfb(pfb: &mut [u8], decode: bool) -> Option<()> {
     transform_layers(pfb, decode, true)
 }
 
+/// A decrypted `.pfb`'s charstrings encrypted in place, its eexec layer left in clear
+/// (`PFB_READY`'s form).
+fn encrypt_pfb_charstrings(pfb: &mut [u8]) -> Option<()> {
+    let segs = pfb_binary_segments(pfb)?;
+    let mut text: Vec<u8> = segs.iter().flat_map(|r| pfb[r.clone()].iter().copied()).collect();
+    charstrings(&mut text, encrypt);
+    let mut at = 0;
+    for r in segs {
+        let n = r.len();
+        pfb[r].copy_from_slice(&text[at..at + n]);
+        at += n;
+    }
+    Some(())
+}
+
 /// As [`transform_pfb`], the charstrings' layer only when `cs`.
 fn transform_layers(pfb: &mut [u8], decode: bool, cs: bool) -> Option<()> {
     let segs = pfb_binary_segments(pfb)?;
@@ -174,7 +199,7 @@ pub struct EmbedTable<'a> {
     /// Per file: where its Type 1 layout (`backend_type1::Index`) lies in `layouts`, a
     /// zero length for a file without one.
     layout_recs: U32s<'a>,
-    layouts: U32s<'a>,
+    layouts: &'a [u8],
     id: u64,
 }
 
@@ -184,7 +209,7 @@ impl<'a> EmbedTable<'a> {
         let names = Phf::from_blob(b, "emf")?;
         let (recs, data, id) = (b.u32s("em.r")?, b.section("em.z")?, b.u32s("em.id")?);
         let (glyph_recs, glyphs) = (b.u32s("em.gn")?, b.section("em.gb")?);
-        let (layout_recs, layouts) = (b.u32s("em.xr")?, b.u32s("em.x")?);
+        let (layout_recs, layouts) = (b.u32s("em.xr")?, b.section("em.x")?);
         let layouts_sound = layout_recs.len() == 2 * names.len() && (0..names.len()).all(|f| (layout_recs.get(2 * f) as usize).checked_add(layout_recs.get(2 * f + 1) as usize).is_some_and(|e| e <= layouts.len()));
         let sound = recs.len() == 3 * names.len() && id.len() == 2 && (0..names.len()).all(|f| (recs.get(3 * f) as usize).checked_add(recs.get(3 * f + 1) as usize).is_some_and(|e| e <= data.len()) && matches!(recs.get(3 * f + 2), RAW | PFB | PFB_PLAIN | PLAIN | PFB_READY));
         let glyphs_sound = glyph_recs.len() == 2 * names.len() && (0..names.len()).all(|f| (glyph_recs.get(2 * f) as usize).checked_add(glyph_recs.get(2 * f + 1) as usize).is_some_and(|e| e <= glyphs.len()));
@@ -218,7 +243,18 @@ impl<'a> EmbedTable<'a> {
     /// is the whole `.pfb` with its binary text decrypted ([`decrypt_binary`]), as stored.
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
         if let Some(file) = name.strip_suffix("#layout") {
-            return self.layout(file).map(|v| v.iter().flat_map(|x| x.to_le_bytes()).collect());
+            let f = self.names.get(file.as_bytes())? as usize;
+            let (at, n) = (self.layout_recs.get(2 * f) as usize, self.layout_recs.get(2 * f + 1) as usize);
+            if n == 0 {
+                return None;
+            }
+            let stored = &self.layouts[at..at + n];
+            if self.recs.get(3 * f + 2) != PFB {
+                return Some(stored.to_vec());
+            }
+            let mut out = Vec::new();
+            crate::backend::backend_inflate::zlib_decompress(stored, &mut out)?;
+            return Some(out);
         }
         if let Some(file) = name.strip_suffix("#names") {
             return self.glyph_names(file).map(<[u8]>::to_vec);
@@ -234,6 +270,11 @@ impl<'a> EmbedTable<'a> {
             }
             let mut out = Vec::new();
             crate::backend::backend_inflate::zlib_decompress(&self.data[at..at + n], &mut out)?;
+            // With a layout, the subset copies the charstrings it keeps (`subset_with`'s
+            // `ready`), so they are encrypted again here, as `PFB_READY` stores them.
+            if self.layout_recs.get(2 * f + 1) > 0 {
+                encrypt_pfb_charstrings(&mut out)?;
+            }
             return Some(out);
         }
         if let Some(file) = name.strip_suffix("#head") {
@@ -280,9 +321,8 @@ impl<'a> EmbedTable<'a> {
     /// `.pfb` `file`'s Type 1 layout as `rushtex-gen` indexed its decrypted binary text
     /// (`X.pfb#layout` through [`EmbedTable::read`]), so subsetting does not scan it.
     pub fn layout(&self, file: &str) -> Option<Vec<u32>> {
-        let f = self.names.get(file.as_bytes())? as usize;
-        let (at, n) = (self.layout_recs.get(2 * f) as usize, self.layout_recs.get(2 * f + 1) as usize);
-        (n > 0).then(|| (at..at + n).map(|i| self.layouts.get(i)).collect())
+        let bytes = self.read(&format!("{file}#layout"))?;
+        Some(bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect())
     }
 
     /// `.pfb` `file`'s built-in encoding (`X.pfb#names`): 256 lines, the glyph name of each
@@ -355,9 +395,10 @@ pub fn embedded() -> Option<&'static EmbedTable<'static>> {
 
 // ---- Generation -------------------------------------------------------------------------
 
-/// Writes `files` (name, bytes), sorted by name; returns the compressed size.
+/// Writes `files` (name, bytes), sorted by name, a `.pfb` stored plain when `plain` says so
+/// (else compressed); returns the stored size.
 #[cfg(any(test, feature = "gen"))]
-pub fn write(w: &mut super::data_blob::BlobWriter, files: &[(String, Vec<u8>)]) -> Result<usize, String> {
+pub fn write(w: &mut super::data_blob::BlobWriter, files: &[(String, Vec<u8>)], plain: &dyn Fn(&str) -> bool) -> Result<usize, String> {
     let mut files: Vec<&(String, Vec<u8>)> = files.iter().collect();
     files.sort_by(|a, b| a.0.cmp(&b.0));
     let names: Vec<&[u8]> = files.iter().map(|f| f.0.as_bytes()).collect();
@@ -376,12 +417,21 @@ pub fn write(w: &mut super::data_blob::BlobWriter, files: &[(String, Vec<u8>)]) 
         // With its layout stored, a `.pfb` keeps its charstrings encrypted (`PFB_READY`): the
         // layout is read from the program in clear, the charstrings are stored as the file
         // has them.
+        // A `.pfb` not stored plain is stored decrypted and compressed (`PFB`), its layout
+        // compressed too.
         let mut layout = Vec::new();
         let kind = if name.ends_with(".pfb") && transform_pfb(&mut body, true).is_some() {
-            layout = binary_text(&body).and_then(|t| crate::backend::backend_type1::index(&t)).and_then(|ix| ix.to_u32s()).unwrap_or_default();
-            if layout.is_empty() {
+            let words = binary_text(&body).and_then(|t| crate::backend::backend_type1::index(&t)).and_then(|ix| ix.to_u32s()).unwrap_or_default();
+            let word_bytes: Vec<u8> = words.iter().flat_map(|x| x.to_le_bytes()).collect();
+            if !plain(name) {
+                if !word_bytes.is_empty() {
+                    z.compress_zlib(&word_bytes, &mut layout);
+                }
+                PFB
+            } else if words.is_empty() {
                 PFB_PLAIN
             } else {
+                layout = word_bytes;
                 body = bytes.clone();
                 transform_layers(&mut body, true, false).ok_or("eexec")?;
                 PFB_READY
@@ -410,7 +460,7 @@ pub fn write(w: &mut super::data_blob::BlobWriter, files: &[(String, Vec<u8>)]) 
     w.u32s("em.gn", &glyph_recs);
     w.bytes("em.gb", glyphs);
     w.u32s("em.xr", &layout_recs);
-    w.u32s("em.x", &layouts);
+    w.bytes("em.x", layouts);
     let h = id.finish() as u64;
     w.u32s("em.id", &[h as u32, (h >> 32) as u32]);
     Ok(size)
@@ -426,6 +476,15 @@ pub fn check(t: &EmbedTable, files: &[(String, Vec<u8>)]) -> Result<(), String> 
         if t.read(name).as_deref() != Some(bytes.as_slice()) {
             return Err(format!("{name}: read back differs"));
         }
+        // A program with a layout reads back ready to subset, plain or compressed: its eexec
+        // layer in clear, its charstrings as the file has them.
+        if t.read(&format!("{name}#layout")).is_some() {
+            let mut ready = bytes.clone();
+            transform_layers(&mut ready, true, false).ok_or("eexec")?;
+            if t.read(&format!("{name}#clear")) != Some(ready) {
+                return Err(format!("{name}: its ready form reads back differently"));
+            }
+        }
         let names = if name.ends_with(".pfb") { pfb_head(bytes).map(names_text) } else { None };
         if t.glyph_names(name).map(<[u8]>::to_vec) != names.filter(|n| !n.is_empty()) {
             return Err(format!("{name}: glyph names read back differ"));
@@ -435,12 +494,12 @@ pub fn check(t: &EmbedTable, files: &[(String, Vec<u8>)]) -> Result<(), String> 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::data_blob::BlobWriter;
     use super::*;
 
     /// A small `.pfb`: cleartext, an eexec section holding two charstrings, a trailer.
-    fn pfb() -> Vec<u8> {
+    pub(crate) fn pfb() -> Vec<u8> {
         let mut plain = b"\x01\x02\x03\x04dup /Private 8 dict dup begin /CharStrings 2 dict dup begin\n/a 5 RD ".to_vec();
         let mut cs = *b"\x00\x00\x00\x00\x0e";
         encrypt(&mut cs, CHARSTRING_KEY);
@@ -457,12 +516,15 @@ mod tests {
         let mut decoded = files[0].1.clone();
         transform_pfb(&mut decoded, true).unwrap();
         assert!(decoded.windows(9).any(|w| w == b"/Private "), "eexec text is decrypted");
-        let mut w = BlobWriter::default();
-        write(&mut w, &files).unwrap();
-        let bytes = w.finish();
-        let t = EmbedTable::from_blob(&Blob::new(&bytes).unwrap()).unwrap();
-        check(&t, &files).unwrap();
-        assert_eq!(t.read("missing.pfb"), None);
+        // Both tiers: every program plain, then every program compressed.
+        for plain in [true, false] {
+            let mut w = BlobWriter::default();
+            write(&mut w, &files, &|_| plain).unwrap();
+            let bytes = w.finish();
+            let t = EmbedTable::from_blob(&Blob::new(&bytes).unwrap()).unwrap();
+            check(&t, &files).unwrap();
+            assert_eq!(t.read("missing.pfb"), None);
+        }
     }
 
     #[cfg(feature = "fonts-core")]

@@ -19,15 +19,28 @@ required-features = ["gen"]
 name = "rushtex"
 path = "src/lib.rs"
 
+# The TeX Live search's cost: the engine's file search, in the oracle build only.
+[[example]]
+name = "kpse_cost"
+required-features = ["oracle"]
+
 [features]
+# The product is the native job alone (2026-11-02): the default build carries the font
+# files it reads and needs no TeX installation; a document it declines is an error.
+default = ["fonts-core"]
 # The TeX engine (native-architecture.md §2 layer 7): the LaTeX format's build and load,
-# kpathsea lookup and the multi-run job. It compiles every document the native job declines;
-# a build without it (`--no-default-features`) has the native job alone.
-default = ["oracle", "fonts-core"]
+# kpathsea lookup and the multi-run job. Development only, never the product's fallback: the
+# oracle for box checks (`scripts/native_probes.sh`), the source the table generators read
+# (`rushtex-gen`) and the exactness reference. Build it apart, so the two binaries do not
+# rebuild each other: `cargo build --release --features oracle --target-dir target/oracle`.
 oracle = []
-# D2b tier 1: the font programs most documents use, carried in the binary
-# (`assets/tables/embed.set`, about 4 MB), so they need no TeX installation.
+# D2b tier 1: the core font files (`assets/tables/embed.set`, about 8 MB: Computer Modern,
+# AMS, the Latin Modern and cm-super sizes most documents use), carried in the binary, so it
+# needs no TeX installation; the rest are font packs (`rushtex fonts install <pack>`).
 fonts-core = []
+# Every font pack carried in the binary as well (`assets/packs/*.rtpack`, about 12 MB): the
+# offline and CI "full" build, which never needs `rushtex fonts install`.
+fonts-full = ["fonts-core"]
 # The table builders (`src/data/`): `rushtex-gen` and tests construct tables; the product
 # only reads them.
 gen = []

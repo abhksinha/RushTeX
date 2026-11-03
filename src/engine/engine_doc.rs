@@ -8440,7 +8440,28 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
     // `Machine::classify_fonts`); a session's job runs again on `read` instead.
     let outside = std::cell::Cell::new(false);
     let none = |_: &str| None;
-    let disk: &Read<'_> = read.unwrap_or(&none);
+    let plain: &Read<'_> = read.unwrap_or(&none);
+    // A font file neither the binary nor the disk has (`font_file`) is noted, and the job
+    // declines naming it ([`MISSING_FILE`]): pdfTeX finds every font file it needs, so a PDF
+    // written without one would lack glyphs.
+    let missing: std::cell::RefCell<Vec<String>> = Default::default();
+    let fetch = |name: &str| {
+        let b = plain(name);
+        // A part of a file (`X.pfb#names`, `data_embed`) the disk does not answer is read
+        // whole instead: only the file itself counts.
+        if b.is_none() && font_file(name) && !missing.borrow().iter().any(|m| m == name) {
+            missing.borrow_mut().push(name.to_string());
+        }
+        b
+    };
+    let disk: &Read<'_> = &fetch;
+    // Named first, before the error the missing file caused (a TFM not found is a TeX error).
+    let checked = |out: Result<Output, String>| -> Result<Output, String> {
+        match missing.borrow().first() {
+            Some(name) => Err(format!("{MISSING_FILE}{name}")),
+            None => out,
+        }
+    };
     // A session notes each file read from disk, with a hash of its bytes (`Kept::reads`).
     let log: std::rc::Rc<std::cell::RefCell<Vec<(String, u128)>>> = Default::default();
     let logging = session.is_some();
@@ -8530,12 +8551,12 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
         if let Some(c) = cache {
             c.set_carried_job(false);
         }
-        let out = job(&text, class, key, now, disk, &predicted, cache, None);
+        let out = checked(job(&text, class, key, now, disk, &predicted, cache, None));
         sweep();
         out
     };
     let Some(session) = session else {
-        let out = job(&text, class, key, now, &first, &predicted, cache, None)?;
+        let out = checked(job(&text, class, key, now, &first, &predicted, cache, None))?;
         sweep();
         return Ok(out);
     };
@@ -8552,8 +8573,8 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
         let n = o.snaps[k].reads;
         // A file found where it was with the same stamp is not read again.
         let hash = |name: &str| match locate {
-            Some(l) => super::engine_checkpoint::hash_stamped(&session.stamps, name, l, disk),
-            None => super::engine_checkpoint::file_hash(disk(name).as_deref()),
+            Some(l) => super::engine_checkpoint::hash_stamped(&session.stamps, name, l, plain),
+            None => super::engine_checkpoint::file_hash(plain(name).as_deref()),
         };
         (reads_same || o.reads[..n].iter().all(|(name, h)| hash(name) == *h)).then_some(k)
     });
@@ -8602,7 +8623,7 @@ fn run_with(src: &str, now: i64, read: Option<&Read<'_>>, locate: Option<&Locate
         }
         _ => {}
     }
-    let out = job(&text, class, key, now, &first, &predicted, cache, Some((&mut ck, resumed)));
+    let out = checked(job(&text, class, key, now, &first, &predicted, cache, Some((&mut ck, resumed))));
     if let Some(p) = ck.cut_page {
         session.how.push_str(&format!(", cut off after page {p}"));
     }
@@ -8755,6 +8776,21 @@ impl Prescan {
     fn predictions(&self) -> Predictions<'_> {
         Predictions { labels: &self.labels, hrefs: &self.hrefs, toc: self.toc.as_deref() }
     }
+}
+
+/// The start of the job's `Err` when a font file it needs is neither carried by the binary
+/// nor found beside the document (nor, in a build with the engine, in TeX Live); the file's
+/// name follows.
+pub const MISSING_FILE: &str = "a font file not carried: ";
+
+/// Whether the job cannot go on without `name` once asked for it: a font's metrics, program,
+/// encoding or bitmap, or the map file (pdftex.web `read_font_info`, writefont.c,
+/// writeenc.c, mapfile.c, pkin.c). A `.vf` is not one: most fonts have none (§`do_vf`).
+fn font_file(name: &str) -> bool {
+    const KINDS: [&str; 7] = [".tfm", ".pfb", ".pfa", ".otf", ".ttf", ".enc", ".map"];
+    // A PK bitmap: `<font>.<dpi>pk`.
+    let pk = name.strip_suffix("pk").and_then(|s| s.rsplit_once('.')).is_some_and(|(_, dpi)| !dpi.is_empty() && dpi.bytes().all(|b| b.is_ascii_digit()));
+    pk || KINDS.iter().any(|k| name.ends_with(k))
 }
 
 /// What the binary knows of a file the native job asks for.
@@ -21620,6 +21656,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn font_files_the_job_cannot_lack() {
+        for name in ["ecst2488.tfm", "sftt2488.pfb", "dsrom12.600pk", "bbm10.1095pk", "cm-super-t1.enc", "pdftex.map"] {
+            assert!(font_file(name), "{name}");
+        }
+        for name in ["ecrm1000.vf", "sfsx1000.pfb#names", "sfsx1000.pfb#layout", "figure.png", "dummy.png.tex", "master.bbl", "chapter.tex", "x.pk", "dsrom.apk"] {
+            assert!(!font_file(name), "{name}");
+        }
+    }
+
+    #[test]
     fn native_packages_doc_names_every_package() {
         // docs/native-packages.md is the list of what the native job takes: a package or class
         // added to the code without a line there fails here (`rushtex-gen natlist` prints them).
@@ -21686,7 +21732,7 @@ mod tests {
 
     #[test]
     fn bytes_end_finds_the_first_of_several() {
-        let set = [b'%', b'\\', b'{', b'}'];
+        let set = *b"%\\{}";
         for c in 0..=255u8 {
             for at in 0..20 {
                 for later in [None, Some(at + 1), Some(at + 9)] {

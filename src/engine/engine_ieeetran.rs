@@ -408,19 +408,6 @@ pub(super) const NATIVES: &[(&str, super::Native)] = &[
     ("rt@ieeetoc", |m| m.ieee_toc()),
 ];
 
-#[cfg(test)]
-mod tests {
-    use super::roman;
-
-    #[test]
-    fn roman_numerals() {
-        assert_eq!(roman(1), "I");
-        assert_eq!(roman(4), "IV");
-        assert_eq!(roman(9), "IX");
-        assert_eq!(roman(14), "XIV");
-    }
-}
-
 /// IEEEtran.cls's commands in place of the kernel's (`engine_doc::class_hooks`).
 pub(super) const HOOKS: super::ClassHooks = super::ClassHooks {
     // IEEEtran.cls: `\columnsep 1pc`; the `conference` option and the size.
@@ -451,3 +438,16 @@ pub(super) const IEEE_NATIVE: &[&str] = &["documentclass", "usepackage", "title"
 pub(super) const IEEE_ENVS: &[&str] = &["document", "abstract", "IEEEkeywords"];
 /// The packages taken under IEEEtran: they change no command the native job takes there.
 pub(super) const IEEE_PACKAGES: &[&str] = &["amsmath", "amssymb", "amsfonts", "graphicx", "url", "float", "hyperref"];
+
+#[cfg(test)]
+mod tests {
+    use super::roman;
+
+    #[test]
+    fn roman_numerals() {
+        assert_eq!(roman(1), "I");
+        assert_eq!(roman(4), "IV");
+        assert_eq!(roman(9), "IX");
+        assert_eq!(roman(14), "XIV");
+    }
+}

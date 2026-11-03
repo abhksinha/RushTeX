@@ -22,3 +22,6 @@ ctan-examples/
 arxiv-corpus/
 template-corpus/
 /scripts/realworld/docs/
+
+# Font packs: release assets of fonts-v<N>, not tracked (rushtex-gen packs writes them here)
+/assets/packs/

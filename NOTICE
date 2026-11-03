@@ -30,8 +30,20 @@ Font programs (assets/tables/embed.rtdb, assets/cm_fonts/)
     GNU General Public License, with the exception that the font program may
     be included in a PostScript or PDF document regardless of the document's
     licence.
-  * CM-Super (sfrm1000, the tcrm text-companion fonts, cm-super-ts1.enc): Copyright (c) 2001 Vladimir
-    Volovich, GNU General Public License.
+  * CM-Super (sf*.pfb, the tcrm text-companion fonts, cm-super-t1.enc,
+    cm-super-ts1.enc): Copyright (c) 2001 Vladimir Volovich, GNU General
+    Public License.
+  * LaTeX's picture and symbol fonts (line10, linew10, lcircle1, lcirclew,
+    lasy*), Type 1 versions from the amsfonts package: Copyright (c) 1997,
+    2009 American Mathematical Society, SIL Open Font License, Version 1.1.
+  * PK bitmaps (dsrom*, bbm*, bbold*, esint*, stmary*, wasy* .NNNpk):
+    METAFONT's output (mode ljfour) for the fonts below, as mktexpk made it on
+    the pinning machine; each keeps its font's licence (TeX Catalogue):
+    doublestroke (Olaf Kummer), free licence; bbm (Gilles F. Robert),
+    "may freely use, modify and/or distribute"; bbold (Alan Jeffrey), BSD licence;
+    esint (Eddie Saudrais), LaTeX Project Public License; stmaryrd (Jeremy
+    Gibbons, Alan Jeffrey), LaTeX Project Public License; wasy (Roland
+    Waldi), public domain.
 
 Font metrics (assets/tables/fonts.rtdb)
   TFM metrics of the fonts above and of the other font packages in the pin,

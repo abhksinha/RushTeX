@@ -1,0 +1,196 @@
+name: Release
+
+# Two kinds of tag, each its own GitHub release (CONTRIBUTING.md, Releasing):
+#
+#   v*        the rushtex binaries, five targets in two flavours:
+#               rushtex-<target>.tar.gz        core: the default build (`fonts-core`)
+#               rushtex-<target>-full.tar.gz   full: `--features fonts-full`, every font pack inside
+#             (.zip on Windows), each holding one folder of the same name with rushtex[.exe],
+#             LICENSE-MIT, LICENSE-APACHE, NOTICE and README.md; plus SHA256SUMS
+#             (`sha256sum` format) over all of them. Asset names carry no version, so
+#             releases/latest/download/<asset> always names the newest one: scripts/install.sh,
+#             scripts/install.ps1 and packaging/homebrew/ depend on these names.
+#   fonts-v*  the font packs `rushtex fonts install <pack>` downloads (fonts-v<N>/<pack>.rtpack),
+#             built by `rushtex-gen packs` from the pinned TeX Live snapshot, plus SHA256SUMS.
+
+on:
+  push:
+    tags: [ 'v*', 'fonts-v*' ]
+  # Dry run (Actions > Release > Run workflow): builds every target and flavour and keeps the
+  # archives as artifacts of the run only; it never creates or changes a release.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # The release profile keeps debug info for profiling (Cargo.toml); the shipped binary does
+  # not need it. Neither setting changes a PDF.
+  CARGO_PROFILE_RELEASE_DEBUG: "false"
+  CARGO_PROFILE_RELEASE_STRIP: "symbols"
+
+jobs:
+  binaries:
+    name: ${{ matrix.target }} ${{ matrix.flavour }}
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One failing target or flavour must not cancel the others; the release job then
+      # publishes nothing, and a rerun of the failed job finishes it.
+      fail-fast: false
+      matrix:
+        target: [ aarch64-apple-darwin, x86_64-apple-darwin, x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-pc-windows-msvc ]
+        flavour: [ core, full ]
+        include:
+          # Both macOS targets on Apple silicon: Apple's linker builds x86_64 natively.
+          # .cargo/config.toml sets MACOSX_DEPLOYMENT_TARGET 13.0 for both.
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-14
+          # Ubuntu 22.04: the oldest glibc the hosted runners offer, so the binary runs on more
+          # distributions. Native arm runner, no cross linker needed.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - flavour: core
+            features: ""
+            suffix: ""
+          - flavour: full
+            features: "--features fonts-full"
+            suffix: "-full"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # The full flavour carries every font pack. The packs are not in git: they are the
+      # assets of the release fonts-v<FONTS_RELEASE> (src/data/data_pack.rs), checked against
+      # that release's SHA256SUMS before the build embeds them.
+      - name: Fetch the font packs
+        if: matrix.flavour == 'full'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          n=$(sed -n 's/^pub const FONTS_RELEASE: u32 = \([0-9]*\);/\1/p' src/data/data_pack.rs)
+          mkdir -p assets/packs
+          gh release download "fonts-v$n" --pattern '*.rtpack' --pattern SHA256SUMS --dir assets/packs
+          cd assets/packs
+          if command -v sha256sum > /dev/null; then sha256sum -c SHA256SUMS; else shasum -a 256 -c SHA256SUMS; fi
+
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked --bin rushtex --target ${{ matrix.target }} ${{ matrix.features }}
+
+      - name: Package (tar.gz)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          NAME: rushtex-${{ matrix.target }}${{ matrix.suffix }}
+          COPYFILE_DISABLE: "1"
+        run: |
+          mkdir -p "dist/$NAME"
+          cp "target/${{ matrix.target }}/release/rushtex" LICENSE-MIT LICENSE-APACHE NOTICE README.md "dist/$NAME/"
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+
+      - name: Package (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          NAME: rushtex-${{ matrix.target }}${{ matrix.suffix }}
+        run: |
+          New-Item -ItemType Directory -Force "dist/$env:NAME" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/rushtex.exe", LICENSE-MIT, LICENSE-APACHE, NOTICE, README.md "dist/$env:NAME/"
+          Compress-Archive -Path "dist/$env:NAME" -DestinationPath "dist/$env:NAME.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rushtex-${{ matrix.target }}${{ matrix.suffix }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    needs: binaries
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: SHA256SUMS and upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          sha256sum -- *.tar.gz *.zip > SHA256SUMS
+          cat SHA256SUMS
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --verify-tag --latest --title "rushtex $TAG" --generate-notes
+          gh release upload "$TAG" --clobber -- *.tar.gz *.zip SHA256SUMS
+
+  # The font packs, from the pinned TeX Live snapshot: the same steps as ci.yml's parity job.
+  # Needs scripts/texlive/ (pin.py, files.tsv, packs.tsv) in the published tree.
+  fonts:
+    name: Font packs
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/fonts-v')
+    runs-on: ubuntu-latest
+    env:
+      PIN_TAG: texlive-2026-pin-3
+      PIN_SHA256: 82fb03fa383e1c9dc8334ca4c3122ed5575618032f4fe504679c026a3e362b84
+      # What `rushtex-gen packs --out-dir` writes and the release carries.
+      PACK_GLOB: "*.rtpack"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Pinned TeX Live snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$PIN_TAG" -p texlive-2026-pin.tar.xz -D "$RUNNER_TEMP"
+          echo "$PIN_SHA256  $RUNNER_TEMP/texlive-2026-pin.tar.xz" | sha256sum -c -
+          python3 -I scripts/texlive/pin.py unpack "$RUNNER_TEMP/texlive-2026-pin.tar.xz" "$RUNNER_TEMP/tl" | sed 's/^export //' >> "$GITHUB_ENV"
+
+      # The packs must be the ones the binary's catalog names: the catalog rebuilt with them is
+      # byte for byte the committed one.
+      - name: Build the packs
+        run: |
+          cargo build --release --locked --features gen,oracle --target-dir target/oracle --bin rushtex-gen
+          ./target/oracle/release/rushtex-gen packs --list scripts/texlive/files.tsv --out-dir "$RUNNER_TEMP/packs" --catalog "$RUNNER_TEMP/packs.rtdb"
+          cmp assets/tables/packs.rtdb "$RUNNER_TEMP/packs.rtdb"
+
+      # Never the repository's "latest" release: releases/latest/download/ must keep naming the
+      # newest binaries (scripts/install.sh).
+      - name: SHA256SUMS and upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd "$RUNNER_TEMP/packs"
+          # shellcheck disable=SC2086 # PACK_GLOB is a pattern
+          set -- $PACK_GLOB
+          [ -e "$1" ] || { echo "no $PACK_GLOB in $RUNNER_TEMP/packs"; ls -l; exit 1; }
+          sha256sum -- "$@" > SHA256SUMS
+          cat SHA256SUMS
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --verify-tag --latest=false --title "rushtex font packs $TAG" --notes "Font packs for \`rushtex fonts install <pack>\`."
+          gh release upload "$TAG" --clobber -- "$@" SHA256SUMS

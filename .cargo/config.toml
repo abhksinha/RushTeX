@@ -1,6 +1,8 @@
 # `cargo benchmark`: RushTeX against pdfLaTeX, and the contributor's check (run it from the
 # repository root). The testing framework does the work (`parity-testing bench`,
-# testing/src/main.rs); cargo builds it when needed. `cargo benchmark --help` lists the modes.
+# testing/src/main.rs); cargo builds it when needed. It measures the product's build
+# (`target/release/rushtex`, native only) and builds the oracle build (`target/oracle`, with
+# the TeX engine) for its box checks. `cargo benchmark --help` lists the modes.
 [alias]
 benchmark = ["run", "--quiet", "--release", "--manifest-path", "testing/Cargo.toml", "--", "bench"]
 

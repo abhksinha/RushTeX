@@ -241,7 +241,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 <section id="how" class="alt">
   <div class="wrap">
     <h2>How it works</h2>
-    <p class="sub">Two paths share one exact typesetting core. A document takes the native path when a pre-scan proves that every command in it is supported; otherwise it runs whole on the engine.</p>
+    <p class="sub">RushTeX is native only. A pre-scan proves that every command in a document is supported, and the document is then typeset by Rust code over an exact core. A TeX engine written in Rust exists only as a development tool: the reference every native feature is checked against, and the source of build-time tables.</p>
 
     <div class="cols two" style="margin-bottom:24px">
       <div>
@@ -249,8 +249,8 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
         <p>LaTeX's kernel and packages rewritten in Rust. No format file, no TeX files read, no <code>.aux</code>, one pass. Class parameters, font metrics, font definitions and hyphenation patterns are generated into tables at build time and carried in the program.</p>
       </div>
       <div>
-        <h3>Engine path: TeX, reimplemented</h3>
-        <p>TeX and pdfTeX from <code>tex.web</code>, written again in Rust: tokenizer, expansion, conditionals, boxes, line breaking, alignments, page builder, math lists, fonts, virtual fonts, PDF output. It runs the real LaTeX format on an installed TeX Live and gives pdfLaTeX's exact output. It is the fallback and the reference the native path is checked against.</p>
+        <h3>Development oracle: TeX, reimplemented</h3>
+        <p>TeX and pdfTeX from <code>tex.web</code>, written again in Rust: tokenizer, expansion, conditionals, boxes, line breaking, alignments, page builder, math lists, fonts, virtual fonts, PDF output. It runs the real LaTeX format on an installed TeX Live and gives pdfLaTeX's exact output. It is not in the shipped program and never compiles a user's document: it is the reference the native path is checked against, box for box.</p>
       </div>
     </div>
 
@@ -374,7 +374,7 @@ cargo benchmark docs/master.tex</pre></dd>
     <p class="sub">“Zero shift” means the RushTeX PDF and the pdfLaTeX PDF agree on everything a reader or a program can observe.</p>
     <div class="cols">
       <div><h3>What is compared</h3><p>Every glyph and its position in scaled points, every rule and path, every colour, link, destination and outline entry, and every pixel of the pages rendered at 300 dpi. New native features are also checked at 600 dpi and node by node against the engine's page boxes.</p></div>
-      <div><h3>Against what</h3><p>A pinned TeX Live 2026 snapshot with a checksummed file list, so references, generated tables and CI all come from the same sources. 85 CTAN documents, 2,137 pages, compile at zero shift on the engine path, and 303 templates compile natively, each byte-identical to its reference.</p></div>
+      <div><h3>Against what</h3><p>A pinned TeX Live 2026 snapshot with a checksummed file list, so references, generated tables and CI all come from the same sources. The development engine compiles 85 CTAN documents, 2,137 pages, at zero shift, and 303 templates compile natively, each byte-identical to its reference.</p></div>
       <div><h3>How</h3><p><code>parity-testing</code>, an independent checker in Rust with its own PDF reader, inflate and renderer comparison. Exactness is derived from <code>tex.web</code> and <code>latex.ltx</code>, never tuned per document; code cites the section it implements.</p></div>
     </div>
   </div>
@@ -383,7 +383,7 @@ cargo benchmark docs/master.tex</pre></dd>
 <section id="coverage">
   <div class="wrap">
     <h2>What works today</h2>
-    <p class="sub">The engine path compiles what pdfLaTeX compiles, given a TeX Live installation. The native path takes 14 classes and 92 packages, listed with their options in <a href="https://github.com/abhksinha/RushTeX/blob/master/docs/native-packages.md"><code>docs/native-packages.md</code></a>.</p>
+    <p class="sub">One self-contained program with no TeX Live. It takes 14 classes and 92 packages, listed with their options in <a href="https://github.com/abhksinha/RushTeX/blob/master/docs/native-packages.md"><code>docs/native-packages.md</code></a>.</p>
     <dl class="spec">
       <dt>Classes</dt>
       <dd>article, report, book, letter, amsart, IEEEtran, memoir, scrartcl, scrreprt, scrbook, scrlttr2, extarticle, a0poster, screenplay.</dd>
@@ -402,11 +402,11 @@ cargo benchmark docs/master.tex</pre></dd>
       <dt>Code</dt>
       <dd>listings, verbatim, comment.</dd>
       <dt>Not native yet</dt>
-      <dd>beamer, JPEG pictures, a package option or command a ported package does not take yet, and every package not listed. Such documents run whole on the engine path with the same output. Of 211 real documents fetched from GitHub, 19 run natively today (9%); work is ordered by how many real documents each item unblocks.</dd>
+      <dd>beamer, JPEG pictures, a package option or command a ported package does not take yet, and every package not listed. Such documents get a clear error, and <code>rushtex --native-gaps</code> lists what they use that is not supported yet. Of 211 real documents fetched from GitHub, 19 run natively today (9%); work is ordered by how many real documents each item unblocks.</dd>
       <dt>Your own <code>.sty</code> and <code>.cls</code></dt>
-      <dd>A document with its own class runs whole on the engine. A preamble <code>.sty</code> made only of commands the native path takes is read inline; any other runs on the engine.</dd>
+      <dd>A preamble <code>.sty</code> made only of supported commands is read inline. A document's own class, or a <code>.sty</code> that is a real package, is not supported yet.</dd>
       <dt>Implementation</dt>
-      <dd>About 109,000 lines of Rust, standard library only, <code>#![forbid(unsafe_code)]</code>. Builds as a command and a Rust library; macOS builds need macOS 13 or later. 225 library tests; Clippy clean.</dd>
+      <dd>About 109,000 lines of Rust, standard library only, <code>#![forbid(unsafe_code)]</code>. Builds as a command and a Rust library, about 37 MB with its fonts and tables; macOS builds need macOS 13 or later. 225 library tests; Clippy clean.</dd>
     </dl>
   </div>
 </section>
@@ -425,7 +425,7 @@ cargo benchmark docs/master.tex</pre></dd>
       <dt>Tablets, phones and privacy <span class="st plan">Planned</span></dt>
       <dd>With no TeX installation and 16–34 MB of memory per document, a full LaTeX compile fits on a phone, offline, and a manuscript compiled on the device never has to leave it.</dd>
       <dt>Servers and CI <span class="st now">Today</span></dt>
-      <dd>One static program with no TeX Live for native documents: small containers, fast cold starts, one pass instead of three for documents with references.</dd>
+      <dd>One static program with no TeX Live: small containers, fast cold starts, one pass instead of three for documents with references.</dd>
     </dl>
   </div>
 </section>

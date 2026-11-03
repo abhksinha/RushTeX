@@ -19,9 +19,16 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    // `rushtex fonts ...`: the font packs (native-architecture.md §4b).
-    if env::args().nth(1).as_deref() == Some("fonts") {
-        return fonts_command(&env::args().skip(2).collect::<Vec<_>>());
+    // `rushtex install fonts ...` and `rushtex list fonts`: the font packs (native-architecture.md §4b).
+    let args: Vec<String> = env::args().skip(1).collect();
+    if let [verb, what, ..] = args.as_slice() {
+        if (verb == "install" || verb == "list") && what == "fonts" {
+            return fonts_command(verb, &args[2..]);
+        }
+        if verb == "fonts" && (what == "install" || what == "list") {
+            eprintln!("[ERROR] The font commands are now verb first: rushtex {what} fonts ...");
+            return ExitCode::from(2);
+        }
     }
     let mut cli_arguments = env::args().skip(1);
     let mut input_file_path: Option<PathBuf> = None;
@@ -505,8 +512,8 @@ fn build(input: &Path, format_path: Option<&Path>, warm: Option<&mut Warm>, star
             let pack = data_pack::catalog().and_then(|c| c.pack_of(name).map(|k| (c.name(k), data_pack::stale(k))));
             let how = match pack {
                 // An installed pack this build cannot read: an older RushTeX's (another pack format).
-                Some((p, true)) => format!("the installed font pack {p} is from another version of RushTeX; reinstall with: rushtex fonts install {p}"),
-                Some((p, false)) => format!("install the font pack {p} with: rushtex fonts install {p} (or put {name} beside the document)"),
+                Some((p, true)) => format!("the installed font pack {p} is from another version of RushTeX; reinstall with: rushtex install fonts {p}"),
+                Some((p, false)) => format!("install the font pack {p} with: rushtex install fonts {p} (or put {name} beside the document)"),
                 None => format!("put {name} beside the document"),
             };
             eprintln!("{}", explain(&format!("This document needs the font file {name}, which this build of RushTeX does not carry, so no PDF was written: {how}.")));
@@ -792,7 +799,8 @@ rushtex — LaTeX to PDF, identical to pdfLaTeX, in pure safe Rust
 USAGE:
   rushtex <file.tex> [-o out.pdf]
   rushtex --watch <file.tex> [-o out.pdf]
-  rushtex fonts list | install <pack>... | install --from <dir>
+  rushtex install fonts <pack>... | --from <dir>
+  rushtex list fonts
 
 RushTeX compiles a document on its own, with no TeX installation, when it takes
 everything the document uses; otherwise it says what it does not take, and
@@ -813,7 +821,8 @@ with the TeX engine)
 USAGE:
   rushtex <file.tex> [-o out.pdf]
   rushtex --watch <file.tex> [-o out.pdf]
-  rushtex fonts list | install <pack>... | install --from <dir>
+  rushtex install fonts <pack>... | --from <dir>
+  rushtex list fonts
 
 A document compiles natively where RushTeX takes everything it uses; otherwise it runs
 whole on the TeX engine on the LaTeX format, as pdflatex does (needs TeX Live).
@@ -903,22 +912,22 @@ fn pages_in(pages: usize, secs: f64) -> String {
     format!("{pages} {} in {secs:.3} seconds", if pages == 1 { "page" } else { "pages" })
 }
 
-/// `rushtex fonts list`: this build's font packs and where each is installed.
-/// `rushtex fonts install <pack>...`: downloads each pack (the system's `curl`) and installs it
-/// once its SHA-256 is the pinned one. `rushtex fonts install --from DIR`: copies the packs
-/// found in DIR into the cache, checked the same way.
-fn fonts_command(args: &[String]) -> ExitCode {
+/// `rushtex list fonts`: this build's font packs and where each is installed.
+/// `rushtex install fonts <pack>...`: downloads each pack (the system's `curl`) and installs it
+/// once its SHA-256 is the pinned one. `rushtex install fonts --from DIR`: copies the packs
+/// found in DIR into the cache, checked the same way. `args` are the words after `fonts`.
+fn fonts_command(verb: &str, args: &[String]) -> ExitCode {
     use rushtex::data::data_pack;
-    match args.first().map(String::as_str) {
-        Some("list") => {
+    match verb {
+        "list" if args.is_empty() => {
             for l in data_pack::list() {
                 println!("{l}");
             }
             ExitCode::SUCCESS
         }
-        Some("install") if args.get(1).map(String::as_str) == Some("--from") && args.len() == 3 => match data_pack::install_from(std::path::Path::new(&args[2])) {
+        "install" if args.first().map(String::as_str) == Some("--from") && args.len() == 2 => match data_pack::install_from(std::path::Path::new(&args[1])) {
             Ok((done, missing)) => {
-                println!("{done} packs installed, {missing} not in {}", args[2]);
+                println!("{done} packs installed, {missing} not in {}", args[1]);
                 ExitCode::SUCCESS
             }
             Err(e) => {
@@ -926,8 +935,8 @@ fn fonts_command(args: &[String]) -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        Some("install") if args.len() > 1 && !args[1].starts_with('-') => {
-            for name in &args[1..] {
+        "install" if !args.is_empty() && !args[0].starts_with('-') => {
+            for name in args {
                 match data_pack::install(name) {
                     Ok(path) => println!("installed {name}: {}", path.display()),
                     Err(e) => {
@@ -939,7 +948,7 @@ fn fonts_command(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         _ => {
-            eprintln!("usage: rushtex fonts list | rushtex fonts install <pack>... | rushtex fonts install --from <dir>");
+            eprintln!("usage: rushtex list fonts | rushtex install fonts <pack>... | rushtex install fonts --from <dir>");
             ExitCode::from(2)
         }
     }

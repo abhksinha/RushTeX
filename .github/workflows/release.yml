@@ -10,7 +10,7 @@ name: Release
 #             (`sha256sum` format) over all of them. Asset names carry no version, so
 #             releases/latest/download/<asset> always names the newest one: scripts/install.sh,
 #             scripts/install.ps1 and packaging/homebrew/ depend on these names.
-#   fonts-v*  the font packs `rushtex fonts install <pack>` downloads (fonts-v<N>/<pack>.rtpack),
+#   fonts-v*  the font packs `rushtex install fonts <pack>` downloads (fonts-v<N>/<pack>.rtpack),
 #             built by `rushtex-gen packs` from the pinned TeX Live snapshot, plus SHA256SUMS.
 
 on:
@@ -192,5 +192,5 @@ jobs:
           [ -e "$1" ] || { echo "no $PACK_GLOB in $RUNNER_TEMP/packs"; ls -l; exit 1; }
           sha256sum -- "$@" > SHA256SUMS
           cat SHA256SUMS
-          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --verify-tag --latest=false --title "rushtex font packs $TAG" --notes "Font packs for \`rushtex fonts install <pack>\`."
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --verify-tag --latest=false --title "rushtex font packs $TAG" --notes "Font packs for \`rushtex install fonts <pack>\`."
           gh release upload "$TAG" --clobber -- "$@" SHA256SUMS

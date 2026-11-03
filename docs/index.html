@@ -210,6 +210,11 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; }
       <div class="fig"><b>7×</b><span>less work per page than pdfLaTeX, 40–64× less fixed cost</span></div>
       <div class="fig"><b>1 pass</b><span>no <code>.aux</code> file, no reruns, references resolved in memory</span></div>
     </div>
+    <pre style="margin-top:22px">brew install abhksinha/rushtex/rushtex
+# or
+curl -fsSL https://raw.githubusercontent.com/abhksinha/RushTeX/master/scripts/install.sh | sh
+rushtex paper.tex                  # writes paper.pdf
+rushtex install fonts cm-super     # an optional font pack</pre>
   </div>
 </header>
 

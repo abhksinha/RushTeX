@@ -13,7 +13,7 @@ release workflow (`.github/workflows/release.yml`) attaches to a `v*` release:
 | Cargo | `cargo install --locked --git https://github.com/abhksinha/RushTeX rushtex` | the source |
 
 The Homebrew formula installs the core build; the full build comes from the script
-(`sh -s -- --full`), or font packs one at a time with `rushtex fonts install <pack>`.
+(`sh -s -- --full`), or font packs one at a time with `rushtex install fonts <pack>`.
 
 ## Homebrew tap
 

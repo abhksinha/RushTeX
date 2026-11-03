@@ -11,7 +11,7 @@
 //! index of a pack on its first use (checked against the catalog's content id: a pack of
 //! another build or format is not used, and named for reinstalling), then only the entries of
 //! the files it needs, one seek and read each, each checked against its index checksum; the
-//! whole file's SHA-256 is checked once, at install. `rushtex fonts install <pack>` fetches it from the release
+//! whole file's SHA-256 is checked once, at install. `rushtex install fonts <pack>` fetches it from the release
 //! `fonts-v<FONTS_RELEASE>` with the system's `curl` and installs it only when its SHA-256 is
 //! the pinned one; the compiler itself never downloads anything.
 
@@ -28,7 +28,7 @@ static CATALOG_BLOB: &[u8] = include_bytes!("../../assets/tables/packs.rtdb");
 /// `rushtex-gen packs` gives different packs (the pin, `packs.tsv` or `embed.set` changed).
 pub const FONTS_RELEASE: u32 = 2;
 
-/// Where `rushtex fonts install` fetches packs from (`RUSHTEX_FONTS_URL` overrides it, a
+/// Where `rushtex install fonts` fetches packs from (`RUSHTEX_FONTS_URL` overrides it, a
 /// `file://` folder for a local test).
 fn release_url() -> String {
     std::env::var("RUSHTEX_FONTS_URL").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| format!("https://github.com/abhksinha/RushTeX/releases/download/fonts-v{FONTS_RELEASE}"))
@@ -311,7 +311,7 @@ pub fn pack(k: usize) -> Option<&'static Pack<'static>> {
 }
 
 /// Whether pack `k` is installed but in a format or build this one does not read: an older
-/// RushTeX's pack, to reinstall with `rushtex fonts install <pack>`.
+/// RushTeX's pack, to reinstall with `rushtex install fonts <pack>`.
 pub fn stale(k: usize) -> bool {
     matches!(slot(k), Some(Slot::Stale))
 }
@@ -368,7 +368,7 @@ fn install_checked(c: &Catalog, k: usize, part: &std::path::Path, dest: &std::pa
 }
 
 /// Copies every pack of this build's catalog found in `from` (a directory) into the first
-/// pack directory, after checking each one's SHA-256: `rushtex fonts install --from DIR`.
+/// pack directory, after checking each one's SHA-256: `rushtex install fonts --from DIR`.
 pub fn install_from(from: &std::path::Path) -> Result<(usize, usize), String> {
     let c = catalog().ok_or("this build has no pack catalog")?;
     let dest = install_dir()?;
@@ -392,7 +392,7 @@ pub fn install_from(from: &std::path::Path) -> Result<(usize, usize), String> {
 /// install <pack>`. Returns where it was installed.
 pub fn install(name: &str) -> Result<PathBuf, String> {
     let c = catalog().ok_or("this build has no pack catalog")?;
-    let k = c.find(name).ok_or_else(|| format!("no font pack named {name} (rushtex fonts list names them)"))?;
+    let k = c.find(name).ok_or_else(|| format!("no font pack named {name} (rushtex list fonts names them)"))?;
     let dest = install_dir()?;
     let file = c.file_name(k);
     let url = format!("{}/{file}", release_url());
@@ -404,7 +404,7 @@ pub fn install(name: &str) -> Result<PathBuf, String> {
             let _ = std::fs::remove_file(&part);
             return Err(format!("could not download {url}"));
         }
-        Err(e) => return Err(format!("could not run curl ({e}); download {url} yourself and run rushtex fonts install --from <its folder>")),
+        Err(e) => return Err(format!("could not run curl ({e}); download {url} yourself and run rushtex install fonts --from <its folder>")),
     }
     install_checked(c, k, &part, dest)?;
     Ok(dest.join(file))
@@ -420,7 +420,7 @@ pub fn list() -> Vec<String> {
             let at = if carried_pack(c.name(k)).is_some() {
                 "in this binary".into()
             } else if stale(k) {
-                format!("{} (another version's; reinstall with: rushtex fonts install {})", at.map_or_else(String::new, |p| p.display().to_string()), c.name(k))
+                format!("{} (another version's; reinstall with: rushtex install fonts {})", at.map_or_else(String::new, |p| p.display().to_string()), c.name(k))
             } else {
                 at.map_or("not installed".into(), |p| p.display().to_string())
             };

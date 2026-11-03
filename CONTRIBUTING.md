@@ -118,11 +118,11 @@ Releases come from tags; `.github/workflows/release.yml` does the rest (maintain
   with `rushtex-gen packs` from the pinned TeX Live snapshot, checks that the catalog they
   give is the committed `assets/tables/packs.rtdb`, and attaches them with `SHA256SUMS` to
   the release `fonts-vN` (never marked latest, so `releases/latest` keeps naming the
-  binaries). `rushtex fonts install <pack>` downloads `fonts-v<N>/<pack>.rtpack` from it, and
+  binaries). `rushtex install fonts <pack>` downloads `fonts-v<N>/<pack>.rtpack` from it, and
   the `v*` workflow's full builds fetch the packs from it (checked against its `SHA256SUMS`),
   so publish `fonts-vN` before the `v*` tag that needs it.
   A change to the pack file's layout also bumps `PACK_FORMAT`, so an installed pack of the
-  old layout is refused with "reinstall with: rushtex fonts install <pack>".
+  old layout is refused with "reinstall with: rushtex install fonts <pack>".
 - **Homebrew.** After a `v*` release has finished:
   `packaging/homebrew/update.sh v0.1.0 ../homebrew-rushtex/Formula/rushtex.rb`, then commit
   and push the tap (`packaging/README.md`).

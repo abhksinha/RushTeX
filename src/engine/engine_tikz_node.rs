@@ -85,9 +85,10 @@ impl NodeAnchor {
 
 /// The text commands a node's text and `font=` may hold: they are read by the machine like
 /// any text, and the pre-scan takes them as native.
-const TEXT_CS: [&str; 37] = [
+const TEXT_CS: [&str; 41] = [
     "includegraphics", "sffamily", "rmfamily", "ttfamily", "bfseries", "mdseries", "itshape", "upshape", "slshape", "scshape", "normalfont", "tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large",
-    "LARGE", "huge", "Huge", "today", "textbf", "textit", "emph", "par", "vspace", "textsc", "textsf", "textrm", "texttt", "textsl", "textup", "rule", "linewidth", "textwidth", "strut",
+    "LARGE", "huge", "Huge", "today", "textbf", "textit", "emph", "par", "vspace", "textsc", "textsf", "textrm", "texttt", "textsl", "textup", "rule", "linewidth", "textwidth", "strut", "fontsize", "selectfont",
+    "AA", "text",
 ];
 
 /// Kernel commands a node's formula may not hold: what numbers, refers, writes, reads files,
@@ -116,16 +117,17 @@ fn formula_ok(f: &str) -> bool {
                     return false;
                 }
             }
-            b'\\' if b.get(i + 1).is_some_and(|c| b",;!{}|".contains(c)) => i += 1,
+            b'\\' if b.get(i + 1).is_some_and(|c| b",;!{}| ".contains(c)) => i += 1,
             b'\\' => {
                 let n = b[i + 1..].iter().take_while(|c| c.is_ascii_alphabetic()).count();
                 let name = &f[i + 1..i + 1 + n];
-                if n == 0 || b.get(i + 1 + n) == Some(&b'@') || FORMULA_NOT.contains(&name) || super::super::table_names(name) & super::super::KERNEL_BIT == 0 || super::super::blocked_names(name) != 0 {
+                let allowed_pkg_cs = matches!(name, "AA" | "boldsymbol" | "bm" | "mathbf" | "mathrm" | "mathit" | "mathsf" | "mathtt" | "mathcal" | "mathfrak" | "mathbb" | "tfrac" | "dfrac" | "text" | "odot" | "otimes" | "sqrt" | "tau" | "pm" | "mp" | "times" | "div" | "alpha" | "beta" | "gamma" | "delta" | "epsilon" | "varepsilon" | "zeta" | "eta" | "theta" | "vartheta" | "iota" | "kappa" | "lambda" | "mu" | "nu" | "xi" | "pi" | "rho" | "sigma" | "upsilon" | "phi" | "chi" | "psi" | "omega" | "Gamma" | "Delta" | "Theta" | "Lambda" | "Xi" | "Pi" | "Sigma" | "Upsilon" | "Phi" | "Psi" | "Omega");
+                if n == 0 || b.get(i + 1 + n) == Some(&b'@') || FORMULA_NOT.contains(&name) || (!allowed_pkg_cs && (super::super::table_names(name) & super::super::KERNEL_BIT == 0 || super::super::blocked_names(name) != 0)) {
                     return false;
                 }
                 i += n;
             }
-            c if c.is_ascii_alphanumeric() || b" (),.+-=^_'|<>/*![]:;".contains(&c) => {}
+            c if c.is_ascii_alphanumeric() || b" (),.+-=^_'|<>/*![]:;?~".contains(&c) => {}
             _ => return false,
         }
         i += 1;
@@ -134,7 +136,7 @@ fn formula_ok(f: &str) -> bool {
 }
 
 /// Text of the grammar: plain characters, groups and [`TEXT_CS`]; `None` otherwise.
-fn text_ok(s: &str) -> bool {
+pub(super) fn text_ok(s: &str) -> bool {
     let b = s.as_bytes();
     let mut depth = 0i32;
     let mut i = 0;
@@ -149,8 +151,8 @@ fn text_ok(s: &str) -> bool {
             }
             // `\\`, and `\\[<length>]`: LaTeX's line break, the machine's like any text.
             b'\\' if b.get(i + 1) == Some(&b'\\') && b.get(i + 2) != Some(&b'*') => i += 1,
-            // `\&`: the character.
-            b'\\' if b.get(i + 1) == Some(&b'&') => i += 1,
+            // `\&`, `\%`, `\_`: literal characters.
+            b'\\' if b.get(i + 1) == Some(&b'&') || b.get(i + 1) == Some(&b'%') || b.get(i + 1) == Some(&b'_') => i += 1,
             b'\\' => {
                 let n = b[i + 1..].iter().take_while(|c| c.is_ascii_alphabetic()).count();
                 // qrcode's `\qrcode*[options]{text}` (`Machine::qrcode` reads it).
@@ -208,9 +210,10 @@ pub(super) struct NodeCmd {
     width: Option<String>,
     /// `align=`: the paragraph settings (`\tikz@text@action`) of a node with a text width.
     align: Align,
-    /// `rotate=90` (`\tikz@addtransform{\pgftransformrotate{90}}`): pgfmath's sine and cosine
-    /// of 90 are `1.0` and `0.0`, so the matrix maps (x, y) to (-y, x) exactly.
-    rotate: bool,
+    /// `rotate=<angle>` in sp.
+    rotate: Option<i32>,
+    /// `sloped` on a path segment.
+    sloped: bool,
     /// Whether `align=` was given: without a text width, tikz then sets the text as an
     /// `\halign` (`\tikz@halign@check`), not of the grammar.
     aligned: bool,
@@ -555,15 +558,16 @@ fn time(v: &str) -> Option<i32> {
 }
 
 fn node_options(list: &str, n: &mut NodeCmd, ctx: &Ctx) -> Option<()> {
-    for item in list.split(',') {
+    for item in super::key_items(list) {
         let item = item.trim();
-        if let Some((k, v)) = item.split_once('=') {
+        if let Some((k, v)) = super::split_key_val(item) {
             let v = v.trim();
             match k.trim() {
                 "anchor" => n.anchor = ANCHORS.iter().find(|(a, _)| *a == v)?.1,
                 "text" => n.text_color = Some(color_spec(v)?),
                 "font" => {
-                    if !v.starts_with('\\') || !text_ok(v) || v.contains(['{', '}']) {
+                    let v = super::strip_braces(v);
+                    if !v.starts_with('\\') || !text_ok(v) {
                         return None;
                     }
                     n.font = v.to_string();
@@ -595,7 +599,7 @@ fn node_options(list: &str, n: &mut NodeCmd, ctx: &Ctx) -> Option<()> {
                     };
                     n.aligned = true;
                 }
-                "rotate" if v == "90" => n.rotate = true,
+                "rotate" => n.rotate = Some(super::angle(v)?),
                 "rounded corners" => n.round = length(v).filter(|r| *r > 0)?,
                 "shape" => {
                     n.circle = match v {
@@ -613,6 +617,8 @@ fn node_options(list: &str, n: &mut NodeCmd, ctx: &Ctx) -> Option<()> {
                     n.of = Some((node_name(v)?, OLD_OF.iter().find(|(o, _)| *o == k)?.1));
                 }
                 "name" => n.name = Some(node_name(v)?),
+                // Node transforms differ from path-label nudges; decline until exact.
+                "xshift" | "yshift" => return None,
                 k if PLACES.iter().any(|(p, ..)| *p == k) && n.place.is_none() => {
                     let (_, a, f) = PLACES.iter().find(|(p, ..)| *p == k)?;
                     n.anchor = *a;
@@ -631,6 +637,8 @@ fn node_options(list: &str, n: &mut NodeCmd, ctx: &Ctx) -> Option<()> {
                 "draw" => n.draw = true,
                 "fill" => n.fill = true,
                 "rounded corners" => n.round = 4 << 16,
+                // PGF uses an exact normalized-vector transform with upright correction.
+                "sloped" => return None,
                 // tikz.code.tex:1142: `\tikz@text@action` only, run in a text width's minipage.
                 "text centered" => n.align = Align::Center,
                 "circle" => n.circle = true,
@@ -644,7 +652,7 @@ fn node_options(list: &str, n: &mut NodeCmd, ctx: &Ctx) -> Option<()> {
                 "very near end" => n.time = Some(57344),
                 "at end" => n.time = Some(65536),
                 // tikz's `.unknown` colour: `\tikz@addoption{\pgfutil@color}` and the text's.
-                _ if !ANCHORS.iter().any(|(a, _)| *a == item) && !matches!(item, "solid" | "none" | "circle" | "rectangle" | "rotate" | "align" | "overlay") => {
+                _ if !ANCHORS.iter().any(|(a, _)| *a == item) && !matches!(item, "solid" | "none" | "circle" | "rectangle" | "rotate" | "align" | "overlay" | "sloped") => {
                     let c = color_spec(item)?;
                     n.text_color = Some(c.clone());
                     n.opts.push(PathOpt::Color(c));
@@ -702,7 +710,7 @@ pub(super) fn parse(c: &mut Cursor, ctx: &mut Ctx, overlay: bool) -> Option<Node
         // A named node's shape: no rotation, no page point (`\pgf@sh@nt@` would turn it, the
         // interpicture shift move it), no name met twice.
         let Pt::At(x, y) = n.at else { return None };
-        if n.rotate || ctx.nodes.iter().any(|s| Some(&s.name) == n.name.as_ref()) {
+        if n.rotate.is_some() || ctx.nodes.iter().any(|s| Some(&s.name) == n.name.as_ref()) {
             return None;
         }
         let k = ctx.node_count;
@@ -729,7 +737,7 @@ pub(super) fn parse(c: &mut Cursor, ctx: &mut Ctx, overlay: bool) -> Option<Node
 /// spaces and the node's `center` anchor's before the node (probe).
 fn labels(n: &mut NodeCmd, k: usize, ctx: &mut Ctx) -> Option<()> {
     let Pt::At(x, y) = n.at else { return None };
-    if n.rotate {
+    if n.rotate.is_some() {
         return None;
     }
     let (outline, _) = n.frame((ctx.boxes)(k), ctx.em, n.line_width());
@@ -777,7 +785,7 @@ pub(super) fn parse_on_path(c: &mut Cursor, ctx: &Ctx, overlay: bool) -> Option<
 /// it names itself. No `at`, positioning, labels or `pos=`.
 pub(super) fn child(c: &mut Cursor, ctx: &mut Ctx, overlay: bool, (x, y): (i32, i32), name: String) -> Option<NodeCmd> {
     let (mut n, at) = body(c, ctx, overlay, false)?;
-    if at || n.time.is_some() || n.of.is_some() || n.place.is_some() || !n.labels.is_empty() || n.rotate || overlay {
+    if at || n.time.is_some() || n.of.is_some() || n.place.is_some() || !n.labels.is_empty() || n.rotate.is_some() || overlay {
         return None;
     }
     n.at = Pt::At(x, y);
@@ -849,7 +857,7 @@ pub(super) fn tree_length(v: &str, ctx: &Ctx) -> Option<i32> {
 
 /// A node of no options at the origin.
 fn blank(ctx: &Ctx) -> NodeCmd {
-    NodeCmd { opts: Vec::new(), draw: false, fill: false, anchor: NodeAnchor::Center, at: Pt::At(0, 0), text_color: None, font: String::new(), text: String::new(), min: [65536; 2], inner: [None; 2], width: None, align: Align::Left, aligned: false, rotate: false, name: None, place: None, spaces: 0, round: 0, base_width: ctx.width, time: None, on_path: None, path_node: false, labels: Vec::new(), label_nodes: Vec::new(), of: None, nudge: (0, 0), circle: false, tree: false }
+    NodeCmd { opts: Vec::new(), draw: false, fill: false, anchor: NodeAnchor::Center, at: Pt::At(0, 0), text_color: None, font: ctx.font.clone(), text: String::new(), min: [65536; 2], inner: [None; 2], width: None, align: Align::Left, aligned: false, rotate: None, sloped: false, name: None, place: None, spaces: 0, round: 0, base_width: ctx.width, time: None, on_path: None, path_node: false, labels: Vec::new(), label_nodes: Vec::new(), of: None, nudge: (0, 0), circle: false, tree: false }
 }
 
 /// A node with the picture's `every node` style applied (`\tikz@node@options` runs
@@ -967,16 +975,16 @@ fn body(c: &mut Cursor, ctx: &Ctx, overlay: bool, on_path: bool) -> Option<(Node
         return None;
     }
     // A rotated background path is `\pgf@specialrect`'s moveto and linetos: not drawn yet.
-    if n.rotate && (n.draw || n.fill) {
+    if n.rotate.is_some() && (n.draw || n.fill) {
         return None;
     }
     // In a `remember picture` picture the background's `re` would move with the picture
     // (`\pgf@shape@interpictureshift`): only unpainted nodes there yet.
-    if overlay && (n.draw || n.fill || n.rotate) {
+    if overlay && (n.draw || n.fill || n.rotate.is_some()) {
         return None;
     }
     // A circle neither turned nor rounded.
-    if n.circle && (n.rotate || n.round > 0) {
+    if n.circle && (n.rotate.is_some() || n.round > 0) {
         return None;
     }
     Some((n, at))
@@ -995,6 +1003,9 @@ impl NodeCmd {
             (None, false) => 65536,
         };
         self.at = Pt::At(a.0 + along(t, b.0 - a.0) + self.nudge.0, a.1 + along(t, b.1 - a.1) + self.nudge.1);
+        if self.sloped {
+            self.rotate = Some(super::pgfmath::atan2(b.1 - a.1, b.0 - a.0));
+        }
     }
 
     /// On a curve from `a` with supports `q[0]`, `q[1]` to `q[2]` at its time (`midway`
@@ -1176,7 +1187,7 @@ pub(super) struct Geo {
     size: [i32; 2],
     /// A circle's background: its centre on the picture and radius (outer sep less).
     circle: Option<([i32; 2], i32)>,
-    rotate: bool,
+    rotate: Option<(i32, i32)>,
     /// Placed on the page: the text's glue and raise are set where the page ships
     /// ([`what::PGF_GLUE`]), `shift` being the page point the text goes to.
     page: bool,
@@ -1221,8 +1232,11 @@ impl NodeCmd {
     /// placement's shift, the rotation, then of the anchor's negative through the matrix).
     fn shift(&self, o: Outline, (px, py): (i32, i32)) -> [i32; 2] {
         let a = o.point(self.anchor);
-        if self.rotate {
-            [px + a[1], py - a[0]]
+        if let Some(angle) = self.rotate {
+            let (c, s) = (super::pgfmath::cos(angle), super::pgfmath::sin(angle));
+            let rx = super::fmul(a[0], c) - super::fmul(a[1], s);
+            let ry = super::fmul(a[0], s) + super::fmul(a[1], c);
+            [px - rx, py - ry]
         } else {
             [px - a[0], py - a[1]]
         }
@@ -1245,24 +1259,25 @@ impl NodeCmd {
                 let (c, rp) = ([c[0] + shift[0], c[1] + shift[1]], r - os);
                 bbox.add(c[0] - rp - w, c[1] - rp - w);
                 bbox.add(c[0] + rp + w, c[1] + rp + w);
-                return Geo { shift, corner: [0; 2], size: [0; 2], circle: Some((c, rp)), rotate: false, page: matches!(self.at, Pt::Page(_)) };
+                return Geo { shift, corner: [0; 2], size: [0; 2], circle: Some((c, rp)), rotate: None, page: matches!(self.at, Pt::Page(_)) };
             }
         };
         let c1 = [sw[0] + os, sw[1] + os];
         let c2 = [ne[0] - os, ne[1] - os];
         let size = [c2[0] - c1[0], c2[1] - c1[1]];
         let corner = [c1[0] + shift[0], c1[1] + shift[1]];
-        if self.rotate {
-            // `\pgf@specialrect`: each corner through the matrix (`\pgfpathmoveto`,
-            // `\pgfpathlineto` protocol them). Unpainted only (`parse`).
+        let rot = self.rotate.map(|a| (super::pgfmath::cos(a), super::pgfmath::sin(a)));
+        if let Some((c, s)) = rot {
             for (x, y) in [(c2[0], c2[1]), (c1[0], c2[1]), (c1[0], c1[1]), (c2[0], c1[1])] {
-                bbox.add(shift[0] - y, shift[1] + x);
+                let rx = super::fmul(x, c) - super::fmul(y, s);
+                let ry = super::fmul(x, s) + super::fmul(y, c);
+                bbox.add(shift[0] + rx, shift[1] + ry);
             }
         } else {
             bbox.add(corner[0] - w, corner[1] - w);
             bbox.add(corner[0] + size[0] + w, corner[1] + size[1] + w);
         }
-        Geo { shift, corner, size, circle: None, rotate: self.rotate, page: matches!(self.at, Pt::Page(_)) }
+        Geo { shift, corner, size, circle: None, rotate: rot, page: matches!(self.at, Pt::Page(_)) }
     }
 
     /// `\pgflinewidth` in the node: its last width option, else the picture's.
@@ -1371,8 +1386,14 @@ impl Machine<'_, '_> {
         };
         self.cur.push(g0);
         let raised = self.cur.len();
-        // `\pgflowlevelsynccm`: the matrix's entries as pgf keeps them.
-        self.pdf_literal(if g.rotate { "0.0 1.0 -1.0 0.0 0.0 0.0 cm " } else { "1.0 0.0 0.0 1.0 0.0 0.0 cm " });
+        // `\pgflowlevelsynccm`: the matrix's entries as pgf keeps them (`\pgfsys@transformcm`
+        // in pgfsys-common-pdf.def passes aa,ab,ba,bb verbatim as dimensionless pgfmath decimal
+        // strings, not bp lengths; use `pgfmath::print`, not `pgf_bp`).
+        let cm = match g.rotate {
+            Some((c, s)) => format!("{} {} {} {} 0.0 0.0 cm ", super::pgfmath::print(c), super::pgfmath::print(s), super::pgfmath::print(-s), super::pgfmath::print(c)),
+            None => "1.0 0.0 0.0 1.0 0.0 0.0 cm ".into(),
+        };
+        self.pdf_literal(&cm);
         self.pdf_literal("q ");
         let zero = self.cur.len();
         let recolor = self.cur.len();
@@ -1460,7 +1481,7 @@ mod tests {
     use super::*;
 
     fn ctx() -> Ctx<'static> {
-        Ctx { dims: &|_| None, names: Vec::new(), unit: [super::super::UNIT; 2], tf: super::super::Tf::ID, boxes: &|_| [0; 3], em: 0, nodes: Vec::new(), node_count: 0, distance: [0; 2], width: 26214, arrows: [false; 2], gt: super::super::Tip::To, styles: Vec::new(), spaces: Default::default(), shape_ref: Default::default(), named: Default::default(), tree: [0, 0, -90], shorten: [0; 2], auto: false }
+        Ctx { dims: &|_| None, names: Vec::new(), unit: [super::super::UNIT; 2], tf: super::super::Tf::ID, boxes: &|_| [0; 3], em: 0, nodes: Vec::new(), node_count: 0, distance: [0; 2], width: 26214, arrows: [false; 2], gt: super::super::Tip::To, styles: Vec::new(), spaces: Default::default(), shape_ref: Default::default(), named: Default::default(), tree: [0, 0, -90], shorten: [0; 2], auto: false, font: String::new() }
     }
 
     #[test]

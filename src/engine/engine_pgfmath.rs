@@ -13,7 +13,7 @@ mod tables;
 use crate::backend::backend_scaled::{round_decimals, times_unit, xn_over_d};
 use tables::{ATAN, COS};
 
-const PT: i32 = 1 << 16;
+pub(super) const PT: i32 = 1 << 16;
 
 /// `<factor><dimen>` (TeX §455) with the factor printed from `e` sp: its integer part times
 /// `v` plus `xn_over_d(v, fraction, 2^16)`, the sign applied last.
@@ -135,6 +135,7 @@ pub(super) fn parse(text: &str, reg: &dyn Fn(&str) -> Option<i32>) -> Option<(i3
     let prec = |op: u8| match op {
         b'n' | b'+' | b'-' => 500,
         b'*' | b'/' => 700,
+        b'^' => 900,
         _ => 5,
     };
     let apply = |vals: &mut Vec<i64>, op: u8| -> Option<()> {
@@ -152,6 +153,7 @@ pub(super) fn parse(text: &str, reg: &dyn Fn(&str) -> Option<i32>) -> Option<(i3
                     if b < 0 { -r } else { r }
                 }
                 b'/' if b != 0 => divide(a as i32, b as i32) as i64,
+                b'^' => pow(a as i32, b as i32)? as i64,
                 _ => return None,
             }
         };
@@ -290,7 +292,7 @@ pub(super) fn parse(text: &str, reg: &dyn Fn(&str) -> Option<i32>) -> Option<(i3
                         }
                     }
                 }
-                Some(&op @ (b'+' | b'-' | b'*' | b'/')) => {
+                Some(&op @ (b'+' | b'-' | b'*' | b'/' | b'^')) => {
                     k += 1;
                     while let Some(&top) = ops.last() {
                         if top == b'(' || prec(op) > prec(top) {
@@ -323,7 +325,201 @@ fn function(name: &str, args: &[i32]) -> Option<i32> {
             let whole: i32 = p.split('.').next()?.parse().ok()?;
             Some(whole * PT)
         }
+        ("sin", &[a]) => Some(sin(a)),
+        ("cos", &[a]) => Some(cos(a)),
+        ("tan", &[a]) => Some(tan(a)),
+        ("sqrt", &[a]) if a >= 0 => Some(sqrt(a)),
+        ("ln", &[a]) => ln(a),
+        ("exp", &[a]) => exp(a),
+        ("pow", &[a, b]) => pow(a, b),
         _ => None,
+    }
+}
+
+/// `\pgfmathln@` (basic.code.tex:336): binary power-of-2 scaling then 6th-order Horner polynomial.
+pub(super) fn ln(mut x: i32) -> Option<i32> {
+    if x <= 0 {
+        return None;
+    }
+    let mut counta = 0;
+    if x > 2 * PT {
+        if x < 128 * PT {
+            if x < 8 * PT {
+                if x < 4 * PT {
+                    x /= 2;
+                    counta = 1;
+                } else {
+                    x /= 4;
+                    counta = 2;
+                }
+            } else if x < 32 * PT {
+                if x < 16 * PT {
+                    x /= 8;
+                    counta = 3;
+                } else {
+                    x /= 16;
+                    counta = 4;
+                }
+            } else if x < 64 * PT {
+                x /= 32;
+                counta = 5;
+            } else {
+                x /= 64;
+                counta = 6;
+            }
+        } else if x < 2048 * PT {
+            if x < 512 * PT {
+                if x < 256 * PT {
+                    x /= 128;
+                    counta = 7;
+                } else {
+                    x /= 256;
+                    counta = 8;
+                }
+            } else if x < 1024 * PT {
+                x /= 512;
+                counta = 9;
+            } else {
+                x /= 1024;
+                counta = 10;
+            }
+        } else if x < 8192 * PT {
+            if x < 4096 * PT {
+                x /= 2048;
+                counta = 11;
+            } else {
+                x /= 4096;
+                counta = 12;
+            }
+        } else {
+            x /= 8192;
+            counta = 13;
+        }
+    } else if x < PT {
+        if x > 512 {
+            if x > 8192 {
+                if x > 32768 {
+                    x *= 2;
+                    counta = -1;
+                } else {
+                    x *= 4;
+                    counta = -2;
+                }
+            } else if x > 2048 {
+                if x > 4096 {
+                    x *= 8;
+                    counta = -3;
+                } else {
+                    x *= 16;
+                    counta = -4;
+                }
+            } else if x > 1024 {
+                x *= 32;
+                counta = -5;
+            } else {
+                x *= 64;
+                counta = -6;
+            }
+        } else if x > 32 {
+            if x > 128 {
+                if x > 256 {
+                    x *= 128;
+                    counta = -7;
+                } else {
+                    x *= 256;
+                    counta = -8;
+                }
+            } else if x > 64 {
+                x *= 512;
+                counta = -9;
+            } else {
+                x *= 1024;
+                counta = -10;
+            }
+        } else if x > 8 {
+            if x > 16 {
+                x *= 2048;
+                counta = -11;
+            } else {
+                x *= 4096;
+                counta = -12;
+            }
+        } else {
+            x *= 8192;
+            counta = -13;
+        }
+    }
+    let temp = x;
+    const CF: i32 = 2818;
+    const CE: i32 = -26379;
+    const CD: i32 = 104168;
+    const CC: i32 = -228713;
+    const CB: i32 = 330817;
+    const CA: i32 = -182710;
+    const LN2: i32 = 45426;
+
+    let mut res = fmul(CF, x) + CE;
+    res = fmul(temp, res) + CD;
+    res = fmul(temp, res) + CC;
+    res = fmul(temp, res) + CB;
+    res = fmul(temp, res) + CA;
+    res += counta * PT;
+    Some(fmul(LN2, res))
+}
+
+/// `\pgfmathexp@` (basic.code.tex:530): Taylor series loop up to convergence.
+pub(super) fn exp(x: i32) -> Option<i32> {
+    if x < -9 * PT {
+        return Some(1); // 1sp
+    }
+    let xc = if x < 0 { -x } else { x };
+    let mut sum = PT;
+    let mut term = PT;
+    let mut counter = 1;
+    loop {
+        term /= counter;
+        term = fmul(xc, term);
+        let next = sum.checked_add(term)?;
+        if next == sum {
+            break;
+        }
+        sum = next;
+        counter += 1;
+    }
+    if x < 0 {
+        Some(reciprocal(sum))
+    } else {
+        Some(sum)
+    }
+}
+
+/// `\pgfmathpow@` (basic.code.tex:741): integer repeated squaring or exp(y * ln(x)).
+pub(super) fn pow(x: i32, y: i32) -> Option<i32> {
+    if x == 0 {
+        return Some(if y == 0 { PT } else { 0 });
+    }
+    if y % PT == 0 {
+        let mut n = y / PT;
+        let mut base = x;
+        if n < 0 {
+            n = -n;
+            base = reciprocal(base);
+        }
+        let mut res = PT;
+        while n > 0 {
+            if n % 2 == 1 {
+                res = fmul(base, res);
+            }
+            if n > 1 {
+                base = fmul(base, base);
+            }
+            n /= 2;
+        }
+        Some(res)
+    } else {
+        let lnx = ln(x)?;
+        let p = fmul(y, lnx);
+        exp(p)
     }
 }
 
@@ -541,13 +737,14 @@ mod tests {
             ("7mm*3", "59.75075", true), ("1.3*2.7", "3.51", false), ("10/3", "3.33333", false), ("7/0.3", "23.33362", false), ("1cm/3", "9.48424", true),
             ("2.5*1cm+1", "72.13185", true), ("-0.75*(2+1.1)", "-2.325", false), ("\\linewidth/7", "49.2857", true), ("1.7*\\linewidth", "586.49895", true),
             ("1.7\\linewidth", "586.49895", true),
+            ("sin(30)", "0.5", false), ("2^2", "4.0", false),
         ];
         for (t, v, u) in oracle {
             assert_eq!(p(t), Some((v.to_string(), u)), "{t}");
         }
         // `012` alone is the fast lane's 12; in an expression octal.
         assert_eq!(p("012"), Some(("12.0".into(), false)));
-        for t in ["sin(30)", "2^2", "1+012", "1e3", "\\foo", "1+", "(1", "3em"] {
+        for t in ["1+012", "1e3", "\\foo", "1+", "(1", "3em"] {
             assert!(p(t).is_none(), "{t}");
         }
     }
@@ -577,6 +774,31 @@ mod tests {
         // `\pgfmathsqrt@`'s results as pdfLaTeX prints them, read back as lengths.
         for (x, want) in [("17", "4.12310"), ("2", "1.41421"), ("150.25", "12.25765"), ("0.04", "0.20000")] {
             assert_eq!(sqrt(n(x)), n(want), "sqrt {x}");
+        }
+        for (x, want) in [("1", "2.71825"), ("0", "1.0"), ("-1", "0.36787"), ("2.5", "12.18217")] {
+            assert_eq!(print(exp(n(x)).unwrap()), want, "exp {x}");
+        }
+        for (x, want) in [("1", "0.0"), ("2.71828", "0.99995"), ("10", "2.30257")] {
+            assert_eq!(print(ln(n(x)).unwrap()), want, "ln {x}");
+        }
+        for (x, y, want) in [("2", "3", "8.0"), ("2.5", "2", "6.25"), ("2", "0.5", "1.41411")] {
+            assert_eq!(print(pow(n(x), n(y)).unwrap()), want, "pow {x}^{y}");
+        }
+        let fig_cases = [
+            ("exp(-1/0.5)/(0.5*0.5*(1-exp(-1/0.5))^2)", "0.72408"),
+            ("0.55*1.5*1.5", "1.23749"),
+            ("1/(1+exp(1/0.8))", "0.22272"),
+            ("(exp(2*1.2)-1)/(exp(2*1.2)+1)", "0.83363"),
+            ("-(1-exp(-2/1.5))/(1+exp(-2/1.5))", "-0.5827"),
+            ("4*exp(-2/1.5)/(1.5*1.5*(1+exp(-2/1.5))^2)", "0.29352"),
+            ("ln(1+exp(-2/1.5))+(2/1.5)*exp(-2/1.5)/(1+exp(-2/1.5))", "0.5121"),
+            ("-0.4*ln(0.4)-(1-0.4)*ln(1-0.4)", "0.67302"),
+            ("1/ln((1-0.3)/0.3)", "1.18024"),
+            ("-1/-1.5", "0.6667"),
+        ];
+        for (expr, want) in fig_cases {
+            let (v, _) = parse(expr, &|_| None).unwrap_or_else(|| panic!("failed to parse {expr}"));
+            assert_eq!(print(v), want, "{expr}");
         }
         // `\pgfmathtruncatemacro` with `mod` and `int`.
         let none = |_: &str| None;

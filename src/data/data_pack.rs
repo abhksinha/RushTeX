@@ -26,7 +26,7 @@ static CATALOG_BLOB: &[u8] = include_bytes!("../../assets/tables/packs.rtdb");
 
 /// The release the packs of this catalog are published in: `fonts-v<N>`. Bumped whenever
 /// `rushtex-gen packs` gives different packs (the pin, `packs.tsv` or `embed.set` changed).
-pub const FONTS_RELEASE: u32 = 2;
+pub const FONTS_RELEASE: u32 = 3;
 
 /// Where `rushtex install fonts` fetches packs from (`RUSHTEX_FONTS_URL` overrides it, a
 /// `file://` folder for a local test).
@@ -37,13 +37,14 @@ fn release_url() -> String {
 /// Every pack, carried in the binary: the `fonts-full` build (offline, CI). The names are the
 /// catalog's (`full_build_carries_every_pack`).
 #[cfg(feature = "fonts-full")]
-static FULL: [(&str, &[u8]); 7] = [
+static FULL: [(&str, &[u8]); 8] = [
     ("cm-super-tt", include_bytes!("../../assets/packs/cm-super-tt.rtpack")),
     ("cm-super", include_bytes!("../../assets/packs/cm-super.rtpack")),
     ("latin-modern", include_bytes!("../../assets/packs/latin-modern.rtpack")),
     ("tex-gyre", include_bytes!("../../assets/packs/tex-gyre.rtpack")),
     ("libertine", include_bytes!("../../assets/packs/libertine.rtpack")),
     ("urw-base", include_bytes!("../../assets/packs/urw-base.rtpack")),
+    ("newtx", include_bytes!("../../assets/packs/newtx.rtpack")),
     ("fonts", include_bytes!("../../assets/packs/fonts.rtpack")),
 ];
 

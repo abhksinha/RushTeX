@@ -1,10 +1,10 @@
 # Packages and classes the native path takes
 
 RushTeX compiles a document natively (the GDL job, no TeX engine) only when every class,
-package and command in it is ported; otherwise the whole document runs on the TeX engine.
+package and command in it is ported; otherwise the product reports an unsupported document.
 This page lists the classes and packages the native job can load. Loading is not the whole
 story: a package listed here may still decline for an option or a command it does not take
-yet, and then the document runs on the engine (same output, slower). `rushtex main.tex
+yet. The development oracle build can run declined documents on the TeX engine. `rushtex main.tex
 --native-gaps` lists what keeps a given document off the native path.
 
 **Keeping this list current.** The names come from the code: `rushtex-gen natlist` prints
@@ -15,7 +15,7 @@ there is missing here, so a port that adds a package must add its line. The note
 written by hand from the code and the journal notes; update the note when a port widens
 what a package takes.
 
-As of 2026-11-02: 14 classes, 92 packages.
+As of 2026-11-19: 14 classes, 119 packages.
 
 ## Classes
 
@@ -180,3 +180,11 @@ As of 2026-11-02: 14 classes, 92 packages.
 | `listings` | `lstlisting`, `\lstinline`, `\lstinputlisting`, preamble `\lstset` (fixed/fullflexible columns, frames, `breaklines`, captions, comments, strings, Python keywords) | other languages' keyword sets, uncommon keys |
 | `calc` | table: `\setlength` expressions | |
 | `keyval` | table | |
+
+## Additional font packages
+
+| Package | Takes | Declines |
+|---|---|---|
+| `newtxtext` | Default newtx text fonts and metrics; requires the newtx font pack | Package options |
+| `newtxmath` | Default newtx math fonts, symbols and sizing; requires the newtx font pack | Package options |
+| `iftex`, `centernot` | Load without options | Options and unsupported commands |

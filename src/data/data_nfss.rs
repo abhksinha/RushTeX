@@ -752,6 +752,10 @@ const DECLARE_HEAD: &str = concat!(
     "\\let\\rt@shape\\DeclareFontShape@\n",
     "\\def\\DeclareFontShape@#1#2#3#4#5#6{\\rt@shape{#1}{#2}{#3}{#4}{#5}{#6}",
     "\\immediate\\write\\rt@out{S #1/#2/\\reserved@b/#4 \\expandafter\\string\\csname#5\\endcsname\\space\\detokenize{#6}}}\n",
+    "\\def\\tx@provide#1{\\@ifundefined{#1}{\\expandafter\\let\\csname#1\\endcsname\\iffalse}{}}\n",
+    "\\tx@provide{iftx@libertine}\\tx@provide{iftx@minion}\\tx@provide{iftx@coch}\\tx@provide{iftx@ch}\n",
+    "\\tx@provide{iftx@stxtwo}\\tx@provide{iftx@ebgm}\\tx@provide{iftx@ut}\\tx@provide{iftx@nc}\n",
+    "\\tx@provide{iftx@noto}\\tx@provide{iftx@fourier}\\tx@provide{iftx@notosans}\\tx@provide{iftx@gel}\n",
 );
 
 #[cfg(test)]

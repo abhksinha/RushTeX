@@ -7,4 +7,5 @@ latin-modern	lm*.pfb lm*.tfm ec-lm*.tfm ts1-lm*.tfm texnansi-lm*.tfm rm-lm*.tfm 
 tex-gyre	q*.pfb q*.tfm *-q*.tfm q-*.enc
 libertine	Lin*.pfb Lin*.tfm Lin*.vf lib*.enc
 urw-base	u*.pfb *8a.tfm *8r.tfm *8c.tfm *8t.tfm *7t.tfm *.vf 8r.enc
+newtx	ztm*.pfb NewTX*.pfb tx*.pfb stx*.pfb ntx*.enc ntx*.vf tx*.tfm ntx*.tfm
 fonts	*.pfb *.pfa *.otf *.ttf *.enc *.tfm *.vf

@@ -1358,8 +1358,8 @@ fn natpkg(args: &[String]) -> Result<String, String> {
                 unknown.push(n.clone());
             }
         }
-        // A held name the native job writes itself would be skipped at install.
-        lost.extend(macros.iter().map(|m| &m.0).chain(chars.iter().map(|c| &c.0)).filter(|n| rushtex::engine::engine_doc::native_name(n)).cloned());
+        // A held macro the native job writes itself would be skipped at install (`engine_doc::install`).
+        lost.extend(macros.iter().map(|m| &m.0).filter(|n| rushtex::engine::engine_doc::native_name(n)).cloned());
         lost.sort();
         lost.dedup();
         unknown.sort();
@@ -1369,7 +1369,7 @@ fn natpkg(args: &[String]) -> Result<String, String> {
         // does one naming a held name whose body reaches it, to a fixed point.
         let mut blocked: std::collections::BTreeSet<String> = lost.iter().cloned().collect();
         loop {
-            let more: Vec<String> = refs.iter().filter(|(n, body)| had(n) && !blocked.contains(n.trim_end()) && body.iter().any(|b| blocked.contains(b.trim_end()))).map(|(n, _)| n.trim_end().to_string()).collect();
+            let more: Vec<String> = refs.iter().filter(|(n, body)| had(n) && !chars.iter().any(|c| c.0 == n.trim_end()) && !delims.iter().any(|d| d.0 == n.trim_end()) && !ops.iter().any(|o| o.0 == n.trim_end()) && !accents.iter().any(|a| a.0 == n.trim_end()) && !blocked.contains(n.trim_end()) && body.iter().any(|b| blocked.contains(b.trim_end()))).map(|(n, _)| n.trim_end().to_string()).collect();
             if more.is_empty() {
                 break;
             }
@@ -1827,6 +1827,7 @@ fn microtype(args: &[String]) -> Result<String, String> {
     use std::collections::BTreeMap;
     let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let out_path = arg("--out").unwrap_or_else(|| "assets/tables/microtype.txt".into());
+    let newtx_only = args.iter().any(|a| a == "--newtx");
     let engine = Engine::new(arg("--format"))?;
     let read = |name: &str| engine.kpse.read(name);
     const SIZES: [&str; 10] = ["tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge"];
@@ -1837,7 +1838,32 @@ fn microtype(args: &[String]) -> Result<String, String> {
     // (font, size) to its codes from the selection naming it; the substituted selections.
     let mut fonts: BTreeMap<(String, i32), String> = BTreeMap::new();
     let mut subs: Vec<(String, i32, String, String)> = Vec::new();
+    let mut listed = std::collections::BTreeSet::new();
     let mut ints = None;
+
+    if newtx_only && std::path::Path::new(&out_path).exists() {
+        if let Ok(existing) = std::fs::read_to_string(&out_path) {
+            for l in existing.lines() {
+                if l.starts_with("microtype ") {
+                    let mut parts = l.split_whitespace().skip(1);
+                    if let (Some(a), Some(p)) = (parts.next().and_then(|v| v.parse().ok()), parts.next().and_then(|v| v.parse().ok())) {
+                        ints = Some((a, p));
+                    }
+                } else if l.starts_with("sub ") {
+                    listed.insert(l.to_string());
+                } else {
+                    let mut parts = l.splitn(3, ' ');
+                    if let (Some(name), Some(Ok(sp)), Some(rest)) = (parts.next(), parts.next().map(str::parse), parts.next()) {
+                        if !name.starts_with("ntx-") && !name.starts_with("rm-qhv") {
+                            fonts.insert((name.to_string(), sp), rest.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !newtx_only {
     for opt in ["10pt", "11pt", "12pt"] {
         // TS1: textcomp's symbols, selected over the OT1 setup.
         for enc in ["OT1", "T1", "TS1"] {
@@ -1915,14 +1941,108 @@ fn microtype(args: &[String]) -> Result<String, String> {
             }
         }
     }
-    let (adjust, protrude) = ints.ok_or("no run")?;
+    }
+
+    // newtxtext and newtxmath: scalable fonts whose codes depend on font and size only.
+    let text_sizes: [&str; 10] = ["tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge"];
+    let math_sizes: [&str; 26] = [
+        "fontsize{5}{6}\\selectfont",
+        "fontsize{5.5}{6.5}\\selectfont",
+        "fontsize{6}{7}\\selectfont",
+        "fontsize{6.1}{7.1}\\selectfont",
+        "fontsize{6.5}{7.5}\\selectfont",
+        "fontsize{6.6}{7.6}\\selectfont",
+        "fontsize{7}{8}\\selectfont",
+        "fontsize{7.3}{8.3}\\selectfont",
+        "fontsize{7.9}{8.9}\\selectfont",
+        "fontsize{8}{9}\\selectfont",
+        "fontsize{8.8}{9.8}\\selectfont",
+        "fontsize{9}{10}\\selectfont",
+        "fontsize{9.4}{10.4}\\selectfont",
+        "fontsize{10}{11}\\selectfont",
+        "fontsize{10.5}{11.5}\\selectfont",
+        "fontsize{10.95}{12}\\selectfont",
+        "fontsize{11.4}{12.4}\\selectfont",
+        "fontsize{12}{13}\\selectfont",
+        "fontsize{12.5}{13.5}\\selectfont",
+        "fontsize{13.7}{14.7}\\selectfont",
+        "fontsize{14.4}{15.4}\\selectfont",
+        "fontsize{16.1}{17.1}\\selectfont",
+        "fontsize{17.28}{18.28}\\selectfont",
+        "fontsize{18.2}{19.2}\\selectfont",
+        "fontsize{20.74}{21.74}\\selectfont",
+        "fontsize{24.88}{25.88}\\selectfont",
+    ];
+    let ntx_combos: Vec<(&str, &str, &str, &str, &str, &str, &str)> = {
+        let mut v = Vec::new();
+        // minntx for md upshape (math operators font whose generic codes pdfTeX assigns to ntx-Regular-tlf-ot1);
+        // ntxtlf for others: all text and math sizes, md/bf, n/it/sl/sc
+        for size in text_sizes.iter().copied().chain(math_sizes.iter().copied()) {
+            for (ser_cmd, series) in [("mdseries", "m"), ("bfseries", "b")] {
+                for (sh_cmd, sh) in [("upshape", "n"), ("itshape", "it"), ("slshape", "sl"), ("scshape", "sc")] {
+                    if series == "m" && sh == "n" {
+                        v.push((size, "fontfamily{minntx}\\selectfont", "minntx", ser_cmd, series, sh_cmd, sh));
+                    } else {
+                        v.push((size, "rmfamily", "ntxtlf", ser_cmd, series, sh_cmd, sh));
+                    }
+                }
+            }
+        }
+        // qhv: text sizes, md/bf, n/sl
+        for size in text_sizes {
+            for (ser_cmd, series) in [("mdseries", "m"), ("bfseries", "b")] {
+                for (sh_cmd, sh) in [("upshape", "n"), ("slshape", "sl")] {
+                    v.push((size, "sffamily", "qhv", ser_cmd, series, sh_cmd, sh));
+                }
+            }
+        }
+        v
+    };
+    let pre = "\\documentclass[10pt]{article}\\usepackage{newtxtext,newtxmath}\\usepackage[protrusion=true,expansion=false]{microtype}";
+    for (size, fam_cmd, family, ser_cmd, series, sh_cmd, sh) in ntx_combos {
+        let key = format!("OT1/{family}/{series}/{sh}");
+        let src = format!("{pre}\\begin{{document}}\\{size}\\{fam_cmd}\\{ser_cmd}\\{sh_cmd} x\\end{{document}}");
+        let mut got = None;
+        let job = rushtex::engine::engine_job::run(&|| Some(engine.fmt.clone()), &src, &rushtex::engine::engine_job::Opts { job_name: "rtgen", now: 0, max_runs: 1 }, &read, &mut |_| {}, &mut |m| {
+            let e = &*m.e;
+            let Meaning::Font(f) = e.eqtb.meaning(rushtex::engine::CUR_FONT_ID) else { return };
+            let font = &e.fonts.list[f as usize];
+            let mi = &e.fonts.micro;
+            let mut line = "-".to_string();
+            for (tag, get, def) in [("lp", 0, 0), ("rp", 1, 0)] {
+                for c in 0..=255u8 {
+                    let v = if get == 0 { mi.lp(f, c) } else { mi.rp(f, c) };
+                    if v != def {
+                        line.push_str(&format!(" {tag}{c}={v}"));
+                    }
+                }
+            }
+            let direct = e.cs.name(font.ident).starts_with(&format!("{key}/"));
+            got = Some((font.name.to_string(), font.size, direct, line));
+        })
+        .ok_or("the format is not one of this build")?;
+        if !job.errors.is_empty() {
+            return Err(format!("10pt OT1 {key}: {}", job.errors[0].lines().next().unwrap_or("")));
+        }
+        let (name, sp, direct, line) = got.ok_or("no current font")?;
+        if direct {
+            match fonts.get(&(name.clone(), sp)) {
+                Some(old) if *old != line => return Err(format!("{name} at {sp}sp: codes differ between selections naming it")),
+                _ => {
+                    fonts.insert((name, sp), line);
+                }
+            }
+        } else {
+            subs.push((name, sp, key, line));
+        }
+    }
+    let (adjust, protrude) = ints.unwrap_or((2, 2));
     let mut text = format!("microtype {adjust} {protrude}\n");
     for ((name, size), line) in &fonts {
         text.push_str(&format!("{name} {size} {line}\n"));
     }
     // A substitution whose codes are the font's own needs nothing; the others, and one to a
     // font no selection names, are listed.
-    let mut listed = std::collections::BTreeSet::new();
     for (name, sp, key, line) in &subs {
         if fonts.get(&(name.clone(), *sp)) != Some(line) {
             listed.insert(format!("sub {key} {sp}"));

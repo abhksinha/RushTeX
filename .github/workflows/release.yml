@@ -149,8 +149,8 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/fonts-v')
     runs-on: ubuntu-latest
     env:
-      PIN_TAG: texlive-2026-pin-3
-      PIN_SHA256: 82fb03fa383e1c9dc8334ca4c3122ed5575618032f4fe504679c026a3e362b84
+      PIN_TAG: texlive-2026-pin-4
+      PIN_SHA256: 5c382df1ca935aa1960f2931fea29f27f4a65ee6d0a9311f0ff29b4e006a7b5a
       # What `rushtex-gen packs --out-dir` writes and the release carries.
       PACK_GLOB: "*.rtpack"
     steps:

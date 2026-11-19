@@ -12,7 +12,7 @@ use super::super::engine_token::Token;
 pub(super) const OWN_NAMES: &[&str] = &["contentsname", "listfigurename", "listtablename", "bibname", "chaptername", "appendixname"];
 
 /// The natives of this file in `DOC` (`DOC_PARTS`).
-pub(super) const NATIVES: &[(&str, super::Native)] = &[("rt@testopt", |m| m.test_opt()), ("newif", |m| m.new_if()), ("AtBeginDocument", |m| m.at_begin_document()), ("rt@ifthenelse", |m| m.if_then_else()), ("rt@newboolean", |m| m.new_boolean(false)), ("rt@provideboolean", |m| m.new_boolean(true)), ("rt@setboolean", |m| m.set_boolean()), ("rt@ifthenword", |m| m.not_native("an ifthen test outside \\ifthenelse")), ("rt@etbunseen", |m| m.etb_unseen())];
+pub(super) const NATIVES: &[(&str, super::Native)] = &[("rt@testopt", |m| m.test_opt()), ("newif", |m| m.new_if()), ("AtBeginDocument", |m| m.at_begin_document()), ("AddToHook", |m| m.add_to_hook()), ("rt@outputbg", |m| m.output_background()), ("rt@ifthenelse", |m| m.if_then_else()), ("rt@newboolean", |m| m.new_boolean(false)), ("rt@provideboolean", |m| m.new_boolean(true)), ("rt@setboolean", |m| m.set_boolean()), ("rt@ifthenword", |m| m.not_native("an ifthen test outside \\ifthenelse")), ("rt@etbunseen", |m| m.etb_unseen())];
 
 /// The kernel macros an etoolbox `\preto`/`\appto` may patch where the document never runs
 /// them, and what in the source would run them: `\@verbatim`, which only the `verbatim`
@@ -328,6 +328,58 @@ impl Machine<'_, '_> {
             return self.back_list(&code);
         }
         doc.pkg.begin_hook.extend(code);
+    }
+
+    /// `\AddToHook{shipout/background}{code}` in the preamble (lthooks.dtx): the code joins the
+    /// document's (label `top-level`, which lthooks runs after every package's, as pgf's
+    /// `\put` of page-level objects). Another hook, a `[label]` or the body decline.
+    fn add_to_hook(&mut self) {
+        let mut name = Vec::new();
+        self.read_arg(&mut name);
+        let plain: Option<String> = name.iter().map(|t| t.cs_id().is_none().then(|| t.chr())).collect();
+        if plain.as_deref().map(str::trim) != Some("shipout/background") {
+            return self.not_native("\\AddToHook of a hook other than shipout/background");
+        }
+        if self.next_is('[') {
+            return self.not_native("\\AddToHook with a label");
+        }
+        let mut code = Vec::new();
+        self.read_arg(&mut code);
+        let Some(doc) = self.doc.as_mut() else { return };
+        if doc.body {
+            return self.not_native("\\AddToHook in the body");
+        }
+        doc.pkg.bg_hook.extend(code);
+    }
+
+    /// ltshipout.dtx `\__shipout_picture_overlay:n`: `\unitlength 1pt \hbox_set_to_wd:Nnn \l_tmp_box
+    /// \c_zero_dim { \ignorespaces #1 \hss }`. The user's part of #1 is typeset here, before the
+    /// foot, in a list of its own (the group is the box's); `\rt@outputbg` takes it and goes on
+    /// with the page ([`Self::start_foot`]). The `\hss` and the pgf `\put` before it are
+    /// `page_background`'s.
+    pub(super) fn run_background_hook(&mut self) {
+        let Some(code) = self.doc.as_ref().map(|d| d.pkg.bg_hook.clone()) else { return };
+        self.push_nest(super::super::engine_run::Mode::Horizontal, true, 1000);
+        let mut t = vec![Token::char(Cat::BeginGroup, '{'), Token::cs(self.e.cs.intern("unitlength"))];
+        t.extend("1pt".chars().map(|c| Token::char(if c.is_ascii_alphabetic() { Cat::Letter } else { Cat::Other }, c)));
+        t.push(Token::cs(self.e.cs.intern("relax")));
+        t.push(self.named_cs(named!("ignorespaces")));
+        t.extend(code);
+        t.push(Token::char(Cat::EndGroup, '}'));
+        t.push(self.doc_id(doc!("rt@outputbg")));
+        self.back_list(&t);
+    }
+
+    /// `\rt@outputbg`: the list the hook's code made is kept for the page, and the page goes on.
+    fn output_background(&mut self) {
+        let start = self.start as usize;
+        let nodes = self.cur.split_off(start);
+        self.pop_nest();
+        if let Some(doc) = self.doc.as_mut() {
+            doc.pkg.bg_nodes = nodes;
+            doc.pkg.bg_ready = true;
+        }
+        self.start_foot();
     }
 
     /// `\document`'s `\UseOneTimeHook{begindocument}` for the document's code, then

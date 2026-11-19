@@ -233,7 +233,7 @@ pub const PACKAGE_NATIVES: &[(&str, &str, &str)] = &[
     ("multirow", "multirow", "rt@multirow"), ("multirow", "multirowsetup", "raggedright"),
     ("geometry", "geometry", "rt@geometry"),
     ("color", "color", "rt@color"), ("color", "textcolor", "rt@textcolor"), ("color", "definecolor", "rt@definecolor"),
-    ("xcolor", "color", "rt@color"), ("xcolor", "textcolor", "rt@textcolor"), ("xcolor", "definecolor", "rt@definecolor"),
+    ("xcolor", "color", "rt@color"), ("xcolor", "textcolor", "rt@textcolor"), ("xcolor", "definecolor", "rt@definecolor"), ("xcolor", "providecolor", "rt@providecolor"),
     ("tikz", "tikz", "rt@tikz"),
     ("url", "url", "rt@url"), ("url", "path", "rt@path"), ("url", "urlstyle", "rt@urlstyle"),
     ("hyperref", "href", "rt@href"), ("hyperref", "nolinkurl", "rt@nolinkurl"), ("hyperref", "hypersetup", "rt@hypersetup"), ("caption", "captionsetup", "rt@captionsetup"), ("caption", "captionof", "rt@captionof"), ("capt-of", "captionof", "rt@captionof"), ("subcaption", "subref", "rt@subref"), ("subfig", "subfloat", "rt@subfloat"), ("subfig", "subref", "rt@subref"),
@@ -569,7 +569,7 @@ pub const PDF_PAGE_WIDTH: u32 = 23;
 
 /// Packages after which `\begin{document}` sets the PDF page to the paper size: those that
 /// load pdftex.def (mathtools loads graphicx in its `\AtBeginDocument`).
-pub const PAGE_SIZE_PACKAGES: &[&str] = &["graphicx", "color", "xcolor", "hyperref", "mathtools"];
+pub const PAGE_SIZE_PACKAGES: &[&str] = &["graphicx", "color", "xcolor", "hyperref", "mathtools", "newtxtext"];
 
 /// Packages the native job runs as Rust alone, with no evaluated table: their commands
 /// are [`PACKAGE_NATIVES`]. graphicx (with keyval, graphics, trig and pdftex.def).
@@ -610,6 +610,7 @@ const DRIVER_PACKAGES: &[&str] = &[
     "subfig",
     "times",
     "palatino",
+    "newtxtext",
     "lastpage",
     "pagecolor",
     "tcolorbox",
@@ -685,7 +686,7 @@ const T1_ACCENT_CMD: &[u8; 11] = b"`'^~\"Hrvu=.";
 /// defines only `\inputencoding`, `\DeclareInputText` and `\DeclareInputMath`, and
 /// with `utf8` (LaTeX's default input encoding) leaves the state as it was
 /// (`rushtex-gen natpkg inputenc` and `inputenc[utf8]`).
-const NO_EFFECT_PACKAGES: &[&str] = &["inputenc"];
+const NO_EFFECT_PACKAGES: &[&str] = &["inputenc", "iftex", "centernot"];
 
 /// Packages `use_package` and `load_package` take by name with code of their own, outside
 /// [`DRIVER_PACKAGES`] and the native tables: babel (`babel_load`), fontenc (`font_encoding`),
@@ -764,6 +765,13 @@ fn strip_pt(sp: i32) -> String {
 /// Whether every option of `opts` (a comma list) has the same effect as none for `pkg`.
 fn same_options(pkg: &str, opts: &str) -> bool {
     opts.split(',').map(str::trim).filter(|o| !o.is_empty()).all(|o| SAME_OPTIONS.contains(&(pkg, o)))
+}
+
+/// Whether `microtype` options are handled natively (protrusion/expansion switches).
+fn microtype_options_ok(opts: &str) -> bool {
+    opts.split(',').map(str::trim).filter(|o| !o.is_empty()).all(|o| {
+        matches!(o, "protrusion=true" | "protrusion" | "protrusion=false" | "expansion=false" | "expansion=true" | "expansion")
+    })
 }
 
 /// `\PassOptionsToPackage`'s two arguments in `s` (the text after its name): the options,
@@ -1086,7 +1094,8 @@ const KERNEL_NATIVES: &[(&str, Native)] = &[
     ("rt@color", |m| m.color_command()),
     ("rt@textcolor", |m| m.text_color()),
     ("rt@tikz", |m| m.tikz_short()),
-    ("rt@definecolor", |m| m.define_color()),
+    ("rt@definecolor", |m| m.define_color(false)),
+    ("rt@providecolor", |m| m.define_color(true)),
     ("rt@setcolor", |m| {
         let c = m.current_color();
         m.color_stack(Some(&c));
@@ -2732,8 +2741,13 @@ struct Packages {
     tikz: Option<String>,
     /// `\usetikzlibrary{positioning}` read: `of` in a placement key is its.
     tikz_positioning: bool,
+    /// microtype options: disabled expansion or protrusion.
+    mt_no_protrusion: bool,
+    mt_no_expansion: bool,
     /// `\usetikzlibrary{arrows.meta}` read: `to` is its tip then (other code and spaces).
     tikz_arrows_meta: bool,
+    /// `\usetikzlibrary{svg.path}` read: `svg {..}` is a path form.
+    tikz_svg_path: bool,
     /// The arrows library loaded (its `stealth'`).
     tikz_arrows_lib: bool,
     /// The preamble's `\tikzset`/`\tikzstyle` styles, in order (`tikz::tikzset_styles`).
@@ -2746,6 +2760,12 @@ struct Packages {
     own_names: u8,
     /// The document's `\AtBeginDocument` code, in order (`userdef::at_begin_document`).
     begin_hook: Vec<Token>,
+    /// The document's `\AddToHook{shipout/background}` code, in order (`userdef::add_to_hook`),
+    /// the nodes it typeset for the page being shipped (`userdef::output_background`) and
+    /// whether they are ready.
+    bg_hook: Vec<Token>,
+    bg_nodes: Vec<Node>,
+    bg_ready: bool,
     /// `\newgeometry` and `\restoregeometry` (`engine_pagelayout`).
     gm: pagelayout::GmState,
     /// pdftex.def's `\current@page@color` while `\ifGPT@pagecolor` (`\pagecolor`).
@@ -3124,8 +3144,8 @@ pub struct Doc {
     /// waiting for its title.
     link_counter: u32,
     star_anchor: Option<String>,
-    /// The fonts microtype's `\pickup@font` hook has set up.
-    pub(super) mt_fonts: Vec<u16>,
+    /// The NFSS font selections (<enc>/<fam>/<ser>/<sh>, size) microtype's `\pickup@font` hook has set up.
+    pub(super) mt_nfss_seen: Vec<(String, i32)>,
     /// LaTeX's registers (`data_class::CLASS_REGS`), indexed by the `R_*` constants.
     regs: [Reg; data_class::CLASS_REGS.len()],
     /// The class is letter: its sender's fields and recipient (`engine_letter`).
@@ -3304,6 +3324,9 @@ fn well_formed_from(body: &str, from: Option<(&WellState, usize)>, mut marks: Op
                                 return Err("\\begin{document} inside something open");
                             }
                             in_document = true;
+                        } else {
+                            after_cs = true;
+                            long_arg = true;
                         }
                         // Verbatim text runs to its `\end` unread.
                         if matches!(env, "verbatim" | "verbatim*" | "Verbatim" | "lstlisting" | "minted" | "comment" | "alltt") {
@@ -4463,6 +4486,25 @@ const PRESCAN_CHECKS: &[(&str, &str, fn(&ScanAt) -> Verdict)] = &[
             _ => Verdict::Stop(None),
         }
     }),
+    ("iffalse", "", |s| {
+        let mut depth = 1;
+        for (idx, ch) in s.after.char_indices() {
+            if ch == '\\' {
+                let rest = &s.after[idx + 1..];
+                let name_len = rest.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(rest.len());
+                let name = &rest[..name_len];
+                if matches!(name, "if" | "ifx" | "iffalse" | "iftrue" | "ifnum" | "ifdim" | "ifcase") {
+                    depth += 1;
+                } else if name == "fi" {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Verdict::Skip(s.src.len() - s.after.len() + idx + 1 + name_len);
+                    }
+                }
+            }
+        }
+        Verdict::Stop(None)
+    }),
 ];
 
 /// The first [`PRESCAN_CHECKS`] row for command `name` whose package is loaded. Asked at most
@@ -5204,6 +5246,11 @@ fn scan_from<'a>(src: &'a str, block: &mut dyn FnMut(&'a str, &'a str) -> bool, 
                                 stop(p, &mut blocked)?;
                             }
                             continue;
+                        } else if p == "microtype" {
+                            if !microtype_options_ok(opts) {
+                                detail.set(p);
+                                stop("package options", &mut blocked)?;
+                            }
                         } else if !same_options(p, opts) {
                             // A package without a table is its own blocker; its options are
                             // named only for a package the native job loads.
@@ -9187,7 +9234,7 @@ impl Machine<'_, '_> {
                 self.e.eqtb.set_meaning(id, Meaning::Reg(r), true);
             }
         }
-        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, multicol: None, ids, named, big_pending: 0, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, titlepage: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, tx: None, tab_to: None, tab_ecs: Vec::new(), tx_delta: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), shape_tables: Vec::new(), booktabs: None, ams_display: 0, df_label: None, df_tag: None, big_size: 0, align: None, eqnarray: None, wrong_shapes: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, eq_within: None, appendix: false, the_prefix: Default::default(), sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), thanks: None, fn_symbol: false, footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, theorems: Vec::new(), thm_values: Vec::new(), thm_item: Vec::new(), thm_style: PLAIN, thm_current: 0, trivlist_then: |_| {}, dated: false, authored: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_next: 0, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), fam_fonts: std::collections::HashMap::new(), eqpen: 0, aligned: None, replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special: None, empty_foot: false, geometry: None, colors: Vec::new(), default_color: None, preamble_colors: Vec::new(), color_names: Vec::new(), url_penalties: [500, 700], shipped: false, label_hrefs: Default::default(), predicted_hrefs: Default::default(), link: None, uri: None, anchor: None, hfootnote: 0, items: 0, enum_templates: Vec::new(), pbox: Vec::new(), colorboxes: Vec::new(), raises: Vec::new(), fancy: None, titlesec: None, babel: None, bibstyles: Vec::new(), coltypes: Vec::new(), lt: None, report: false, koma: false, book: false, openright: false, mainmatter: true, headings: false, my_headings: false, std_heads: false, marks: 0, page_style: 0, head_page: false, mark_title: Vec::new(), abs_page: 0, page_label_last: None, page_labels: String::new(), display_pen: 10000, t1: false, thm_anchor: None, link_counter: 0, star_anchor: None, mt_fonts: Vec::new(), regs, letter: None, ams: None, ieee: None, toc_shown: Vec::new(), toc_list: 0, toc_name: "Contents", biblatex: None, memoir: false, memoir_style: 0, memoir_secnum: 1, memoir_tocdepth: 1, secnum: None, fig_within: [None, None], class_em_ex: (0, 0), size_asked: Vec::new(), authblk: None, hooks: &KERNEL_HOOKS, pkg: Default::default(), normal_fam: 0, bottom: None, own_counters: Vec::new(), own_lengths: 0, set_to: Vec::new(), qed: Vec::new(), eq_chapter: false, sub_eq: None, sub_eq_h: None, display_env: 0, eq_qed: false }));
+        self.doc = Some(Box::new(Doc { class: Class { table: t, vals }, page: 1, normal_font, column: None, multicol: None, ids, named, big_pending: 0, nobreak: false, afterindent: true, inlabel: false, newlist: false, noitemarg: false, endpe: false, titlepage: false, lists: Vec::new(), tabs: Vec::new(), tab_group: 0, tx: None, tab_to: None, tab_ecs: Vec::new(), tx_delta: 0, floats: Default::default(), cr_base: 0, font_switch: Vec::new(), families: DEFAULT_FAMILIES, font_fixed: Vec::new(), cr_id, crcr_id, stretch_id, newline_id, omit_id, span_id, par_prim, par_id, counters: [0; 3], title: Vec::new(), number_box: None, after: Glue::default(), numbered: true, toc: true, noskipsec: false, stored: Default::default(), math_size: "", fams, alphabets, packages: Vec::new(), shape_tables: Vec::new(), booktabs: None, ams_display: 0, df_label: None, df_tag: None, big_size: 0, align: None, eqnarray: None, wrong_shapes: Vec::new(), wide_fam: 0, wide: Vec::new(), equation: 0, eq_within: None, appendix: false, the_prefix: Default::default(), sphack: Vec::new(), footnote: 0, footnote_text: Vec::new(), thanks: None, fn_symbol: false, footnote_sf: Vec::new(), footnote_flags: Vec::new(), steps: Vec::new(), level: 0, after_before: Glue::default(), indent: None, current: 0, item_label: None, theorems: Vec::new(), thm_values: Vec::new(), thm_item: Vec::new(), thm_style: PLAIN, thm_current: 0, trivlist_then: |_| {}, dated: false, authored: false, unsupported: None, options: 0, verbatim: Vec::new(), labels: Default::default(), predicted: Default::default(), forward: Default::default(), used: Default::default(), label_keys: Vec::new(), label_pages: Default::default(), contents: None, toc_next: 0, toc_seen: 0, toc_pages: Vec::new(), toc_boxes: Vec::new(), defer: false, deferred: Vec::new(), fam_fonts: std::collections::HashMap::new(), eqpen: 0, aligned: None, replay: false, toc_afterindent: Vec::new(), body: false, empty_style: false, special: None, empty_foot: false, geometry: None, colors: Vec::new(), default_color: None, preamble_colors: Vec::new(), color_names: Vec::new(), url_penalties: [500, 700], shipped: false, label_hrefs: Default::default(), predicted_hrefs: Default::default(), link: None, uri: None, anchor: None, hfootnote: 0, items: 0, enum_templates: Vec::new(), pbox: Vec::new(), colorboxes: Vec::new(), raises: Vec::new(), fancy: None, titlesec: None, babel: None, bibstyles: Vec::new(), coltypes: Vec::new(), lt: None, report: false, koma: false, book: false, openright: false, mainmatter: true, headings: false, my_headings: false, std_heads: false, marks: 0, page_style: 0, head_page: false, mark_title: Vec::new(), abs_page: 0, page_label_last: None, page_labels: String::new(), display_pen: 10000, t1: false, thm_anchor: None, link_counter: 0, star_anchor: None, mt_nfss_seen: Vec::new(), regs, letter: None, ams: None, ieee: None, toc_shown: Vec::new(), toc_list: 0, toc_name: "Contents", biblatex: None, memoir: false, memoir_style: 0, memoir_secnum: 1, memoir_tocdepth: 1, secnum: None, fig_within: [None, None], class_em_ex: (0, 0), size_asked: Vec::new(), authblk: None, hooks: &KERNEL_HOOKS, pkg: Default::default(), normal_fam: 0, bottom: None, own_counters: Vec::new(), own_lengths: 0, set_to: Vec::new(), qed: Vec::new(), eq_chapter: false, sub_eq: None, sub_eq_h: None, display_env: 0, eq_qed: false }));
         self.strut_update();
         let fixed = FONT_FIXED.iter().map(|name| {
             let id = self.e.cs.intern(name);
@@ -9455,6 +9502,11 @@ impl Machine<'_, '_> {
     /// `\@outputpage` of the column in `doc.column`, up to the foot's page number, which is
     /// typeset from tokens; `\rt@outputfoot` finishes the page.
     fn start_foot(&mut self) {
+        // The user's `shipout/background` code is typeset first, into a list `page_background`
+        // splices in ([`Self::run_background_hook`]); this runs again when it is ready.
+        if self.doc.as_ref().is_some_and(|d| !d.pkg.bg_hook.is_empty() && !d.pkg.bg_ready) {
+            return self.run_background_hook();
+        }
         let Some(doc) = self.doc.as_ref() else { return };
         let (page, font, special) = (doc.page, doc.normal_font, doc.special);
         // `\@outputpage`: `\if@specialpage \global\@specialpagefalse \@nameuse{ps@\@specialstyle}
@@ -9599,6 +9651,13 @@ impl Machine<'_, '_> {
             let put = self.e.nodes.add_box(put);
             self.cur.push(Node::new(Kind::Box, put as i32));
         }
+        // The user's `shipout/background` code (top-level label: after pgf's), typeset before
+        // the foot (`userdef::run_background_hook`).
+        if let Some(d) = self.doc.as_mut() {
+            let user = std::mem::take(&mut d.pkg.bg_nodes);
+            d.pkg.bg_ready = false;
+            self.cur.extend(user);
+        }
         let n = self.e.nodes.glue_node(fil, 0);
         self.cur.push(n);
         // `\__shipout_picture_overlay:n` sets the box's height and depth to zero.
@@ -9732,7 +9791,7 @@ impl Machine<'_, '_> {
             shipped = self.page_anchor(shipped, page, top, margin, i32::MAX >> 1);
             self.page_label(page);
         }
-        if self.doc.as_ref().is_some_and(|d| d.packages.iter().any(|p| matches!(*p, "graphicx" | "color" | "xcolor"))) {
+        if self.doc.as_ref().is_some_and(|d| d.packages.iter().any(|p| matches!(*p, "graphicx" | "color" | "xcolor")) || !d.pkg.bg_hook.is_empty()) {
             shipped = self.page_background(shipped, d, true);
         }
         if (self.hyper() || self.doc.as_ref().is_some_and(|d| d.pkg.screenplay.is_some())) && self.doc.as_mut().is_some_and(|d| !std::mem::replace(&mut d.shipped, true)) {
@@ -10891,6 +10950,9 @@ impl Machine<'_, '_> {
         if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathpazo")) {
             return pazo_math_sizes(size).unwrap_or((size, size, size));
         }
+        if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"newtxmath")) {
+            return newtx_math_sizes(size).unwrap_or((size, size, size));
+        }
         match self.size_index(size).map(|i| self.size_row(i)) {
             Some(r) => (r.fsize, r.sf, r.ssf),
             None => calculated_math_sizes(size).unwrap_or((size, size, size)),
@@ -10913,7 +10975,14 @@ impl Machine<'_, '_> {
         let f = self.cur_font();
         let name = self.e.cs.name(self.e.fonts.list[f as usize].ident);
         match name.rsplit_once('/') {
-            Some((key, size)) if key.matches('/').count() == 3 => (key.to_string(), static_size(size)),
+            Some((key, size)) if key.matches('/').count() == 3 => {
+                let key = if key.contains("/minntx/") {
+                    key.replace("/minntx/", &format!("/{}/", self.normal_family()))
+                } else {
+                    key.to_string()
+                };
+                (key, static_size(size))
+            }
             _ => (self.rm_key("m/n"), self.size_fsize(NORMALSIZE)),
         }
     }
@@ -11026,11 +11095,15 @@ impl Machine<'_, '_> {
             self.error(format!("Font shape `{key}' undefined"));
             return None;
         };
-        let at = match ext.at {
+        let mut at = match ext.at {
             data_nfss::At::Sp(v) => v,
             data_nfss::At::Text(v) => data_nfss::decimal_sp(v).unwrap_or(-1000),
             data_nfss::At::None => -1000,
         };
+        if key.contains("/qhv/") && self.doc.as_ref().is_some_and(|d| d.packages.contains(&"newtxtext")) {
+            let factor = crate::backend::scaled::round_decimals(b"94") as u32;
+            at = data_nfss::scale_by(factor, at);
+        }
         // A substitution (`ssub`) names the font after the shape it came to.
         let real = t.shape_name(ext.shape);
         let real_cs = if real == key { cs } else { self.e.cs.intern(&format!("{real}/{size}")) };
@@ -11053,6 +11126,13 @@ impl Machine<'_, '_> {
                     if skew != data_nfss::NONE {
                         font.skew_char = skew;
                     }
+                }
+                if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"newtxtext")) && (family.ends_with("+ntxtlf") || family.ends_with("+minntx")) {
+                    let em = self.e.fonts.params(f)[5];
+                    let p = self.e.fonts.params_mut(f);
+                    p[1] = crate::backend::scaled::xn_over_d(em, 16384, 65536);
+                    p[2] = crate::backend::scaled::xn_over_d(em, 13107, 65536);
+                    p[3] = crate::backend::scaled::xn_over_d(em, 6554, 65536);
                 }
                 self.e.fonts.list[f as usize].ident = real_cs;
                 self.e.eqtb.set_meaning(real_cs, Meaning::Font(f), true);
@@ -11925,7 +12005,39 @@ impl Machine<'_, '_> {
         let mut arg = Vec::new();
         self.read_arg(&mut arg);
         if self.has_accent(&arg, 8) {
-            return self.not_native("a math accent over an accent (amsmath's \\macc@nested)");
+            let mut codes = vec![code];
+            let nucleus = self.unpack_accents(&arg, &mut codes);
+            let fam = self.e.eqtb.word(super::engine_eqtb::Reg { region: super::engine_eqtb::Region::Int, slot: super::engine_noad::CUR_FAM });
+            let plain = usize::try_from(fam).ok().and_then(|f| self.doc.as_ref()?.fams.get(f).copied()).is_some_and(|[k, _]| k.starts_with("OML/") || k.starts_with("OMS/"));
+            let codes: Vec<u32> = codes.into_iter().map(|c| if plain { c & 0xfff } else { c }).collect();
+            let mut t = Vec::new();
+            t.push(self.named_cs(named!("mathchoice")));
+            for style in [named!("displaystyle"), named!("textstyle"), named!("scriptstyle"), named!("scriptscriptstyle")] {
+                t.push(Token::char(Cat::BeginGroup, '{'));
+                let mut branch = self.tex_tokens("\\begingroup\\mathsurround0pt\\setbox0\\hbox{$");
+                branch.push(self.named_cs(style));
+                branch.extend_from_slice(&nucleus);
+                branch.extend(self.tex_tokens("{}\\mathchar 29055$}\\setbox2\\hbox{$"));
+                branch.push(self.named_cs(style));
+                branch.extend_from_slice(&nucleus);
+                branch.extend(self.tex_tokens("\\mathchar 29055$}\\dimen0=2\\wd2 \\advance\\dimen0 -2\\wd0 \\setbox4\\hbox{$"));
+                branch.push(self.named_cs(style));
+                branch.extend_from_slice(&nucleus);
+                branch.extend(self.tex_tokens("$}\\setbox1\\hbox to\\wd4{}\\ht1=\\ht4 \\dp1=\\dp4 "));
+                for c in &codes {
+                    branch.extend(self.tex_tokens(&format!("\\mathaccent {c} {{")));
+                }
+                branch.extend(self.tex_tokens("\\box1\\kern\\dimen0"));
+                for _ in &codes {
+                    branch.push(Token::char(Cat::EndGroup, '}'));
+                }
+                branch.extend(self.tex_tokens("\\advance\\dimen0\\wd4 \\kern-\\dimen0 "));
+                branch.extend_from_slice(&nucleus);
+                branch.extend(self.tex_tokens("\\endgroup"));
+                t.extend(branch);
+                t.push(Token::char(Cat::EndGroup, '}'));
+            }
+            return self.back_list(&t);
         }
         // `\accentclass@`: 0 inside an OML or OMS alphabet (amsmath's `\noaccents@`), so
         // the accent keeps its own family; 7 elsewhere.
@@ -11949,6 +12061,97 @@ impl Machine<'_, '_> {
                     _ => false,
                 }
         })
+    }
+
+    /// Unpacks nested accents from `toks`, collecting all accent codes into `codes` and returning
+    /// the innermost nucleus tokens.
+    fn unpack_accents(&self, toks: &[Token], codes: &mut Vec<u32>) -> Vec<Token> {
+        let mut t = toks;
+        while t.first().is_some_and(|tok| tok.cat() == Some(Cat::BeginGroup))
+            && t.last().is_some_and(|tok| tok.cat() == Some(Cat::EndGroup))
+        {
+            let mut depth = 0;
+            let mut all_enclosed = true;
+            for (idx, tok) in t.iter().enumerate() {
+                if tok.cat() == Some(Cat::BeginGroup) {
+                    depth += 1;
+                } else if tok.cat() == Some(Cat::EndGroup) {
+                    depth -= 1;
+                    if depth == 0 && idx + 1 < t.len() {
+                        all_enclosed = false;
+                        break;
+                    }
+                }
+            }
+            if all_enclosed && depth == 0 {
+                t = &t[1..t.len() - 1];
+            } else {
+                break;
+            }
+        }
+        let start = t.iter().position(|tok| tok.cat() != Some(Cat::Space)).unwrap_or(0);
+        let t = &t[start..];
+        if let Some(first) = t.first() {
+            if let Some(cs) = first.cs_id() {
+                let rt_accent = self.e.cs.get("rt@amsaccent");
+                let mut inner_code = None;
+                let mut arg_tokens = &t[1..];
+                if Some(cs) == rt_accent {
+                    let a_start = arg_tokens.iter().position(|tok| tok.cat() != Some(Cat::Space)).unwrap_or(0);
+                    let a_toks = &arg_tokens[a_start..];
+                    if a_toks.first().is_some_and(|tok| tok.cat() == Some(Cat::BeginGroup)) {
+                        let end = a_toks.iter().position(|tok| tok.cat() == Some(Cat::EndGroup)).unwrap_or(a_toks.len());
+                        let digits: String = a_toks[1..end].iter().map(|tk| tk.chr()).collect();
+                        if let Ok(c) = digits.parse::<u32>() {
+                            inner_code = Some(c);
+                            arg_tokens = if end < a_toks.len() { &a_toks[end + 1..] } else { &[] };
+                        }
+                    }
+                } else if let Meaning::Macro(m) = self.e.eqtb.meaning(cs) {
+                    let mtoks = self.e.toks.get(m.text);
+                    if mtoks.len() >= 4 && mtoks[0] == Token::END_MATCH && mtoks[1].cs_id() == rt_accent {
+                        let digits: String = mtoks[3..].iter().take_while(|tk| tk.cat() != Some(Cat::EndGroup)).map(|tk| tk.chr()).collect();
+                        if let Ok(c) = digits.parse::<u32>() {
+                            inner_code = Some(c);
+                        }
+                    }
+                }
+                if let Some(c) = inner_code {
+                    codes.push(c);
+                    let rstart = arg_tokens.iter().position(|tok| tok.cat() != Some(Cat::Space)).unwrap_or(0);
+                    let rest = &arg_tokens[rstart..];
+                    if let Some(first_rest) = rest.first() {
+                        if first_rest.cat() == Some(Cat::BeginGroup) {
+                            let mut depth = 0;
+                            let mut end_idx = rest.len();
+                            for (idx, tok) in rest.iter().enumerate() {
+                                if tok.cat() == Some(Cat::BeginGroup) {
+                                    depth += 1;
+                                } else if tok.cat() == Some(Cat::EndGroup) {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        end_idx = idx + 1;
+                                        break;
+                                    }
+                                }
+                            }
+                            let inner_arg = &rest[..end_idx];
+                            let trailing = &rest[end_idx..];
+                            let mut nuc = self.unpack_accents(inner_arg, codes);
+                            nuc.extend_from_slice(trailing);
+                            return nuc;
+                        } else {
+                            let inner_arg = &rest[..1];
+                            let trailing = &rest[1..];
+                            let mut nuc = self.unpack_accents(inner_arg, codes);
+                            nuc.extend_from_slice(trailing);
+                            return nuc;
+                        }
+                    }
+                }
+            }
+        }
+        t.to_vec()
     }
 
     /// amsmath's dots in math (`\cdots`, `\dotsc`, `\dotsi`, `\dotso`, and `\dots` by
@@ -14985,6 +15188,9 @@ impl Machine<'_, '_> {
         if self.parskip() && self.doc.as_ref().is_some_and(|d| d.packages.contains(&"amsthm")) {
             return self.not_native("parskip with amsthm");
         }
+        if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"newtxtext") && !d.packages.contains(&"newtxmath")) {
+            return self.not_native("newtxtext without newtxmath");
+        }
         // siunitx's `\AddToHook{begindocument/before}{\RequirePackage{color}}`
         // (siunitx.sty:4696); xcolor stands for color once loaded.
         if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"siunitx") && !d.packages.contains(&"xcolor")) {
@@ -15051,7 +15257,13 @@ impl Machine<'_, '_> {
         }
         // microtype's `\MT@setup@`: `\pdfadjustspacing` and `\pdfprotrudechars`.
         if doc.packages.contains(&"microtype") {
-            let (adjust, protrude) = super::engine_microtype::microtype_ints();
+            let (mut adjust, mut protrude) = super::engine_microtype::microtype_ints();
+            if doc.pkg.mt_no_expansion {
+                adjust = 0;
+            }
+            if doc.pkg.mt_no_protrusion {
+                protrude = 0;
+            }
             self.set_int_named(param!("pdfadjustspacing"), adjust);
             self.set_int_named(param!("pdfprotrudechars"), protrude);
         }
@@ -19503,6 +19715,24 @@ impl Machine<'_, '_> {
                 self.cancel_set_options(v);
                 continue;
             }
+            if name == "microtype" {
+                if !microtype_options_ok(&opts) {
+                    return self.not_native("package options");
+                }
+                self.load_package(name);
+                if let Some(d) = self.doc.as_mut() {
+                    for opt in opts.split(',').map(str::trim).filter(|o| !o.is_empty()) {
+                        match opt {
+                            "expansion=false" => d.pkg.mt_no_expansion = true,
+                            "expansion=true" | "expansion" => d.pkg.mt_no_expansion = false,
+                            "protrusion=false" => d.pkg.mt_no_protrusion = true,
+                            "protrusion=true" | "protrusion" => d.pkg.mt_no_protrusion = false,
+                            _ => {}
+                        }
+                    }
+                }
+                continue;
+            }
             if !same_options(name, &opts) {
                 return self.not_native("package options");
             }
@@ -19802,7 +20032,10 @@ impl Machine<'_, '_> {
     /// `\definecolor{name}{model}{spec}` in the preamble, or in the body outside any group
     /// (its local definition then lasts to the end, as a preamble one does; a later one
     /// of the same name is found first).
-    fn define_color(&mut self) {
+    ///
+    /// `\providecolor` (xcolor.sty:594 `\XC@providec@lor`) is the same when `\color@<name>` is
+    /// undefined and reads and drops its model and spec otherwise (`provide`).
+    fn define_color(&mut self, provide: bool) {
         let mut a = [Vec::new(), Vec::new(), Vec::new()];
         for x in &mut a {
             self.read_arg(x);
@@ -19813,6 +20046,10 @@ impl Machine<'_, '_> {
         let [Some(name), Some(model), Some(spec)] = a.map(|x| Self::plain_text(&x)) else {
             return self.not_native("a colour with commands");
         };
+        // A name `\color@<name>` is bound to: a `\definecolor` one or one xcolor predefines.
+        if provide && !name.trim().is_empty() && name.trim().chars().all(|c| c.is_ascii_alphanumeric()) && self.color_literal(None, name.trim(), false).is_some() {
+            return;
+        }
         let Some(lit) = self.color_literal(Some(model.trim()), spec.trim(), true) else {
             return self.not_native("a colour the native job does not know");
         };
@@ -19957,6 +20194,10 @@ impl Machine<'_, '_> {
                 let t = self.tex_tokens(&format!("\\long\\def\\sfdefault{{phv}}\\long\\def\\rmdefault{{{rm}}}\\long\\def\\ttdefault{{pcr}}"));
                 self.back_list(&t);
             }
+            if p == "newtxtext" {
+                let t = self.tex_tokens("\\long\\def\\rmdefault{ntxtlf}\\long\\def\\sfdefault{qhv}\\long\\def\\ttdefault{ntxtt}\\def\\qhv@scale{0.94}");
+                self.back_list(&t);
+            }
             if p == "tabularx" {
                 self.load_package("array");
                 let fuzz = self.dimen_param(super::engine_pack::HFUZZ);
@@ -20031,6 +20272,38 @@ impl Machine<'_, '_> {
             }
             return;
         }
+        let digits = |n: &str| matches!(n, "mathchar" | "mathchardef" | "delimiter" | "fam" | "mathaccent" | "radical" | "mathcode" | "delcode" | "textfont" | "scriptfont" | "scriptscriptfont");
+        let macro_digit_safe = |toks: &[crate::data::data_kernel::MacroToken], fam0: u8| -> bool {
+            for (i, tok) in toks.iter().enumerate() {
+                if let crate::data::data_kernel::MacroToken::Cs(n) = tok {
+                    if !digits(n) {
+                        continue;
+                    }
+                    if matches!(*n, "mathaccent" | "mathchar") {
+                        if let (Some(crate::data::data_kernel::MacroToken::Raw(q)),
+                                Some(crate::data::data_kernel::MacroToken::Raw(_cls)),
+                                Some(crate::data::data_kernel::MacroToken::Raw(fam_tok))) =
+                            (toks.get(i + 1), toks.get(i + 2), toks.get(i + 3))
+                        {
+                            if (q & 255) == b'"' as u32 {
+                                let c = (fam_tok & 255) as u8;
+                                let fam = match c {
+                                    b'0'..=b'9' => (c - b'0') as u32,
+                                    b'a'..=b'f' => (10 + c - b'a') as u32,
+                                    b'A'..=b'F' => (10 + c - b'A') as u32,
+                                    _ => return false,
+                                };
+                                if fam < fam0 as u32 {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                }
+            }
+            true
+        };
         let Some(k) = crate::data::data_kernel::package(name) else {
             return self.not_native(&format!("package {name}"));
         };
@@ -20060,17 +20333,39 @@ impl Machine<'_, '_> {
             // A macro may stay when its body names families only through names the table
             // relocates (esint's `\int` is `\intop\ilimits@`, stmaryrd's `\mapsfrom` is
             // `\leftarrow\mapsfromchar`): no primitive that takes a family number.
-            let digits = |n: &str| matches!(n, "mathchar" | "mathchardef" | "delimiter" | "fam" | "mathaccent" | "radical" | "mathcode" | "delcode" | "textfont" | "scriptfont" | "scriptscriptfont");
-            let macros_ok = k.macros().all(|(_, _, toks)| toks.iter().all(|t| !matches!(*t, crate::data::data_kernel::MacroToken::Cs(n) if digits(n))));
+            let macros_ok = k.macros().all(|(_, _, toks)| macro_digit_safe(&toks, fam0));
             if doc.fams.len() < fam0 as usize || fams_after > 16 || !macros_ok || k.ops().next().is_some() {
                 return self.not_native("a math package after other math fonts");
             }
             relocate.by = (doc.fams.len() - fam0 as usize) as u32;
         }
+        if name == "newtxmath" && !doc.packages.contains(&"newtxtext") {
+            return self.not_native("newtxmath without newtxtext");
+        }
         let pkg = crate::data::data_kernel::packages().find(|p| p.0 == name).map_or("", |p| p.0);
         doc.push_package(pkg);
         let (mut fams, mut alphabets) = (std::mem::take(&mut doc.fams), std::mem::take(&mut doc.alphabets));
         self.install(k, Some(pkg), &mut fams, &mut alphabets, relocate);
+        if name == "bm" {
+            let fam0 = relocate.fam(relocate.from) as usize;
+            for i in 0..4 {
+                if i < fam0 && fam0 + i < fams.len() {
+                    let bold = fams[i][1];
+                    fams[fam0 + i] = [bold, bold];
+                }
+            }
+        }
+        if name == "newtxmath" {
+            fams[0] = ["OT1/minntx/m/n", "OT1/minntx/b/n"];
+            for a in &mut alphabets {
+                match a.0 {
+                    "mathbf" => a.2 = Alphabet::Shape("OT1/minntx/b/n", None),
+                    "mathsf" => a.2 = Alphabet::Shape("OT1/qhv/m/n", None),
+                    "mathit" => a.2 = Alphabet::Shape("OT1/minntx/m/it", None),
+                    _ => {}
+                }
+            }
+        }
         // mathpazo's `\AtBeginDocument` declares msa and msb at `s*[1.042]` and euf at its own
         // sizes, which amsfonts' shapes in the tables are not.
         if self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathpazo") && d.packages.contains(&"amsfonts")) {
@@ -20501,7 +20796,14 @@ impl Machine<'_, '_> {
         // A size fontmath.ltx declares that no size command sets keeps its `\S@` (not in the
         // class table); any other size of `\fontsize` is `\calculate@math@sizes`'s.
         let pazo = self.doc.as_ref().is_some_and(|d| d.packages.contains(&"mathpazo"));
-        if if pazo { pazo_math_sizes(size).is_none() } else { self.size_index(size).is_none() && calculated_math_sizes(size).is_none() } {
+        let ntx = self.doc.as_ref().is_some_and(|d| d.packages.contains(&"newtxmath"));
+        if if pazo {
+            pazo_math_sizes(size).is_none()
+        } else if ntx {
+            newtx_math_sizes(size).is_none()
+        } else {
+            self.size_index(size).is_none() && calculated_math_sizes(size).is_none()
+        } {
             return self.not_native("math at a font size fontmath.ltx declares and no size command sets");
         }
         let bold = self.bold_version() as usize;
@@ -20587,9 +20889,13 @@ impl Machine<'_, '_> {
         }
         let mut a = Vec::new();
         self.read_arg(&mut a);
+        self.bold_choice(&a);
+    }
+
+    fn bold_choice(&mut self, a: &[Token]) {
         let (open, close, shift) = (Token::char(Cat::BeginGroup, '{'), Token::char(Cat::EndGroup, '}'), Token::char(Cat::MathShift, '$'));
         let mut t = vec![self.named_cs(named!("begingroup")), self.doc_id(doc!("rt@boldversion"))];
-        t.extend(self.binrel_tokens(&a));
+        t.extend(self.binrel_tokens(a));
         t.extend([open, self.named_cs(named!("mathchoice"))]);
         for style in [named!("displaystyle"), named!("textstyle"), named!("scriptstyle"), named!("scriptscriptstyle")] {
             t.extend([open, self.named_cs(named!("hbox")), open, shift, self.named_cs(named!("mathsurround"))]);
@@ -20606,8 +20912,8 @@ impl Machine<'_, '_> {
     /// gives each math character its family moved to the bold one (`\bm@mathchar`,
     /// `\bm@changefam`: operators, letters and symbols to `\symboldoperators`,
     /// `\symboldletters`, `\symboldsymbols`), as a plain `\mathchar` after the group; `^`
-    /// and `_` pass through (`\bm@add`). A group, a macro, an accent, a family without a bold
-    /// one (`\pmb`, the boxed `\bm@gr@up`) and the prime are not native yet.
+    /// and `_` pass through (`\bm@add`). A group, a macro, an accent, or a family without a bold
+    /// one falls back to the boxed `\bm@gr@up\boldmath` choice ([`Self::bold_choice`]).
     fn bm(&mut self) {
         if self.mode != Mode::Math {
             return self.not_native("\\bm outside math");
@@ -20622,7 +20928,8 @@ impl Machine<'_, '_> {
             }
         });
         let mut t = Vec::new();
-        for x in a {
+        let mut ok = true;
+        for &x in &a {
             let v = match (x.cat(), x.cs_id()) {
                 (Some(Cat::Space), _) => continue,
                 (Some(Cat::Superscript | Cat::Subscript), _) => {
@@ -20632,17 +20939,28 @@ impl Machine<'_, '_> {
                 (Some(Cat::Letter | Cat::Other), _) => self.e.eqtb.code(super::engine_eqtb::Code::Math, x.chr() as u32) as u32,
                 (_, Some(c)) => match self.e.eqtb.meaning(c) {
                     Meaning::MathCharDef(v) => v,
-                    _ => return self.not_native("\\bm of a command"),
+                    _ => {
+                        ok = false;
+                        break;
+                    }
                 },
-                _ => return self.not_native("\\bm of a group"),
+                _ => {
+                    ok = false;
+                    break;
+                }
             };
             let Some(Some(f)) = bold.get((v >> 8 & 15) as usize).copied().filter(|_| v < 0x8000) else {
-                return self.not_native("\\bm of a character with no bold family");
+                ok = false;
+                break;
             };
             let m = self.tex_tokens(&format!("\\mathchar{} ", v & !0xF00 | f << 8));
             t.extend(m);
         }
-        self.back_list(&t);
+        if ok {
+            self.back_list(&t);
+        } else {
+            self.bold_choice(&a);
+        }
     }
 
     /// `\getanddefine@fonts` with `\globaldefs` 1: family `fam`'s text, script and
@@ -21368,6 +21686,32 @@ fn pazo_math_sizes(size: &'static str) -> Option<(&'static str, &'static str, &'
     match DECLARED.iter().find(|d| d.0 == size) {
         Some(&(_, sf, ssf)) => Some((size, size_name(sf), size_name(ssf))),
         None => scaled_math_sizes(size, b"76", b"6"),
+    }
+}
+
+/// newtxmath.sty's `\DeclareMathSizes` (psnfss-compatible font scaling: 10pt text has 7.3pt
+/// scripts and 5.5pt scriptscripts; 11pt text uses 10.95pt math with 8pt scripts and 6.1pt
+/// scriptscripts), and for any other size `\calculate@math@sizes` with its `\defaultscriptratio`
+/// .73 and `\defaultscriptscriptratio` .55.
+fn newtx_math_sizes(size: &'static str) -> Option<(&'static str, &'static str, &'static str)> {
+    const DECLARED: [(&str, &str, &str, &str); 13] = [
+        ("5", "5.5", "5.5", "5.5"),
+        ("6", "6.5", "5.5", "5.5"),
+        ("7", "7.3", "5.5", "5.5"),
+        ("8", "8", "6", "5.5"),
+        ("9", "9", "6.6", "5.5"),
+        ("10", "10", "7.3", "5.5"),
+        ("10.95", "10.95", "8", "6.1"),
+        ("11", "10.95", "8", "6.1"),
+        ("12", "12", "8.8", "6.6"),
+        ("14.4", "14.4", "10.5", "7.9"),
+        ("17.28", "17.28", "12.5", "9.4"),
+        ("20.74", "20.74", "16.1", "11.4"),
+        ("24.88", "24.88", "18.2", "13.7"),
+    ];
+    match DECLARED.iter().find(|d| d.0 == size) {
+        Some(&(_, tf, sf, ssf)) => Some((size_name(tf), size_name(sf), size_name(ssf))),
+        None => scaled_math_sizes(size, b"73", b"55"),
     }
 }
 
@@ -22318,5 +22662,13 @@ mod tests {
         let lp = "\\makeatletter\\ifx\\@preamblecmds\\@notprerr\\else\\documentclass{article}\\let\\X\\document\\let\\endX\\enddocument\\fi\\makeatother\\begin{X}A\\@ B.\\end{X}";
         assert_eq!(accepts(&format!("{lp}\\endinput")), Some(lp));
         assert_eq!(accepts("\\makeatletter\\begin{document}x\\end{document}"), None);
+    }
+
+    #[test]
+    fn test_newtx_math_sizes() {
+        assert_eq!(super::newtx_math_sizes("10"), Some(("10", "7.3", "5.5")));
+        assert_eq!(super::newtx_math_sizes("11"), Some(("10.95", "8", "6.1")));
+        assert_eq!(super::newtx_math_sizes("12"), Some(("12", "8.8", "6.6")));
+        assert_eq!(super::newtx_math_sizes("5"), Some(("5.5", "5.5", "5.5")));
     }
 }

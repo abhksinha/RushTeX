@@ -111,6 +111,15 @@ impl Micro {
             _ => k.ef[c as usize] = v.clamp(0, 1000) as i16,
         }
     }
+
+    /// Reset character protrusion codes for font `f` to zero before applying a new configuration.
+    pub fn reset_protrusion(&mut self, f: u16) {
+        let owner = self.owner(f) as usize;
+        if let Some(Some(k)) = self.codes.get_mut(owner) {
+            k.lp = [0; 256];
+            k.rp = [0; 256];
+        }
+    }
 }
 
 const LP: u8 = 0;
@@ -636,9 +645,38 @@ pub(super) fn microtype_ints() -> (i32, i32) {
     (w.next().unwrap_or(0), w.next().unwrap_or(0))
 }
 
+static DIFF_PTM_M_LP: &[(u8, i32)] = &[(37, 83), (49, 75), (52, 35), (64, 92), (89, 58), (96, 167), (123, 150), (124, 200)];
+static DIFF_PTM_M_RP: &[(u8, i32)] = &[(34, 178), (37, 83), (39, 167), (49, 75), (52, 0), (55, 50), (64, 92), (76, 49), (89, 58), (92, 178), (96, 167), (121, 35), (123, 150), (124, 200)];
+
+static DIFF_MIN_M_LP: &[(u8, i32)] = &[(37, 42), (49, 25), (52, 25), (64, 46), (89, 36), (96, 100), (123, 100), (124, 150)];
+static DIFF_MIN_M_RP: &[(u8, i32)] = &[(34, 133), (37, 42), (39, 133), (49, 25), (52, 25), (55, 25), (64, 46), (76, 31), (89, 36), (92, 133), (96, 133), (121, 25), (123, 100), (124, 150)];
+
+static DIFF_PTM_B_LP: &[(u8, i32)] = &[(37, 100), (49, 75), (52, 35), (64, 93), (89, 58), (96, 167), (123, 150), (124, 200)];
+static DIFF_PTM_B_RP: &[(u8, i32)] = &[(34, 200), (37, 100), (39, 167), (49, 75), (52, 0), (55, 50), (64, 93), (76, 53), (89, 58), (92, 200), (96, 167), (121, 35), (123, 150), (124, 200)];
+
+static DIFF_MIN_B_LP: &[(u8, i32)] = &[(37, 50), (49, 25), (52, 25), (64, 47), (89, 36), (96, 100), (123, 100), (124, 150)];
+static DIFF_MIN_B_RP: &[(u8, i32)] = &[(34, 150), (37, 50), (39, 133), (49, 25), (52, 25), (55, 25), (64, 47), (76, 33), (89, 36), (92, 150), (96, 133), (121, 25), (123, 100), (124, 150)];
+
+fn apply_code_str(micro: &mut Micro, f: u16, line: &str) {
+    for code in line.split(' ') {
+        if code.len() < 4 {
+            continue;
+        }
+        let (which, rest) = code.split_at(2);
+        let Some((c, v)) = rest.split_once('=') else { continue };
+        let (Ok(c), Ok(v)) = (c.parse::<u8>(), v.parse::<i32>()) else { continue };
+        let which = match which {
+            "lp" => LP,
+            "rp" => RP,
+            _ => EF,
+        };
+        micro.set(f, which, c, v);
+    }
+}
+
 impl Machine<'_, '_> {
-    /// microtype's `\MT@setupfont` for text font `f`, once: its codes and its
-    /// `\pdffontexpand` from the table; a font the table lacks goes to the engine.
+    /// microtype's `\MT@setupfont` for NFSS name `key` (`<enc>/<family>/<series>/<shape>`)
+    /// and font `f`: mutates `f`'s current codes to match this configuration on first use.
     pub(super) fn microtype_setup(&mut self, key: &str, f: u16) {
         // microtype's sets (`alltext`): the text encodings; others it leaves alone.
         if !matches!(key.split('/').next(), Some("OT1" | "T1" | "TS1")) {
@@ -649,35 +687,66 @@ impl Machine<'_, '_> {
             return self.not_native("microtype: a substituted font shape with codes of its own");
         }
         let Some(doc) = self.doc.as_mut() else { return };
-        if doc.mt_fonts.contains(&f) {
+        if doc.mt_nfss_seen.iter().any(|(k, s)| k == key && *s == size) {
             return;
         }
-        doc.mt_fonts.push(f);
+        doc.mt_nfss_seen.push((key.to_string(), size));
+
         let font = &self.e.fonts.list[f as usize];
-        let Some(&line) = microtype_table().fonts.get(&(&*font.name, font.size)) else {
-            return self.not_native("microtype: a font without its codes");
-        };
-        let mut w = line.split(' ');
-        let expand = match w.next() {
-            Some("-") | None => None,
-            Some(stretch) => {
-                let mut n = || w.next().and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
-                Some((stretch.parse::<i32>().unwrap_or(0), n(), n(), n() != 0))
-            }
-        };
-        for code in w {
-            let (which, rest) = code.split_at(2);
-            let Some((c, v)) = rest.split_once('=') else { continue };
-            let (Ok(c), Ok(v)) = (c.parse::<u8>(), v.parse::<i32>()) else { continue };
-            let which = match which {
-                "lp" => LP,
-                "rp" => RP,
-                _ => EF,
+        // On first use of this underlying font f, load its base codes from microtype.txt:
+        if self.e.fonts.micro.codes.get(self.e.fonts.micro.owner(f) as usize).and_then(|c| c.as_ref()).is_none() {
+            let Some(&line) = microtype_table().fonts.get(&(&*font.name, font.size)) else {
+                return self.not_native("microtype: a font without its codes");
             };
-            self.e.fonts.micro.set(f, which, c, v);
+            let mut w = line.split(' ');
+            let expand = match w.next() {
+                Some("-") | None => None,
+                Some(stretch) => {
+                    let mut n = || w.next().and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+                    Some((stretch.parse::<i32>().unwrap_or(0), n(), n(), n() != 0))
+                }
+            };
+            apply_code_str(&mut self.e.fonts.micro, f, line.split_once(' ').map_or("", |x| x.1));
+            if let Some((stretch, shrink, step, auto)) = expand {
+                self.set_expand_params(f, auto, stretch, shrink, step);
+            }
         }
-        if let Some((stretch, shrink, step, auto)) = expand {
-            self.set_expand_params(f, auto, stretch, shrink, step);
+
+        // Apply dynamic NFSS configuration overrides:
+        let mut parts = key.split('/');
+        let _enc = parts.next().unwrap_or("");
+        let fam = parts.next().unwrap_or("");
+        let ser = parts.next().unwrap_or("");
+        let sh = parts.next().unwrap_or("");
+
+        type ProtrusionDiffs = (&'static [(u8, i32)], &'static [(u8, i32)]);
+        let diffs: Option<ProtrusionDiffs> = match fam {
+            "ntxtlf" => {
+                if (ser == "b" || ser == "bx") && (sh == "n" || sh.is_empty()) {
+                    Some((DIFF_PTM_B_LP, DIFF_PTM_B_RP))
+                } else if (ser == "m" || ser.is_empty()) && (sh == "n" || sh.is_empty()) {
+                    Some((DIFF_PTM_M_LP, DIFF_PTM_M_RP))
+                } else {
+                    None
+                }
+            }
+            "minntx" => {
+                if ser == "b" || ser == "bx" {
+                    Some((DIFF_MIN_B_LP, DIFF_MIN_B_RP))
+                } else {
+                    Some((DIFF_MIN_M_LP, DIFF_MIN_M_RP))
+                }
+            }
+            _ => None,
+        };
+
+        if let Some((lp_diff, rp_diff)) = diffs {
+            for &(c, v) in lp_diff {
+                self.e.fonts.micro.set(f, LP, c, v);
+            }
+            for &(c, v) in rp_diff {
+                self.e.fonts.micro.set(f, RP, c, v);
+            }
         }
     }
 }

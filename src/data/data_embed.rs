@@ -344,10 +344,16 @@ pub fn builtin_encoding_names(clear: &[u8]) -> Vec<String> {
         if w != "dup" {
             continue;
         }
-        let (Some(code), Some(name)) = (t.next(), t.next()) else { break };
-        if let (Ok(c), Some(n)) = (code.parse::<usize>(), name.strip_prefix('/')) {
-            if c < 256 {
-                names[c] = n.to_string();
+        let Some(rest) = t.next() else { break };
+        let (code, name) = if let Some((c, n)) = rest.split_once('/') {
+            (c, n)
+        } else {
+            let Some(name) = t.next() else { break };
+            (rest, name.strip_prefix('/').unwrap_or(""))
+        };
+        if let Ok(c) = code.parse::<usize>() {
+            if c < 256 && !name.is_empty() {
+                names[c] = name.to_string();
             }
         }
     }

@@ -186,6 +186,7 @@ enum PathOpt {
 struct PathCmd {
     fill: bool,
     draw: bool,
+    clip: bool,
     opts: Vec<PathOpt>,
     /// `rounded corners=<r>`, in sp; 0 without.
     round: i32,
@@ -224,6 +225,68 @@ struct PathCmd {
     /// `shorten <`, `shorten >` (`\pgf@shorten@start@additional`, `..end..`): each end drawn
     /// back by that much more, a tip with it.
     shorten: [i32; 2],
+    /// Options controlling `plot`: `domain`, `samples`, `variable`, `smooth`.
+    plot_opts: PlotOpts,
+    /// TikZ path decoration (`snake`, `zigzag`, `coil`).
+    decoration: Decoration,
+    /// `use as bounding box` (tikz.code.tex:534, `/pgf/use as bounding box`): after this path
+    /// (its own points count) nothing else widens the picture (`\pgf@up@bb`).
+    use_bb: bool,
+    /// The path is `svg {..}` (tikzlibrarysvg.path.code.tex): no first point, its own `M` moves.
+    svg: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DecoKind {
+    None,
+    Snake,
+    Zigzag,
+    Coil,
+}
+
+#[derive(Clone, Debug)]
+struct Decoration {
+    active: bool,
+    kind: DecoKind,
+    amplitude: i32,
+    segment_length: i32,
+    pre_length: i32,
+    post_length: i32,
+    aspect: i32,
+}
+
+impl Default for Decoration {
+    fn default() -> Self {
+        Self {
+            active: false,
+            kind: DecoKind::None,
+            amplitude: 163840,
+            segment_length: 655360,
+            pre_length: 0,
+            post_length: 0,
+            aspect: 32768,
+        }
+    }
+}
+
+/// Options controlling `plot`: `domain`, `samples`, `variable`, `smooth`.
+#[derive(Clone, Debug)]
+struct PlotOpts {
+    domain: (i32, i32),
+    samples: u32,
+    variable: String,
+    smooth: bool,
+}
+
+impl Default for PlotOpts {
+    fn default() -> Self {
+        Self {
+            domain: (-5 * pgfmath::PT, 5 * pgfmath::PT),
+            samples: 25,
+            variable: r"\x".to_string(),
+            smooth: false,
+        }
+    }
 }
 
 /// What a picture holds, in order.
@@ -288,7 +351,10 @@ fn strip_comments(s: &str) -> Option<String> {
                     it.next();
                 }
             }
-            '\\' if it.peek() == Some(&'%') => return None,
+            '\\' if it.peek() == Some(&'%') => {
+                out.push('\\');
+                out.push(it.next().unwrap());
+            }
             _ => out.push(c),
         }
     }
@@ -319,36 +385,101 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// The text up to the `]` closing a key list (no nested brackets).
+    /// `\begin{scope}` or `\end{scope}` (`cs` `begin`/`end`): the blanks after a control word are
+    /// skipped as TeX reads them, so `\end {scope}`, how a macro's tokens show, is the same.
+    fn eat_scope(&mut self, cs: &str) -> bool {
+        let Some(r) = self.s.strip_prefix('\\').and_then(|r| r.strip_prefix(cs)) else { return false };
+        match r.trim_start_matches([' ', '\t', '\n']).strip_prefix("{scope}") {
+            Some(r) => {
+                self.s = r;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The text up to the `]` closing a key list (respecting `{...}` nesting).
     fn bracketed(&mut self) -> Option<&'a str> {
-        let k = self.s.find(']')?;
+        let mut b_depth = 0i32;
+        let mut close = None;
+        for (i, ch) in self.s.char_indices() {
+            match ch {
+                '{' => b_depth += 1,
+                '}' => {
+                    b_depth -= 1;
+                    if b_depth < 0 {
+                        return None;
+                    }
+                }
+                ']' if b_depth == 0 => {
+                    close = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let k = close?;
         let inner = &self.s[..k];
-        // Braces only balanced and one deep (`shift={(1,2)}`); the keys' readers check them.
-        // Commands only within braces (a style's `font=\small`), which the reader of the
-        // style's keys checks again.
+        // Braces only balanced and up to two deep (`font={\fontsize{8}{9}\selectfont}`); the keys' readers check them.
+        // Commands only within braces, or for `variable=` and `font=`, which the readers check.
         let mut depth = 0i32;
-        for ch in inner.chars() {
+        let mut in_cmd_key = false;
+        for (i, ch) in inner.char_indices() {
             depth += match ch {
                 '{' => 1,
                 '}' => -1,
                 _ => 0,
             };
-            if !(0..=1).contains(&depth) || ch == '\\' && depth == 0 {
+            if depth == 0 && (inner[..i].trim_end().ends_with("variable=") || inner[..i].trim_end().ends_with("font=")) {
+                in_cmd_key = true;
+            } else if ch == ',' && depth == 0 {
+                in_cmd_key = false;
+            }
+            if !(0..=2).contains(&depth) || ch == '\\' && depth == 0 && !in_cmd_key || ch == '[' && depth == 0 {
                 return None;
             }
         }
-        if depth != 0 || inner.contains('[') {
+        if depth != 0 {
             return None;
         }
         self.s = &self.s[k + 1..];
         Some(inner)
     }
 
-    /// The text up to the `)` closing a coordinate (no nesting).
+    /// The text up to the `)` closing a coordinate (respecting `{...}` and `(...)` nesting).
     fn parenthesized(&mut self) -> Option<&'a str> {
-        let k = self.s.find(')')?;
+        let mut brace_depth = 0i32;
+        let mut paren_depth = 0i32;
+        let mut close = None;
+        for (i, ch) in self.s.char_indices() {
+            match ch {
+                '{' => brace_depth += 1,
+                '}' => {
+                    brace_depth -= 1;
+                    if brace_depth < 0 {
+                        return None;
+                    }
+                }
+                '(' if brace_depth > 0 => paren_depth += 1,
+                ')' if brace_depth > 0 => {
+                    paren_depth -= 1;
+                    if paren_depth < 0 {
+                        return None;
+                    }
+                }
+                ')' if brace_depth == 0 => {
+                    close = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let k = close?;
+        if brace_depth != 0 || paren_depth != 0 {
+            return None;
+        }
         let inner = &self.s[..k];
-        if inner.contains(['(', '{', '}', '$']) {
+        if inner.contains('$') {
             return None;
         }
         self.s = &self.s[k + 1..];
@@ -486,6 +617,7 @@ impl Tf {
     fn turns(&self) -> bool {
         self.ab != 0 || self.ba != 0
     }
+
 }
 
 /// What a picture's points may name: LaTeX's length registers (by a lookup the caller
@@ -533,17 +665,46 @@ struct Ctx<'d> {
     /// The picture's `auto` (`\tikz@install@auto@anchor`): a path label's anchor then comes
     /// from its segment's direction, not drawn here, so labels decline.
     auto: bool,
+    /// The picture's or scope's `font=` (`\tikz@textfont`), inherited by each node.
+    font: String,
 }
 
 /// The length registers a point may name (`(\linewidth,0)`): pgfmath prints the length in
 /// pt, which reads back as itself.
 const REGISTERS: [&str; 6] = ["linewidth", "textwidth", "textheight", "columnwidth", "paperwidth", "paperheight"];
 
+pub(super) fn strip_braces(mut s: &str) -> &str {
+    s = s.trim();
+    while s.starts_with('{') && s.ends_with('}') {
+        let b = s.as_bytes();
+        let mut depth = 0;
+        let mut matched = false;
+        for (i, &c) in b.iter().enumerate() {
+            if c == b'{' {
+                depth += 1;
+            } else if c == b'}' {
+                depth -= 1;
+                if depth == 0 {
+                    matched = i == b.len() - 1;
+                    break;
+                }
+            }
+        }
+        if matched {
+            s = s[1..s.len() - 1].trim();
+        } else {
+            break;
+        }
+    }
+    s
+}
+
 /// One coordinate of `(x,y)`: `\tikz@checkunit` parses it with pgfmath; without a unit it is
 /// that number times the unit vector (`\pgfpointxy`), else the length (`\pgfpoint`). tikz.code.tex `\tikz@@@parse@regular` treats the two
 /// coordinates apart (`\pgfpointadd{\pgfpoint{x}{0pt}}{\pgfpointxy{0}{y}}` when only one has a
 /// unit; the other's term is an exact zero), so each is computed alone.
 fn component(v: &str, ctx: &Ctx, axis: usize) -> Option<i32> {
+    let v = strip_braces(v);
     let reg = |name: &str| REGISTERS.contains(&name).then(|| (ctx.dims)(name)).flatten();
     let (v, units) = pgfmath::parse(v, &reg)?;
     // Far below `\maxdimen`, so no sum of the picture overflows.
@@ -830,6 +991,19 @@ fn arc_point(a: i32, r: [i32; 2], unitless: bool, ctx: &Ctx) -> (i32, i32) {
     }
 }
 
+fn split_point_coords(s: &str) -> Option<(&str, &str)> {
+    let mut depth = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' | '(' => depth += 1,
+            '}' | ')' => depth -= 1,
+            ',' if depth == 0 => return Some((&s[..i], &s[i + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// A point: `(x,y)`, `(a:r)`, `(name)` of a `\coordinate`, `+(..)` or `++(..)` relative to `last`, or
 /// (in a `remember picture,overlay` picture) `([shifts]current page.<anchor>)`. The second
 /// value is whether the point becomes tikz's last point (`+` leaves it).
@@ -851,7 +1025,7 @@ fn point(c: &mut Cursor, ctx: &Ctx, last: (i32, i32)) -> Option<(Pt, bool)> {
         return calc_point(c, ctx).map(|q| (q, true));
     }
     let inner = c.parenthesized()?;
-    let (x, y) = match inner.split_once(',') {
+    let (x, y) = match split_point_coords(inner) {
         Some((x, y)) => (component(x, ctx, 0)?, component(y, ctx, 1)?),
         None if inner.contains(':') => polar(inner, ctx)?,
         None if rel != 0 => return None,
@@ -963,12 +1137,62 @@ fn color_spec(s: &str) -> Option<String> {
     (s.starts_with(|ch: char| ch.is_ascii_alphabetic()) && s.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '!' || ch == '.')).then(|| s.to_string())
 }
 
+pub(super) fn split_key_val(item: &str) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    for (i, ch) in item.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            '=' if depth == 0 => return Some((item[..i].trim(), item[i + 1..].trim())),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Options for `plot`: `domain`, `samples`, `variable`, `smooth`.
+fn apply_plot_opt(item: &str, opts: &mut PlotOpts) -> Option<bool> {
+    let item = item.trim();
+    if item == "smooth" {
+        opts.smooth = true;
+        return Some(true);
+    }
+    if let Some((k, v)) = split_key_val(item) {
+        match k.trim() {
+            "domain" => {
+                let (s_str, e_str) = v.split_once(':')?;
+                let (s, _) = pgfmath::parse(s_str.trim(), &|_| None)?;
+                let (e, _) = pgfmath::parse(e_str.trim(), &|_| None)?;
+                opts.domain = (s, e);
+                return Some(true);
+            }
+            "samples" => {
+                let (n, _) = pgfmath::parse(v.trim(), &|_| None)?;
+                opts.samples = ((n / pgfmath::PT).max(2)) as u32;
+                return Some(true);
+            }
+            "variable" => {
+                opts.variable = v.trim().to_string();
+                return Some(true);
+            }
+            _ => {}
+        }
+    }
+    Some(false)
+}
+
 /// A path's `[options]`: into `p`'s modes, options and corner radius.
 fn path_options(list: &str, p: &mut PathCmd, ctx: &Ctx) -> Option<()> {
     // tikz's `\tikz@addtransform`: in written order after the picture's.
     for item in key_items(list) {
         let item = item.trim();
-        if let Some((k, v)) = item.split_once('=') {
+        if item.is_empty() {
+            continue;
+        }
+        if apply_plot_opt(item, &mut p.plot_opts)? {
+            continue;
+        }
+        if let Some((k, v)) = split_key_val(item) {
             match k.trim() {
                 "line width" => p.opts.push(PathOpt::Width(width_value(v)?)),
                 "shorten <" => p.shorten[0] = length(v).filter(|l| *l >= 0)?,
@@ -981,6 +1205,7 @@ fn path_options(list: &str, p: &mut PathCmd, ctx: &Ctx) -> Option<()> {
                     p.fill = true;
                     p.opts.push(PathOpt::Fill(color_spec(v)?));
                 }
+                "clip" => p.clip = true,
                 "rounded corners" => p.round = length(v).filter(|r| *r > 0)?,
                 // tikz.code.tex:189, 243, 248: `\pgfsetstrokeopacity`, `\pgfsetfillopacity`,
                 // `opacity` both (stroke first), each `\pgfmathparse`d; values in 0..1.
@@ -1036,6 +1261,64 @@ fn path_options(list: &str, p: &mut PathCmd, ctx: &Ctx) -> Option<()> {
                 }
                 // `\pgftransformrotate`: no space, no scope.
                 "rotate" => p.tf = p.tf.rotate(angle(v)?),
+                "rotate around" => {
+                    let v = strip_braces(v);
+                    let (ang, pt_src) = v.split_once(':')?;
+                    let ang = angle(ang)?;
+                    let pt_src = pt_src.trim();
+                    let pt_buf = if pt_src.starts_with('(') { pt_src.to_string() } else { format!("({pt_src})") };
+                    let mut pc = Cursor { s: &pt_buf };
+                    let (Pt::At(x, y), _) = point(&mut pc, ctx, (0, 0))? else { return None };
+                    p.tf = p.tf.shift(x, y).rotate(ang).shift(-x, -y);
+                }
+                "decoration" => {
+                    let inner = strip_braces(v);
+                    for sub in key_items(inner) {
+                        let sub = sub.trim();
+                        if sub.is_empty() {
+                            continue;
+                        }
+                        match sub {
+                            "snake" => p.decoration.kind = DecoKind::Snake,
+                            "zigzag" => p.decoration.kind = DecoKind::Zigzag,
+                            "coil" => p.decoration.kind = DecoKind::Coil,
+                            _ => {
+                                if let Some((sk, sv)) = sub.split_once('=') {
+                                    match sk.trim() {
+                                        "amplitude" => p.decoration.amplitude = length(sv)?,
+                                        "segment length" => p.decoration.segment_length = length(sv)?,
+                                        "pre length" => p.decoration.pre_length = length(sv)?,
+                                        "post length" => p.decoration.post_length = length(sv)?,
+                                        "aspect" => p.decoration.aspect = number(sv)?,
+                                        _ => return None,
+                                    }
+                                } else {
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                }
+                "amplitude" => p.decoration.amplitude = length(v)?,
+                "segment length" => p.decoration.segment_length = length(v)?,
+                "pre length" => p.decoration.pre_length = length(v)?,
+                "post length" => p.decoration.post_length = length(v)?,
+                "aspect" => p.decoration.aspect = number(v)?,
+                "decorate" => p.decoration.active = v.trim() != "false",
+                ">" => {
+                    let v = strip_braces(v);
+                    if matches!(v, "stealth" | "latex" | "stealth'" | "Latex" | "Stealth") {
+                        p.tip = match v {
+                            "Latex" => Tip::Latex,
+                            "Stealth" => Tip::Stealth,
+                            "stealth" => Tip::OldStealth,
+                            "stealth'" => Tip::StealthPrime,
+                            _ => Tip::OldLatex,
+                        };
+                    } else {
+                        return None;
+                    }
+                }
                 _ => return None,
             }
         } else if let Some((_, w)) = WIDTHS.iter().find(|(n, _)| *n == item) {
@@ -1046,6 +1329,9 @@ fn path_options(list: &str, p: &mut PathCmd, ctx: &Ctx) -> Option<()> {
             match item {
                 "draw" => p.draw = true,
                 "fill" => p.fill = true,
+                "clip" => p.clip = true,
+                "use as bounding box" => p.use_bb = true,
+                "decorate" => p.decoration.active = true,
                 "rounded corners" => p.round = 4 << 16,
                 // tikz.code.tex `\tikz@processarrows`: `-` splits the start tip from the end
                 // tip; `<`, `>` are `to` (`\pgfarrowsdeclarealias{<}{>}{to}{to}`).
@@ -1054,12 +1340,34 @@ fn path_options(list: &str, p: &mut PathCmd, ctx: &Ctx) -> Option<()> {
                 "<-" => (p.arrows, p.own_arrows, p.tip) = ([true, false], true, ctx.gt),
                 "<->" => (p.arrows, p.own_arrows, p.tip) = ([true, true], true, ctx.gt),
                 "-" => (p.arrows, p.own_arrows, p.tip) = ([false; 2], true, ctx.gt),
-                "-stealth" => (p.arrows, p.own_arrows, p.tip) = ([false, true], true, Tip::Stealth),
-                "stealth-" => (p.arrows, p.own_arrows, p.tip) = ([true, false], true, Tip::Stealth),
-                "stealth-stealth" => (p.arrows, p.own_arrows, p.tip) = ([true, true], true, Tip::Stealth),
+                "|-|" => (p.arrows, p.own_arrows, p.tip) = ([true, true], true, Tip::Bar),
+                "|-" => (p.arrows, p.own_arrows, p.tip) = ([true, false], true, Tip::Bar),
+                "-|" => (p.arrows, p.own_arrows, p.tip) = ([false, true], true, Tip::Bar),
+                "-stealth" => (p.arrows, p.own_arrows, p.tip) = ([false, true], true, Tip::OldStealth),
+                "stealth-" => (p.arrows, p.own_arrows, p.tip) = ([true, false], true, Tip::OldStealth),
+                "stealth-stealth" => (p.arrows, p.own_arrows, p.tip) = ([true, true], true, Tip::OldStealth),
+                "-Stealth" => (p.arrows, p.own_arrows, p.tip) = ([false, true], true, Tip::Stealth),
+                "Stealth-" => (p.arrows, p.own_arrows, p.tip) = ([true, false], true, Tip::Stealth),
+                "Stealth-Stealth" => (p.arrows, p.own_arrows, p.tip) = ([true, true], true, Tip::Stealth),
                 "-latex" => (p.arrows, p.own_arrows, p.tip) = ([false, true], true, Tip::OldLatex),
                 "latex-" => (p.arrows, p.own_arrows, p.tip) = ([true, false], true, Tip::OldLatex),
                 "latex-latex" => (p.arrows, p.own_arrows, p.tip) = ([true, true], true, Tip::OldLatex),
+                // Tip options (`Stealth[length=2mm]`) change the tip's parameters and its instance
+                // name: declined, not ignored.
+                s if (s.contains("Stealth") || s.contains("Latex")) && s.contains('[') => return None,
+                // Tip options (`Stealth[length=2mm]`) change the tip's parameters and its instance
+                // name: declined, not ignored.
+                s if (s.contains("Stealth") || s.contains("Latex")) && s.contains('[') => return None,
+                s if s.contains("Stealth") && s.contains('-') => {
+                    let has_start = s.starts_with('{') || s.starts_with("Stealth");
+                    let has_end = s.ends_with('}') || s.ends_with("Stealth");
+                    (p.arrows, p.own_arrows, p.tip) = ([has_start, has_end], true, Tip::Stealth);
+                }
+                s if s.contains("Latex") && s.contains('-') => {
+                    let has_start = s.starts_with('{') || s.starts_with("Latex");
+                    let has_end = s.ends_with('}') || s.ends_with("Latex");
+                    (p.arrows, p.own_arrows, p.tip) = ([has_start, has_end], true, Tip::Latex);
+                }
                 "-stealth'" => (p.arrows, p.own_arrows, p.tip) = ([false, true], true, Tip::StealthPrime),
                 "stealth'-" => (p.arrows, p.own_arrows, p.tip) = ([true, false], true, Tip::StealthPrime),
                 "stealth'-stealth'" => (p.arrows, p.own_arrows, p.tip) = ([true, true], true, Tip::StealthPrime),
@@ -1156,12 +1464,33 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
     // tikz's `\tikz@lastx`, `\tikz@lasty` start at the origin.
     ctx.spaces.set(0);
     ctx.shape_ref.set(None);
+    let word = |c: &Cursor, w: &str| c.s.starts_with(w) && !c.s[w.len()..].starts_with(|ch: char| ch.is_ascii_alphabetic());
+    // `\path svg {d};`: tikz's `s` + `vg`, then the library's `\pgfpathsvg`, no first point (its
+    // `M` is the first moveto). Nothing else on the path: no tips, rounding, decoration or nodes.
+    if word(c, "svg") {
+        c.eat("svg");
+        c.blanks()?;
+        let d = braced(c)?;
+        c.blanks()?;
+        if !c.eat(";") {
+            return None;
+        }
+        if !p.draw {
+            (p.arrows, p.shorten) = ([false; 2], [0; 2]);
+        }
+        if p.arrows != [false; 2] || p.shorten != [0; 2] || p.round != 0 || p.decoration.active {
+            return None;
+        }
+        p.segs = svg_segs(d)?.into_iter().map(|s| (s, true)).collect();
+        p.svg = true;
+        return Some(p);
+    }
     let mut plot_segs = Vec::new();
     // The text of the last point, absolute and written alone (an `edge`'s `\tikztostart`).
     let mut last_src: Option<&str> = None;
     let mut edges: Vec<PathCmd> = Vec::new();
-    let start = if c.s.starts_with("plot") && !c.s[4..].starts_with(|ch: char| ch.is_ascii_alphabetic()) {
-        let (s, segs) = smooth_plot(c, ctx)?;
+    let start = if word(c, "plot") {
+        let (s, segs) = parse_plot(c, ctx, &p.plot_opts, true, false)?;
         plot_segs = segs;
         Pt::At(s.0, s.1)
     } else {
@@ -1180,19 +1509,34 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
     // `\tikz@lastx` (every point) beside `last`, `\tikz@lastxsaved` (not moved by `+`).
     let mut cur = last;
     let mut sub_start = last;
-    if let Some(Seg::Curve(q, _)) = plot_segs.last() {
-        (last, cur) = (q[2], q[2]);
+    for s in &plot_segs {
+        match s {
+            Seg::Curve(q, _) => (last, cur) = (q[2], q[2]),
+            Seg::Line(Pt::At(x, y)) | Seg::Move(Pt::At(x, y)) => (last, cur) = ((*x, *y), (*x, *y)),
+            _ => {}
+        }
     }
     p.segs.extend(plot_segs.into_iter().map(|s| (s, true)));
     // Its nodes: each with the segment it is on (its timer's) and whether it is within one.
     let mut on_path: Vec<(node::NodeCmd, usize, bool)> = Vec::new();
-    let word = |c: &Cursor, w: &str| c.s.starts_with(w) && !c.s[w.len()..].starts_with(|ch: char| ch.is_ascii_alphabetic());
     loop {
         c.blanks()?;
         if c.eat(";") {
             break;
         }
         let was_plain = std::mem::replace(&mut plain_last, false);
+        if word(c, "plot") {
+            let (_, segs) = parse_plot(c, ctx, &p.plot_opts, false, false)?;
+            for s in &segs {
+                match s {
+                    Seg::Curve(q, _) => (last, cur) = (q[2], q[2]),
+                    Seg::Line(Pt::At(x, y)) | Seg::Move(Pt::At(x, y)) => (last, cur) = ((*x, *y), (*x, *y)),
+                    _ => {}
+                }
+            }
+            p.segs.extend(segs.into_iter().map(|s| (s, true)));
+            continue;
+        }
         // `to[out=a,in=b]`, `to[bend left]`, `to[bend right=a]` between two points written as
         // coordinates: the topaths library's `\tikz@to@curve@path`, a curve (tikzlibrarytopaths
         // .code.tex `\tikz@to@compute`, `\tikz@to@compute@relative`).
@@ -1217,7 +1561,9 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
             // A node at the start: the point before (the path's start or a moveto) alone.
             let from_node = refs.last().filter(|r| r.0 == p.segs.len()).map(|r| r.1);
             let moved_to = p.segs.last().is_none_or(|(s, m)| *m && matches!(s, Seg::Move(_)));
-            if !(was_plain || from_node.is_some() && moved_to) || last != cur || ctx.tf != Tf::ID || !c.s.starts_with('(') {
+            if !(was_plain || from_node.is_some() && moved_to) || last != cur || !c.s.starts_with('(') {
+                #[cfg(test)]
+                println!("DEBUG to fail: was_plain={}, from_node={:?}, moved_to={}, last==cur {}, c.s starts with ( {}", was_plain, from_node, moved_to, last == cur, c.s.starts_with('('));
                 return None;
             }
             let before = c.s;
@@ -1321,7 +1667,7 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
             let op = if bend.is_empty() { "--".to_string() } else { format!("to[{},{EDGE_MARK}]", bend.join(",")) };
             let text = if rest.is_empty() { format!("{start} {op} {labels}({target});") } else { format!("[{rest}] {start} {op} {labels}({target});") };
             let saved = (ctx.spaces.take(), ctx.shape_ref.take());
-            let e = PathCmd { fill: false, draw: true, opts: Vec::new(), round: 0, start: Pt::At(0, 0), segs: Vec::new(), tf: ctx.tf, unskips: 0, spaces: 0, arrows: p.arrows, own_arrows: false, tip: p.tip, nudges: Vec::new(), base_width: line_width(&p), nodes: Vec::new(), step: [GRID_STEP; 2], edges: Vec::new(), edge: None, bare: false, shorten: ctx.shorten };
+            let e = PathCmd { fill: false, draw: true, clip: false, opts: Vec::new(), round: 0, start: Pt::At(0, 0), segs: Vec::new(), tf: ctx.tf, unskips: 0, spaces: 0, arrows: p.arrows, own_arrows: false, tip: p.tip, nudges: Vec::new(), base_width: line_width(&p), nodes: Vec::new(), step: [GRID_STEP; 2], edges: Vec::new(), edge: None, bare: false, shorten: ctx.shorten, plot_opts: p.plot_opts.clone(), decoration: Decoration::default(), use_bb: false, svg: false };
             let e = path(&mut Cursor { s: &text }, ctx, e, overlay);
             ctx.spaces.set(saved.0);
             ctx.shape_ref.set(saved.1);
@@ -1335,7 +1681,16 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
         // `node` after a point: at it, or with `pos=` on the segment before it.
         if word(c, "node") {
             c.eat("node");
-            on_path.push((node::parse_on_path(c, ctx, overlay)?, p.segs.len(), false));
+            let np = match node::parse_on_path(c, ctx, overlay) {
+                Some(np) => np,
+                None => {
+                    #[cfg(test)]
+                    println!("DEBUG: node::parse_on_path returned None: {:?}", &c.s[..c.s.len().min(60)]);
+                    return None;
+                }
+            };
+            on_path.push((np, p.segs.len(), false));
+            plain_last = was_plain;
             continue;
         }
         // `to (p)` without options: `\tikz@do@to` puts in the default `to path`, `-- (\tikztotarget)
@@ -1355,6 +1710,17 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
             }
             if !to && c.eat("cycle") {
                 (Seg::Cycle, true)
+            } else if !to && word(c, "plot") {
+                let (_, segs) = parse_plot(c, ctx, &p.plot_opts, false, true)?;
+                for s in &segs {
+                    match s {
+                        Seg::Curve(q, _) => (last, cur) = (q[2], q[2]),
+                        Seg::Line(Pt::At(x, y)) | Seg::Move(Pt::At(x, y)) => (last, cur) = ((*x, *y), (*x, *y)),
+                        _ => {}
+                    }
+                }
+                p.segs.extend(segs.into_iter().map(|s| (s, true)));
+                continue;
             } else {
                 if to && !c.s.starts_with('(') {
                     return None;
@@ -1366,31 +1732,45 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
             // tikz.code.tex `\tikz@curveto`: `controls (a) and (b) .. (c)`, points of the
             // picture, no relative ones (they count from the controls).
             c.blanks()?;
-            if !c.eat("controls") {
+            if c.eat("cycle") {
+                (Seg::Cycle, true)
+            } else if !c.eat("controls") {
                 return None;
-            }
-            let mut q = [(0, 0); 3];
-            // `controls (a) .. (c)`: `\tikz@curveA` lets the second support be the first.
-            let mut k = 0;
-            while k < 3 {
-                c.blanks()?;
-                if !c.s.starts_with('(') {
-                    return None;
-                }
-                let (Pt::At(x, y), _) = point(c, ctx, last)? else { return None };
-                q[k] = (x, y);
-                if k < 2 {
+            } else {
+                let mut q = [(0, 0); 3];
+                // `controls (a) .. (c)`: `\tikz@curveA` lets the second support be the first.
+                let mut k = 0;
+                let mut is_cycle = false;
+                while k < 3 {
                     c.blanks()?;
-                    if k == 0 && c.eat("..") {
-                        q[1] = q[0];
-                        k = 1;
-                    } else if !c.eat(if k == 0 { "and" } else { ".." }) {
+                    if k == 2 && c.eat("cycle") {
+                        q[2] = sub_start;
+                        is_cycle = true;
+                        break;
+                    }
+                    if !c.s.starts_with('(') {
                         return None;
                     }
+                    let (Pt::At(x, y), _) = point(c, ctx, last)? else { return None };
+                    q[k] = (x, y);
+                    if k < 2 {
+                        c.blanks()?;
+                        if k == 0 && c.eat("..") {
+                            q[1] = q[0];
+                            k = 1;
+                        } else if !c.eat(if k == 0 { "and" } else { ".." }) {
+                            return None;
+                        }
+                    }
+                    k += 1;
                 }
-                k += 1;
+                if is_cycle {
+                    p.segs.push((Seg::Curve(q, 0), true));
+                    (Seg::Cycle, true)
+                } else {
+                    (Seg::Curve(q, 0), true)
+                }
             }
-            (Seg::Curve(q, 0), true)
         } else if c.s.starts_with("-|") || c.s.starts_with("|-") {
             let hv = c.eat("-|") || !c.eat("|-");
             c.blanks()?;
@@ -1479,7 +1859,7 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
         // Its tips are its edges' (taken above); the point itself has none.
         p.arrows = [false; 2];
         p.edges = edges;
-    } else if undrawn_opts || (p.segs.is_empty() || !(p.draw || p.fill)) && on_path.is_empty() || !(p.draw || p.fill) && !p.segs.is_empty() {
+    } else if undrawn_opts || (p.segs.is_empty() || !(p.draw || p.fill || p.clip)) && on_path.is_empty() && !(p.use_bb && !p.segs.is_empty()) || !(p.draw || p.fill || p.clip || p.use_bb) && !p.segs.is_empty() {
         return None;
     }
     // A bare name's shape scan typesets its space (half of what a border's takes; a
@@ -1495,6 +1875,7 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
                 Seg::Curve(q, _) if *m => v.push(q[2]),
                 // A circle leaves `\tikz@lastx` at its centre: a node after it sits there.
                 Seg::Circle(..) => v.push(*v.last()?),
+                Seg::Arc { to, .. } if *m => v.push(*to),
                 _ => return None,
             }
         }
@@ -1511,15 +1892,11 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
         // opacity); each on a segment's line, or at a point that is no node.
         // A lone point's nodes in a transformed picture sit as `\node at` there does (its
         // point through the picture's matrix).
-        let lone = p.segs.is_empty() && p.tf == ctx.tf;
-        if p.opts.iter().any(|o| matches!(o, PathOpt::Opacity(..))) || p.tf != Tf::ID && !lone || p.unskips != 0 {
+        if p.opts.iter().any(|o| matches!(o, PathOpt::Opacity(..))) || p.unskips != 0 {
             return None;
         }
         let after = pts(&p)?;
         for (mut n, k, mid) in on_path {
-            if p.tf != Tf::ID && (n.nudged() || n.timed()) {
-                return None;
-            }
             n.in_path_scope(&p.opts, p.base_width)?;
             if n.nudged() {
                 if mid {
@@ -1559,12 +1936,15 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
     for (k, (s, _)) in p.segs.iter().enumerate() {
         match s {
             Seg::Line(q) | Seg::Rect(q) => any_page |= page(q),
-            Seg::Cycle if k == 0 || !matches!(p.segs[k - 1].0, Seg::Line(_) | Seg::Arc { .. }) => return None,
+            Seg::Cycle if k == 0 || !matches!(p.segs[k - 1].0, Seg::Line(_) | Seg::Arc { .. } | Seg::Curve(..) | Seg::Hv(_) | Seg::Vh(_)) => return None,
             _ => {}
         }
     }
     // Rounded corners on rectangles, or on one run of straight lines (closed by `cycle` or not).
     if p.round != 0 && !p.segs.iter().all(|(s, _)| matches!(s, Seg::Rect(_))) && round_polyline(&p).is_none() {
+        return None;
+    }
+    if p.decoration.active && p.decoration.kind != DecoKind::None && decorate_path(&p, &mut Bbox { min: [0; 2], max: [0; 2] }).is_none() {
         return None;
     }
     // Tips only on a stroked path of straight lines whose end segments are longer than the
@@ -1584,11 +1964,8 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
             return None;
         }
         let [first, last] = tip_ends(&p)?;
-        let n = if p.segs.iter().all(|(s, _)| matches!(s, Seg::Line(_))) { p.segs.len() + 1 } else { 3 };
-        let ext = tip_extends(&p).0;
         let (l0, l1) = (reach(first.0, first.1), reach(last.0, last.1));
-        let take = |k: usize| ext * p.arrows[k] as i32 + p.shorten[k];
-        if l0 <= take(0) + if n == 2 { take(1) } else { 0 } || l1 <= take(1) + if n == 2 { take(0) } else { 0 } {
+        if l0 <= 0 || l1 <= 0 {
             return None;
         }
     }
@@ -1602,6 +1979,96 @@ fn path(c: &mut Cursor, ctx: &Ctx, mut p: PathCmd, overlay: bool) -> Option<Path
         return None;
     }
     Some(p)
+}
+
+/// `svg {d}` (tikzlibrarysvg.path.code.tex `\tikz@svg@path`, pgflibrarysvg.path.code.tex
+/// `\pgfpathsvg`): the segments of the compressed SVG path `d`, user coordinates in sp as the
+/// library's `\pgf@lib@svg@last@x` dimens hold them (the transformation is applied at
+/// emission, as `\pgfpathmoveto` does). Its states are ported for `M m L l H h V v C c Z z`
+/// with integer or decimal numbers: a number is the text `<digits>pt` TeX scans (`-` or a
+/// second `.` begins the next); a command's numbers come in whole groups (a short group would
+/// run the action on stale `\pgf@lib@svg@num@k`s), more groups repeat the action, and after
+/// `M`/`m` the rest are linetos (`\pgf@lib@svg@moveto`). The first command is `M` (a relative
+/// start is read from the transformed current point). `Q T A S s`, an exponent and a stray
+/// character are refused.
+fn svg_segs(d: &str) -> Option<Vec<Seg>> {
+    // Tokens: a command letter, then its numbers (each in sp).
+    let b = d.as_bytes();
+    let mut cmds: Vec<(u8, Vec<i32>)> = Vec::new();
+    let mut k = 0;
+    while k < b.len() {
+        match b[k] {
+            b' ' | b'\t' | b'\n' | b'\r' | b',' => k += 1,
+            c @ (b'M' | b'm' | b'L' | b'l' | b'H' | b'h' | b'V' | b'v' | b'C' | b'c' | b'Z' | b'z') => {
+                cmds.push((c, Vec::new()));
+                k += 1;
+            }
+            b'-' | b'+' | b'.' | b'0'..=b'9' => {
+                let start = k;
+                if matches!(b[k], b'-' | b'+') {
+                    k += 1;
+                }
+                let mut dot = false;
+                while k < b.len() && (b[k].is_ascii_digit() || (b[k] == b'.' && !std::mem::replace(&mut dot, true))) {
+                    k += 1;
+                }
+                let text = &d[start..k];
+                if !text.bytes().any(|c| c.is_ascii_digit()) {
+                    return None;
+                }
+                let sp = crate::backend::backend_scaled::scan_dimen(&format!("{text}pt"), 0, 0)?;
+                if sp.abs() >= 1 << 30 {
+                    return None;
+                }
+                cmds.last_mut()?.1.push(sp as i32);
+            }
+            _ => return None,
+        }
+    }
+    let (mut x, mut y) = (0i32, 0i32);
+    let mut segs = Vec::new();
+    for (n, (c, v)) in cmds.iter().enumerate() {
+        let arity = match c {
+            b'M' | b'm' | b'L' | b'l' => 2,
+            b'H' | b'h' | b'V' | b'v' => 1,
+            b'C' | b'c' => 6,
+            _ => 0,
+        };
+        if arity == 0 {
+            if !v.is_empty() {
+                return None;
+            }
+            segs.push(Seg::Cycle);
+            continue;
+        }
+        if v.is_empty() || v.len() % arity != 0 || (n == 0 && *c != b'M') {
+            return None;
+        }
+        let add = |a: i32, b: i32| a.checked_add(b).filter(|s| s.abs() < 1 << 30);
+        for (g, w) in v.chunks(arity).enumerate() {
+            let rel = c.is_ascii_lowercase();
+            // `M`'s and `m`'s first pair moves, the others are `\pgf@lib@svg@lineto`(`@rel`).
+            let moveto = g == 0 && matches!(c, b'M' | b'm');
+            let line = matches!(c, b'M' | b'm' | b'L' | b'l');
+            if line {
+                (x, y) = if rel { (add(x, w[0])?, add(y, w[1])?) } else { (w[0], w[1]) };
+                segs.push(if moveto { Seg::Move(Pt::At(x, y)) } else { Seg::Line(Pt::At(x, y)) });
+            } else if matches!(c, b'H' | b'h') {
+                x = if rel { add(x, w[0])? } else { w[0] };
+                segs.push(Seg::Line(Pt::At(x, y)));
+            } else if matches!(c, b'V' | b'v') {
+                y = if rel { add(y, w[0])? } else { w[0] };
+                segs.push(Seg::Line(Pt::At(x, y)));
+            } else {
+                // `\pgf@lib@svg@curveto`: absolute points; `@rel`: each plus the point before.
+                let pt = |i: usize| if rel { Some((add(x, w[i])?, add(y, w[i + 1])?)) } else { Some((w[i], w[i + 1])) };
+                let q = [pt(0)?, pt(2)?, pt(4)?];
+                (x, y) = q[2];
+                segs.push(Seg::Curve(q, 0));
+            }
+        }
+    }
+    Some(segs)
 }
 
 /// A path whose first or last point is a named node: tikz's `\iftikz@shapeborder` points
@@ -1658,17 +2125,32 @@ fn tip_ends(p: &PathCmd) -> Option<[TipEnd; 2]> {
         }
         return Some([(pts[0], pts[1]), (pts[n - 1], pts[n - 2])]);
     }
-    if p.tf != Tf::ID || p.segs.iter().any(|(s, m)| !*m || !matches!(s, Seg::Line(Pt::At(..)) | Seg::Curve(..))) {
+    if p.segs.iter().any(|(s, m)| !*m || !matches!(s, Seg::Line(Pt::At(..)) | Seg::Curve(..) | Seg::Arc { .. })) {
         return None;
     }
     let Pt::At(x, y) = p.start else { return None };
-    let start = (x, y);
-    // The points along the path: each segment's supports and end.
+    let start = p.tf.apply(x, y);
+    let mut from = start;
     let mut v = vec![start];
     for (s, _) in &p.segs {
         match s {
-            Seg::Line(Pt::At(x, y)) => v.push((*x, *y)),
-            Seg::Curve(q, _) => v.extend_from_slice(q),
+            Seg::Line(Pt::At(x, y)) => {
+                from = p.tf.apply(*x, *y);
+                v.push(from);
+            }
+            Seg::Curve(q, _) => {
+                let q = q.map(|(x, y)| p.tf.apply(x, y));
+                v.extend_from_slice(&q);
+                from = q[2];
+            }
+            Seg::Arc { s, e, r, unitless, axes, .. } => {
+                let (atf, r) = if *unitless { (p.tf.cm([axes[0], 0, 0, axes[1]], 0, 0), [1 << 16; 2]) } else { (p.tf, *r) };
+                for (a, b) in arc_pieces(*s, *e).0 {
+                    let pts = arc_piece(atf, a, b, r, from);
+                    v.extend_from_slice(&pts);
+                    from = pts[2];
+                }
+            }
             _ => return None,
         }
     }
@@ -1700,22 +2182,94 @@ fn points(p: &PathCmd, segs: &[(Seg, bool)]) -> Option<Vec<(i32, i32)>> {
     Some(user.into_iter().map(|(x, y)| p.tf.apply(x, y)).collect())
 }
 
-/// `plot[smooth] coordinates {(p1)(p2)..}` at a path's start (pgflibraryplothandlers.code.tex
-/// `\pgfplothandlercurveto`, tension 0.5: `\pgf@plottension` `0.13875`): the first point a
-/// moveto; then for each point after the second, the difference from the point two back
-/// times the tension, the curve to the middle point ending against it, the next curve
-/// starting along it; the last curve's second control its end. Points of the picture (no
-/// relative ones); `n - 2` spaces (probe).
-fn smooth_plot(c: &mut Cursor, ctx: &Ctx) -> Option<((i32, i32), Vec<Seg>)> {
-    c.eat("plot");
-    c.blanks()?;
-    if !c.eat("[") || c.bracketed()?.trim() != "smooth" {
+/// Read a parenthesized expression that may contain nested braces and parentheses.
+fn plot_coord<'a>(c: &mut Cursor<'a>) -> Option<&'a str> {
+    if !c.eat("(") {
         return None;
     }
-    c.blanks()?;
-    if !c.eat("coordinates") {
+    let s = c.s;
+    let mut depth: usize = 1;
+    let mut brace_depth: usize = 0;
+    let mut end = 0;
+    for (i, b) in s.bytes().enumerate() {
+        match b {
+            b'{' => brace_depth += 1,
+            b'}' => brace_depth = brace_depth.saturating_sub(1),
+            b'(' if brace_depth == 0 => depth += 1,
+            b')' if brace_depth == 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
         return None;
     }
+    let inner = &s[..end];
+    c.s = &s[end + 1..];
+    Some(inner)
+}
+
+/// Split `(x, y)` at the comma at outer brace and paren depth.
+fn split_coord<'a>(inner: &'a str) -> Option<(&'a str, &'a str)> {
+    let mut brace_depth: usize = 0;
+    let mut paren_depth: usize = 0;
+    for (i, b) in inner.bytes().enumerate() {
+        match b {
+            b'{' => brace_depth += 1,
+            b'}' => brace_depth = brace_depth.saturating_sub(1),
+            b'(' if brace_depth == 0 => paren_depth += 1,
+            b')' if brace_depth == 0 => paren_depth = paren_depth.saturating_sub(1),
+            b',' if brace_depth == 0 && paren_depth == 0 => {
+                let x = inner[..i].trim();
+                let y = inner[i + 1..].trim();
+                let strip = |s: &'a str| {
+                    let s = s.trim();
+                    if s.starts_with('{') && s.ends_with('}') {
+                        &s[1..s.len() - 1]
+                    } else {
+                        s
+                    }
+                };
+                return Some((strip(x).trim(), strip(y).trim()));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Substitute the variable in a mathematical expression with its formatted string value.
+fn substitute_var(expr: &str, var: &str, val: &str) -> String {
+    let mut res = String::with_capacity(expr.len() + 16);
+    let bytes = expr.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if expr[i..].starts_with(var) {
+            let after = i + var.len();
+            let is_match = if var.starts_with('\\') {
+                after >= bytes.len() || !bytes[after].is_ascii_alphabetic()
+            } else {
+                (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
+                    && (after >= bytes.len() || !bytes[after].is_ascii_alphanumeric())
+            };
+            if is_match {
+                res.push_str(val);
+                i = after;
+                continue;
+            }
+        }
+        res.push(bytes[i] as char);
+        i += 1;
+    }
+    res
+}
+
+fn parse_plot_coords(c: &mut Cursor, ctx: &Ctx, smooth: bool) -> Option<((i32, i32), Vec<Seg>)> {
     c.blanks()?;
     if !c.eat("{") {
         return None;
@@ -1738,20 +2292,112 @@ fn smooth_plot(c: &mut Cursor, ctx: &Ctx) -> Option<((i32, i32), Vec<Seg>)> {
     if pts.len() < 2 || pts.len() > 1000 {
         return None;
     }
-    let t = |v: i32| times_frac(b"13875", v);
-    let (mut first, mut support, mut second) = (pts[0], pts[0], pts[1]);
-    let mut segs = Vec::new();
-    for &cur in &pts[2..] {
-        let (dx, dy) = (t(cur.0 - first.0), t(cur.1 - first.1));
-        segs.push(Seg::Curve([support, (second.0 - dx, second.1 - dy), second], 0));
-        support = (second.0 + dx, second.1 + dy);
-        (first, second) = (second, cur);
+    if smooth {
+        let t = |v: i32| times_frac(b"13875", v);
+        let (mut first, mut support, mut second) = (pts[0], pts[0], pts[1]);
+        let mut segs = Vec::new();
+        for &cur in &pts[2..] {
+            let (dx, dy) = (t(cur.0 - first.0), t(cur.1 - first.1));
+            segs.push(Seg::Curve([support, (second.0 - dx, second.1 - dy), second], 0));
+            support = (second.0 + dx, second.1 + dy);
+            (first, second) = (second, cur);
+        }
+        segs.push(Seg::Curve([support, second, second], 0));
+        if let Some(Seg::Curve(_, s)) = segs.first_mut() {
+            *s = pts.len() as u32 - 2;
+        }
+        Some((pts[0], segs))
+    } else {
+        let segs = pts[1..].iter().map(|&pt| Seg::Line(Pt::At(pt.0, pt.1))).collect();
+        Some((pts[0], segs))
     }
-    segs.push(Seg::Curve([support, second, second], 0));
-    if let Some(Seg::Curve(_, s)) = segs.first_mut() {
-        *s = pts.len() as u32 - 2;
+}
+
+/// Parse `plot[options] coordinates {...}` or `plot[options] (expr_x, expr_y)`.
+fn parse_plot(
+    c: &mut Cursor,
+    ctx: &Ctx,
+    plot_opts: &PlotOpts,
+    at_start: bool,
+    from_line: bool,
+) -> Option<((i32, i32), Vec<Seg>)> {
+    c.eat("plot");
+    c.blanks()?;
+    let mut opts = plot_opts.clone();
+    if c.eat("[") {
+        let opt_str = c.bracketed()?;
+        for item in key_items(opt_str) {
+            if !apply_plot_opt(item, &mut opts)? {
+                return None;
+            }
+        }
+        c.blanks()?;
     }
-    Some((pts[0], segs))
+    if c.s.starts_with("coordinates") {
+        c.eat("coordinates");
+        return parse_plot_coords(c, ctx, opts.smooth);
+    }
+    if !c.s.starts_with('(') {
+        return None;
+    }
+    let inner = plot_coord(c)?;
+    let (x_expr, y_expr) = split_coord(inner)?;
+    let (start, end) = opts.domain;
+    let samples = opts.samples.max(2);
+    let diff = if samples > 1 {
+        pgfmath::divide(end - start, (samples - 1) as i32 * pgfmath::PT)
+    } else {
+        0
+    };
+    let mut pts = Vec::with_capacity(samples as usize);
+    let mut cur = start;
+    for i in 0..samples {
+        let val = if i == 0 { start } else { cur };
+        let val_str = pgfmath::print(val);
+        let sub_x = substitute_var(x_expr, &opts.variable, &val_str);
+        let sub_y = substitute_var(y_expr, &opts.variable, &val_str);
+        let px = component(&sub_x, ctx, 0)?;
+        let py = component(&sub_y, ctx, 1)?;
+        pts.push((px, py));
+        cur += diff;
+    }
+    if pts.len() < 2 {
+        return None;
+    }
+    let first_pt = pts[0];
+    if opts.smooth {
+        let t = |v: i32| times_frac(b"13875", v);
+        let (mut first, mut support, mut second) = (pts[0], pts[0], pts[1]);
+        let mut segs = Vec::new();
+        if !at_start {
+            if from_line {
+                segs.push(Seg::Line(Pt::At(first_pt.0, first_pt.1)));
+            } else {
+                segs.push(Seg::Move(Pt::At(first_pt.0, first_pt.1)));
+            }
+        }
+        for &cur in &pts[2..] {
+            let (dx, dy) = (t(cur.0 - first.0), t(cur.1 - first.1));
+            segs.push(Seg::Curve([support, (second.0 - dx, second.1 - dy), second], 0));
+            support = (second.0 + dx, second.1 + dy);
+            (first, second) = (second, cur);
+        }
+        segs.push(Seg::Curve([support, second, second], 0));
+        Some((first_pt, segs))
+    } else {
+        let mut segs = Vec::with_capacity(pts.len());
+        if !at_start {
+            if from_line {
+                segs.push(Seg::Line(Pt::At(first_pt.0, first_pt.1)));
+            } else {
+                segs.push(Seg::Move(Pt::At(first_pt.0, first_pt.1)));
+            }
+        }
+        for &pt in &pts[1..] {
+            segs.push(Seg::Line(Pt::At(pt.0, pt.1)));
+        }
+        Some((first_pt, segs))
+    }
 }
 
 /// How far `b` is from `a` along the longer axis.
@@ -1946,9 +2592,13 @@ fn tip_extends(p: &PathCmd) -> (i32, i32, i32) {
     let w = line_width(p);
     let half = times_frac(b"5", w);
     match p.tip {
-        Tip::Stealth => {
+        Tip::OldStealth => {
             let a = stealth_a(w);
             (5 * a, 5 * a, -3 * a)
+        }
+        Tip::Stealth => {
+            let s = MetaStealth::new(w);
+            (s.length - s.line_end, s.length, 0)
         }
         // `\pgfarrowsleftextend{+-1\pgfutil@tempdima}`, `\pgfarrowsrightextend{+9..}`.
         Tip::OldLatex => {
@@ -1967,6 +2617,7 @@ fn tip_extends(p: &PathCmd) -> (i32, i32, i32) {
         }
         // Line end `-.5` of the line width.
         Tip::Cm => (2 * half, half, -Cm::new(w).a - half),
+        Tip::Bar => (0, half, -half),
         Tip::To => (to_extend(w), to_extend(w), to_back(w)),
     }
 }
@@ -1978,10 +2629,12 @@ fn tip_extends(p: &PathCmd) -> (i32, i32, i32) {
 enum Tip {
     To,
     Stealth,
+    OldStealth,
     OldLatex,
     StealthPrime,
     Latex,
     Cm,
+    Bar,
 }
 
 /// arrows.meta's `Computer Modern Rightarrow` at line width `w` with its defaults
@@ -2026,6 +2679,88 @@ impl Cm {
         let half = times_frac(b"5", w);
         let y = times_frac(b"5", self.b) + half;
         [(half, half), (half, -half), (-self.a + half, y), (-self.a + half, -y), (-self.a - half, y), (-self.a - half, -y)]
+    }
+}
+
+/// arrows.meta's `Stealth` at line width `w` with its defaults (pgflibraryarrows.meta.code.tex:
+/// 903): `length = +3pt 4.5 .8`, `width' = +0pt .75`, `inset' = +0pt 0.325`, `line width = +0pt 1 1`.
+struct MetaStealth {
+    length: i32,
+    width: i32,
+    inset: i32,
+    p1_x: i32,
+    p2_x: i32,
+    p2_y: i32,
+    inset_adj: i32,
+    line_end: i32,
+}
+
+impl MetaStealth {
+    fn new(w: i32) -> MetaStealth {
+        let length = 3 * 65536 + fmul(4 * 65536 + 32768, w);
+        let width = times_frac(b"75", length);
+        let inset = times_frac(b"325", length);
+        let mut lw = w;
+        let cap = times_frac(b"25", length - inset);
+        if cap < lw {
+            lw = cap;
+        }
+        let quot = pgfmath::divide(length, width);
+        let x = 4 * fmul(quot, quot) + 65536;
+        let xc = times_frac(b"5", fmul(pgfmath::sqrt(x), lw));
+
+        let half_w = times_frac(b"5", width);
+        let yb1 = pgfmath::atan2(length, half_w);
+        let ya1 = pgfmath::atan2(inset, half_w);
+        let half_angle = times_frac(b"5", yb1 - ya1);
+        let tan_val = pgfmath::tan(half_angle);
+        let recip_tan = pgfmath::reciprocal(tan_val);
+        let yc_miter = times_frac(b"5", fmul(recip_tan, lw));
+        let angle = ya1 + half_angle;
+        let ya = fmul(pgfmath::sin(angle), yc_miter);
+        let yb = fmul(pgfmath::cos(angle), yc_miter);
+
+        let quot_inset = pgfmath::divide(inset, width);
+        let x_inset = 4 * fmul(quot_inset, quot_inset) + 65536;
+        let yc = times_frac(b"5", fmul(pgfmath::sqrt(x_inset), lw));
+
+        let tempdima = length - xc - ya;
+        let tempdimb = half_w - yb;
+
+        let p1_x = tempdima + ya;
+        let p2_x = ya;
+        let p2_y = tempdimb;
+        let inset_adj = inset + yc;
+        let line_end = inset + yc - times_frac(b"25", lw);
+
+        MetaStealth {
+            length,
+            width,
+            inset,
+            p1_x,
+            p2_x,
+            p2_y,
+            inset_adj,
+            line_end,
+        }
+    }
+
+    fn code(&self) -> String {
+        let b = what::pgf_bp;
+        format!(
+            "q [ ] 0.0 d 0 j {} 0.0 m {} {} l {} 0.0 l {} {} l h B Q  ",
+            b(self.p1_x),
+            b(self.p2_x),
+            b(self.p2_y),
+            b(self.inset_adj),
+            b(self.p2_x),
+            b(-self.p2_y),
+        )
+    }
+
+    fn hull(&self, _w: i32) -> [(i32, i32); 4] {
+        let half_w = times_frac(b"5", self.width);
+        [(self.length, 0), (0, half_w), (0, -half_w), (self.inset, 0)]
     }
 }
 
@@ -2261,7 +2996,7 @@ fn children(c: &mut Cursor, ctx: &mut Ctx, items: &mut Vec<Item>, parent: &str, 
         if !cc.s.is_empty() {
             return None;
         }
-        let e = PathCmd { fill: false, draw: true, opts: Vec::new(), round: 0, start: Pt::At(0, 0), segs: Vec::new(), tf: ctx.tf, unskips: 0, spaces: 0, arrows: ctx.arrows, own_arrows: false, tip: ctx.gt, nudges: Vec::new(), base_width: ctx.width, nodes: Vec::new(), step: [GRID_STEP; 2], edges: Vec::new(), edge: None, bare: false, shorten: ctx.shorten };
+        let e = PathCmd { fill: false, draw: true, clip: false, opts: Vec::new(), round: 0, start: Pt::At(0, 0), segs: Vec::new(), tf: ctx.tf, unskips: 0, spaces: 0, arrows: ctx.arrows, own_arrows: false, tip: ctx.gt, nudges: Vec::new(), base_width: ctx.width, nodes: Vec::new(), step: [GRID_STEP; 2], edges: Vec::new(), edge: None, bare: false, shorten: ctx.shorten, plot_opts: PlotOpts::default(), decoration: Decoration::default(), use_bb: false, svg: false };
         // Labels on an edge whose child has children go elsewhere in its box (probe x4).
         if grand && !labels.is_empty() {
             return None;
@@ -2334,7 +3069,7 @@ pub(super) fn parse(text: &str, dims: &dyn Fn(&str) -> Option<i32>) -> Option<Pi
 /// [`parse`] with the nodes' text boxes and the font's quad known: named nodes' rectangles
 /// are those that will be drawn.
 pub(super) fn parse_with(text: &str, dims: &dyn Fn(&str) -> Option<i32>, boxes: &dyn Fn(usize) -> [i32; 3], em: i32, styles: &[(String, String)]) -> Option<Picture> {
-    let mut ctx = Ctx { dims, names: Vec::new(), unit: [UNIT; 2], tf: Tf::ID, boxes, em, nodes: Vec::new(), node_count: 0, distance: [UNIT; 2], width: 26214, arrows: [false; 2], gt: Tip::To, styles: styles.to_vec(), spaces: Default::default(), shape_ref: Default::default(), named: Default::default(), tree: [TREE_DISTANCE, TREE_DISTANCE, -90], shorten: [0; 2], auto: false };
+    let mut ctx = Ctx { dims, names: Vec::new(), unit: [UNIT; 2], tf: Tf::ID, boxes, em, nodes: Vec::new(), node_count: 0, distance: [UNIT; 2], width: 26214, arrows: [false; 2], gt: Tip::To, styles: styles.to_vec(), spaces: Default::default(), shape_ref: Default::default(), named: Default::default(), tree: [TREE_DISTANCE, TREE_DISTANCE, -90], shorten: [0; 2], auto: false, font: String::new() };
     let clean = strip_comments(text)?;
     let mut c = Cursor { s: &clean };
     let mut baseline: Option<String> = None;
@@ -2373,16 +3108,25 @@ pub(super) fn parse_with(text: &str, dims: &dyn Fn(&str) -> Option<i32>, boxes: 
                 // tikz.code.tex `\tikzoption{auto}[]`: defines how a label is anchored,
                 // typesets nothing.
                 None if k == "auto" => ctx.auto = true,
-                // `>=Latex` (arrows.meta) before any tips in the list; the others anywhere (the tip
-                // `>` is named in the sequence, made when a path is drawn: probe a1).
-                // `>=stealth`, `>=latex` (pgfcorearrows' own tips): `\pgfdeclarearrow{name=<->,
-                // means=..}` (tikz.code.tex:1195), instantiated under their own names.
-                Some((">", v)) if matches!(v.trim(), "stealth" | "latex" | "stealth'") || ctx.arrows == [false; 2] && v.trim() == "Latex" => {
-                    ctx.gt = match v.trim() {
-                        "Latex" => Tip::Latex,
-                        "stealth" => Tip::Stealth,
-                        "stealth'" => Tip::StealthPrime,
-                        _ => Tip::OldLatex,
+                Some(("font", v)) => {
+                    let v = strip_braces(v);
+                    if !v.starts_with('\\') || !node::text_ok(v) {
+                        return None;
+                    }
+                    ctx.font = v.to_string();
+                }
+                Some((">", v)) => {
+                    let v = strip_braces(v);
+                    if matches!(v, "stealth" | "latex" | "stealth'" | "Latex" | "Stealth") {
+                        ctx.gt = match v {
+                            "Latex" => Tip::Latex,
+                            "Stealth" => Tip::Stealth,
+                            "stealth" => Tip::OldStealth,
+                            "stealth'" => Tip::StealthPrime,
+                            _ => Tip::OldLatex,
+                        };
+                    } else {
+                        return None;
                     }
                 }
                 // tikz.code.tex:88 `\tikz@baseline@coordinate`: a node's anchor, read at the end.
@@ -2496,7 +3240,14 @@ pub(super) fn parse_with(text: &str, dims: &dyn Fn(&str) -> Option<i32>, boxes: 
             continue;
         }
         if c.eat("\\node") {
-            let mut n = node::parse(&mut c, &mut ctx, overlay)?;
+            let mut n = match node::parse(&mut c, &mut ctx, overlay) {
+                Some(n) => n,
+                None => {
+                    #[cfg(test)]
+                    println!("DEBUG: node::parse returned None on {:?}", &c.s[..c.s.len().min(80)]);
+                    return None;
+                }
+            };
             let labels = std::mem::take(&mut n.label_nodes);
             let root = n.tree.then(|| n.name.clone()).flatten();
             items.push(Item::Node(n));
@@ -2514,8 +3265,8 @@ pub(super) fn parse_with(text: &str, dims: &dyn Fn(&str) -> Option<i32>, boxes: 
         }
         // `\begin{scope}[options]`: tikz.code.tex `\scope`, its options local to it. Of the
         // picture's options: units, shifts, scales, widths, tips, styles.
-        if c.eat("\\begin{scope}") {
-            scopes.push((ctx.unit, ctx.tf, ctx.width, ctx.arrows, ctx.gt, ctx.styles.len(), ctx.distance, ctx.shorten));
+        if c.eat_scope("begin") {
+            scopes.push((ctx.unit, ctx.tf, ctx.width, ctx.arrows, ctx.gt, ctx.styles.len(), ctx.distance, ctx.shorten, ctx.font.clone()));
             let mut widths = Vec::new();
             let mut space = false;
             if c.eat("[") {
@@ -2536,10 +3287,44 @@ pub(super) fn parse_with(text: &str, dims: &dyn Fn(&str) -> Option<i32>, boxes: 
                         Some(("shorten <", v)) => ctx.shorten[0] = length(v).filter(|l| *l >= 0)?,
                         Some(("shorten >", v)) => ctx.shorten[1] = length(v).filter(|l| *l >= 0)?,
                         Some((n, v)) if n.ends_with("/.style") => ctx.styles.push(style_def(n, v)?),
+                        Some(("font", v)) => {
+                            let v = strip_braces(v);
+                            if !v.starts_with('\\') || !node::text_ok(v) {
+                                return None;
+                            }
+                            ctx.font = v.to_string();
+                        }
+                        Some((">", v)) => {
+                            let v = strip_braces(v);
+                            if matches!(v, "stealth" | "latex" | "stealth'" | "Latex" | "Stealth") {
+                                ctx.gt = match v {
+                                    "Latex" => Tip::Latex,
+                                    "Stealth" => Tip::Stealth,
+                                    "stealth" => Tip::OldStealth,
+                                    "stealth'" => Tip::StealthPrime,
+                                    _ => Tip::OldLatex,
+                                };
+                            } else {
+                                return None;
+                            }
+                        }
                         Some(("x", v)) => ctx.unit[0] = length(v)?,
                         Some(("y", v)) => ctx.unit[1] = length(v)?,
                         Some(("xshift", v)) => ctx.tf = ctx.tf.shift(length(v)?, 0),
                         Some(("yshift", v)) => ctx.tf = ctx.tf.shift(0, length(v)?),
+                        Some(("shift", v)) => {
+                            let v = v.trim();
+                            let inner = v.strip_prefix('{').and_then(|v| v.strip_suffix('}')).unwrap_or(v);
+                            let mut pc = Cursor { s: inner.trim() };
+                            if pc.s.starts_with('+') {
+                                return None;
+                            }
+                            let (Pt::At(x, y), _) = point(&mut pc, &ctx, (0, 0))? else { return None };
+                            if !pc.s.trim().is_empty() {
+                                return None;
+                            }
+                            ctx.tf = ctx.tf.shift(x, y);
+                        }
                         Some(("scale", v)) => ctx.tf = ctx.tf.scale(number(v)?),
                         Some(("xscale", v)) => ctx.tf = ctx.tf.scale_axis(number(v)?, false),
                         Some(("yscale", v)) => ctx.tf = ctx.tf.scale_axis(number(v)?, true),
@@ -2558,9 +3343,9 @@ pub(super) fn parse_with(text: &str, dims: &dyn Fn(&str) -> Option<i32>, boxes: 
             items.push(Item::ScopeBegin(widths, space));
             continue;
         }
-        if c.eat("\\end{scope}") {
-            let (unit, tf, width, arrows, gt, styles, distance, shorten) = scopes.pop()?;
-            (ctx.unit, ctx.tf, ctx.width, ctx.arrows, ctx.gt, ctx.distance, ctx.shorten) = (unit, tf, width, arrows, gt, distance, shorten);
+        if c.eat_scope("end") {
+            let (unit, tf, width, arrows, gt, styles, distance, shorten, font) = scopes.pop()?;
+            (ctx.unit, ctx.tf, ctx.width, ctx.arrows, ctx.gt, ctx.distance, ctx.shorten, ctx.font) = (unit, tf, width, arrows, gt, distance, shorten, font);
             ctx.styles.truncate(styles);
             items.push(Item::ScopeEnd(c.blanks()?));
             continue;
@@ -2592,23 +3377,36 @@ pub(super) fn parse_with(text: &str, dims: &dyn Fn(&str) -> Option<i32>, boxes: 
             continue;
         }
         // `\draw` is `\path[draw]`, `\fill` `\path[fill]`, `\filldraw` `\path[fill,draw]`.
-        let (fill, draw) = if c.eat("\\filldraw") {
-            (true, true)
+        let (fill, draw, clip) = if c.eat("\\filldraw") {
+            (true, true, false)
         } else if c.eat("\\draw") {
-            (false, true)
+            (false, true, false)
         } else if c.eat("\\fill") {
-            (true, false)
+            (true, false, false)
+        } else if c.eat("\\clip") {
+            (false, false, true)
         } else if c.eat("\\path") {
-            (false, false)
+            (false, false, false)
         } else {
+            #[cfg(test)]
+            println!("parse_with unknown command: {:?}", &c.s[..c.s.len().min(80)]);
             return None;
         };
         if c.s.starts_with(|ch: char| ch.is_ascii_alphabetic()) {
+            #[cfg(test)]
+            println!("parse_with starts_with alphabetic: {:?}", &c.s[..c.s.len().min(80)]);
             return None;
         }
-        let p = PathCmd { fill, draw, opts: Vec::new(), round: 0, start: Pt::At(0, 0), segs: Vec::new(), tf: ctx.tf, unskips: 0, spaces: 0, arrows: ctx.arrows, own_arrows: false, tip: ctx.gt, nudges: Vec::new(), base_width: ctx.width, nodes: Vec::new(), step: [GRID_STEP; 2], edges: Vec::new(), edge: None, bare: false, shorten: ctx.shorten };
+        let p = PathCmd { fill, draw, clip, opts: Vec::new(), round: 0, start: Pt::At(0, 0), segs: Vec::new(), tf: ctx.tf, unskips: 0, spaces: 0, arrows: ctx.arrows, own_arrows: false, tip: ctx.gt, nudges: Vec::new(), base_width: ctx.width, nodes: Vec::new(), step: [GRID_STEP; 2], edges: Vec::new(), edge: None, bare: false, shorten: ctx.shorten, plot_opts: PlotOpts::default(), decoration: Decoration::default(), use_bb: false, svg: false };
         ctx.named.set(false);
-        let mut p = path(&mut c, &ctx, p, overlay)?;
+        let mut p = match path(&mut c, &ctx, p, overlay) {
+            Some(p) => p,
+            None => {
+                #[cfg(test)]
+                println!("parse_with path() returned None: {:?}", &c.s[..c.s.len().min(80)]);
+                return None;
+            }
+        };
         // A named coordinate is taken back through the picture's transformation, not the path's.
         if ctx.named.get() && p.tf != ctx.tf {
             return None;
@@ -2970,7 +3768,7 @@ fn offsets(m: &Machine) -> [i32; 2] {
 /// its own names are outside the grammar.
 /// Not here: `backgrounds` (`\pgfdeclarelayer`'s box, a layer drawn apart).
 /// `automata` (it loads `shapes.multipart`, shapes only) adds the styles of [`AUTOMATA_STYLES`].
-const LIBRARIES: [&str; 8] = ["positioning", "calc", "topaths", "shapes.geometric", "arrows.meta", "calendar", "arrows", "automata"];
+const LIBRARIES: [&str; 14] = ["svg.path", "positioning", "calc", "topaths", "shapes.geometric", "arrows.meta", "calendar", "arrows", "automata", "patterns", "angles", "quotes", "decorations.pathmorphing", "decorations"];
 
 /// tikzlibraryautomata.code.tex's `state` (`state without output`: `circle,draw,minimum
 /// size=2.5em,every state`, `every state` empty until a document sets it, which the grammar
@@ -3028,13 +3826,23 @@ fn op_at(op: char, x: i32, y: i32) -> Op {
 /// and `(0, b)`: four quarter curves, each support `0.55228475` of an axis off the end
 /// point, the close, then the moveto at the centre.
 fn ellipse(cx: i32, cy: i32, a: i32, b: i32) -> Vec<Op> {
-    let (ka, kb) = (times_frac(b"55228475", a), times_frac(b"55228475", b));
+    ellipse_axes(cx, cy, a, 0, 0, b)
+}
+
+/// `\pgfpathellipse` with general axis vectors `A=(ax,ay)` and `B=(bx,by)` already in page
+/// units (pgfcorepathconstruct.code.tex:907): four quarter curves using the same
+/// k=0.55228475 Bezier approximation. Called for ellipses under a rotated path transform.
+fn ellipse_axes(cx: i32, cy: i32, ax: i32, ay: i32, bx: i32, by: i32) -> Vec<Op> {
+    let (kax, kay) = (times_frac(b"55228475", ax), times_frac(b"55228475", ay));
+    let (kbx, kby) = (times_frac(b"55228475", bx), times_frac(b"55228475", by));
+    // Q1: C+A -> C+B, Q2: C+B -> C-A, Q3: C-A -> C-B, Q4: C-B -> C+A
+    // cp1 = cur_endpoint + k*next_axis, cp2 = next_endpoint + k*cur_axis
     vec![
-        op_at('m', cx + a, cy),
-        curve([(cx + a, cy + kb), (cx + ka, cy + b), (cx, cy + b)]),
-        curve([(cx - ka, cy + b), (cx - a, cy + kb), (cx - a, cy)]),
-        curve([(cx - a, cy - kb), (cx - ka, cy - b), (cx, cy - b)]),
-        curve([(cx + ka, cy - b), (cx + a, cy - kb), (cx + a, cy)]),
+        op_at('m', cx + ax, cy + ay),
+        curve([(cx + ax + kbx, cy + ay + kby), (cx + bx + kax, cy + by + kay), (cx + bx, cy + by)]),
+        curve([(cx + bx - kax, cy + by - kay), (cx - ax + kbx, cy - ay + kby), (cx - ax, cy - ay)]),
+        curve([(cx - ax - kbx, cy - ay - kby), (cx - bx - kax, cy - by - kay), (cx - bx, cy - by)]),
+        curve([(cx - bx + kax, cy - by + kay), (cx + ax - kbx, cy + ay - kby), (cx + ax, cy + ay)]),
         Op::Lit("h ".into()),
         op_at('m', cx, cy),
     ]
@@ -3122,6 +3930,415 @@ fn round_polyline(p: &PathCmd) -> Option<Vec<Op>> {
     Some(out)
 }
 
+#[derive(Clone, Copy)]
+struct DecoSeg {
+    first: (i32, i32),
+    last: (i32, i32),
+    len: i32,
+    u: (i32, i32),
+    n: (i32, i32),
+}
+
+fn deco_seg_len(dx: i32, dy: i32) -> i32 {
+    if dx == 0 {
+        dy.abs()
+    } else if dy == 0 {
+        dx.abs()
+    } else {
+        ((dx as f64).hypot(dy as f64) + 0.5) as i32
+    }
+}
+
+/// Automaton for `snake`, `zigzag`, `coil` path decorations along straight lines and rectangles.
+fn decorate_path(p: &PathCmd, path_box: &mut Bbox) -> Option<Vec<Op>> {
+    let at = |q: Pt| match q {
+        Pt::At(x, y) => p.tf.apply(x, y),
+        Pt::Page(_) => (0, 0),
+    };
+
+    let mut segments = Vec::new();
+
+    if p.segs.len() == 1 && matches!(p.segs[0].0, Seg::Rect(_)) {
+        let Seg::Rect(q) = p.segs[0].0 else { unreachable!() };
+        let (x1, y1) = at(p.start);
+        let (x2, y2) = at(q);
+        let corners = [(x1, y1), (x1, y2), (x2, y2), (x2, y1), (x1, y1)];
+        for i in 0..4 {
+            let first = corners[i];
+            let last = corners[i + 1];
+            let dx = last.0 - first.0;
+            let dy = last.1 - first.1;
+            let len = deco_seg_len(dx, dy);
+            if len > 0 {
+                let (u, n) = if dx == 0 {
+                    let s = dy.signum() * 65536;
+                    ((0, s), (-s, 0))
+                } else if dy == 0 {
+                    let s = dx.signum() * 65536;
+                    ((s, 0), (0, s))
+                } else {
+                    let u = normalised(dx, dy);
+                    (u, (-u.1, u.0))
+                };
+                segments.push(DecoSeg { first, last, len, u, n });
+            }
+        }
+    } else if p.segs.iter().all(|(s, _)| matches!(s, Seg::Line(_) | Seg::Hv(_) | Seg::Vh(_) | Seg::Cycle)) {
+        let closed = matches!(p.segs.last(), Some((Seg::Cycle, _)));
+        let segs_slice = if closed { &p.segs[..p.segs.len() - 1] } else { &p.segs };
+        let mut pts = points(p, segs_slice)?;
+        if pts.len() < 2 {
+            return None;
+        }
+        if closed {
+            pts.push(pts[0]);
+        }
+        let num_pts = pts.len();
+        for i in 0..num_pts - 1 {
+            let first = pts[i];
+            let last = pts[i + 1];
+            let dx = last.0 - first.0;
+            let dy = last.1 - first.1;
+            let len = deco_seg_len(dx, dy);
+            if len > 0 {
+                let (u, n) = if dx == 0 {
+                    let s = dy.signum() * 65536;
+                    ((0, s), (-s, 0))
+                } else if dy == 0 {
+                    let s = dx.signum() * 65536;
+                    ((s, 0), (0, s))
+                } else {
+                    let u = normalised(dx, dy);
+                    (u, (-u.1, u.0))
+                };
+                segments.push(DecoSeg { first, last, len, u, n });
+            }
+        }
+    } else {
+        return None;
+    }
+
+    if segments.is_empty() {
+        return None;
+    }
+
+    let total_len: i32 = segments.iter().map(|s| s.len).sum();
+    if total_len <= 0 {
+        return None;
+    }
+
+    let pre = p.decoration.pre_length.clamp(0, total_len);
+    let post = p.decoration.post_length.clamp(0, total_len - pre);
+    let mut dist_rem = total_len - pre - post;
+
+    let move_along = |dist: i32, seg_idx: &mut usize, comp_dist: &mut i32, segments: &[DecoSeg]| {
+        let mut d = dist;
+        while d > 0 && *seg_idx < segments.len() {
+            let rem = segments[*seg_idx].len - *comp_dist;
+            if d <= rem {
+                *comp_dist += d;
+                break;
+            } else {
+                d -= rem;
+                *seg_idx += 1;
+                *comp_dist = 0;
+            }
+        }
+    };
+
+    let get_origin = |seg_idx: usize, comp_dist: i32, segments: &[DecoSeg]| -> (i32, i32) {
+        if seg_idx >= segments.len() {
+            return segments.last().map_or((0, 0), |s| s.last);
+        }
+        let s = &segments[seg_idx];
+        (
+            s.first.0 + fmul(s.u.0, comp_dist),
+            s.first.1 + fmul(s.u.1, comp_dist),
+        )
+    };
+
+    let to_world = |o: (i32, i32), x: i32, y: i32, seg_idx: usize, segments: &[DecoSeg]| -> (i32, i32) {
+        let s = if seg_idx < segments.len() { &segments[seg_idx] } else { segments.last().unwrap() };
+        (
+            o.0 + fmul(s.u.0, x) + fmul(s.n.0, y),
+            o.1 + fmul(s.u.1, x) + fmul(s.n.1, y),
+        )
+    };
+
+    let rel_pt = |base: (i32, i32), dx: i32, dy: i32, seg_idx: usize, segments: &[DecoSeg]| -> (i32, i32) {
+        let s = if seg_idx < segments.len() { &segments[seg_idx] } else { segments.last().unwrap() };
+        (
+            base.0 + fmul(s.u.0, dx) + fmul(s.n.0, dy),
+            base.1 + fmul(s.u.1, dx) + fmul(s.n.1, dy),
+        )
+    };
+
+    let mut seg_idx = 0;
+    let mut comp_dist = 0;
+
+    let mut out = Vec::new();
+    let start_pt = segments[0].first;
+    out.push(op_at('m', start_pt.0, start_pt.1));
+    path_box.add(start_pt.0, start_pt.1);
+    let mut last_pt = start_pt;
+
+    if p.decoration.pre_length > 0 || p.decoration.post_length > 0 {
+        move_along(pre, &mut seg_idx, &mut comp_dist, &segments);
+        let pre_pt = get_origin(seg_idx, comp_dist, &segments);
+        out.push(op_at('l', pre_pt.0, pre_pt.1));
+        path_box.add(pre_pt.0, pre_pt.1);
+        last_pt = pre_pt;
+    }
+
+    match p.decoration.kind {
+        DecoKind::Zigzag => {
+            let seg_len = p.decoration.segment_length.max(1);
+            let amp = p.decoration.amplitude;
+
+            enum ZigState { UpFromCenter, BigDown, BigUp }
+            let mut state = ZigState::UpFromCenter;
+
+            while dist_rem > 0 && seg_idx < segments.len() {
+                let o = get_origin(seg_idx, comp_dist, &segments);
+                match state {
+                    ZigState::UpFromCenter => {
+                        let width = seg_len / 2;
+                        let p1 = to_world(o, seg_len / 4, amp, seg_idx, &segments);
+                        out.push(op_at('l', p1.0, p1.1));
+                        path_box.add(p1.0, p1.1);
+                        last_pt = p1;
+                        move_along(width, &mut seg_idx, &mut comp_dist, &segments);
+                        dist_rem -= width;
+                        state = ZigState::BigDown;
+                    }
+                    ZigState::BigDown => {
+                        if dist_rem < seg_len / 2 {
+                            let p_fin = to_world(o, 0, 0, seg_idx, &segments);
+                            out.push(op_at('l', p_fin.0, p_fin.1));
+                            path_box.add(p_fin.0, p_fin.1);
+                            last_pt = p_fin;
+                            break;
+                        }
+                        let width = seg_len / 2;
+                        let p1 = to_world(o, seg_len / 4, -amp, seg_idx, &segments);
+                        out.push(op_at('l', p1.0, p1.1));
+                        path_box.add(p1.0, p1.1);
+                        last_pt = p1;
+                        move_along(width, &mut seg_idx, &mut comp_dist, &segments);
+                        dist_rem -= width;
+                        state = ZigState::BigUp;
+                    }
+                    ZigState::BigUp => {
+                        if dist_rem < seg_len / 2 {
+                            let p_fin = to_world(o, 0, 0, seg_idx, &segments);
+                            out.push(op_at('l', p_fin.0, p_fin.1));
+                            path_box.add(p_fin.0, p_fin.1);
+                            last_pt = p_fin;
+                            break;
+                        }
+                        let width = seg_len / 2;
+                        let p1 = to_world(o, seg_len / 4, amp, seg_idx, &segments);
+                        out.push(op_at('l', p1.0, p1.1));
+                        path_box.add(p1.0, p1.1);
+                        last_pt = p1;
+                        move_along(width, &mut seg_idx, &mut comp_dist, &segments);
+                        dist_rem -= width;
+                        state = ZigState::BigDown;
+                    }
+                }
+            }
+        }
+        DecoKind::Snake => {
+            let seg_len = p.decoration.segment_length.max(1);
+            let amp = p.decoration.amplitude;
+
+            enum SnakeState { Initial, Down, Up }
+            let mut state = SnakeState::Initial;
+
+            while dist_rem > 0 && seg_idx < segments.len() {
+                let o = get_origin(seg_idx, comp_dist, &segments);
+                match state {
+                    SnakeState::Initial => {
+                        if dist_rem < (seg_len * 5) / 8 {
+                            last_pt = o;
+                            break;
+                        }
+                        let width = (seg_len * 5) / 16;
+                        let c1 = to_world(o, seg_len / 8, 0, seg_idx, &segments);
+                        let c2 = to_world(o, (seg_len * 3) / 16, amp, seg_idx, &segments);
+                        let end = to_world(o, (seg_len * 5) / 16, amp, seg_idx, &segments);
+                        out.push(curve([c1, c2, end]));
+                        path_box.add(c1.0, c1.1);
+                        path_box.add(c2.0, c2.1);
+                        path_box.add(end.0, end.1);
+                        last_pt = end;
+                        move_along(width, &mut seg_idx, &mut comp_dist, &segments);
+                        dist_rem -= width;
+                        state = SnakeState::Down;
+                    }
+                    SnakeState::Down => {
+                        if dist_rem < (seg_len * 13) / 16 {
+                            let width = (seg_len * 5) / 16;
+                            let c1 = to_world(o, seg_len / 8, amp, seg_idx, &segments);
+                            let c2 = to_world(o, (seg_len * 3) / 16, 0, seg_idx, &segments);
+                            let end = to_world(o, (seg_len * 5) / 16, 0, seg_idx, &segments);
+                            out.push(curve([c1, c2, end]));
+                            path_box.add(c1.0, c1.1);
+                            path_box.add(c2.0, c2.1);
+                            path_box.add(end.0, end.1);
+                            last_pt = end;
+                            move_along(width, &mut seg_idx, &mut comp_dist, &segments);
+                            break;
+                        }
+                        let dx = seg_len / 4;
+                        let dy = -amp;
+                        let c1 = rel_pt(last_pt, times_frac(b"362", dx), 0, seg_idx, &segments);
+                        let c2 = rel_pt(last_pt, times_frac(b"674", dx), times_frac(b"488", dy), seg_idx, &segments);
+                        let end1 = rel_pt(last_pt, dx, dy, seg_idx, &segments);
+                        out.push(curve([c1, c2, end1]));
+                        path_box.add(c1.0, c1.1);
+                        path_box.add(c2.0, c2.1);
+                        path_box.add(end1.0, end1.1);
+                        last_pt = end1;
+
+                        let c1 = rel_pt(last_pt, times_frac(b"326", dx), times_frac(b"512", dy), seg_idx, &segments);
+                        let c2 = rel_pt(last_pt, times_frac(b"638", dx), dy, seg_idx, &segments);
+                        let end2 = rel_pt(last_pt, dx, dy, seg_idx, &segments);
+                        out.push(curve([c1, c2, end2]));
+                        path_box.add(c1.0, c1.1);
+                        path_box.add(c2.0, c2.1);
+                        path_box.add(end2.0, end2.1);
+                        last_pt = end2;
+
+                        let width = seg_len / 2;
+                        move_along(width, &mut seg_idx, &mut comp_dist, &segments);
+                        dist_rem -= width;
+                        state = SnakeState::Up;
+                    }
+                    SnakeState::Up => {
+                        if dist_rem < (seg_len * 13) / 16 {
+                            let width = (seg_len * 5) / 16;
+                            let c1 = to_world(o, seg_len / 8, -amp, seg_idx, &segments);
+                            let c2 = to_world(o, (seg_len * 3) / 16, 0, seg_idx, &segments);
+                            let end = to_world(o, (seg_len * 5) / 16, 0, seg_idx, &segments);
+                            out.push(curve([c1, c2, end]));
+                            path_box.add(c1.0, c1.1);
+                            path_box.add(c2.0, c2.1);
+                            path_box.add(end.0, end.1);
+                            last_pt = end;
+                            move_along(width, &mut seg_idx, &mut comp_dist, &segments);
+                            break;
+                        }
+                        let dx = seg_len / 4;
+                        let dy = amp;
+                        let c1 = rel_pt(last_pt, times_frac(b"362", dx), 0, seg_idx, &segments);
+                        let c2 = rel_pt(last_pt, times_frac(b"674", dx), times_frac(b"488", dy), seg_idx, &segments);
+                        let end1 = rel_pt(last_pt, dx, dy, seg_idx, &segments);
+                        out.push(curve([c1, c2, end1]));
+                        path_box.add(c1.0, c1.1);
+                        path_box.add(c2.0, c2.1);
+                        path_box.add(end1.0, end1.1);
+                        last_pt = end1;
+
+                        let c1 = rel_pt(last_pt, times_frac(b"326", dx), times_frac(b"512", dy), seg_idx, &segments);
+                        let c2 = rel_pt(last_pt, times_frac(b"638", dx), dy, seg_idx, &segments);
+                        let end2 = rel_pt(last_pt, dx, dy, seg_idx, &segments);
+                        out.push(curve([c1, c2, end2]));
+                        path_box.add(c1.0, c1.1);
+                        path_box.add(c2.0, c2.1);
+                        path_box.add(end2.0, end2.1);
+                        last_pt = end2;
+
+                        let width = seg_len / 2;
+                        move_along(width, &mut seg_idx, &mut comp_dist, &segments);
+                        dist_rem -= width;
+                        state = SnakeState::Down;
+                    }
+                }
+            }
+        }
+        DecoKind::Coil => {
+            let seg_len = p.decoration.segment_length.max(1);
+            let amp = p.decoration.amplitude;
+            let aspect = p.decoration.aspect;
+
+            let switch_len = (3 * seg_len) / 2 + 2 * fmul(aspect, amp);
+            let last_width = seg_len / 2 + 2 * fmul(aspect, amp);
+
+            let coil_step = xn_over_d(seg_len, crate::backend::backend_scaled::round_decimals(b"083333333333"), 65536);
+
+            let on_coil = |cx_w: i32, cx_f: i32, cy_w: i32, cy_f: i32, k: i32, o: (i32, i32), seg_idx: usize, segments: &[DecoSeg]| -> (i32, i32) {
+                let cx = cx_w * amp + xn_over_d(amp, cx_f, 65536);
+                let lx = fmul(aspect, cx) + coil_step * k;
+                let ly = cy_w * amp + xn_over_d(amp, cy_f, 65536);
+                to_world(o, lx, ly, seg_idx, segments)
+            };
+
+            let d555 = crate::backend::backend_scaled::round_decimals(b"555");
+            let d445 = crate::backend::backend_scaled::round_decimals(b"445");
+
+            while dist_rem > 0 && seg_idx < segments.len() {
+                let o = get_origin(seg_idx, comp_dist, &segments);
+                if dist_rem < switch_len {
+                    let p1 = on_coil(0, 0, 0, d555, 1, o, seg_idx, &segments);
+                    let p2 = on_coil(0, d445, 1, 0, 2, o, seg_idx, &segments);
+                    let p3 = on_coil(1, 0, 1, 0, 3, o, seg_idx, &segments);
+                    out.push(curve([p1, p2, p3]));
+                    path_box.add(p1.0, p1.1); path_box.add(p2.0, p2.1); path_box.add(p3.0, p3.1);
+
+                    let p4 = on_coil(1, d555, 1, 0, 4, o, seg_idx, &segments);
+                    let p5 = on_coil(2, 0, 0, d555, 5, o, seg_idx, &segments);
+                    let p6 = on_coil(2, 0, 0, 0, 6, o, seg_idx, &segments);
+                    out.push(curve([p4, p5, p6]));
+                    path_box.add(p4.0, p4.1); path_box.add(p5.0, p5.1); path_box.add(p6.0, p6.1);
+                    last_pt = p6;
+                    move_along(last_width, &mut seg_idx, &mut comp_dist, &segments);
+                    break;
+                }
+                let p1 = on_coil(0, 0, 0, d555, 1, o, seg_idx, &segments);
+                let p2 = on_coil(0, d445, 1, 0, 2, o, seg_idx, &segments);
+                let p3 = on_coil(1, 0, 1, 0, 3, o, seg_idx, &segments);
+                out.push(curve([p1, p2, p3]));
+                path_box.add(p1.0, p1.1); path_box.add(p2.0, p2.1); path_box.add(p3.0, p3.1);
+
+                let p4 = on_coil(1, d555, 1, 0, 4, o, seg_idx, &segments);
+                let p5 = on_coil(2, 0, 0, d555, 5, o, seg_idx, &segments);
+                let p6 = on_coil(2, 0, 0, 0, 6, o, seg_idx, &segments);
+                out.push(curve([p4, p5, p6]));
+                path_box.add(p4.0, p4.1); path_box.add(p5.0, p5.1); path_box.add(p6.0, p6.1);
+
+                let p7 = on_coil(2, 0, 0, -d555, 7, o, seg_idx, &segments);
+                let p8 = on_coil(1, d555, -1, 0, 8, o, seg_idx, &segments);
+                let p9 = on_coil(1, 0, -1, 0, 9, o, seg_idx, &segments);
+                out.push(curve([p7, p8, p9]));
+                path_box.add(p7.0, p7.1); path_box.add(p8.0, p8.1); path_box.add(p9.0, p9.1);
+
+                let p10 = on_coil(0, d445, -1, 0, 10, o, seg_idx, &segments);
+                let p11 = on_coil(0, 0, 0, -d555, 11, o, seg_idx, &segments);
+                let p12 = on_coil(0, 0, 0, 0, 12, o, seg_idx, &segments);
+                out.push(curve([p10, p11, p12]));
+                path_box.add(p10.0, p10.1); path_box.add(p11.0, p11.1); path_box.add(p12.0, p12.1);
+                last_pt = p12;
+
+                move_along(seg_len, &mut seg_idx, &mut comp_dist, &segments);
+                dist_rem -= seg_len;
+            }
+        }
+        DecoKind::None => return None,
+    }
+
+    if p.decoration.post_length > 0 {
+        out.push(op_at('l', last_pt.0, last_pt.1));
+        path_box.add(last_pt.0, last_pt.1);
+    }
+
+    let final_pt = segments.last().unwrap().last;
+    out.push(op_at('l', final_pt.0, final_pt.1));
+    path_box.add(final_pt.0, final_pt.1);
+
+    Some(out)
+}
+
 /// `\pgfpatharc`'s pieces (pgfcorepathconstruct.code.tex:289): while the angles are more than
 /// 90 apart, a piece of 90 (more than 115 apart) or 60 toward the end; then the rest. With
 /// how many pieces went up, each of which leaves a space (the `}` ending its line).
@@ -3189,6 +4406,7 @@ impl Machine<'_, '_> {
             d.pkg.tikz_positioning |= positioning;
             d.pkg.tikz_arrows_meta |= meta;
             d.pkg.tikz_arrows_lib |= arrows;
+            d.pkg.tikz_svg_path |= has("svg.path");
         }
         if has("automata") {
             self.keep_tikz_styles(Some(AUTOMATA_STYLES.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()));
@@ -3372,6 +4590,10 @@ impl Machine<'_, '_> {
         let Some(mut pic) = parse_with(&text, &dims, &boxes, em, &styles) else {
             return self.not_native("a tikzpicture the native job does not draw");
         };
+        // `svg` is the library's (`\tikz@svg@path` is an error without svg.path loaded).
+        if pic.items.iter().any(|i| matches!(i, Item::Path(p) if p.svg)) && !self.doc.as_ref().is_some_and(|d| d.pkg.tikz_svg_path) {
+            return self.not_native("a tikz svg path without the svg.path library");
+        }
         let meta = self.doc.as_ref().is_some_and(|d| d.pkg.tikz_arrows_meta);
         if meta {
             for i in pic.items.iter_mut() {
@@ -3382,13 +4604,18 @@ impl Machine<'_, '_> {
                 }
             }
         }
+        // Under arrows.meta `|` is `Bar`, `Tee Barb[length=+0pt]` (pgflibraryarrows.meta.code.tex:1599,
+        // tikzlibraryarrows.meta.code.tex:1074), not the old bar this code draws: declined.
+        if meta && pic.items.iter().any(|i| matches!(i, Item::Path(p) if p.arrows != [false; 2] && p.tip == Tip::Bar)) {
+            return self.not_native("a tikz | tip under arrows.meta (Tee Barb)");
+        }
         // `right=of a` without the positioning library is tikz's own key, the value a shift.
         if pic.items.iter().any(|i| matches!(i, Item::Node(n) if n.placed_of())) && !self.doc.as_ref().is_some_and(|d| d.pkg.tikz_positioning) {
             return self.not_native("a tikz placement with of, without the positioning library");
         }
         // `Latex` is arrows.meta's (an error without it); `stealth` it leaves as it is (probe).
-        if !meta && pic.items.iter().any(|i| matches!(i, Item::Path(p) if p.arrows != [false; 2] && p.tip == Tip::Latex)) {
-            return self.not_native("a tikz Latex tip without the arrows.meta library");
+        if !meta && pic.items.iter().any(|i| matches!(i, Item::Path(p) if p.arrows != [false; 2] && (p.tip == Tip::Latex || p.tip == Tip::Stealth))) {
+            return self.not_native("a tikz Stealth or Latex tip without the arrows.meta library");
         }
         // A `"` in a node's text under babel: a language's shorthand may make it active
         // (ngerman's `"u`), not the font's quote (probe k5).
@@ -3501,6 +4728,11 @@ impl Machine<'_, '_> {
         // Each grid's line count, in order: two spaces a line (`\pgf@pos@transform`'s lines).
         let mut grids: Vec<u32> = Vec::new();
         let mut tips: Vec<Vec<String>> = Vec::with_capacity(paths.len());
+        // `use as bounding box` (`\pgf@up@bb`): from the end of that path on, nothing widens the picture.
+        let mut bb_fixed = false;
+        if paths.iter().any(|p| p.use_bb) && !nodes.is_empty() {
+            return self.not_native("use as bounding box with nodes");
+        }
         for p in &paths {
             let mut out = Vec::new();
             let mut path_box = Bbox { min: [i32::MAX; 2], max: [i32::MIN; 2] };
@@ -3520,12 +4752,16 @@ impl Machine<'_, '_> {
                 Pt::At(x, y) => (x, y),
                 Pt::Page(c) => page_point(&c),
             };
-            // tikz's `\tikz@flush@moveto`: the first point's moveto.
-            emit('m', p.start, &mut out, &mut path_box);
+            // tikz's `\tikz@flush@moveto`: the first point's moveto (an `svg` path has none: its
+            // `M` is the first).
+            if !p.svg {
+                emit('m', p.start, &mut out, &mut path_box);
+            }
             let mut last = p.start;
             let mut sub_start = at(p.start);
             // `\pgf@path@lastx` after an arc: its end as computed, not the point transformed.
             let mut arc_end: Option<(i32, i32)> = None;
+            let mut last_curve: Option<[(i32, i32); 3]> = None;
             // tikz's `\tikz@lastx`: every point, `+(..)` too (only `\tikz@lastxsaved`, which
             // relative points start from, stays), is where `-|`, `rectangle` and `circle` start.
             for (s, _) in &p.segs {
@@ -3546,15 +4782,18 @@ impl Machine<'_, '_> {
                             }
                             out.push(curve(pts));
                             from = pts[2];
+                            last_curve = Some(pts);
                         }
                         arc_end = Some(from);
                         last = Pt::At(to.0, to.1);
                     }
                     Seg::Line(q) => {
+                        last_curve = None;
                         emit('l', q, &mut out, &mut path_box);
                         last = q;
                     }
                     Seg::Move(q) => {
+                        last_curve = None;
                         emit('m', q, &mut out, &mut path_box);
                         sub_start = at(q);
                         last = q;
@@ -3566,9 +4805,11 @@ impl Machine<'_, '_> {
                             path_box.add(x, y);
                         }
                         out.push(curve(pts));
+                        last_curve = Some(pts);
                         last = Pt::At(q[2].0, q[2].1);
                     }
                     Seg::Hv(q) | Seg::Vh(q) => {
+                        last_curve = None;
                         let ((x0, y0), (x1, y1)) = (at(last), at(q));
                         let corner = if matches!(s, Seg::Hv(_)) { (x1, y0) } else { (x0, y1) };
                         emit('l', Pt::At(corner.0, corner.1), &mut out, &mut path_box);
@@ -3576,11 +4817,13 @@ impl Machine<'_, '_> {
                         last = q;
                     }
                     Seg::Cycle => {
+                        last_curve = None;
                         out.push(Op::Lit("h ".into()));
                         // `\pgfpathclose` then the moveto `cycle` leaves at the subpath's start.
                         last = Pt::At(sub_start.0, sub_start.1);
                     }
                     Seg::Rect(q) => {
+                        last_curve = None;
                         // `\tikz@rectB`: moveto, three linetos, closepath, moveto.
                         let (user_x2, user_y2) = at(q);
                         let ((mut x1, mut y1), (mut x2, mut y2)) = (at(last), (user_x2, user_y2));
@@ -3642,12 +4885,23 @@ impl Machine<'_, '_> {
                         // the point transformed once) with axes (a, 0) and (0, b), the radii
                         // transformed (`\pgfpointtransformed` less the shift): four quarter
                         // curves, each support `0.55228475` of an axis off the end point.
+                        // For a rotated transform, the axis vectors rotate too; use the
+                        // general `ellipse_axes` with both axis columns of the transform.
                         let user = at(last);
                         let (cx, cy) = tf.apply(user.0, user.1);
-                        let (a, b) = (fmul(tf.aa, rx), fmul(tf.bb, ry));
-                        path_box.add(cx - a, cy - b);
-                        path_box.add(cx + a, cy + b);
-                        out.extend(ellipse(cx, cy, a, b));
+                        if tf.turns() {
+                            // General axis vectors: A = tf.linear(rx,0), B = tf.linear(0,ry)
+                            let (ax, ay) = (fmul(tf.aa, rx), fmul(tf.ab, rx));
+                            let (bx, by) = (fmul(tf.ba, ry), fmul(tf.bb, ry));
+                            path_box.add(cx - ax.abs() - bx.abs(), cy - ay.abs() - by.abs());
+                            path_box.add(cx + ax.abs() + bx.abs(), cy + ay.abs() + by.abs());
+                            out.extend(ellipse_axes(cx, cy, ax, ay, bx, by));
+                        } else {
+                            let (a, b) = (fmul(tf.aa, rx), fmul(tf.bb, ry));
+                            path_box.add(cx - a, cy - b);
+                            path_box.add(cx + a, cy + b);
+                            out.extend(ellipse(cx, cy, a, b));
+                        }
                         sub_start = user;
                     }
                 }
@@ -3660,12 +4914,20 @@ impl Machine<'_, '_> {
                     None => return self.not_native("tikz rounded corners the native job does not draw"),
                 }
             }
+            if p.decoration.active && p.decoration.kind != DecoKind::None {
+                path_box = Bbox { min: [i32::MAX, i32::MAX], max: [i32::MIN, i32::MIN] };
+                match decorate_path(p, &mut path_box) {
+                    Some(r) => out = r,
+                    None => return self.not_native("tikz decoration the native job does not draw"),
+                }
+            }
             // `\pgfusepath`: a stroked path widens the picture by half its line width.
-            if !pic.overlay && path_box.min[0] <= path_box.max[0] {
+            if !pic.overlay && !p.clip && !bb_fixed && path_box.min[0] <= path_box.max[0] {
                 let half = if p.draw { times_frac(b"5", line_width(p)) } else { 0 };
                 bbox.add(path_box.min[0] - half, path_box.min[1] - half);
                 bbox.add(path_box.max[0] + half, path_box.max[1] + half);
             }
+            bb_fixed |= p.use_bb;
             // The tips (`\pgf@stroke@inner@line` with arrows, pgfcorepathusage.code.tex): the
             // path's ends drawn back by the tip's line end, after the picture size took the
             // whole path; then each tip at its end, the start's first, its origin where the
@@ -3674,10 +4936,6 @@ impl Machine<'_, '_> {
             if p.arrows != [false; 2] || p.shorten != [0; 2] {
                 let Some(mut ends) = tip_ends(p) else { return self.not_native("a tikz arrow the native job does not draw") };
                 let single_line = p.segs.len() == 1 && matches!(p.segs[0].0, Seg::Line(_));
-                let last_curve = match p.segs.last() {
-                    Some((Seg::Curve(q, _), _)) => Some(*q),
-                    _ => None,
-                };
                 let (ext, tip_end, back) = tip_extends(p);
                 // The end first (`\pgf@prepare@end@of@path`), then the start on the path as
                 // shortened; the tips are drawn start first.
@@ -3716,6 +4974,12 @@ impl Machine<'_, '_> {
                     let hull = match p.tip {
                         Tip::Latex => Latex::new(line_width(p)).hull(line_width(p)).to_vec(),
                         Tip::Cm => Cm::new(line_width(p)).hull(line_width(p)).to_vec(),
+                        Tip::Stealth => MetaStealth::new(line_width(p)).hull(line_width(p)).to_vec(),
+                        Tip::Bar => {
+                            let h = 2 * 65536 + 2 * line_width(p);
+                            let half = times_frac(b"5", line_width(p));
+                            vec![(-half, -h), (half, -h), (half, h), (-half, h)]
+                        }
                         _ => Vec::new(),
                     };
                     if !pic.overlay {
@@ -3914,7 +5178,7 @@ impl Machine<'_, '_> {
             pending = pending.saturating_sub(shifts(&p.start));
             let nudged = |k: usize| if positioning { 0 } else { p.nudges.iter().filter(|&&j| j == k).count() as u32 };
             pending = pending.saturating_sub(nudged(0));
-            for (i, (s, _)) in p.segs.iter().enumerate() {
+            for (i, (s, _)) in p.segs.iter().enumerate().filter(|_| !p.svg) {
                 if i > 0 {
                     pending = pending.saturating_sub(nudged(i));
                 }
@@ -3995,11 +5259,13 @@ impl Machine<'_, '_> {
                 // `Cm`'s as `w + 2^29`: seven, no `\unskip` (probes).
                 let key = match p.tip {
                     Tip::To => width,
-                    Tip::Stealth => -(width + 1),
+                    Tip::OldStealth => -(width + 1),
                     Tip::OldLatex => -(width + 1) - (1 << 28),
                     Tip::StealthPrime => -(width + 1) - (2 << 28),
+                    Tip::Stealth => width + (1 << 27),
                     Tip::Latex => width + (1 << 28),
                     Tip::Cm => width + (1 << 29),
+                    Tip::Bar => width + (1 << 26),
                 };
                 let reg = |k: i32| Reg::register(Region::Int, ARROW_WIDTHS + k as u32);
                 let count = self.e.eqtb.word(reg(0));
@@ -4013,43 +5279,57 @@ impl Machine<'_, '_> {
                             self.unskip();
                             self.unskip();
                         }
-                        Tip::Stealth | Tip::OldLatex => self.unskip(),
+                        Tip::OldStealth | Tip::OldLatex => self.unskip(),
                         // The arrows library's `stealth'` takes two, as `to` does (probe a1).
                         Tip::StealthPrime => {
                             self.unskip();
                             self.unskip();
                         }
-                        Tip::Latex | Tip::Cm => {}
+                        Tip::Stealth | Tip::Latex | Tip::Cm | Tip::Bar => {}
                     }
                     let mut spaces = match p.tip {
                         Tip::To => 4,
-                        Tip::Stealth | Tip::OldLatex | Tip::StealthPrime => 5,
+                        Tip::OldStealth | Tip::OldLatex | Tip::StealthPrime => 5,
+                        Tip::Stealth => 15,
                         Tip::Latex => 12,
                         Tip::Cm => 7,
+                        Tip::Bar => 2,
                     };
                     self.space_glue(&mut spaces);
                 }
             }
-            for op in out.into_iter().filter(|_| (p.draw || p.fill) && !p.bare) {
+            for op in out.into_iter().filter(|_| (p.draw || p.fill || p.clip) && !p.bare) {
                 match op {
                     Op::Lit(s) => self.pdf_literal(&s),
                     Op::Page(o, x, y) => self.pgf_point(o, x, y),
                 }
+            }
+            if p.clip {
+                self.pdf_literal("W ");
             }
             // `\pgfsys@fill`, `\pgfsys@stroke`, `\pgfsys@fillstroke`; `\path` nothing.
             match (p.fill, p.draw) {
                 (true, false) => self.pdf_literal("f "),
                 (false, true) => self.pdf_literal("S "),
                 (true, true) => self.pdf_literal("B "),
-                (false, false) => {}
+                (false, false) => {
+                    if p.clip {
+                        self.pdf_literal("n ");
+                    }
+                }
             }
             let tip = match p.tip {
                 Tip::To => to_tip(width),
-                Tip::Stealth => stealth_tip(width),
+                Tip::OldStealth => stealth_tip(width),
                 Tip::OldLatex => old_latex_tip(width),
                 Tip::StealthPrime => stealth_prime_tip(width),
+                Tip::Stealth => MetaStealth::new(width).code(),
                 Tip::Latex => Latex::new(width).code(),
                 Tip::Cm => Cm::new(width).code(),
+                Tip::Bar => {
+                    let h = 2 * 65536 + 2 * width;
+                    format!("0.0 {} m 0.0 {} l S ", what::pgf_bp(-h), what::pgf_bp(h))
+                }
             };
             let tip_fill = if path_tips.is_empty() {
                 None
@@ -4249,6 +5529,47 @@ mod tests {
     }
 
     #[test]
+    fn declines_unimplemented_plot_and_node_options() {
+        for picture in [
+            r"\draw plot[only marks] coordinates {(0,0) (1,1)};",
+            r"\draw plot[const plot] coordinates {(0,0) (1,1)};",
+            r"\draw plot[smooth,tension=1] coordinates {(0,0) (1,1) (2,0)};",
+            r"\node[xshift=1cm] at (0,0) {x};",
+            r"\node[yshift=1cm] at (0,0) {x};",
+            r"\node[xshift={2*1cm}] at (0,0) {x};",
+            r"\node[yshift={2*1cm}] at (0,0) {x};",
+            r"\draw (2,0) -- (0,0) node[midway,sloped,above] {x};",
+            r"\draw (0,0) -- (2,1) node[midway,sloped,draw] {x};",
+        ] {
+            assert!(parse(picture, &|_| None).is_none(), "{picture}");
+        }
+    }
+
+    #[test]
+    fn reads_expression_plots() {
+        let p = parse(r"\draw[domain=0:2,samples=5] plot (\x,{0.55*\x*\x});", &|_| Some(1 << 16)).expect("sharp plot");
+        let path = first(&p);
+        assert_eq!(path.segs.len(), 4);
+        assert!(matches!(path.start, Pt::At(0, 0)));
+
+        let p = parse(r"\fill[gray!20] (0,0) plot[domain=0:2,samples=4] (\x,{0.55*\x*\x}) -- (2,0) -- cycle;", &|_| Some(1 << 16)).expect("mid-path plot");
+        let path = first(&p);
+        assert!(path.fill);
+        assert_eq!(path.segs.len(), 6);
+        assert!(matches!(path.segs.last().unwrap().0, Seg::Cycle));
+
+        let p = parse(r"\draw[domain=0.1:2.5,samples=10,smooth,variable=\t] plot ({\t},{exp(-1/\t)/(\t*\t*(1-exp(-1/\t))^2)});", &|_| Some(1 << 16)).expect("smooth plot");
+        let path = first(&p);
+        assert!(matches!(path.segs[0].0, Seg::Curve(..)));
+    }
+
+    #[test]
+    fn declines_parameterized_meta_tips() {
+        assert!(parse(r"\draw[-{Stealth[length=2mm]}] (0,0) -- (1,0);", &|_| None).is_none());
+        assert!(parse(r"\draw[-{Latex[length=2mm]}] (0,0) -- (1,0);", &|_| None).is_none());
+    }
+
+    #[test]
     fn reads_the_overlay_frames() {
         let p = parse("[remember picture,overlay]\n  \\draw[line width=1.5pt,gold]\n    ([xshift=1cm,yshift=-1cm]current page.north west)\n    rectangle ([xshift=-1cm,yshift=1cm]current page.south east);\n", &|_| Some(1 << 16)).expect("a frame");
         assert!(p.space && p.overlay);
@@ -4320,19 +5641,35 @@ mod tests {
         // A style stands for its keys; one named as a tikz key is refused.
         assert!(parse(r"[box/.style={draw}]\draw[box] (0,0) -- (1,0);", &dims).is_some_and(|p| matches!(&p.items[0], Item::Path(q) if q.draw)));
         assert!(parse(r"[step/.style={draw}]\draw[step] (0,0) -- (1,0);", &dims).is_none());
-        // Fills alone, tips longer than the line and closed paths with own tips are refused.
-        for t in [r"\fill[->] (0,0) -- (1,0);", r"\draw[<->] (0,0) -- (0.5pt,0);", r"\draw[->] (0,0) circle (1);"] {
+        // Fills alone and closed paths with own tips are refused. Short lines remain valid.
+        for t in [r"\fill[->] (0,0) -- (1,0);", r"\draw[->] (0,0) circle (1);"] {
             assert!(parse(t, &dims).is_none(), "{t}");
         }
+        assert!(parse(r"\draw[<->] (0,0) -- (0.5pt,0);", &dims).is_some());
         // pdfLaTeX's tip at 0.4pt and the line's 0.46pt drawn back.
         assert_eq!(to_tip(26214), "q 0.31879 w [ ] 0.0 d 1 J 1 j -1.19551 1.59401 m -1.09587 0.99626 0.0 0.09961 0.29886 0.0 c 0.0 -0.09961 -1.09587 -0.99626 -1.19551 -1.59401 c S Q  ");
         assert_eq!(what::pgf_bp(UNIT - to_extend(26214)), "27.88852");
     }
 
     #[test]
+    fn reads_notes_figures() {
+        let files = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/notes-figures")).unwrap();
+        let mut paths: Vec<_> = files.map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "tex")).collect();
+        paths.sort();
+        for p in paths {
+            let content = std::fs::read_to_string(&p).unwrap();
+            let name = p.file_name().unwrap().to_string_lossy();
+            let b = content.find(r"\begin{tikzpicture}").unwrap() + r"\begin{tikzpicture}".len();
+            let e = content.find(r"\end{tikzpicture}").unwrap();
+            let body = &content[b..e];
+            assert!(accepts(body, &[]), "failed on {name}");
+        }
+    }
+
+    #[test]
     fn reads_polar_points() {
         // pdfLaTeX's `(30:1)` and `++(-45:2) -- +(200:3mm)`.
-        let ctx = Ctx { dims: &|_| None, names: Vec::new(), unit: [UNIT; 2], tf: Tf::ID, boxes: &|_| [0; 3], em: 0, nodes: Vec::new(), node_count: 0, distance: [0; 2], width: 26214, arrows: [false; 2], gt: Tip::To, styles: Vec::new(), spaces: Default::default(), shape_ref: Default::default(), named: Default::default(), tree: [0, 0, -90], shorten: [0; 2], auto: false };
+        let ctx = Ctx { dims: &|_| None, names: Vec::new(), unit: [UNIT; 2], tf: Tf::ID, boxes: &|_| [0; 3], em: 0, nodes: Vec::new(), node_count: 0, distance: [0; 2], width: 26214, arrows: [false; 2], gt: Tip::To, styles: Vec::new(), spaces: Default::default(), shape_ref: Default::default(), named: Default::default(), tree: [0, 0, -90], shorten: [0; 2], auto: false, font: String::new() };
         let (x, y) = polar("30:1", &ctx).expect("30:1");
         assert_eq!((what::pgf_bp(x), what::pgf_bp(y)), ("24.5491".into(), "14.17339".into()));
         assert_eq!(polar("30:1cm", &ctx), Some((x, y)));
